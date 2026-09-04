@@ -219,7 +219,7 @@ impl SceneUniform {
         let (mut rows, edge_on, apron_scale) = match map {
             PoseMap::Mapped(map) => {
                 let apron_scale = map.apron_scale as f32;
-                if !apron_scale.is_finite() || !(1.0..=2.0).contains(&apron_scale) {
+                if !apron_scale.is_finite() || apron_scale < 1.0 {
                     return Err(PresentDataError::InvalidMap);
                 }
                 (

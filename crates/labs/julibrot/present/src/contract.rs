@@ -22,6 +22,19 @@ pub struct PresentHot {
     pub map: PoseMap,
 }
 
+/// One coarse, wide record grid composited behind the primary scene mesh.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentBackdrop {
+    /// Kernels-owned escape grid whose active prefix is ready in DATA.
+    pub grid: EscapeGrid,
+    /// Delivered iteration cap used to produce the backdrop records.
+    pub iteration_cap: u32,
+    /// Math-owned sampled plane used by the backdrop dispatch.
+    pub plane: Plane,
+    /// Wider screen-to-plane map used by the backdrop dispatch and mesh.
+    pub map: PoseMap,
+}
+
 /// Arrival-rate owner state adapted with a published escape grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresentMain {
@@ -37,6 +50,8 @@ pub struct PresentMain {
     pub plane: Plane,
     /// Exact mapped or edge-on state used by this dispatch.
     pub map: PoseMap,
+    /// Optional coarse wide grid drawn before the primary grid.
+    pub backdrop: Option<PresentBackdrop>,
 }
 
 impl PresentMain {
@@ -529,6 +544,7 @@ mod tests {
                 basis_v: [0.0, 0.0, 0.0, 1.0],
             },
             map: PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY),
+            backdrop: None,
         };
         assert_eq!(
             main(0).selected_palette().map(|selected| selected.0),

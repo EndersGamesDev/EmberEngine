@@ -22,6 +22,35 @@ const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 const EXPOSURE_FACT_STEPS: u32 = 9;
 const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
 const RGBA8_BYTES_PER_TEXEL: u32 = 4;
+const SCENE_DEPTH_COMPARE: wgpu::CompareFunction = wgpu::CompareFunction::LessEqual;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SceneLayer {
+    Backdrop,
+    Main,
+}
+
+const BACKDROP_THEN_MAIN: [SceneLayer; 2] = [SceneLayer::Backdrop, SceneLayer::Main];
+const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
+
+const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
+    if has_backdrop {
+        &BACKDROP_THEN_MAIN
+    } else {
+        &MAIN_ONLY
+    }
+}
+
+#[cfg(test)]
+const fn composed_layer(main_covered: bool, backdrop_covered: bool) -> Option<SceneLayer> {
+    if main_covered {
+        Some(SceneLayer::Main)
+    } else if backdrop_covered {
+        Some(SceneLayer::Backdrop)
+    } else {
+        None
+    }
+}
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -136,15 +165,16 @@ impl SampleTracker {
 
 struct GpuState {
     heap_group: wgpu::BindGroup,
-    scene_group: wgpu::BindGroup,
+    scene_groups: [wgpu::BindGroup; 2],
     warp_hot_group: wgpu::BindGroup,
     warp_texture_layout: wgpu::BindGroupLayout,
     scene_sampler: wgpu::Sampler,
     hot_buffer: wgpu::Buffer,
-    scene_buffer: wgpu::Buffer,
+    scene_buffers: [wgpu::Buffer; 2],
     scene_textures: [SceneTexture; 2],
     depth: DepthTarget,
     indices: Option<IndexTarget>,
+    backdrop_indices: Option<IndexTarget>,
     glitch_count_target: GlitchCountTarget,
     glitch_readback: GlitchReadback,
     scene_pipeline: wgpu::RenderPipeline,
@@ -235,7 +265,9 @@ impl Presenter {
             .as_ref()
             .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
         let selection_replaced = self.main.as_ref().is_some_and(|previous| {
-            previous.state.palette_id != main.state.palette_id || previous.grid != main.grid
+            previous.state.palette_id != main.state.palette_id
+                || previous.grid != main.grid
+                || previous.backdrop != main.backdrop
         });
         if revision_advanced {
             self.ledger.apply_reference_shift(
@@ -441,6 +473,9 @@ impl Presenter {
             logical_len: 0,
         })?;
         validate_grid(main, self.gpu.heap_limits)?;
+        if let Some(backdrop) = &main.backdrop {
+            validate_backdrop(backdrop, self.gpu.heap_limits)?;
+        }
         let pose = self.hot[hot_slot.index() as usize].ok_or(PresentError::Device {
             operation: "select unwritten HOT slot",
         })?;
@@ -472,6 +507,41 @@ impl Presenter {
                 logical_len: main.grid.span.logical_len,
             },
         })?;
+        let backdrop_uniform = main
+            .backdrop
+            .as_ref()
+            .map(|backdrop| {
+                SceneUniform::new(
+                    [backdrop.grid.width, backdrop.grid.height],
+                    backdrop.grid.level as u32,
+                    backdrop.iteration_cap,
+                    backdrop.grid.span.directory_index,
+                    backdrop.grid.span.logical_len,
+                    backdrop.plane,
+                    backdrop.map,
+                    palette_record,
+                )
+            })
+            .transpose()
+            .map_err(|error| match error {
+                PresentDataError::InvalidMap => PresentError::Device {
+                    operation: "pack backdrop screen map",
+                },
+                _ => PresentError::InvalidGrid {
+                    width: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.width),
+                    height: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.height),
+                    logical_len: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.span.logical_len),
+                },
+            })?;
         let scene_id = self.next_scene_id;
         let next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance scene identity",
@@ -489,6 +559,13 @@ impl Presenter {
                 warp_samples.reset();
             }
             ensure_indices(device, gpu, extent)?;
+            ensure_backdrop_indices(
+                device,
+                gpu,
+                main.backdrop
+                    .as_ref()
+                    .map(|backdrop| [backdrop.grid.width, backdrop.grid.height]),
+            )?;
             ensure_depth(device, gpu, extent)?;
             if main.grid.level == RefinementLevel::Final {
                 ensure_glitch_count_resources(device, gpu, extent);
@@ -509,7 +586,14 @@ impl Presenter {
         })?;
         self.next_scene_id = next_scene_id;
         self.queue
-            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
+        if let Some(backdrop_uniform) = backdrop_uniform {
+            self.queue.write_buffer(
+                &self.gpu.scene_buffers[1],
+                0,
+                bytemuck::bytes_of(&backdrop_uniform),
+            );
+        }
         let collect_glitch_count = main.grid.level == RefinementLevel::Final;
         let mut encoder = self
             .device
@@ -522,6 +606,7 @@ impl Presenter {
             texture_index as usize,
             hot_slot.dynamic_offset(),
             palette_record,
+            main.backdrop.is_some(),
         );
         if collect_glitch_count {
             let readback = &self.gpu.glitch_readback;
@@ -719,7 +804,7 @@ impl Presenter {
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
         self.queue
-            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
         Ok(())
     }
 
@@ -975,34 +1060,48 @@ fn create_gpu_state(
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Julibrot regional scene uniform"),
-        size: u64::from(SCENE_PAYLOAD_BYTES),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let scene_buffers = [
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Julibrot main scene uniform"),
+            size: u64::from(SCENE_PAYLOAD_BYTES),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Julibrot backdrop scene uniform"),
+            size: u64::from(SCENE_PAYLOAD_BYTES),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+    ];
     let scene_layout = create_scene_layout(device);
-    let scene_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Julibrot immutable scene and HOT group"),
-        layout: &scene_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &scene_buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &hot_buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
-                }),
-            },
-        ],
+    let scene_groups = [
+        ("Julibrot main scene and HOT group", &scene_buffers[0]),
+        ("Julibrot backdrop scene and HOT group", &scene_buffers[1]),
+    ]
+    .map(|(label, scene_buffer)| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &scene_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: scene_buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &hot_buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
+                    }),
+                },
+            ],
+        })
     });
     let warp_texture_layout = create_warp_texture_layout(device);
     let warp_hot_layout = create_warp_hot_layout(device);
@@ -1021,7 +1120,7 @@ fn create_gpu_state(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &scene_buffer,
+                    buffer: &scene_buffers[0],
                     offset: 0,
                     size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
                 }),
@@ -1084,15 +1183,16 @@ fn create_gpu_state(
     );
     Ok(GpuState {
         heap_group,
-        scene_group,
+        scene_groups,
         warp_hot_group,
         warp_texture_layout,
         scene_sampler: sampler,
         hot_buffer,
-        scene_buffer,
+        scene_buffers,
         scene_textures,
         depth,
         indices: None,
+        backdrop_indices: None,
         glitch_count_target,
         glitch_readback,
         scene_pipeline,
@@ -1328,7 +1428,7 @@ fn create_scene_pipeline(
         depth_stencil: depth.then_some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_compare: SCENE_DEPTH_COMPARE,
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -1464,22 +1564,85 @@ fn ensure_indices(
     Ok(())
 }
 
+fn ensure_backdrop_indices(
+    device: &wgpu::Device,
+    gpu: &mut GpuState,
+    extent: Option<[u32; 2]>,
+) -> Result<(), PresentError> {
+    let Some(extent) = extent else {
+        return Ok(());
+    };
+    if gpu
+        .backdrop_indices
+        .as_ref()
+        .is_some_and(|indices| indices.extent == extent)
+    {
+        return Ok(());
+    }
+    let values = scene_indices(extent).map_err(|_| PresentError::IndexCountOverflow {
+        width: extent[0],
+        height: extent[1],
+    })?;
+    let count = u32::try_from(values.len()).map_err(|_| PresentError::IndexCountOverflow {
+        width: extent[0],
+        height: extent[1],
+    })?;
+    let contents = if values.is_empty() {
+        &[0_u32][..]
+    } else {
+        &values
+    };
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Julibrot backdrop u32 index buffer"),
+        contents: bytemuck::cast_slice(contents),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    gpu.backdrop_indices = Some(IndexTarget {
+        buffer,
+        count,
+        extent,
+    });
+    Ok(())
+}
+
 fn encode_scene(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
     texture_index: usize,
     hot_offset: u32,
     selected: PaletteRecord,
+    has_backdrop: bool,
 ) {
-    encode_scene_mesh(
-        encoder,
-        gpu,
-        &gpu.scene_textures[texture_index].view,
-        &gpu.scene_pipeline,
-        hot_offset,
-        scene_load_color(selected),
-        "Julibrot scene pass",
-    );
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Julibrot backdrop then main scene pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &gpu.scene_textures[texture_index].view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &gpu.depth.view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Discard,
+            }),
+            stencil_ops: None,
+        }),
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    pass.set_bind_group(0, &gpu.heap_group, &[]);
+    pass.set_pipeline(&gpu.scene_pipeline);
+    for layer in scene_draw_order(has_backdrop) {
+        let (group, indices) = match layer {
+            SceneLayer::Backdrop => (&gpu.scene_groups[1], gpu.backdrop_indices.as_ref()),
+            SceneLayer::Main => (&gpu.scene_groups[0], gpu.indices.as_ref()),
+        };
+        draw_scene_mesh(&mut pass, group, indices, hot_offset);
+    }
 }
 
 fn encode_glitch_count(encoder: &mut wgpu::CommandEncoder, gpu: &GpuState, hot_offset: u32) {
@@ -1585,9 +1748,23 @@ fn encode_scene_mesh(
         timestamp_writes: None,
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
     pass.set_pipeline(pipeline);
-    if let Some(indices) = &gpu.indices {
+    draw_scene_mesh(
+        &mut pass,
+        &gpu.scene_groups[0],
+        gpu.indices.as_ref(),
+        hot_offset,
+    );
+}
+
+fn draw_scene_mesh<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    scene_group: &'pass wgpu::BindGroup,
+    indices: Option<&'pass IndexTarget>,
+    hot_offset: u32,
+) {
+    pass.set_bind_group(1, scene_group, &[hot_offset]);
+    if let Some(indices) = indices {
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
     }
@@ -1641,37 +1818,50 @@ fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord)
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
-    let active_len = main
-        .grid
+    validate_grid_parts(&main.grid, main.state.delivered_iter_cap, limits)
+}
+
+fn validate_grid_parts(
+    grid: &ember_julibrot_kernels::EscapeGrid,
+    iteration_cap: u32,
+    limits: DialectLimits,
+) -> Result<(), PresentError> {
+    let active_len = grid
         .width
-        .checked_mul(main.grid.height)
-        .filter(|length| *length > 0 && *length <= main.grid.span.logical_len)
+        .checked_mul(grid.height)
+        .filter(|length| *length > 0 && *length <= grid.span.logical_len)
         .ok_or(PresentError::InvalidGrid {
-            width: main.grid.width,
-            height: main.grid.height,
-            logical_len: main.grid.span.logical_len,
+            width: grid.width,
+            height: grid.height,
+            logical_len: grid.span.logical_len,
         })?;
-    if main.grid.span.directory_index >= limits.span_capacity
-        || main.grid.span.page_count > limits.handle_capacity
-        || main
-            .grid
+    if grid.span.directory_index >= limits.span_capacity
+        || grid.span.page_count > limits.handle_capacity
+        || grid
             .span
             .handles()
             .iter()
             .any(|handle| handle.index() >= limits.descriptor_capacity)
     {
         return Err(PresentError::StaleSpan {
-            directory_index: main.grid.span.directory_index,
+            directory_index: grid.span.directory_index,
         });
     }
-    if active_len == 0 || main.state.delivered_iter_cap == 0 {
+    if active_len == 0 || iteration_cap == 0 {
         return Err(PresentError::InvalidGrid {
-            width: main.grid.width,
-            height: main.grid.height,
-            logical_len: main.grid.span.logical_len,
+            width: grid.width,
+            height: grid.height,
+            logical_len: grid.span.logical_len,
         });
     }
     Ok(())
+}
+
+fn validate_backdrop(
+    backdrop: &crate::PresentBackdrop,
+    limits: DialectLimits,
+) -> Result<(), PresentError> {
+    validate_grid_parts(&backdrop.grid, backdrop.iteration_cap, limits)
 }
 
 fn validate_extent(device: &wgpu::Device, extent: [u32; 2]) -> Result<(), PresentError> {
@@ -1834,7 +2024,7 @@ fn pose_is_finite(pose: &Pose) -> bool {
                     .chain(map.inverse)
                     .chain([map.condition_number, map.apron_scale])
                     .all(f64::is_finite)
-                    && (1.0..=2.0).contains(&map.apron_scale)
+                    && map.apron_scale >= 1.0
             }
             PoseMap::EdgeOn => true,
         }
@@ -2092,6 +2282,7 @@ mod tests {
             object: ember_julibrot_math::ObjectAngles::JULIA,
             plane: binding_pose().plane,
             map: PoseMap::EdgeOn,
+            backdrop: None,
         }
     }
 
@@ -2225,7 +2416,7 @@ mod tests {
     #[test]
     fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
         let mut ledger = SceneLedger::default();
-        let mut sampled = promote_binding_scene(&mut ledger, 61);
+        let sampled = promote_binding_scene(&mut ledger, 61);
         let mut plan = clear_warp_plan(false, true);
         plan.kind = WarpKind::ReliefRedraw;
         plan.source_scene_id = Some(sampled.scene_id);
@@ -2239,12 +2430,6 @@ mod tests {
             Some(61)
         );
 
-        let PoseMap::Mapped(mut source_map) = sampled.pose.map else {
-            panic!("binding scene is mapped");
-        };
-        source_map.apron_scale = 1.541_25;
-        sampled.pose.map = PoseMap::Mapped(source_map);
-
         let main = binding_main();
         let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
             .expect("compatible records form a scene uniform");
@@ -2253,10 +2438,22 @@ mod tests {
         assert_eq!(uniform.span[1], 64 * 36);
         assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
         assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.541_25]);
+        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.0]);
         let load = scene_load_color(crate::CLASSIC_PALETTE);
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    }
+
+    #[test]
+    fn backdrop_is_drawn_first_and_main_wins_equal_depth() {
+        assert_eq!(
+            scene_draw_order(true),
+            &[SceneLayer::Backdrop, SceneLayer::Main]
+        );
+        assert_eq!(SCENE_DEPTH_COMPARE, wgpu::CompareFunction::LessEqual);
+        assert_eq!(composed_layer(true, true), Some(SceneLayer::Main));
+        assert_eq!(composed_layer(false, true), Some(SceneLayer::Backdrop));
+        assert_eq!(composed_layer(false, false), None);
     }
 
     #[test]

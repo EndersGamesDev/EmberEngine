@@ -160,10 +160,14 @@ pub struct PageFacts<'a> {
     pub distance_four: f64,
     /// Share of the surface the lifted scene mesh cannot reach after the applied apron.
     pub surface_uncovered_fraction: Option<f64>,
-    /// Applied sampling overscan, as a multiple of the frame extent.
+    /// Footprint-requested sampling overscan, as a multiple of the frame extent.
     pub scene_apron_scale: Option<f64>,
-    /// Requested overscan when the fixed two-times budget clamps it.
-    pub scene_apron_requested: Option<f64>,
+    /// Applied sampling overscan of the coarse backdrop; absent for a flat scene.
+    pub scene_backdrop_scale: Option<f64>,
+    /// Coarse backdrop record extent; absent for a flat scene.
+    pub scene_backdrop_extent: Option<[u32; 2]>,
+    /// Share of the bounded relief census clamped at the five-dimensional near limit.
+    pub relief_clipped_fraction: Option<f64>,
     pub horizon_pixels: u64,
     pub horizon_fraction: f64,
     pub uncertain_pixels: u64,
@@ -229,6 +233,16 @@ impl<'a> PageFacts<'a> {
         let dispatch = loop_facts.dispatch_facts();
         let worker = loop_facts.worker_facts();
         let plan = loop_facts.plan();
+        let backdrop_extent = footprint.and_then(|value| {
+            if value.apron_scale > 1.0 {
+                crate::frame::backdrop_extent([
+                    plan.delivered_extent.width,
+                    plan.delivered_extent.height,
+                ])
+            } else {
+                None
+            }
+        });
         Self {
             abi_version: JULIBROT_ABI_VERSION,
             adapter_name: &device.adapter_name,
@@ -312,10 +326,10 @@ impl<'a> PageFacts<'a> {
             distance_four: requested.view.distance_four,
             surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
             scene_apron_scale: footprint.map(|value| value.apron_scale),
-            scene_apron_requested: footprint.and_then(|value| {
-                (value.apron_scale.to_bits() != value.requested_apron_scale.to_bits())
-                    .then_some(value.requested_apron_scale)
-            }),
+            scene_backdrop_scale: footprint
+                .and_then(|value| (value.apron_scale > 1.0).then_some(value.apron_scale)),
+            scene_backdrop_extent: backdrop_extent,
+            relief_clipped_fraction: footprint.map(|value| value.relief_clipped_fraction),
             horizon_pixels: loop_facts.horizon_pixels(),
             horizon_fraction: loop_facts.horizon_fraction(),
             uncertain_pixels: loop_facts.uncertain_pixels(),

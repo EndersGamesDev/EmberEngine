@@ -38,6 +38,37 @@ fn reference_texel_bytes(length: u32) -> Result<usize, AppError> {
         .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))
 }
 
+/// Chooses the coarse backdrop extent within one quarter of the Final record count.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn backdrop_extent(final_extent: [u32; 2]) -> Option<[u32; 2]> {
+    let [width, height] = final_extent;
+    let extent = [width / 2, height / 2];
+    if extent.contains(&0) {
+        return None;
+    }
+    let final_records = width.checked_mul(height)?;
+    let backdrop_records = extent[0].checked_mul(extent[1])?;
+    (backdrop_records <= final_records / 4).then_some(extent)
+}
+
+/// Converts a map's applied apron into the kernel-only zoom offset.
+#[cfg(any(target_arch = "wasm32", test))]
+fn sampling_zoom_log2(zoom_log2: f64, apron_scale: f64) -> Result<f64, AppError> {
+    if apron_scale.to_bits() == 1.0_f64.to_bits() {
+        return Ok(zoom_log2);
+    }
+    if !zoom_log2.is_finite() || !apron_scale.is_finite() || apron_scale < 1.0 {
+        return Err(AppError::Math(
+            "sampling apron is not a finite scale at least one".to_string(),
+        ));
+    }
+    let sampling_zoom = zoom_log2 - apron_scale.log2();
+    sampling_zoom
+        .is_finite()
+        .then_some(sampling_zoom)
+        .ok_or_else(|| AppError::Math("sampling zoom is not finite".to_string()))
+}
+
 #[cfg(test)]
 fn expand_reference_texels_into(
     records: &[u8],
@@ -886,8 +917,8 @@ mod browser {
         reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
-        FrameState, HotSlot, PresentConfig, PresentEvent, PresentHot, PresentMain, Presenter,
-        SubmissionKind, WarpValidation, hot_stride,
+        FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent, PresentHot, PresentMain,
+        Presenter, SubmissionKind, WarpValidation, hot_stride,
     };
     use ember_julibrot_worker::{
         EncodedCentre, OrbitDisposition, OrbitHandle, OrbitRegistry, OrbitRequest, OwnerEndpoint,
@@ -997,6 +1028,27 @@ mod browser {
         precision_mode: u32,
     }
 
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct BackdropReady {
+        stamp: ViewStamp,
+        map: PoseMap,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct BackdropFlight {
+        scene_id: u64,
+        stamp: ViewStamp,
+        map: PoseMap,
+    }
+
+    #[derive(Debug)]
+    struct BackdropGrid {
+        plan: RefinementPlan,
+        grid: EscapeGrid,
+        ready: Option<BackdropReady>,
+        in_flight: Option<BackdropFlight>,
+    }
+
     impl ViewStamp {
         fn render_equivalent(self, other: Self) -> bool {
             let selection_matches = self.generation_applied == other.generation_applied
@@ -1038,6 +1090,8 @@ mod browser {
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
         grid: EscapeGrid,
+        backdrop: Option<BackdropGrid>,
+        active_backdrop_map: Option<PoseMap>,
         main: ember_julibrot_worker::MainState,
         scene_selection: Option<SceneSelection>,
         loop_state: FrameLoop,
@@ -1164,6 +1218,7 @@ mod browser {
                 object: requested.object_angles,
                 plane,
                 map,
+                backdrop: None,
             });
             let (owner_endpoint, producer_endpoint) = WorkerChannel::new(
                 WorkerConfig {
@@ -1191,6 +1246,8 @@ mod browser {
                 reference_upload,
                 plan,
                 grid,
+                backdrop: None,
+                active_backdrop_map: None,
                 main,
                 scene_selection: None,
                 loop_state,
@@ -1294,7 +1351,12 @@ mod browser {
             if KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Shallow {
                 self.abandon_submitted_references(viewer);
             }
-            let final_validation = self.prepare_due_level();
+            let backdrop_active = self.prepare_backdrop(viewer)?;
+            let final_validation = if backdrop_active {
+                false
+            } else {
+                self.prepare_due_level()
+            };
             let extent = self.prepared_extent();
             let mut hot = viewer.drain_hot(extent)?;
             self.owner_epoch = hot.state.epoch;
@@ -1305,7 +1367,7 @@ mod browser {
                 self.prepared_level = None;
                 self.prepare_due_level();
             }
-            self.install_main(hot.pose.object, hot.plane, hot.pose.map);
+            self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
             let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
             let measure_validation =
@@ -1339,12 +1401,13 @@ mod browser {
             let main_arrived = self.service_arrivals(viewer, now_ms)?;
             let shallow_accepted = self.submit_pending_reference(viewer, hot.plane)?;
             if main_arrived || shallow_accepted {
+                self.prepare_backdrop(viewer)?;
                 self.prepare_due_level();
                 hot = viewer.drain_hot(self.prepared_extent())?;
                 self.owner_epoch = hot.state.epoch;
                 self.main = hot.state.main;
                 self.observe_scene_selection(viewer);
-                self.install_main(hot.pose.object, hot.plane, hot.pose.map);
+                self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
                 slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                     .map_err(|error| AppError::Present(error.to_string()))?;
                 self.presenter.write_hot(
@@ -1364,9 +1427,10 @@ mod browser {
                     hold_refused_warp,
                 );
             }
-            if self
-                .loop_state
-                .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
+            if self.active_backdrop_map.is_none()
+                && self
+                    .loop_state
+                    .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
             {
                 self.prepared_level = None;
                 let final_validation = self.prepare_due_level();
@@ -1375,7 +1439,7 @@ mod browser {
                 self.owner_epoch = hot.state.epoch;
                 self.main = hot.state.main;
                 self.observe_scene_selection(viewer);
-                self.install_main(hot.pose.object, hot.plane, hot.pose.map);
+                self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
                 slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                     .map_err(|error| AppError::Present(error.to_string()))?;
                 self.presenter.write_hot(
@@ -1400,7 +1464,7 @@ mod browser {
                 relief_redraw,
                 self.presented_view_is_stale(viewer),
             );
-            let scene_id = if defer_scene_for_redraw {
+            let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {
                 None
             } else {
                 self.submit_due_scene(
@@ -1522,7 +1586,23 @@ mod browser {
                     PresentEvent::SceneCompleted { frame } => {
                         self.level_timings
                             .complete_scene(frame.scene_id, frame.measurement);
-                        if self.loop_state.completed(
+                        let backdrop_completed = self.backdrop.as_mut().is_some_and(|backdrop| {
+                            let Some(flight) = backdrop
+                                .in_flight
+                                .filter(|flight| flight.scene_id == frame.scene_id)
+                            else {
+                                return false;
+                            };
+                            backdrop.in_flight = None;
+                            backdrop.ready = Some(BackdropReady {
+                                stamp: flight.stamp,
+                                map: flight.map,
+                            });
+                            true
+                        });
+                        if backdrop_completed {
+                            self.active_backdrop_map = None;
+                        } else if self.loop_state.completed(
                             frame.scene_id,
                             frame.pose.orbit_generation,
                             frame.level,
@@ -1536,7 +1616,20 @@ mod browser {
                         ..
                     } => {
                         self.level_timings.drop_scene(scene_id, Some(measurement));
-                        if self.loop_state.retired(scene_id) {
+                        let backdrop_retired = self.backdrop.as_mut().is_some_and(|backdrop| {
+                            if backdrop
+                                .in_flight
+                                .is_some_and(|flight| flight.scene_id == scene_id)
+                            {
+                                backdrop.in_flight = None;
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                        if backdrop_retired {
+                            self.active_backdrop_map = None;
+                        } else if self.loop_state.retired(scene_id) {
                             self.prepared_level = None;
                         }
                     }
@@ -1571,6 +1664,21 @@ mod browser {
                         if matches!(kind, SubmissionKind::Scene) {
                             self.level_timings.drop_scene(id, None);
                         }
+                        let backdrop_retired = matches!(kind, SubmissionKind::Scene)
+                            && self.backdrop.as_mut().is_some_and(|backdrop| {
+                                if backdrop
+                                    .in_flight
+                                    .is_some_and(|flight| flight.scene_id == id)
+                                {
+                                    backdrop.in_flight = None;
+                                    true
+                                } else {
+                                    false
+                                }
+                            });
+                        if backdrop_retired {
+                            self.active_backdrop_map = None;
+                        }
                         let outcome = self.loop_state.refused(kind, reason, id, polls, wall_ms);
                         if outcome.retired_scene {
                             self.prepared_level = None;
@@ -1601,6 +1709,9 @@ mod browser {
         }
 
         fn prepare_due_level(&mut self) -> bool {
+            if self.active_backdrop_map.is_some() {
+                return false;
+            }
             let Some(level) = self.loop_state.due() else {
                 return false;
             };
@@ -1611,15 +1722,161 @@ mod browser {
             level == RefinementLevel::Final
         }
 
-        fn install_main(&mut self, object: ObjectAngles, plane: Plane, map: PoseMap) {
-            let mut grid = self.grid.clone();
-            if let Some(level) = self.prepared_level {
-                let spec = self.plan.level(level);
-                grid.width = spec.extent.width;
-                grid.height = spec.extent.height;
-                grid.level = level;
+        fn prepare_backdrop(&mut self, viewer: &ViewerController) -> Result<bool, AppError> {
+            let final_spec = self.plan.level(RefinementLevel::Final);
+            let Some(requested_extent) =
+                super::backdrop_extent([final_spec.extent.width, final_spec.extent.height])
+            else {
+                self.active_backdrop_map = None;
+                return Ok(false);
+            };
+            let Some(mut map) = viewer.backdrop_map(requested_extent)? else {
+                self.active_backdrop_map = None;
+                return Ok(false);
+            };
+            if let Some(flight) = self
+                .backdrop
+                .as_ref()
+                .and_then(|backdrop| backdrop.in_flight)
+            {
+                self.active_backdrop_map = Some(flight.map);
+                return Ok(true);
             }
-            self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
+            let stamp = self.view_stamp(viewer);
+            if self.backdrop.as_ref().is_some_and(|backdrop| {
+                backdrop
+                    .ready
+                    .is_some_and(|ready| ready.stamp.render_equivalent(stamp))
+            }) {
+                self.active_backdrop_map = None;
+                return Ok(false);
+            }
+            self.ensure_backdrop_grid(requested_extent, viewer.requested().iteration_cap)?;
+            let delivered_extent = self
+                .backdrop
+                .as_ref()
+                .map(|backdrop| {
+                    let final_spec = backdrop.plan.level(RefinementLevel::Final);
+                    [final_spec.extent.width, final_spec.extent.height]
+                })
+                .ok_or_else(|| AppError::Kernel("backdrop grid was not allocated".to_string()))?;
+            if delivered_extent != requested_extent {
+                map = viewer.backdrop_map(delivered_extent)?.ok_or_else(|| {
+                    AppError::Math("delivered backdrop unexpectedly has no apron".to_string())
+                })?;
+            }
+            self.active_backdrop_map = Some(map);
+            Ok(true)
+        }
+
+        fn ensure_backdrop_grid(
+            &mut self,
+            requested_extent: [u32; 2],
+            requested_iter_cap: u32,
+        ) -> Result<(), AppError> {
+            let requested_extent = GridExtent {
+                width: requested_extent[0],
+                height: requested_extent[1],
+            };
+            if self.backdrop.as_ref().is_some_and(|backdrop| {
+                backdrop.plan.requested_extent == requested_extent
+                    && backdrop.plan.requested_max_iter == requested_iter_cap
+                    && backdrop.plan.precision_mode == self.precision_mode
+            }) {
+                return Ok(());
+            }
+            self.release_backdrop()?;
+            let plan = JulibrotKernels::plan(
+                &self.executor,
+                requested_extent,
+                EscapeParams::new(requested_iter_cap),
+            )
+            .map_err(kernel_error)?
+            .with_precision_mode(self.precision_mode);
+            let grid = self
+                .kernels
+                .allocate_grid(&mut self.executor, &plan)
+                .map_err(kernel_error)?;
+            self.backdrop = Some(BackdropGrid {
+                plan,
+                grid,
+                ready: None,
+                in_flight: None,
+            });
+            Ok(())
+        }
+
+        fn release_backdrop(&mut self) -> Result<(), AppError> {
+            self.active_backdrop_map = None;
+            if let Some(backdrop) = self.backdrop.take() {
+                self.kernels
+                    .free_grid(&mut self.executor, backdrop.grid)
+                    .map_err(kernel_error)?;
+            }
+            Ok(())
+        }
+
+        fn install_main(
+            &mut self,
+            viewer: &ViewerController,
+            object: ObjectAngles,
+            plane: Plane,
+            map: PoseMap,
+        ) {
+            let current_stamp = self.view_stamp(viewer);
+            let ready_backdrop = self.backdrop.as_ref().and_then(|backdrop| {
+                backdrop.ready.filter(|ready| {
+                    ready.stamp.render_equivalent(current_stamp)
+                        && self.active_backdrop_map.is_none()
+                })
+            });
+            let (grid, source_map, requested_width, delivered_iter_cap, backdrop) =
+                if let Some(source_map) = self.active_backdrop_map {
+                    let backdrop = self
+                        .backdrop
+                        .as_ref()
+                        .expect("active backdrop map always owns a grid");
+                    let mut grid = backdrop.grid.clone();
+                    let final_spec = backdrop.plan.level(RefinementLevel::Final);
+                    grid.width = final_spec.extent.width;
+                    grid.height = final_spec.extent.height;
+                    grid.level = RefinementLevel::Final;
+                    (
+                        grid,
+                        source_map,
+                        backdrop.plan.requested_extent.width,
+                        super::published_iteration_cap(&backdrop.plan),
+                        None,
+                    )
+                } else {
+                    let mut grid = self.grid.clone();
+                    if let Some(level) = self.prepared_level {
+                        let spec = self.plan.level(level);
+                        grid.width = spec.extent.width;
+                        grid.height = spec.extent.height;
+                        grid.level = level;
+                    }
+                    let backdrop = ready_backdrop.map(|ready| {
+                        let stored = self
+                            .backdrop
+                            .as_ref()
+                            .expect("ready backdrop always owns a grid");
+                        PresentBackdrop {
+                            grid: stored.grid.clone(),
+                            iteration_cap: super::published_iteration_cap(&stored.plan),
+                            plane,
+                            map: ready.map,
+                        }
+                    });
+                    (
+                        grid,
+                        map,
+                        self.plan.requested_extent.width,
+                        super::published_iteration_cap(&self.plan),
+                        backdrop,
+                    )
+                };
+            self.main.delivered_iter_cap = delivered_iter_cap;
             let facts_pose = (map, [grid.width, grid.height]);
             if self.facts_pose != facts_pose {
                 let horizon = super::horizon_facts(map, facts_pose.1);
@@ -1633,15 +1890,12 @@ mod browser {
             }
             self.presenter.set_main(PresentMain {
                 epoch: self.owner_epoch,
-                state: super::main_for_grid(
-                    self.main,
-                    grid.width,
-                    self.plan.requested_extent.width,
-                ),
+                state: super::main_for_grid(self.main, grid.width, requested_width),
                 grid,
                 object,
                 plane,
-                map,
+                map: source_map,
+                backdrop,
             });
         }
 
@@ -1696,6 +1950,12 @@ mod browser {
         }
 
         fn prepared_extent(&self) -> [u32; 2] {
+            if self.active_backdrop_map.is_some()
+                && let Some(backdrop) = &self.backdrop
+            {
+                let final_spec = backdrop.plan.level(RefinementLevel::Final);
+                return [final_spec.extent.width, final_spec.extent.height];
+            }
             self.prepared_level
                 .map_or([self.grid.width, self.grid.height], |level| {
                     let extent = self.plan.level(level).extent;
@@ -1829,7 +2089,7 @@ mod browser {
             let requested = viewer.requested();
             let map = viewer.screen_map(self.prepared_extent())?;
             let plane = viewer.checked_plane();
-            self.install_main(requested.object_angles, plane, map);
+            self.install_main(viewer, requested.object_angles, plane, map);
             Ok((disposition, true))
         }
 
@@ -1865,7 +2125,7 @@ mod browser {
                 self.loop_state.scene_input_ready(navigation.generation);
                 self.prepared_level = None;
                 let map = viewer.screen_map(self.prepared_extent())?;
-                self.install_main(requested.object_angles, plane, map);
+                self.install_main(viewer, requested.object_angles, plane, map);
                 return Ok(true);
             }
             let precision = precision_for(
@@ -1914,6 +2174,10 @@ mod browser {
         }
 
         fn rebuild_grid_if_needed(&mut self, requested_max_iter: u32) -> Result<(), AppError> {
+            if self.plan.requested_max_iter == requested_max_iter {
+                return Ok(());
+            }
+            self.release_backdrop()?;
             let requested_extent = self.plan.requested_extent;
             let next = JulibrotKernels::plan(
                 &self.executor,
@@ -1945,6 +2209,7 @@ mod browser {
             if next == self.precision_mode {
                 return Ok(());
             }
+            self.release_backdrop()?;
             let next_plan = self.plan.with_precision_mode(next);
             let next_grid = self
                 .kernels
@@ -1989,6 +2254,9 @@ mod browser {
             }
             if !self.scene_ready(viewer.requested().zoom_log2) {
                 return Ok(None);
+            }
+            if self.active_backdrop_map.is_some() {
+                return self.submit_due_backdrop(viewer, plane, slot, owner_epoch, now_ms);
             }
             let Some(level) = self.loop_state.due() else {
                 return Ok(None);
@@ -2073,24 +2341,135 @@ mod browser {
                 None
             };
             self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
-            self.presenter.set_main(PresentMain {
-                epoch: owner_epoch,
-                state: super::main_for_grid(
-                    self.main,
-                    self.grid.width,
-                    self.plan.requested_extent.width,
-                ),
-                grid: self.grid.clone(),
-                object,
-                plane,
-                map,
-            });
+            self.install_main(viewer, object, plane, map);
             match self.presenter.submit_scene(slot, now_ms) {
                 Ok(scene_id) => {
                     self.last_dispatch = facts;
                     self.level_timings
                         .begin_scene(self.main.centre_revision, scene_id, level);
                     self.loop_state.submitted(scene_id, level);
+                    Ok(Some(scene_id))
+                }
+                Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
+                Err(error) => Err(present_error(error)),
+            }
+        }
+
+        fn submit_due_backdrop(
+            &mut self,
+            viewer: &ViewerController,
+            plane: Plane,
+            slot: HotSlot,
+            owner_epoch: u64,
+            now_ms: f64,
+        ) -> Result<Option<u64>, AppError> {
+            if self
+                .backdrop
+                .as_ref()
+                .is_some_and(|backdrop| backdrop.in_flight.is_some())
+            {
+                return Ok(None);
+            }
+            let PoseMap::Mapped(screen_to_plane) = self
+                .active_backdrop_map
+                .ok_or_else(|| AppError::Math("backdrop dispatch has no map".to_string()))?
+            else {
+                return Ok(None);
+            };
+            let stamp = self.view_stamp(viewer);
+            let params = EscapeParams::new(viewer.requested().iteration_cap);
+            let sampling_zoom = super::sampling_zoom_log2(
+                viewer.requested().zoom_log2,
+                screen_to_plane.apron_scale,
+            )?;
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Julibrot backdrop kernels SCRATCH and DATA copy"),
+                });
+            let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
+            let facts = {
+                let backdrop = self
+                    .backdrop
+                    .as_mut()
+                    .ok_or_else(|| AppError::Kernel("backdrop dispatch has no grid".to_string()))?;
+                let level = RefinementLevel::Final;
+                match mode {
+                    KernelMode::Shallow => {
+                        let centre = self.shallow_centre.as_ref().ok_or_else(|| {
+                            AppError::Kernel("missing shallow centre".to_string())
+                        })?;
+                        let split = split_centre(centre).map_err(math_error)?;
+                        let scale = shallow_pixel_scale(
+                            sampling_zoom,
+                            backdrop.plan.level(level).extent.width,
+                        )
+                        .map_err(math_error)?;
+                        self.kernels
+                            .encode_shallow(
+                                &self.executor,
+                                &mut encoder,
+                                &mut backdrop.grid,
+                                owner_epoch,
+                                viewer.requested().precision_mode,
+                                level,
+                                &plane,
+                                &screen_to_plane,
+                                &split,
+                                scale,
+                                params,
+                            )
+                            .map_err(kernel_error)?
+                    }
+                    KernelMode::Perturbation => {
+                        let handle = self.current_orbit.ok_or_else(|| {
+                            AppError::Kernel("missing reference orbit".to_string())
+                        })?;
+                        let orbit = self.orbits.get(handle).map_err(registry_error)?;
+                        let scale =
+                            scale_split(sampling_zoom, backdrop.plan.level(level).extent.width)
+                                .map_err(math_error)?;
+                        self.kernels
+                            .encode_perturbation(
+                                &self.executor,
+                                &mut encoder,
+                                &mut backdrop.grid,
+                                owner_epoch,
+                                viewer.requested().precision_mode,
+                                level,
+                                &plane,
+                                &screen_to_plane,
+                                scale,
+                                params,
+                                ReferenceOrbitInput {
+                                    span: &orbit.span,
+                                    generation: handle.generation,
+                                    length: orbit.length,
+                                    precision_bits: orbit.precision_bits,
+                                    precision_mode: orbit.precision_mode,
+                                },
+                            )
+                            .map_err(kernel_error)?
+                    }
+                }
+            };
+            self.queue.submit([encoder.finish()]);
+            match self.presenter.submit_scene(slot, now_ms) {
+                Ok(scene_id) => {
+                    let backdrop = self.backdrop.as_mut().ok_or_else(|| {
+                        AppError::Kernel("submitted backdrop lost its grid".to_string())
+                    })?;
+                    backdrop.in_flight = Some(BackdropFlight {
+                        scene_id,
+                        stamp,
+                        map: PoseMap::Mapped(screen_to_plane),
+                    });
+                    self.last_dispatch = Some(facts);
+                    self.level_timings.begin_scene(
+                        self.main.centre_revision,
+                        scene_id,
+                        RefinementLevel::Final,
+                    );
                     Ok(Some(scene_id))
                 }
                 Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
@@ -2423,9 +2802,10 @@ mod tests {
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
         REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
-        SubmissionKind, apply_precision_mode, arrival_is_current, defer_scene_until_relief_redraw,
-        expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-        main_for_grid, perturbation_reference_is_current, published_iteration_cap,
+        SubmissionKind, apply_precision_mode, arrival_is_current, backdrop_extent,
+        defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
+        hold_redraw_during_scene, horizon_facts, main_for_grid,
+        perturbation_reference_is_current, published_iteration_cap, sampling_zoom_log2,
         schedule_exposure_fill, stamp_scene_level, stamped_extent, stamped_screen_map,
         view_projection_changed,
     };
@@ -2549,11 +2929,38 @@ mod tests {
         assert!(
             source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
         );
-        assert!(source.contains("let scene_id = if defer_scene_for_redraw {"));
+        assert!(source.contains(
+            "let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
+        ));
         assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
         assert!(source.contains(
             "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"
         ));
+    }
+
+    #[test]
+    fn backdrop_extent_spends_at_most_one_quarter_of_final_records() {
+        assert_eq!(backdrop_extent([960, 540]), Some([480, 270]));
+        assert_eq!(backdrop_extent([961, 541]), Some([480, 270]));
+        assert_eq!(backdrop_extent([1, 1]), None);
+        for extent in [[960, 540], [961, 541], [2, 2], [4_096, 2_047]] {
+            let backdrop = backdrop_extent(extent).expect("fixture admits a backdrop");
+            let final_records = u64::from(extent[0]) * u64::from(extent[1]);
+            let backdrop_records = u64::from(backdrop[0]) * u64::from(backdrop[1]);
+            assert!(backdrop_records <= final_records / 4);
+        }
+    }
+
+    #[test]
+    fn backdrop_sampling_zoom_widens_only_the_coarse_kernel_grid() {
+        let zoom = 3.921_825_538_184_839;
+        assert_eq!(
+            sampling_zoom_log2(zoom, 1.0).expect("identity").to_bits(),
+            zoom.to_bits()
+        );
+        let widened = sampling_zoom_log2(zoom, 5.0).expect("fivefold backdrop");
+        assert_eq!(widened, zoom - 5.0_f64.log2());
+        assert!(sampling_zoom_log2(zoom, 0.5).is_err());
     }
 
     #[test]

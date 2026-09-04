@@ -1,5 +1,6 @@
 use ember_julibrot_math::{
-    Plane, Pose, PoseMap, PrecisionMode, ViewControls, plane_chart_relation, warp_matrix,
+    Plane, Pose, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION, ViewControls, plane_chart_relation,
+    warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
@@ -447,8 +448,9 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
 
 /// Mirrors the generated scene WGSL from one grid-screen point through its plane point and relief.
 ///
-/// `record_height` is the escape record's normalized height in `[-2,2]`. `None` means that the
-/// projected vertex lies behind one of the perspective poles and the exterior sky remains visible.
+/// `record_height` is the escape record's normalized height in `[-2,2]`. The five-dimensional
+/// near pole is clamped; `None` means the later four-dimensional or observer projection is behind
+/// its pole and the exterior sky remains visible.
 #[must_use]
 pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
     project_scene_vertex(pose, screen, record_height).map(|projected| projected.0)
@@ -457,7 +459,7 @@ pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) ->
 /// Mirrors one scene vertex and returns its screen point with its clip-space `w`.
 ///
 /// The second value lets CPU raster oracles reproduce perspective-correct interpolation of the
-/// grid coordinate. `None` means the vertex lies behind a perspective pole.
+/// grid coordinate. `None` means the vertex lies behind a later perspective pole.
 #[must_use]
 pub fn project_scene_vertex(
     pose: &Pose,
@@ -503,8 +505,7 @@ fn project_scene_vertex_with_shortcut(
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
     let height = pose.view.height_scale * record_height;
-    if flat_shortcut && pose.view.height_scale == 0.0 {
-        debug_assert_eq!(map.apron_scale.to_bits(), 1.0_f64.to_bits());
+    if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
         return Some((screen, 1.0));
     }
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
@@ -512,7 +513,7 @@ fn project_scene_vertex_with_shortcut(
     let rotated = ambient_point(pose.plane, chart_coordinate, height, &pose.view);
     let distance_five = pose.view.distance_five;
     let distance_four = pose.view.distance_four;
-    let denominator_five = distance_five - rotated[4];
+    let denominator_five = (distance_five - rotated[4]).max(RELIEF_NEAR_FRACTION * distance_five);
     if denominator_five <= POLE_EPSILON {
         return None;
     }
@@ -1082,10 +1083,7 @@ mod tests {
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
             assert!(!plan.source_valid);
-            assert_eq!(
-                plan.approx_max_error_px, None,
-                "a pole counterexample has nothing to measure and nothing to redraw towards"
-            );
+            assert!(plan.approx_max_error_px.is_none_or(f64::is_finite));
         }
     }
 
@@ -1175,10 +1173,9 @@ mod tests {
     }
 
     #[test]
-    fn a_perspective_pole_on_the_sampled_surface_is_unbounded() {
-        // A pole on the sampled relief leaves the corpus with no finite answer to redraw towards,
-        // so the plan is an honest clear. The two poses must differ: sampling a scene at the pose
-        // it was rendered at is the identity and is never measured, let alone refused.
+    fn the_five_dimensional_pole_is_clamped_to_a_finite_relief_redraw() {
+        // The bounded near plane turns the former five-dimensional pole into a closed finite
+        // surface. The retained records can therefore be redrawn instead of being discarded.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
@@ -1189,9 +1186,9 @@ mod tests {
         to.zoom_log2 += 0.125;
         assert_ne!(from, to);
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ClearOnly);
-        assert!(!plan.source_valid);
-        assert_eq!(plan.approx_max_error_px, None);
+        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+        assert!(plan.source_valid);
+        assert!(plan.approx_max_error_px.is_some_and(f64::is_finite));
     }
 
     /// The owner's broken row, taken from the page's own Copy row JSON.

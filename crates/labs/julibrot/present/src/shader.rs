@@ -112,7 +112,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    let denominator_five = distance_five - ambient.fifth;
+    let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);
     if (denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
     let projected_four = ambient.low * scale_five;
@@ -334,6 +334,7 @@ mod tests {
 
     #[test]
     fn the_scene_pins_heap_rotation_poles_camera_depth_and_light() {
+        assert_eq!(ember_julibrot_math::RELIEF_NEAR_FRACTION, 0.05);
         let source = scene_shader(limits());
         for required in [
             "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
@@ -351,7 +352,7 @@ mod tests {
             "rotated.fifth += hot.camera_translation_1.x;",
             "let distance_five = hot.view_scale.y;",
             "let distance_four = hot.view_scale.z;",
-            "let denominator_five = distance_five - ambient.fifth;",
+            "let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);",
             "let denominator_four = distance_four - projected_four.w;",
             "if (denominator_five <= 1.0e-4) { return output; }",
             "if (denominator_four <= 1.0e-4) { return output; }",

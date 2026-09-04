@@ -95,7 +95,7 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
         map.apron_scale,
     ];
     if !scalar_values.iter().all(|value| value.is_finite())
-        || !(1.0..=2.0).contains(&map.apron_scale)
+        || map.apron_scale < 1.0
         || !map
             .rows
             .iter()

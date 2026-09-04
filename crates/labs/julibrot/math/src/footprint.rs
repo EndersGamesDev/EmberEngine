@@ -33,20 +33,30 @@ const COVERAGE_LATTICE_SIDE: usize = 65;
 /// Guard the scene shader applies to both perspective denominators before dividing.
 const DENOMINATOR_EPSILON: f64 = 1.0e-4;
 
-/// Largest sampling-map apron the application will spend at a fixed record count.
-pub const MAX_APRON_SCALE: f64 = 2.0;
+/// Minimum retained distance from the five-dimensional eye, as a fraction of `distance_five`.
+///
+/// Five percent leaves twenty-times perspective magnification available for relief while keeping
+/// every lifted vertex strictly in front of the eye. A later limit-model study owns replacing this
+/// small 2D-projection rule with a true model-space clipping distance.
+pub const RELIEF_NEAR_FRACTION: f64 = 0.05;
+
+/// Heights sampled when reporting the pose-level share of the bounded record domain that clips.
+const CLIP_HEIGHTS: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
+
+/// Screen samples per axis in the clipping census.
+const CLIP_LATTICE_SIDE: u32 = 9;
 
 /// Where one pose's lifted mesh lands relative to the frame it was sampled for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneFootprint {
     /// Smallest radial scale the frame boundary reaches under the height range; `1.0` covers.
     pub boundary_scale: f64,
-    /// Screen-space overscan applied to the sampling extent, clamped to [`MAX_APRON_SCALE`].
+    /// Unclamped screen-space overscan applied to the coarse backdrop sampling extent.
     pub apron_scale: f64,
-    /// Unclamped screen-space overscan needed to cover the complete frame.
-    pub requested_apron_scale: f64,
-    /// Share of the render surface the mesh cannot reach after applying `apron_scale`, in `[0,1]`.
+    /// Share of the render surface neither the main grid nor the scaled backdrop can reach.
     pub uncovered_fraction: f64,
+    /// Share of the fixed plane-and-height census clamped at the five-dimensional near limit.
+    pub relief_clipped_fraction: f64,
 }
 
 impl SceneFootprint {
@@ -54,8 +64,8 @@ impl SceneFootprint {
     pub const COVERED: Self = Self {
         boundary_scale: 1.0,
         apron_scale: 1.0,
-        requested_apron_scale: 1.0,
         uncovered_fraction: 0.0,
+        relief_clipped_fraction: 0.0,
     };
 }
 
@@ -88,33 +98,16 @@ pub fn scene_footprint(
         return Ok(SceneFootprint::COVERED);
     }
 
-    // `record_height` spans [-2,2]; the height control scales it. The fifth coordinate is affine
-    // in the record height and `d₅/(d₅ − h)` is monotone in it, so the extremes of the range bound
-    // every intermediate lift and two boundary traces are enough.
+    // `record_height` spans [-2,2]. The floor is therefore lifted to `-2 * height_scale` and the
+    // five-to-four perspective contracts all four plane coordinates by the closed-form factor
+    // below. Widening the input plane by its reciprocal restores the exact height-zero four-point
+    // before the later four-to-three perspective and observer, irrespective of those transforms.
     let amplitude = 2.0 * view.height_scale;
-    let unscaled_boundaries = [-amplitude, amplitude]
-        .map(|height| lifted_boundary(&map, plane, view, grid_w, grid_h, aspect, height, 1.0));
-    let unscaled_traces: Vec<&Vec<[f64; 2]>> = unscaled_boundaries.iter().flatten().collect();
-    if unscaled_traces.is_empty() {
-        // Every boundary vertex fell past a perspective pole. The shader clips those triangles and
-        // paints sky there, which is the geometry answering rather than a coverage shortfall.
-        return Ok(SceneFootprint {
-            boundary_scale: 1.0,
-            apron_scale: 1.0,
-            requested_apron_scale: 1.0,
-            uncovered_fraction: 1.0,
-        });
-    }
-    let mut boundary_scale = 1.0_f64;
-    for point in unscaled_traces.iter().flat_map(|ring| ring.iter()) {
-        let radius = point[0].abs().max(point[1].abs());
-        boundary_scale = boundary_scale.min(radius);
-    }
+    let boundary_scale = view.distance_five / (view.distance_five + amplitude);
     if !boundary_scale.is_finite() || boundary_scale <= 0.0 {
         return Err(MathError::DegenerateViewMap);
     }
-    let requested_apron_scale = (1.0 / boundary_scale).max(1.0);
-    let apron_scale = requested_apron_scale.min(MAX_APRON_SCALE);
+    let apron_scale = 1.0 / boundary_scale;
     let applied_boundaries = [-amplitude, amplitude].map(|height| {
         lifted_boundary(
             &map,
@@ -140,11 +133,12 @@ pub fn scene_footprint(
         }
     }
     let uncovered = 1.0 - covered as f64 / total as f64;
+    let relief_clipped_fraction = clipped_fraction(&map, plane, view, grid_w, grid_h, apron_scale);
     Ok(SceneFootprint {
         boundary_scale,
         apron_scale,
-        requested_apron_scale,
         uncovered_fraction: uncovered,
+        relief_clipped_fraction,
     })
 }
 
@@ -210,36 +204,10 @@ fn project_vertex(
     height: f64,
     apron_scale: f64,
 ) -> Option<[f64; 2]> {
-    let rows = map.rows;
-    let homogeneous: [f64; 3] = core::array::from_fn(|row| {
-        rows[3 * row] * screen[0] + rows[3 * row + 1] * screen[1] + rows[3 * row + 2]
-    });
-    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
-        return None;
-    }
-    let offset = [
-        homogeneous[0] / homogeneous[2],
-        homogeneous[1] / homogeneous[2],
-    ];
-    let chart_scale = 4.0 * apron_scale / f64::from(grid_w);
-    let display: [f64; 4] = core::array::from_fn(|axis| {
-        chart_scale
-            * offset[0].mul_add(
-                f64::from(plane.basis_u[axis]),
-                offset[1] * f64::from(plane.basis_v[axis]),
-            )
-    });
-
-    let ambient_in = [display[0], display[1], display[2], display[3], height];
-    let matrix = camera_matrix(view);
-    let mut ambient: [f64; 5] = core::array::from_fn(|row| {
-        (0..5).fold(0.0, |sum, column| {
-            matrix[row][column].mul_add(ambient_in[column], sum)
-        })
-    });
-    for (axis, value) in ambient.iter_mut().enumerate() {
-        *value += view.camera_translation[axis];
-    }
+    let mut ambient = ambient_vertex(map, plane, view, grid_w, screen, height, apron_scale)?;
+    let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
+    let maximum_fifth = view.distance_five - near_five;
+    ambient[4] = ambient[4].min(maximum_fifth);
 
     let denominator_five = view.distance_five - ambient[4];
     if denominator_five <= DENOMINATOR_EPSILON {
@@ -287,6 +255,96 @@ fn project_vertex(
     ndc.iter().all(|value| value.is_finite()).then_some(ndc)
 }
 
+/// Maps one grid point through the sampling chart and five-dimensional camera, before clipping.
+fn ambient_vertex(
+    map: &crate::Homography,
+    plane: Plane,
+    view: &ViewControls,
+    grid_w: u32,
+    screen: [f64; 2],
+    height: f64,
+    apron_scale: f64,
+) -> Option<[f64; 5]> {
+    let rows = map.rows;
+    let homogeneous: [f64; 3] = core::array::from_fn(|row| {
+        rows[3 * row] * screen[0] + rows[3 * row + 1] * screen[1] + rows[3 * row + 2]
+    });
+    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
+        return None;
+    }
+    let offset = [
+        homogeneous[0] / homogeneous[2],
+        homogeneous[1] / homogeneous[2],
+    ];
+    let chart_scale = 4.0 * apron_scale / f64::from(grid_w);
+    let display: [f64; 4] = core::array::from_fn(|axis| {
+        chart_scale
+            * offset[0].mul_add(
+                f64::from(plane.basis_u[axis]),
+                offset[1] * f64::from(plane.basis_v[axis]),
+            )
+    });
+
+    let ambient_in = [display[0], display[1], display[2], display[3], height];
+    let matrix = camera_matrix(view);
+    let mut ambient: [f64; 5] = core::array::from_fn(|row| {
+        (0..5).fold(0.0, |sum, column| {
+            matrix[row][column].mul_add(ambient_in[column], sum)
+        })
+    });
+    for (axis, value) in ambient.iter_mut().enumerate() {
+        *value += view.camera_translation[axis];
+    }
+    ambient
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(ambient)
+}
+
+/// Measures the share of the bounded record domain that reaches the five-dimensional near clamp.
+fn clipped_fraction(
+    map: &crate::Homography,
+    plane: Plane,
+    view: &ViewControls,
+    grid_w: u32,
+    grid_h: u32,
+    apron_scale: f64,
+) -> f64 {
+    let mut clipped = 0_u32;
+    let mut total = 0_u32;
+    for row in 0..CLIP_LATTICE_SIDE {
+        for column in 0..CLIP_LATTICE_SIDE {
+            let screen = [
+                (f64::from(column) / f64::from(CLIP_LATTICE_SIDE - 1) - 0.5) * f64::from(grid_w),
+                (f64::from(row) / f64::from(CLIP_LATTICE_SIDE - 1) - 0.5) * f64::from(grid_h),
+            ];
+            for record_height in CLIP_HEIGHTS {
+                let Some(ambient) = ambient_vertex(
+                    map,
+                    plane,
+                    view,
+                    grid_w,
+                    screen,
+                    view.height_scale * record_height,
+                    apron_scale,
+                ) else {
+                    continue;
+                };
+                total += 1;
+                let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
+                if view.distance_five - ambient[4] < near_five {
+                    clipped += 1;
+                }
+            }
+        }
+    }
+    if total == 0 {
+        0.0
+    } else {
+        f64::from(clipped) / f64::from(total)
+    }
+}
+
 /// Crossing-count test for a point against the traced boundary ring.
 fn encloses(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
     let mut inside = false;
@@ -327,9 +385,9 @@ mod tests {
         let (object, view) = owner_row(0.0);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("flat pose maps");
         assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
-        assert_eq!(footprint.requested_apron_scale.to_bits(), 1.0_f64.to_bits());
         assert!((footprint.boundary_scale - 1.0).abs() < 1.0e-9);
         assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert_eq!(footprint.relief_clipped_fraction, 0.0);
         assert_eq!(SceneFootprint::COVERED.uncovered_fraction, 0.0);
     }
 
@@ -346,9 +404,9 @@ mod tests {
             "boundary {} expected {expected}",
             footprint.boundary_scale
         );
-        assert!((footprint.requested_apron_scale - 1.0 / expected).abs() < 1.0e-6);
         assert!((footprint.apron_scale - 1.0 / expected).abs() < 1.0e-6);
         assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert_eq!(footprint.relief_clipped_fraction, 0.0);
     }
 
     /// Zoom never enters the scene map or the vertex chain, only the kernels' pixel scale, so the
@@ -378,13 +436,13 @@ mod tests {
                 footprint.apron_scale
             );
             assert!(
-                (footprint.requested_apron_scale * footprint.boundary_scale - 1.0).abs() < 1.0e-9,
+                (footprint.apron_scale * footprint.boundary_scale - 1.0).abs() < 1.0e-9,
                 "height {height_scale} apron and boundary must be reciprocal"
             );
         }
     }
 
-    /// The slider maximum doubles the sampled extent, which is four times the records.
+    /// At the ordinary distance, the slider maximum asks the backdrop to span twice the frame.
     #[test]
     fn maximum_height_needs_a_doubled_extent() {
         let (object, view) = owner_row(4.0);
@@ -394,16 +452,37 @@ mod tests {
             "apron {}",
             footprint.apron_scale
         );
-        assert!((footprint.requested_apron_scale - 2.0).abs() < 1.0e-6);
         assert_eq!(footprint.uncovered_fraction, 0.0);
     }
 
     #[test]
-    fn an_apron_beyond_the_budget_is_clamped_and_its_shortfall_stays_visible() {
-        let (object, view) = owner_row(8.0);
+    fn close_owner_row_gets_a_five_times_backdrop_and_a_closed_near_clip() {
+        let angle = -1.316_653_720_171_549_4;
+        let object = ObjectAngles {
+            rho_13: angle,
+            rho_24: angle,
+            ..ObjectAngles::IDENTITY
+        };
+        let camera_angle = -0.254_142_606_623_347_1;
+        let mut camera = [0.0; 10];
+        camera[1] = camera_angle;
+        camera[4] = camera_angle;
+        let view = ViewControls {
+            camera,
+            camera_yaw: 0.960_422_302_787_256,
+            camera_pitch: core::f64::consts::PI,
+            height_scale: 4.0,
+            distance_five: 2.0,
+            distance_four: 2.0,
+            ..ViewControls::NEUTRAL
+        };
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert!((footprint.requested_apron_scale - 3.0).abs() < 1.0e-6);
-        assert_eq!(footprint.apron_scale, super::MAX_APRON_SCALE);
-        assert!(footprint.uncovered_fraction > 0.5);
+        assert!(
+            (footprint.boundary_scale - 0.2).abs() < 1.0e-6,
+            "footprint was {footprint:?}"
+        );
+        assert!((footprint.apron_scale - 5.0).abs() < 1.0e-6);
+        assert!(footprint.uncovered_fraction < 0.01);
+        assert!(footprint.relief_clipped_fraction > 0.0);
     }
 }
