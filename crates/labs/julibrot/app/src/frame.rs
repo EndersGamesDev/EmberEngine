@@ -2738,8 +2738,7 @@ mod tests {
                 self.fence_observations += 1;
                 if let Some(event) = self.callback.take() {
                     if let FakeEvent::Completed(scene) = event
-                        && (self.retained_scene.is_none()
-                            || scene.level == RefinementLevel::Final)
+                        && (self.retained_scene.is_none() || scene.level == RefinementLevel::Final)
                     {
                         self.retained_scene = Some(scene.id);
                         self.refuse_warp = false;
