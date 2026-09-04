@@ -48,9 +48,9 @@ struct ReferenceCandidate {
 /// Mirrors the present census candidate on CPU records.
 ///
 /// The rank is the same total order the census shader encodes: a record that never escaped within
-/// the grid's cap ranks 255, a glitched record ranks 254, and an escaped record ranks by its own
-/// count over 0..253. Equal ranks keep the lowest record index, so the same grid always names the
-/// same reference point.
+/// the grid's cap ranks 255, a glitch that exhausted its reference ranks 254, an escaped record
+/// ranks by its own count over 1..253, and a glitch from arithmetic failure ranks 0. Equal ranks
+/// keep the lowest record index, so the same grid always names the same reference point.
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
@@ -71,12 +71,15 @@ fn select_reference_candidate(
                 return None;
             }
             let rank = if status == SampleStatus::Glitch {
-                254
+                u8::from(
+                    record.smooth_iter.to_bits()
+                        == ember_julibrot_kernels::GLITCH_REFERENCE_EXHAUSTED.to_bits(),
+                ) * 254
             } else if record.escaped == 0.0 {
                 255
-            } else if record.escaped != 0.0 && record.smooth_iter.is_finite() {
+            } else if record.smooth_iter.is_finite() {
                 let reached = f64::from(record.smooth_iter.ceil().max(0.0)).min(cap);
-                (253.0 * reached / cap + 0.5).floor() as u8
+                1 + (252.0 * reached / cap + 0.5).floor() as u8
             } else {
                 return None;
             };
@@ -624,6 +627,18 @@ impl FrameLoop {
         }
     }
 
+    /// Accepts new scene input that changed no pixel's meaning and resumes at one chosen level.
+    #[cfg(any(target_arch = "wasm32", test))]
+    const fn scene_input_resumed(&mut self, generation: u32, level: RefinementLevel) {
+        if matches!(self.scene_mode, SceneMode::Auto) || self.manual_rendering {
+            self.schedule.resume_at(generation, level);
+            self.restart_after_scene = None;
+            if self.requested_run {
+                self.completed_run = false;
+            }
+        }
+    }
+
     const fn scene_selection_changed(&mut self, generation: u32) {
         if matches!(self.scene_mode, SceneMode::Auto) {
             self.restart(generation);
@@ -920,6 +935,15 @@ impl RefinementSchedule {
         self.next = Some(RefinementLevel::Preview);
     }
 
+    /// Resumes ordered refinement at one chosen level for a selection whose picture did not change.
+    ///
+    /// A reference exchange replaces the orbit the same view is expanded around, so the levels
+    /// below the one already delivered would only repaint the same meaning at lower resolution.
+    pub const fn resume_at(&mut self, generation: u32, level: RefinementLevel) {
+        self.generation = generation;
+        self.next = Some(level);
+    }
+
     /// Stops future levels without forgetting a scene whose fence must still be observed.
     #[cfg(any(target_arch = "wasm32", test))]
     const fn pause(&mut self) {
@@ -1185,6 +1209,10 @@ mod browser {
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
         sampled_references: u32,
+        sampled_request_at_length: Option<u32>,
+        sampled_reference_rounds: u32,
+        sampled_reference_discards: u32,
+        sampled_resume_level: Option<RefinementLevel>,
         submitted_references: Vec<SubmittedReference>,
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
@@ -1343,6 +1371,10 @@ mod browser {
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
                 sampled_references: 0,
+                sampled_request_at_length: None,
+                sampled_reference_rounds: 0,
+                sampled_reference_discards: 0,
+                sampled_resume_level: None,
                 submitted_references: Vec::with_capacity(2),
                 reference_upload,
                 plan,
@@ -1818,16 +1850,21 @@ mod browser {
 
         /// Requests one reference at a completed grid's best census candidate.
         ///
-        /// A reference whose own orbit escapes before a level's cap turns every longer-lived pixel
-        /// of that level into a glitch, so a short accepted reference is replaced by the record the
+        /// A reference whose own orbit ends before a level's cap turns every longer-lived record of
+        /// that level into a glitch, so a short accepted reference is replaced by the record the
         /// census ranked highest: one that never escaped within the completed grid's cap where the
-        /// grid holds one, a glitched record next, and the longest-lived escaping record last, ties
-        /// broken by the lowest index. The request is made only when the completed grid's cap is
-        /// strictly longer than the accepted orbit, because only then does its top-ranked record
-        /// certify a longer orbit than the one in hand; that alone makes the exchange monotone and
-        /// stops it the moment the reference outlasts the level. The navigation centre never moves;
-        /// only the orbit point does. At most [`SAMPLED_REFERENCE_LIMIT`] requests are made per
-        /// accepted navigation, so a grid whose glitches have another cause cannot drive a chase.
+        /// grid holds one, a glitch that exhausted its reference next, then the longest-lived
+        /// escaping record, and a glitch from arithmetic failure last, ties broken by the lowest
+        /// index. The request is made only when the completed grid's cap is strictly longer than
+        /// the accepted orbit, because only then can its top-ranked record name a longer orbit at
+        /// all. The navigation centre never moves; only the orbit point does.
+        ///
+        /// One request is issued per accepted orbit: a ladder whose Interactive and Final caps both
+        /// outlast the same short reference would otherwise spend two of the bounded slots to buy
+        /// one correction, because the second request only supersedes the first. At most
+        /// [`SAMPLED_REFERENCE_LIMIT`] requests are made per accepted navigation, so a grid whose
+        /// glitches have another cause cannot drive a chase, and the top rank is a heuristic rather
+        /// than a proof, which is why the arrival keeps the longest orbit rather than the newest.
         fn maybe_request_sampled_reference(
             &mut self,
             viewer: &mut ViewerController,
@@ -1841,6 +1878,7 @@ mod browser {
                 || self.sampled_references >= SAMPLED_REFERENCE_LIMIT
                 || self.main.orbit_length == 0
                 || frame.iteration_cap <= self.main.orbit_length
+                || self.sampled_request_at_length == Some(self.main.orbit_length)
             {
                 return;
             }
@@ -1849,7 +1887,27 @@ mod browser {
                 .is_ok()
             {
                 self.sampled_references = self.sampled_references.saturating_add(1);
+                self.sampled_request_at_length = Some(self.main.orbit_length);
+                self.sampled_resume_level = Some(frame.level);
             }
+        }
+
+        /// Returns how many reference requests the census candidate has driven for this navigation.
+        #[must_use]
+        pub const fn sampled_reference_requests(&self) -> u32 {
+            self.sampled_references
+        }
+
+        /// Returns how many of those requests were accepted, each costing one resumed ladder.
+        #[must_use]
+        pub const fn sampled_reference_rounds(&self) -> u32 {
+            self.sampled_reference_rounds
+        }
+
+        /// Returns how many sampled arrivals were discarded for not lengthening the accepted orbit.
+        #[must_use]
+        pub const fn sampled_reference_discards(&self) -> u32 {
+            self.sampled_reference_discards
         }
 
         fn prepare_due_level(&mut self) -> bool {
@@ -2167,6 +2225,11 @@ mod browser {
             }) else {
                 return Ok((OrbitDisposition::Stale, false));
             };
+            if submitted.sampled && response.length() <= self.main.orbit_length {
+                self.sampled_reference_discards = self.sampled_reference_discards.saturating_add(1);
+                self.sampled_resume_level = None;
+                return Ok((OrbitDisposition::Stale, false));
+            }
             let records = response
                 .records
                 .transfer_record_bytes()
@@ -2232,8 +2295,14 @@ mod browser {
             self.replace_current_orbit(handle)?;
             self.accepted_reference = Some(submitted.reference_centre);
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
-            if !submitted.sampled {
+            self.sampled_request_at_length = None;
+            if submitted.sampled {
+                self.sampled_reference_rounds = self.sampled_reference_rounds.saturating_add(1);
+            } else {
                 self.sampled_references = 0;
+                self.sampled_reference_rounds = 0;
+                self.sampled_reference_discards = 0;
+                self.sampled_resume_level = None;
             }
             self.main = viewer.drain_main()?.main;
             self.level_timings.record_worker(
@@ -2242,7 +2311,12 @@ mod browser {
                 None,
             );
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-            self.loop_state.scene_input_ready(response.generation());
+            match self.sampled_resume_level.take().filter(|_| submitted.sampled) {
+                Some(level) => self
+                    .loop_state
+                    .scene_input_resumed(response.generation(), level),
+                None => self.loop_state.scene_input_ready(response.generation()),
+            }
             self.prepared_level = None;
             let requested = viewer.requested();
             let map = viewer.screen_map(self.prepared_extent())?;
@@ -3016,40 +3090,51 @@ mod tests {
             }
         }
         const CAP: u32 = 512;
+        let escaping = record(SampleStatus::Sampled, 1.0, 511.0);
+        let exhausted = record(
+            SampleStatus::Glitch,
+            0.0,
+            ember_julibrot_kernels::GLITCH_REFERENCE_EXHAUSTED,
+        );
+        let numeric = record(
+            SampleStatus::Glitch,
+            0.0,
+            ember_julibrot_kernels::GLITCH_NUMERIC_FAILURE,
+        );
+        let interior = record(SampleStatus::Sampled, 0.0, -1.0);
+        let horizon = record(SampleStatus::Horizon, 0.0, -1.0);
 
-        let records = [
-            record(SampleStatus::Sampled, 1.0, 511.0),
-            record(SampleStatus::Glitch, 0.0, -1.0),
-            record(SampleStatus::Sampled, 0.0, -1.0),
-            record(SampleStatus::Sampled, 0.0, -1.0),
-            record(SampleStatus::Horizon, 0.0, -1.0),
-        ];
-        let candidate =
-            select_reference_candidate(&records, CAP).expect("the grid holds a candidate");
         assert_eq!(
-            candidate.index, 2,
+            select_reference_candidate(&[numeric, escaping, exhausted, interior, horizon], CAP),
+            Some(super::ReferenceCandidate {
+                index: 3,
+                rank: 255
+            }),
             "a record that never escaped outranks every other"
         );
-        assert_eq!(candidate.rank, 255);
         assert_eq!(
-            select_reference_candidate(&records[..2], CAP)
-                .expect("a glitched record is still a candidate"),
-            super::ReferenceCandidate {
-                index: 1,
+            select_reference_candidate(&[numeric, escaping, exhausted], CAP),
+            Some(super::ReferenceCandidate {
+                index: 2,
                 rank: 254
-            },
-            "a glitched record outranks every escaping record"
+            }),
+            "only the glitch that exhausted its reference outranks an escaping record"
         );
         assert_eq!(
-            select_reference_candidate(&records[..1], CAP)
-                .expect("an escaping record is the last resort"),
-            super::ReferenceCandidate {
-                index: 0,
+            select_reference_candidate(&[numeric, escaping], CAP),
+            Some(super::ReferenceCandidate {
+                index: 1,
                 rank: 253
-            }
+            }),
+            "a glitch from arithmetic failure ranks below every escaping record"
         );
         assert_eq!(
-            select_reference_candidate(&records[4..], CAP),
+            select_reference_candidate(&[numeric], CAP),
+            Some(super::ReferenceCandidate { index: 0, rank: 0 }),
+            "a numeric failure is still a last resort when the grid holds nothing else"
+        );
+        assert_eq!(
+            select_reference_candidate(&[horizon], CAP),
             None,
             "a horizon record is never a reference"
         );

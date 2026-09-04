@@ -51,6 +51,9 @@ const PAGE_FACT_FIELDS: [&str; 115] = [
     "scene_mode",
     "scene_update_pending",
     "draft_skipped_count",
+    "sampled_reference_requests",
+    "sampled_reference_rounds",
+    "sampled_reference_discards",
     "last_draft_skip_reason",
     "extent_divisor",
     "active_pixels",
@@ -686,6 +689,8 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("scene_mode: loop_facts.scene_mode().as_str()"));
     assert!(FACTS.contains("scene_update_pending: loop_facts.scene_update_pending()"));
     assert!(FACTS.contains("draft_skipped_count: loop_facts.draft_skipped_count()"));
+    assert!(FACTS.contains("sampled_reference_rounds: loop_facts.sampled_reference_rounds()"));
+    assert!(FACTS.contains("sampled_reference_discards: loop_facts.sampled_reference_discards()"));
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_exposed_fraction: present.warp_exposed_fraction"));
