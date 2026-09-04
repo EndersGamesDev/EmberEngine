@@ -258,7 +258,7 @@ alive() {
 }
 
 stop_one() {
-    local label="$1" pid i
+    local label="$1" pid
     pid="$(pid_of "$label")"
     if [ -z "$pid" ] || ! alive "$label"; then
         # Gone, or the number now belongs to something that is not ours.
@@ -266,7 +266,7 @@ stop_one() {
         return 0
     fi
     kill "$pid" 2>/dev/null || true
-    for i in $(seq 1 25); do
+    for _ in $(seq 1 25); do
         if ! kill -0 "$pid" 2>/dev/null; then
             echo "   stopped $label ($pid)"
             rm -f "$RUN/$label.pid"
