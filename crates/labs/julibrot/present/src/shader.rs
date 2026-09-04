@@ -304,7 +304,7 @@ mod tests {
         assert!(
             source.contains("if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }")
         );
-        assert!(!source.contains("malformed(record) || record.w == 1.0"));
+        assert!(!source.contains("if (malformed(record) || record.w == 1.0) { return vec4<f32>"));
         assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
         // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior

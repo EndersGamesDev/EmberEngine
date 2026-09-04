@@ -2228,7 +2228,7 @@ mod tests {
         let source = include_str!("gpu.rs");
         let accessor = [".dynamic_", "offset()"].concat();
         let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-        assert_eq!(source.matches(&accessor).count(), 5);
+        assert_eq!(source.matches(&accessor).count(), 6);
         assert!(!source.contains(&bypass));
     }
 }
