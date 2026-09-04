@@ -94,7 +94,11 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
         SampleStatus::Sampled | SampleStatus::MapUncertain if escaped => {
             record.smooth_iter.is_finite()
         }
-        SampleStatus::Sampled | SampleStatus::MapUncertain | SampleStatus::Glitch if !escaped => {
+        SampleStatus::Glitch if !escaped => {
+            record.smooth_iter.to_bits() == crate::GLITCH_REFERENCE_EXHAUSTED.to_bits()
+                || record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits()
+        }
+        SampleStatus::Sampled | SampleStatus::MapUncertain if !escaped => {
             record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
         }
         SampleStatus::Horizon => {

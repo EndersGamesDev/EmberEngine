@@ -236,13 +236,30 @@ fn smooth_iteration(iteration: u32, value: [f32; 2]) -> f32 {
     iteration as f32 + 1.0 - log2_norm(value).log2()
 }
 
-const fn record(rebases: u32, glitch: bool) -> KernelSample {
+const fn capped(rebases: u32) -> KernelSample {
     KernelSample {
         record: EscapeGridRecord {
             smooth_iter: -1.0,
             escaped: 0.0,
             rebase_count: rebases as f32,
-            status: if glitch { 1.0 } else { 0.0 },
+            status: 0.0,
+        },
+        escape_index: None,
+    }
+}
+
+/// Builds the honest glitch record, carrying which of the two glitch kinds produced it.
+const fn glitch(rebases: u32, exhausted: bool) -> KernelSample {
+    KernelSample {
+        record: EscapeGridRecord {
+            smooth_iter: if exhausted {
+                crate::GLITCH_REFERENCE_EXHAUSTED
+            } else {
+                crate::GLITCH_NUMERIC_FAILURE
+            },
+            escaped: 0.0,
+            rebase_count: rebases as f32,
+            status: 1.0,
         },
         escape_index: None,
     }
@@ -286,19 +303,19 @@ pub fn perturb_scaled_offset(
         glitch: false,
     });
     if state.glitch {
-        return Ok(record(0, true));
+        return Ok(glitch(0, false));
     }
     let mut reference_index = 0_u32;
     let mut rebases = 0_u32;
     for iteration in 0..uniforms.max_iter {
         if reference_index >= uniforms.orbit_length {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, true));
         }
         let reference = reconstruct(orbit[reference_index as usize]);
         let represented_delta = scale(state.delta, state.exponent);
         let z = add(reference, represented_delta);
         if !finite(z) {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, false));
         }
         if radius_squared(z) > uniforms.bailout {
             return Ok(KernelSample {
@@ -316,17 +333,17 @@ pub fn perturb_scaled_offset(
         }
         let advance_reference = if robust_norm(z) < robust_norm(represented_delta) {
             if rebases >= REBASE_EXACT_LIMIT {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             }
             let Some(reverse_exponent) = state.exponent.checked_neg() else {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             };
             state.delta = scale(subtract(z, z_zero), reverse_exponent);
             reference_index = 0;
             rebases += 1;
             state = normalize_scaled(state);
             if state.glitch {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             }
             z_zero
         } else {
@@ -341,10 +358,10 @@ pub fn perturb_scaled_offset(
         reference_index += 1;
         state = normalize_scaled(state);
         if state.glitch {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, false));
         }
     }
-    Ok(record(rebases, false))
+    Ok(capped(rebases))
 }
 
 /// Forms one normalized bottom-up pixel offset and mirrors the scaled perturbation kernel.

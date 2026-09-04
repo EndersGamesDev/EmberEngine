@@ -22,8 +22,8 @@ pub use error::KernelError;
 pub use gpu::JulibrotKernels;
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
 pub use records::{
-    EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
-    SampleStatus, ShallowUniform,
+    EscapeGrid, GLITCH_NUMERIC_FAILURE, GLITCH_REFERENCE_EXHAUSTED, GridExtent, KernelMode,
+    PerturbUniform, ReferenceOrbitInput, RefinementLevel, SampleStatus, ShallowUniform,
 };
 pub use refinement::{
     DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, next_refinement_level,
