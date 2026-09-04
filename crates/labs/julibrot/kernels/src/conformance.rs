@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn pauldelbrot_cancellation_is_a_numeric_glitch() {
+    fn pauldelbrot_single_step_leaves_the_accumulated_counterexample_undetected() {
         const WIDTH: u32 = 960;
         const HEIGHT: u32 = 540;
         const CAP: u32 = 512;
@@ -334,9 +334,6 @@ mod tests {
         let gpu_glitch = gpu_source
             .find("if (z_squared < 0.000001 * reference_squared)")
             .expect("GPU Pauldelbrot test");
-        let gpu_accumulated = gpu_source
-            .find("accumulated_relative_error > 0.001")
-            .expect("GPU accumulated-error test");
         let gpu_rebase = gpu_source
             .find("if (perturb_norm(z) < perturb_norm(represented_delta))")
             .expect("GPU rebase test");
@@ -353,13 +350,7 @@ mod tests {
             Some(SampleStatus::Sampled)
         );
         assert!(gpu_escape < gpu_glitch && gpu_glitch < gpu_rebase);
-        assert!(gpu_rebase < gpu_accumulated);
-        assert_eq!(sample.escape_index, None);
-        assert_eq!(
-            SampleStatus::from_f32(sample.record.status),
-            Some(SampleStatus::Glitch)
-        );
-        assert_eq!(sample.record.smooth_iter, crate::GLITCH_NUMERIC_FAILURE);
+        assert_eq!(sample, before);
     }
 
     #[test]
@@ -449,20 +440,30 @@ mod tests {
         let corpus = WIDTH * HEIGHT;
 
         for epsilon in [1.0e-4_f32, PAULDELBROT_GLITCH_EPSILON, 1.0e-8_f32] {
-            let flagged = (0..corpus)
-                .map(|index| {
+            let mut flagged = 0_usize;
+            let mut changed_non_glitch = 0_usize;
+            for index in 0..corpus {
+                let sample =
                     perturb_scaled_pixel_for_epsilon(&uniforms, &orbit.records, index, epsilon)
-                        .expect("standard-corpus pixel")
-                })
-                .filter(|sample| {
-                    sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits()
-                })
-                .count();
+                        .expect("standard-corpus pixel");
+                let numeric =
+                    sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits();
+                flagged += usize::from(numeric);
+                if !numeric && epsilon.to_bits() == PAULDELBROT_GLITCH_EPSILON.to_bits() {
+                    let baseline =
+                        perturb_scaled_pixel_for_epsilon(&uniforms, &orbit.records, index, 0.0)
+                            .expect("detector-disabled standard-corpus pixel");
+                    changed_non_glitch += usize::from(sample != baseline);
+                }
+            }
             #[allow(clippy::cast_precision_loss)]
             let fraction = flagged as f64 / f64::from(corpus);
             eprintln!(
-                "pauldelbrot_epsilon epsilon={epsilon:e} corpus={corpus} flagged={flagged} fraction={fraction:.9}"
+                "pauldelbrot_epsilon epsilon={epsilon:e} corpus={corpus} flagged={flagged} fraction={fraction:.9} changed_non_glitch={changed_non_glitch}"
             );
+            if epsilon.to_bits() == PAULDELBROT_GLITCH_EPSILON.to_bits() {
+                assert_eq!(changed_non_glitch, 0);
+            }
         }
     }
 
@@ -672,14 +673,19 @@ mod tests {
         let scale = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
         let corpus = WIDTH * HEIGHT;
         let mut flagged = Vec::new();
-        let mut production = Vec::with_capacity(usize::try_from(corpus).expect("corpus fits"));
+        let mut detected = Vec::with_capacity(usize::try_from(corpus).expect("corpus fits"));
         for index in 0..corpus {
-            let sample = perturb_scaled_pixel(&uniforms, &orbit.records, index)
-                .expect("corrected-Final pixel");
+            let sample = perturb_scaled_pixel_for_accumulated_error(
+                &uniforms,
+                &orbit.records,
+                index,
+                Some(ACCUMULATED_ERROR_LIMIT),
+            )
+            .expect("corrected-Final detector sample");
             if sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits() {
                 flagged.push(index);
             }
-            production.push(sample);
+            detected.push(sample);
         }
 
         let mut old_wrong = 0_usize;
@@ -714,7 +720,7 @@ mod tests {
         let mut unflagged_wrong = 0_usize;
         for step in 0..corpus {
             let index = step * 509 % corpus;
-            if production[usize::try_from(index).expect("sample index fits")]
+            if detected[usize::try_from(index).expect("sample index fits")]
                 .record
                 .smooth_iter
                 .to_bits()
