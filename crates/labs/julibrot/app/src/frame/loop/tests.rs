@@ -2135,7 +2135,7 @@ fn coverage_takes_one_turn_and_then_yields_one() {
 /// that settles still walks its ladder to Final.
 #[test]
 fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
-    const DRAG_FRAMES: u32 = 90;
+    const DRAG_FRAMES: usize = 90;
     const SETTLE_FRAMES: usize = 30;
     /// Frames a dispatched scene occupies the presenter before its fence completes.
     const FLIGHT_FRAMES: usize = 3;
@@ -2303,7 +2303,7 @@ struct HeightDragStats {
 }
 
 fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
-    const DRAG_FRAMES: usize = 90;
+    const DRAG_FRAMES: u32 = 90;
     const FLIGHT_FRAMES: usize = 3;
     const FRAME_MS: f64 = 1_000.0 / 30.0;
 
