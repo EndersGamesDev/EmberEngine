@@ -1097,10 +1097,9 @@ mod tests {
 
     /// The height control is the one observer degree of freedom the image homography cannot hold.
     ///
-    /// The same plan is proved exact wherever the record height is zero and beyond the ceiling as
-    /// soon as it is not, which is what makes the refusal geometry rather than arithmetic: the
-    /// destination differs from the retained image by a displacement each pixel takes in
-    /// proportion to its own escape height.
+    /// The same plan is proved exact on the record floor and beyond the ceiling above it, which is
+    /// what makes the refusal geometry rather than arithmetic: the destination differs from the
+    /// retained image by a displacement each pixel takes from its height above that floor.
     #[test]
     fn a_pure_height_change_selects_a_relief_redraw_and_is_flat_exact() {
         let mut lifted = ViewControls::NEUTRAL;
@@ -1124,10 +1123,10 @@ mod tests {
         );
 
         let displayed = unpack_rows(plan.rows);
-        let mut flat_error = 0.0_f64;
+        let mut floor_error = 0.0_f64;
         let mut lifted_error = 0.0_f64;
         for corner in screen_corners(&to).into_iter().chain([[0.0; 2]]) {
-            for (height, worst) in [(0.0, &mut flat_error), (1.0, &mut lifted_error)] {
+            for (height, worst) in [(-2.0, &mut floor_error), (1.0, &mut lifted_error)] {
                 let source =
                     apply_homography(displayed, corner).expect("displayed map has no pole");
                 let destination =
@@ -1141,8 +1140,8 @@ mod tests {
             }
         }
         assert!(
-            flat_error <= 1.0e-6,
-            "the same map carries every flat record exactly: {flat_error}"
+            floor_error <= 1.0e-6,
+            "the same map carries every floor record exactly: {floor_error}"
         );
         assert!(
             lifted_error > WARP_MAX_ERROR_PX,

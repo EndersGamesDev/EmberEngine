@@ -646,13 +646,11 @@ mod tests {
     /// horizon: those screen points fail the sampling map outright, no height and no apron can
     /// recover them, and honest sky is the correct picture there. Measured through the same mirror
     /// at the same pose with the height set to zero — a flat chart, no relief at all — the frame is
-    /// still `821/4225` uncovered at apron one and `668/4225` at apron five.
+    /// still `821/4225` uncovered at apron one, `655/4225` at the chosen 1.25 apron, and
+    /// `668/4225` at apron five. The small non-monotonic step is raster-lattice quantization.
     ///
-    /// The relief scene with its backdrop leaves `650/4225`, which is BELOW the flat chart's own
-    /// floor at the same apron: the lift brings a little more surface into view than the discarded
-    /// clipped rim costs. So the backdrop closes the whole recoverable gap at this row, and the
-    /// residual is geometry rather than a deficit. It also explains why the published pair looks
-    /// like a small win — the `813/4225` main-alone baseline was already almost all horizon sky.
+    /// The relief scene matches those flat-floor fractions exactly, so the residual is the plane's
+    /// projective horizon rather than relief coverage that a still-wider backdrop could repair.
     #[test]
     fn the_close_row_residual_is_the_plane_horizon_and_not_a_coverage_deficit() {
         let (object, view) = close_owner_row();
@@ -682,7 +680,7 @@ mod tests {
         let relief_wide = horizon(&view, 5.0);
         assert!(
             (flat_narrow - 821.0 / 4225.0).abs() < 1.0e-12
-                && (flat_chosen - 0.0).abs() < 1.0e-12
+                && (flat_chosen - 655.0 / 4225.0).abs() < 1.0e-12
                 && (flat_wide - 668.0 / 4225.0).abs() < 1.0e-12
                 && (relief_chosen - 655.0 / 4225.0).abs() < 1.0e-12
                 && (relief_wide - 668.0 / 4225.0).abs() < 1.0e-12,
@@ -696,9 +694,8 @@ mod tests {
 
     /// The clipping census keeps its whole fixed denominator.
     ///
-    /// At the second owner row 252 of the 405 census points are held at the near clamp.
-    /// cannot be projected at all. Counting only the projectable ones published `126/315 = 0.4`,
-    /// which improves as a pose projects less; the census is a fixed domain and stays one.
+    /// At the second owner row 252 of the 405 census points are held at the near clamp. The
+    /// denominator stays the whole fixed domain, including points that cannot project at all.
     #[test]
     fn the_clipping_census_counts_every_point_it_sampled() {
         let (object, view) = close_owner_row();

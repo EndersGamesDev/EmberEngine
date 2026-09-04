@@ -802,9 +802,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
     );
     let footprint = scene_footprint(&ObjectAngles::JULIA, &owner_height, EXTENT[0], EXTENT[1])
         .expect("owner height has a finite backdrop footprint");
-    assert!((footprint.apron_scale - 1.541_25).abs() < 1.0e-9);
+    assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
+    assert_eq!(footprint.uncovered_fraction, 0.0);
     assert_fixture(
-        "height 0 -> 2.165 across the apron",
+        "height 0 -> 2.165 at the floor",
         &base,
         &owner_height_to,
         1.0,
