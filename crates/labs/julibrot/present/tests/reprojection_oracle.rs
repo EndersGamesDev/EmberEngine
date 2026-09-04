@@ -785,7 +785,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &retained_relief,
         &relief_rotation,
         1.0,
-        Expected::ReliefExposed,
+        Expected::Relief,
     );
 
     let owner_height = ViewControls {
