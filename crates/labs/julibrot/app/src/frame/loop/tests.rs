@@ -2261,8 +2261,12 @@ fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     }
 }
 
-fn owner_height_drag_plan(row: HeightDragRow, height_scale: f64) -> WarpKind {
-    let retained = owner_height_drag_pose(row, 0.0);
+fn owner_height_drag_plan(
+    row: HeightDragRow,
+    retained_height_scale: f64,
+    requested_height_scale: f64,
+) -> WarpKind {
+    let retained = owner_height_drag_pose(row, retained_height_scale);
     let frame = SceneFrame {
         scene_id: 37,
         pose: retained,
@@ -2288,7 +2292,7 @@ fn owner_height_drag_plan(row: HeightDragRow, height_scale: f64) -> WarpKind {
     Warp::reproject(
         &frame,
         &retained,
-        &owner_height_drag_pose(row, height_scale),
+        &owner_height_drag_pose(row, requested_height_scale),
         PrecisionMode::PictureFast,
         WarpValidation::Ordinary,
     )
@@ -2297,6 +2301,7 @@ fn owner_height_drag_plan(row: HeightDragRow, height_scale: f64) -> WarpKind {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct HeightDragStats {
+    clear_only_before: u64,
     clear_only_presentations: u64,
     hold_presentations: u64,
     final_after_drag_ms: f64,
@@ -2315,28 +2320,47 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
     let mut clock = FakeClock::default();
     let mut flight_frames = 0_usize;
     let mut last_scene_id = 0_u64;
+    let mut retained_height_scale = 0.0;
+    let mut pending_height_scale = None;
+    let mut clear_only_before = 0_u64;
 
     for input in 1..=DRAG_FRAMES {
-        if presenter.pending_warp.is_some() {
-            presenter.fire_warp_completed();
+        let requested_height_scale = 4.0 * f64::from(input) / f64::from(DRAG_FRAMES);
+        if owner_height_drag_plan(row, 0.0, requested_height_scale) == WarpKind::ClearOnly {
+            clear_only_before = clear_only_before.saturating_add(1);
         }
         if presenter.pending.is_some() {
             flight_frames += 1;
             if flight_frames == FLIGHT_FRAMES {
                 presenter.fire_completed_callback();
                 flight_frames = 0;
+                retained_height_scale = pending_height_scale
+                    .take()
+                    .expect("an in-flight scene carries its requested height");
+                let events = FrameLoop::refresh(&mut presenter, clock.now_ms);
+                assert_eq!(events.len(), 1, "{} completed scene event", row.name);
+                let FakeEvent::Completed(scene) = events[0] else {
+                    panic!("{} completed scene event", row.name);
+                };
+                assert!(frame_loop.completed(scene.id, scene.generation, scene.level));
+                frame_loop.restart(37);
             }
+        }
+        if presenter.pending_warp.is_some() {
+            presenter.fire_warp_completed();
         }
         frame_loop.accept_request(37, true);
         frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         presenter.forced_warp_kind = Some(owner_height_drag_plan(
             row,
-            4.0 * f64::from(input) / f64::from(DRAG_FRAMES),
+            retained_height_scale,
+            requested_height_scale,
         ));
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} scene ids", row.name);
             last_scene_id = scene_id;
+            pending_height_scale = Some(requested_height_scale);
         }
         assert_ne!(
             presenter.warp_kind,
@@ -2348,7 +2372,6 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
     }
 
     let drag_ended_ms = clock.now_ms;
-    presenter.forced_warp_kind = Some(owner_height_drag_plan(row, 4.0));
     let settled_scene = loop {
         if presenter.pending_warp.is_some() {
             presenter.fire_warp_completed();
@@ -2358,15 +2381,20 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
             if flight_frames == FLIGHT_FRAMES {
                 presenter.fire_completed_callback();
                 flight_frames = 0;
+                retained_height_scale = pending_height_scale
+                    .take()
+                    .expect("an in-flight scene carries its requested height");
             }
         } else {
             frame_loop.restart(37);
             frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         }
+        presenter.forced_warp_kind = Some(owner_height_drag_plan(row, retained_height_scale, 4.0));
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} settled scene id", row.name);
             last_scene_id = scene_id;
+            pending_height_scale = Some(4.0);
         }
         if presenter
             .retained_scene
@@ -2378,13 +2406,15 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
     };
     assert_eq!(presenter.retained_scene, Some(settled_scene));
     let stats = HeightDragStats {
+        clear_only_before,
         clear_only_presentations: presenter.presented_clear_only,
         hold_presentations: presenter.warp_hold_count,
         final_after_drag_ms: clock.now_ms - drag_ended_ms,
     };
     eprintln!(
-        "height_drag row={} clear_only={} holds={} final_ms={:.3}",
+        "height_drag row={} clear_only_before={} clear_only_after={} holds={} final_ms={:.3}",
         row.name,
+        stats.clear_only_before,
         stats.clear_only_presentations,
         stats.hold_presentations,
         stats.final_after_drag_ms,
@@ -2405,8 +2435,9 @@ fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_rou
         },
     ] {
         let stats = drive_height_drag(row);
+        assert!(stats.clear_only_before > 0, "{}", row.name);
         assert_eq!(stats.clear_only_presentations, 0, "{}", row.name);
-        assert_eq!(stats.hold_presentations, 0, "{}", row.name);
+        assert!(stats.hold_presentations > 0, "{}", row.name);
         assert!(
             stats.final_after_drag_ms <= 3.0 * (1_000.0 / 30.0),
             "{}",
