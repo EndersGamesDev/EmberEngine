@@ -1,4 +1,5 @@
 const ABI = 3;
+globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1";
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");

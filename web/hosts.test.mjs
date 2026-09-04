@@ -711,6 +711,12 @@ test('games.json: exactly one live version per game', () => {
 
 test('games.json: a handover target declares the protocol it is a target for', () => {
   const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  for (const lab of catalog.games.filter((entry) => entry.kind === 'lab')) {
+    for (const version of lab.versions) {
+      assert.equal('proto' in version, false);
+      assert.equal('handover' in version, false);
+    }
+  }
   for (const g of catalog.games) {
     for (const v of g.versions) {
       if (!v.handover) continue;
