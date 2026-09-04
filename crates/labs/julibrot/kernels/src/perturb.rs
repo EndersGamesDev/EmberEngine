@@ -21,8 +21,8 @@ const LDEXP_EXPONENT_LIMIT: i32 = 512;
 const F32_EXPONENT_MASK: u32 = 0x7f80_0000;
 const F32_SIGN_MASK: u32 = 0x8000_0000;
 const MAX_RESCALE_STEPS: u32 = u32::MAX / 64;
-pub(crate) const PAULDELBROT_GLITCH_EPSILON: f32 = 1.0e-6;
-pub(crate) const ACCUMULATED_ERROR_LIMIT: f32 = 1.0e-3;
+pub const PAULDELBROT_GLITCH_EPSILON: f32 = 1.0e-6;
+pub const ACCUMULATED_ERROR_LIMIT: f32 = 1.0e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScaledState {
@@ -462,7 +462,7 @@ fn perturb_scaled_pixel_with_detectors(
 }
 
 #[cfg(test)]
-pub(crate) fn perturb_scaled_pixel_for_epsilon(
+pub fn perturb_scaled_pixel_for_epsilon(
     uniforms: &PerturbUniform,
     orbit: &[ReferenceOrbitRecord],
     index: u32,
@@ -472,7 +472,7 @@ pub(crate) fn perturb_scaled_pixel_for_epsilon(
 }
 
 #[cfg(test)]
-pub(crate) fn perturb_scaled_pixel_for_accumulated_error(
+pub fn perturb_scaled_pixel_for_accumulated_error(
     uniforms: &PerturbUniform,
     orbit: &[ReferenceOrbitRecord],
     index: u32,
@@ -488,7 +488,7 @@ pub(crate) fn perturb_scaled_pixel_for_accumulated_error(
 }
 
 #[cfg(test)]
-pub(crate) fn perturb_scaled_offset_for_accumulated_error(
+pub fn perturb_scaled_offset_for_accumulated_error(
     uniforms: &PerturbUniform,
     orbit: &[ReferenceOrbitRecord],
     offset_prime: [f32; 4],

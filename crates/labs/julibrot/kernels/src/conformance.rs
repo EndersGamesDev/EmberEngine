@@ -307,8 +307,8 @@ mod tests {
         let sample = perturb_scaled_pixel(&uniforms, &orbit.records, PIXEL_INDEX)
             .expect("cancellation pixel is valid");
         let scale = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
-        let x = f64::from(PIXEL_INDEX % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH);
-        let y = f64::from(PIXEL_INDEX / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT);
+        let x = 0.5_f64.mul_add(-f64::from(WIDTH), f64::from(PIXEL_INDEX % WIDTH) + 0.5);
+        let y = 0.5_f64.mul_add(-f64::from(HEIGHT), f64::from(PIXEL_INDEX / WIDTH) + 0.5);
         let c = [x.mul_add(scale, target[0]), y.mul_add(scale, target[1])];
         let gpu_source = crate::perturbation_kernel().body;
         let gpu_escape = gpu_source
@@ -453,6 +453,7 @@ mod tests {
     #[ignore = "native kernels measurement harness"]
     #[allow(
         clippy::print_stderr,
+        clippy::too_many_lines,
         reason = "the explicitly selected error-bound sweep reports measured fractions"
     )]
     fn measures_accumulated_error_bounds_on_seahorse_corpus() {
@@ -515,8 +516,8 @@ mod tests {
                     continue;
                 }
                 flagged += 1;
-                let x = f64::from(index % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH);
-                let y = f64::from(index / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT);
+                let x = 0.5_f64.mul_add(-f64::from(WIDTH), f64::from(index % WIDTH) + 0.5);
+                let y = 0.5_f64.mul_add(-f64::from(HEIGHT), f64::from(index / WIDTH) + 0.5);
                 let c = [x.mul_add(scale, target[0]), y.mul_add(scale, target[1])];
                 let exact = exact_mandelbrot_escape_index(c, CAP);
                 let baseline = perturb_scaled_pixel_for_accumulated_error(
