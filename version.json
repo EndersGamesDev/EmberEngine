@@ -1,6 +1,6 @@
 {
-  "version": "r591",
-  "commit": "b946c60",
-  "built": "2026-09-04T14:35:00Z",
-  "subject": "arena v20 client: rounds shaped by calibre, round tapered streaks, aim dot gone"
+  "version": "r1236+dirty",
+  "commit": "6126497",
+  "built": "2026-09-04T16:02:07Z",
+  "subject": "deploy: an interpreter only counts once it has run a line"
 }
