@@ -1160,7 +1160,8 @@ impl ViewerController {
     /// Builds the coarse backdrop map from the cached main homography at the same extent.
     ///
     /// The cache owns only the neutral-height presented-camera rows. The returned copy carries the
-    /// footprint's unbounded apron, so backdrop use cannot evict an otherwise identical main map.
+    /// footprint's raster-selected apron, so backdrop use cannot evict an otherwise identical main
+    /// map.
     ///
     /// # Errors
     ///

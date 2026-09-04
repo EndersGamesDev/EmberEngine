@@ -2,16 +2,14 @@
 //!
 //! Screen-aligned sampling chooses chart points by inverting the scene map at height zero, so at
 //! `height_scale = 0` every interior mesh vertex is its own screen pixel, the outermost ring is
-//! drawn on the frame boundary, and the mesh tiles the frame exactly. Lifting a vertex into the fifth coordinate moves it: the five-to-four perspective
-//! divides by `d₅ − h`, so a vertex whose record sits below the chart is pulled toward the frame
-//! centre and one above it is pushed out. The frame's own boundary vertices are therefore no
-//! longer on the frame boundary, and the mesh stops covering the surface it was sampled for.
+//! drawn on the frame boundary, and the mesh tiles the frame exactly. The displayed lift is
+//! `height_scale * (record_height + 2) * 0.5`: the record floor stays on that chart and every other
+//! record rises toward the eye, leaving the former peak position unchanged.
 //!
 //! This module mirrors the scene shader's vertex chain in binary64 and reports, for one pose, how
-//! far the boundary moves, how much overscan the sampling extent would need to undo the movement,
-//! and what share of the surface the mesh cannot reach. It reads no records: the bound is taken
-//! over the whole height range a record can occupy, `record_height ∈ [−2,2]` scaled by the height
-//! control, which makes it a property of the pose alone.
+//! much of the surface the main mesh and candidate backdrop spans can reach. It reads no records:
+//! the raster census covers the whole record domain and selects the smallest reviewed apron that
+//! recovers at least half the coverage gained at scale five.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -56,7 +54,7 @@ const APRON_CANDIDATES: [f64; 5] = [1.25, 1.5, 2.0, 3.0, 5.0];
 /// Where one pose's lifted mesh lands relative to the frame it was sampled for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneFootprint {
-    /// Raster-selected screen-space overscan applied to the coarse backdrop sampling extent.
+    /// Raster-selected screen-space overscan requested for the coarse backdrop sampling extent.
     pub apron_scale: f64,
     /// Share of the render surface no record of any admissible height can reach.
     ///
@@ -512,7 +510,7 @@ mod tests {
 
     /// Every requested apron is one of the reviewed raster-policy candidates.
     #[test]
-    fn apron_scale_pushes_the_boundary_past_the_frame() {
+    fn apron_scale_is_always_one_or_a_reviewed_candidate() {
         for (object, view) in [owner_row(2.165), owner_row(4.0), close_owner_row()] {
             let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
             assert!(

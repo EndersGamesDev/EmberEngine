@@ -1173,6 +1173,56 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested relief corpus publishes its freshly measured pixel table"
+    )]
+    fn floor_anchored_relief_corpus_pins_the_published_measurements() {
+        fn published_pose(height_scale: f64, distance_five: f64) -> Pose {
+            let mut posed = pose(
+                ViewControls {
+                    height_scale,
+                    distance_five,
+                    ..ViewControls::NEUTRAL
+                },
+                [0.0; 2],
+            );
+            set_extent(&mut posed, [960, 540]);
+            posed
+        }
+
+        fn maximum(from: &Pose, to: &Pose) -> f64 {
+            reproject(&frame(from), from, to)
+                .approx_max_error_px
+                .expect("the published relief fixture is measurable")
+        }
+
+        let flat = published_pose(0.0, 8.0);
+        let step = published_pose(0.005, 8.0);
+        let one = published_pose(1.0, 8.0);
+        let half = published_pose(0.5, 8.0);
+        let nearer = published_pose(1.0, 6.0);
+        let measured = [
+            maximum(&flat, &step),
+            maximum(&flat, &one),
+            maximum(&one, &half),
+            maximum(&one, &nearer),
+        ];
+        let expected = [0.689, 183.58, 104.90, 91.79];
+        let tolerances = [0.0005, 0.005, 0.005, 0.005];
+        for ((actual, expected), tolerance) in measured.into_iter().zip(expected).zip(tolerances) {
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "measured {actual} px, expected published rounding {expected} px"
+            );
+        }
+        eprintln!(
+            "floor relief corpus | 0 -> 0.005 = {:.6} px | 0 -> 1 = {:.6} px | 1 -> 0.5 = {:.6} px | d5 8 -> 6 h1 = {:.6} px",
+            measured[0], measured[1], measured[2], measured[3]
+        );
+    }
+
+    #[test]
     fn exact_relief_redraw_family_follows_the_fixed_plane_proof() {
         let neutral = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut neutral_observer = neutral;

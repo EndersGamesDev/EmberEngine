@@ -442,8 +442,8 @@ fn backdrop_sampling_zoom_widens_only_the_coarse_kernel_grid() {
         sampling_zoom_log2(zoom, 1.0).expect("identity").to_bits(),
         zoom.to_bits()
     );
-    let widened = sampling_zoom_log2(zoom, 5.0).expect("fivefold backdrop");
-    assert_eq!(widened, zoom - 5.0_f64.log2());
+    let widened = sampling_zoom_log2(zoom, 1.25).expect("selected backdrop");
+    assert_eq!(widened, zoom - 1.25_f64.log2());
     assert!(sampling_zoom_log2(zoom, 0.5).is_err());
 }
 
