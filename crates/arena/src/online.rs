@@ -847,9 +847,10 @@ struct Cmd {
     sent_at: f32,
 }
 
-/// One short-lived cube: sparks on a hit, shards and smoke from a blast,
-/// the launch smoke behind a rocket. `life` is the ttl it started with, so
-/// a size or colour can fade against it.
+/// One short-lived opaque ball (`rounds::puff`, drawn at `feel::PUFF_BALL`
+/// of `size`): sparks on a hit, shards and smoke from a blast, the launch
+/// smoke behind a rocket. `life` is the ttl it started with, so a size or
+/// colour can fade against it.
 #[derive(Clone, Copy)]
 struct Fx {
     pos: Vec3,
@@ -860,10 +861,22 @@ struct Fx {
     color: Vec3,
     /// Downward acceleration; 0 for smoke.
     gravity: f32,
+    /// The time it comes alive (`self.time` plus `feel::Puff::delay` at the
+    /// spawn): until then it does not move, does not age and is not drawn.
+    ///
+    /// Absolute, not a per-frame countdown, so that it is the same clock
+    /// `Flash::until` is read against. A countdown was a frame out on the
+    /// remote path, where a shot is spawned in the inbox drain and so had
+    /// that frame's own `dt` taken off it before the flash's clock had
+    /// started: the smoke arrived one frame before the star went out and
+    /// sat on it.
+    born: f32,
 }
 
-impl From<Puff> for Fx {
-    fn from(p: Puff) -> Self {
+impl Fx {
+    /// A spawned `Puff` as a frame particle: its delay is relative to the
+    /// spawn, this is the wall time it becomes visible.
+    fn spawn(p: Puff, now: f32) -> Self {
         Self {
             pos: p.pos,
             vel: p.vel,
@@ -872,6 +885,7 @@ impl From<Puff> for Fx {
             size: p.size,
             color: p.color,
             gravity: p.gravity,
+            born: now + p.delay,
         }
     }
 }
@@ -897,6 +911,35 @@ const FLASH_COLOR: Vec3 = Vec3::new(1.0, 0.9, 0.5);
 const FLASH_BASE: f32 = 0.22;
 const FLASH_PETAL: f32 = 1.0;
 const FLASH_FORWARD: f32 = 1.6;
+
+/// How far past the smoke's own outer edge (`feel::plume_reach()`, the
+/// spawn ring plus one ball) a shot's petal tips must stand.
+///
+/// Not why the star was lost: the plume and the star no longer overlap at
+/// all, since every plume puff now waits out its weapon's flash. The star
+/// was buried because four opaque cubes of edge 0.10 m sat on the muzzle
+/// for a quarter second while it lived 35 to 60 ms — no petal in the table
+/// was ever shorter than the ball. What this earns is the frame the
+/// handover happens on: a star narrower than the smoke that replaces it
+/// reads as a small light swallowed by a big ball, and it is the margin
+/// that keeps a future fatter plume from taking the star back.
+const FLASH_CLEAR: f32 = 1.4;
+
+/// The size of the star at a shot from `row`: the weapon's own `flash`,
+/// raised if that is too small to put the petal tips (`FLASH_PETAL` of the
+/// size) `FLASH_CLEAR` times the plume's reach out. The whole star is
+/// scaled rather than the petals alone, so it keeps its shape.
+///
+/// The floor is 0.126 m and exactly one row in the table is under it: the
+/// Vityaz (id 2, flash 0.10), which is drawn at 0.126. Every other gun,
+/// the sidearm's 0.14 included, is already clear and is untouched. The
+/// point of taking the floor from `feel::plume_reach` rather than from a
+/// bare number is that a fatter plume widens every star that would
+/// otherwise be lost in it. `push_showcase` passes its own size and is not
+/// touched: nothing smokes in the showcase.
+fn shot_flash(row: &feel::WeaponFeel) -> f32 {
+    row.flash.max(feel::plume_reach() * FLASH_CLEAR / FLASH_PETAL)
+}
 
 /// Push a muzzle flash as a star of five streak cones radiating from the
 /// muzzle: four petals in the plane square to the bore (up, down, left and
@@ -1572,7 +1615,8 @@ impl ShooterGame {
 
     /// Spawn a burst of particles.
     fn puffs(&mut self, puffs: Vec<Puff>) {
-        self.fx.extend(puffs.into_iter().map(Fx::from));
+        let now = self.time;
+        self.fx.extend(puffs.into_iter().map(|p| Fx::spawn(p, now)));
     }
 
     /// One `S2C::Shot`: a round's segment ended. The streak, the muzzle
@@ -1632,10 +1676,10 @@ impl ShooterGame {
                 self.flashes.push(Flash {
                     pos: muzzle,
                     dir,
-                    size: row.flash,
+                    size: shot_flash(&row),
                     until: now + row.flash_ms,
                 });
-                self.puffs(feel::plume(muzzle, dir));
+                self.puffs(feel::plume(muzzle, dir, weapon));
                 let d = (from - ear.at).length();
                 sfx.push(Play::spatial(
                     feel::shot_sfx(weapon, Dist::at(d)),
@@ -1732,10 +1776,12 @@ impl ShooterGame {
         ))
     }
 
-    /// A rocket went off: one flash cube, twelve shards under gravity,
-    /// eight smoke cubes rising. Directions are a fixed fan, not random:
-    /// there is no RNG on the client and a burst does not need one.
+    /// A rocket went off: one flash ball, twelve shards under gravity,
+    /// eight balls of smoke rising. Directions are a fixed fan, not random:
+    /// there is no RNG on the client and a burst does not need one. A blast
+    /// is all born at once — the delay is the muzzle plume's alone.
     fn blast_fx(&mut self, at: Vec3) {
+        let now = self.time;
         self.fx.push(Fx {
             pos: at,
             vel: Vec3::ZERO,
@@ -1744,6 +1790,7 @@ impl ShooterGame {
             size: 2.2,
             color: Vec3::new(1.0, 0.85, 0.5),
             gravity: 0.0,
+            born: now,
         });
         for k in 0_u8..12 {
             let a = f32::from(k) * std::f32::consts::TAU / 12.0;
@@ -1756,6 +1803,7 @@ impl ShooterGame {
                 size: 0.18,
                 color: Vec3::new(1.0, 0.45, 0.12),
                 gravity: 9.0,
+                born: now,
             });
         }
         for k in 0_u8..8 {
@@ -1768,6 +1816,7 @@ impl ShooterGame {
                 size: 0.7,
                 color: Vec3::new(0.30, 0.28, 0.26),
                 gravity: 0.0,
+                born: now,
             });
         }
     }
@@ -2901,16 +2950,23 @@ impl EmberGame for ShooterGame {
             *t -= dt;
             *t > 0.0
         });
+        // The v20 leftovers: streaks that have faded, flashes that are
+        // over, marks past twenty seconds, casings past their time. A
+        // casing falls until it lands and then lies there. `now` is read
+        // before the particles so that a held-back plume and the star it
+        // waits for are tested against the one clock.
+        let now = self.time;
         self.fx.retain_mut(|f| {
+            // Held back (the muzzle plume, waiting out its flash): not
+            // born yet, so it neither moves nor ages nor is drawn.
+            if f.born > now {
+                return true;
+            }
             f.vel.y -= f.gravity * dt;
             f.pos += f.vel * dt;
             f.ttl -= dt;
             f.ttl > 0.0
         });
-        // The v20 leftovers: streaks that have faded, flashes that are
-        // over, marks past twenty seconds, casings past their time. A
-        // casing falls until it lands and then lies there.
-        let now = self.time;
         self.tracers.retain(|t| t.alive(now));
         self.flashes.retain(|f| f.until > now);
         feel::expire_marks(&mut self.marks, now);
@@ -3346,25 +3402,30 @@ impl EmberGame for ShooterGame {
             }
         }
 
-        // Sparks, shards and smoke: opaque cubes, the only particle the
-        // scene pass can draw. Shards shrink out; smoke swells and dims.
-        for f in &self.fx {
-            let k = (f.ttl / f.life).clamp(0.0, 1.0);
-            let (edge, color) = if f.gravity > 0.0 {
-                (f.size * k, f.color)
-            } else {
-                (f.size * (1.4 - 0.4 * k), f.color * (0.4 + 0.6 * k))
-            };
-            frame
-                .instances
-                .push(Instance::new(f.pos, Vec3::splat(edge), color).with_yaw(f.ttl * 12.0));
-        }
-
-        // Impact marks, tracers and remote flashes (v20) all wear the
-        // round meshes; without them registered (a frame built by a test
-        // that did not ask) none is drawn, since the cubes they replaced
-        // are the look the operator sent back.
+        // Impact marks, tracers, particles and remote flashes (v20) all
+        // wear the round meshes; without them registered (a frame built by
+        // a test that did not ask) none is drawn, since the cubes they
+        // replaced are the look the operator sent back.
         if let Some(rs) = self.rounds {
+            // Sparks, shards and smoke: opaque balls (`rounds::puff`) at
+            // `feel::PUFF_BALL` of the size that used to be a cube's edge,
+            // which is the only particle the scene pass can draw. Shards
+            // shrink out; smoke swells and dims. No yaw any more: a ball
+            // turned about its centre is the same ball, so the spin the
+            // cubes needed to look less like boxes is work no pixel could
+            // show. A puff still waiting out a flash is not drawn.
+            for f in self.fx.iter().filter(|f| f.born <= self.time) {
+                let k = (f.ttl / f.life).clamp(0.0, 1.0);
+                let (edge, color) = if f.gravity > 0.0 {
+                    (f.size * k, f.color)
+                } else {
+                    (f.size * (1.4 - 0.4 * k), f.color * (0.4 + 0.6 * k))
+                };
+                frame.instances.push(
+                    Instance::new(f.pos, Vec3::splat(edge * feel::PUFF_BALL), color)
+                        .with_mesh(rs.puff()),
+                );
+            }
             // Impact marks: near-black holes on the faces rounds hit, each
             // the width its round makes (`Mark::diameter`), drawn after the
             // cover so the depth test lays them on it; the disc is sunk
@@ -3620,7 +3681,7 @@ impl EmberGame for ShooterGame {
             // late by the fall, and only off the floor (a crate top is not
             // cobbles).
             if std::mem::take(&mut self.own_plume) {
-                self.puffs(feel::plume(muzzle, look));
+                self.puffs(feel::plume(muzzle, look, my_weapon));
                 if feel::traces(my_weapon) {
                     let (pos, vel) = feel::casing_eject(muzzle, right3, look);
                     let land_y = self.pred_y;
@@ -3640,8 +3701,10 @@ impl EmberGame for ShooterGame {
                     }
                 }
             }
-            // The rocket's launch smoke: six grey cubes drifting back from
-            // the muzzle, spawned on the frame the shot was confirmed.
+            // The rocket's launch smoke: six grey balls drifting back from
+            // the muzzle, spawned on the frame the shot was confirmed and
+            // held back by the launch flash like the plume, so the star
+            // has the first frames of the launch to itself.
             if std::mem::take(&mut self.launch_smoke) {
                 for k in 0_u8..6 {
                     let a = f32::from(k) * std::f32::consts::TAU / 6.0;
@@ -3655,6 +3718,7 @@ impl EmberGame for ShooterGame {
                         size: 0.22,
                         color: Vec3::new(0.45, 0.43, 0.40),
                         gravity: 0.0,
+                        born: now + feel::plume_delay_of(my_weapon),
                     });
                 }
             }
@@ -3749,7 +3813,7 @@ impl EmberGame for ShooterGame {
                 && !scoped
                 && let Some(rs) = self.rounds
             {
-                push_flash(&mut frame, rs, muzzle, look, my_feel.flash);
+                push_flash(&mut frame, rs, muzzle, look, shot_flash(&my_feel));
             }
             // The crosshair. What stood here was an aim dot: an opaque
             // cube in the weapon's accent 4 m down the sight line, which
@@ -4789,6 +4853,104 @@ mod wire_tests {
         assert_eq!(game.marks.len(), 3);
         assert_eq!(game.marks[2].weapon, 7, "the rocket's blast mark");
         assert!((game.marks[2].diameter() - feel::ROCKET_MARK).abs() < 1e-6);
+    }
+
+    /// A shot reads as light first and smoke second (v20, the fourth
+    /// pass). The plume used to be born with the star, four opaque cubes
+    /// of edge 0.10 m over a muzzle for a quarter second while the star
+    /// lived 35 to 60 ms, so from six metres a shot was a lump of grey
+    /// boxes and no star at all. Now every plume puff is held back by its
+    /// weapon's own flash life and starts `feel::PLUME_LEAD` down the
+    /// bore: at the shot there is a star and no smoke, and when the flash
+    /// is out the smoke is there and the star is gone. And no weapon's
+    /// petals are shorter than the ball of smoke that follows them.
+    #[test]
+    fn the_star_shows_before_the_smoke() {
+        use arena_core::shooter::{SHOT_COVER, WEAPON_COUNT};
+
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        let mut other = me(3);
+        other.x = 10.0;
+        game.latest.insert(3, other);
+        game.was_alive = true;
+        game.time = 5.0;
+        game.set_rounds(500);
+        let input = InputState::default();
+        // A remote AK shot 10 m to my right, north into a container.
+        inbox
+            .send(S2C::Shot {
+                owner: 3,
+                weapon: 3,
+                x0: 10.0,
+                y0: 1.45,
+                z0: 0.0,
+                x1: 10.0,
+                y1: 1.45,
+                z1: 30.0,
+                hit: SHOT_COVER,
+                cover: Cover::Container.index(),
+                victim: 255,
+                normal: [0, 0, -1],
+            })
+            .unwrap();
+        let muzzle = Vec3::new(10.0, 1.45, REMOTE_MUZZLE);
+        // The star's five cones, and the balls of smoke at that muzzle:
+        // the impact's dust is 30 m up the line and is not smoke here.
+        let star = |f: &Frame| f.instances.iter().filter(|i| i.color == FLASH_COLOR).count();
+        let smoke = |f: &Frame| {
+            f.instances
+                .iter()
+                .filter(|i| {
+                    i.mesh == 500 + rounds::PUFF_OFFSET && (i.position - muzzle).length() < 1.0
+                })
+                .count()
+        };
+        let frame = game.update(&input, 0.001);
+        assert_eq!(star(&frame), 5, "the star is drawn at the shot");
+        assert_eq!(smoke(&frame), 0, "and nothing is over it");
+        assert_eq!(game.fx.iter().filter(|f| f.born > game.time).count(), 4);
+        // Now walk the flash out at the frame rate the client actually
+        // runs, 60 Hz, not in one step the length of the flash: the delay
+        // used to be a per-frame countdown started in the inbox drain,
+        // which is BEFORE the particle retain and after `self.time` has
+        // moved, so a remote plume lost the shot frame's own dt and was
+        // drawn one frame early — on top of the star. On no frame may both
+        // be up.
+        let mut smoked = 0;
+        for _ in 0..8 {
+            let frame = game.update(&input, 1.0 / 60.0);
+            let (s, k) = (star(&frame), smoke(&frame));
+            assert!(
+                s == 0 || k == 0,
+                "t={}: {s} star cones and {k} balls of smoke on one frame",
+                game.time
+            );
+            smoked += usize::from(k > 0);
+        }
+        // And the smoke did arrive: the AK's flash is 45 ms, so it is out
+        // inside three frames and the four balls have the muzzle after it.
+        assert!(smoked >= 5, "the plume arrives as the light goes");
+        assert!(game.fx.iter().all(|f| f.born <= game.time));
+        // Every weapon's star stands out past the smoke that succeeds it,
+        // by the margin `FLASH_CLEAR` promises — a bound the raw table did
+        // not already meet, so dropping the floor fails this.
+        for id in 1..=WEAPON_COUNT {
+            let petal = shot_flash(&weapon_feel(id)) * FLASH_PETAL;
+            assert!(
+                petal >= feel::plume_reach() * FLASH_CLEAR - 1e-6,
+                "id {id}: a petal of {petal} against a plume reaching {}",
+                feel::plume_reach()
+            );
+        }
+        // The Vityaz's 0.10 is the one flash in the table under that floor
+        // and is drawn bigger than the table says; the sidearm's 0.14 is
+        // already clear and is drawn exactly as the table has it.
+        assert!(shot_flash(&weapon_feel(2)) > weapon_feel(2).flash);
+        let sidearm = weapon_feel(1);
+        assert!((shot_flash(&sidearm) - sidearm.flash).abs() < 1e-6);
     }
 
     /// With the round meshes registered a tracer is the round itself at

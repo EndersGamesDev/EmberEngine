@@ -25,8 +25,15 @@
 //! plate `feel::Mark` was, sized by the calibre of the round that made
 //! it. The flash star is not a mesh of its own: it is the streak cone five
 //! times over, radiating from the muzzle (`online::push_flash`).
+//!
+//! The fourth pass adds the ball every particle is drawn with (`PUFF`):
+//! the muzzle smoke, the impact dust, the sparks and the splinters were
+//! opaque cubes, and four of those over a muzzle read as a grey box that
+//! swallowed the flash star. A ball of radius 1, scaled to the puff's own
+//! size, is the same bulk of smoke with no corners and no square edge for
+//! the eye to catch on.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
 use ember_engine::{MeshData, MeshVertex, TextureData};
 
@@ -36,7 +43,8 @@ use crate::feel::{TRACER_CORE_LEN, TRACER_TAIL_LEN};
 /// offset from the base `run_online` hands to `ShooterGame::set_rounds`,
 /// so the order here IS the registration order and `round_meshes` builds
 /// from `ALL` to keep them from drifting apart. The streak comes after the
-/// last round, at `STREAK_OFFSET`, the core after it, the disc last.
+/// last round, at `STREAK_OFFSET`, the core after it, then the disc, and
+/// the particle puff last of the group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Round {
@@ -114,9 +122,12 @@ pub const CORE_OFFSET: u32 = STREAK_OFFSET + 1;
 /// The hole disc's offset: after the core.
 pub const DISC_OFFSET: u32 = CORE_OFFSET + 1;
 
+/// The particle ball's offset: after the disc, last of the group.
+pub const PUFF_OFFSET: u32 = DISC_OFFSET + 1;
+
 /// How many meshes `round_meshes` builds: the rounds, the streak, the
-/// core, the disc.
-pub const MESH_COUNT: usize = DISC_OFFSET as usize + 1;
+/// core, the disc, the puff.
+pub const MESH_COUNT: usize = PUFF_OFFSET as usize + 1;
 
 /// A round is drawn at this many times its real size. At real size a 9 mm
 /// is under a pixel past about 3 m, so it would be a fleck at the muzzle
@@ -158,6 +169,16 @@ pub const SIDES: u32 = 12;
 
 /// Sides of the streak's cone and the core's frustum.
 pub const STREAK_SIDES: u32 = 8;
+
+/// Sides around the puff ball's axis, and bands from pole to pole. Ten
+/// around would be enough for the shape; twelve is divisible by four, so
+/// the ring touches radius 1 on both cross axes and the ball is as wide
+/// as it is long. At ten sides the widest `z` on a ring is 0.951 and a
+/// ball drawn at one radius would be an egg lying on its side. Six bands
+/// over twelve sides is 120 triangles, which is what a thing that lives a
+/// quarter of a second and is never bigger than a fist is worth.
+pub const PUFF_SIDES: u32 = 12;
+pub const PUFF_RINGS: u32 = 6;
 
 /// The copper jacket, as the 8-bit sRGB bytes the picture is stored in
 /// (the upload is `Rgba8UnormSrgb`, so these decode to about 0.61, 0.22,
@@ -215,16 +236,22 @@ impl Rounds {
     pub const fn disc(self) -> u32 {
         self.base + DISC_OFFSET
     }
+
+    #[must_use]
+    pub const fn puff(self) -> u32 {
+        self.base + PUFF_OFFSET
+    }
 }
 
 /// Build every mesh, in registration order: `Round::ALL`, then the streak,
-/// then the core, then the disc.
+/// then the core, then the disc, then the puff.
 #[must_use]
 pub fn round_meshes() -> Vec<MeshData> {
     let mut meshes: Vec<MeshData> = Round::ALL.into_iter().map(round_mesh).collect();
     meshes.push(streak_mesh());
     meshes.push(core_mesh());
     meshes.push(disc_mesh());
+    meshes.push(puff_mesh());
     debug_assert_eq!(meshes.len(), MESH_COUNT);
     meshes
 }
@@ -409,6 +436,46 @@ fn disc_mesh() -> MeshData {
     )
 }
 
+/// The puff: a UV sphere of radius 1 about the origin, `PUFF_SIDES`
+/// around the +X axis and `PUFF_RINGS` bands from the pole at -X to the
+/// pole at +X, untextured, so an instance scaled by `r` is a ball of
+/// radius `r` in the instance's own colour. Every particle the frame
+/// draws - muzzle smoke, impact dust, sparks, splinters, a blast's
+/// shards - is one of these; they were cubes.
+///
+/// The normals `revolve` computes are chord normals, a shade off the
+/// radius on a curve this coarse. On a unit sphere the exact normal at a
+/// vertex is the vertex, so every one takes its own position: that is
+/// what lets six bands light as a ball rather than as a barrel, and it
+/// puts every normal exactly on the outward radius, which matters where
+/// there is no backface culling to hide one that points in.
+fn puff_mesh() -> MeshData {
+    let mut pts: Vec<Pt> = Vec::with_capacity(PUFF_RINGS as usize + 1);
+    for i in 0..=PUFF_RINGS {
+        // Exact: ring counts are tiny.
+        #[allow(clippy::cast_precision_loss)]
+        let theta = i as f32 / PUFF_RINGS as f32 * PI;
+        let (sin, cos) = theta.sin_cos();
+        // The poles by hand: `sin(PI)` is 8.7e-8, not 0, and a negative
+        // radius at the far pole would turn the last band inside out.
+        let (x, r) = if i == 0 {
+            (-1.0, 0.0)
+        } else if i == PUFF_RINGS {
+            (1.0, 0.0)
+        } else {
+            (-cos, sin)
+        };
+        pts.push(p(x, r));
+    }
+    let mut mesh = revolve(&pts, PUFF_SIDES, None);
+    for v in &mut mesh.vertices {
+        let [x, y, z] = v.pos;
+        let len = x.mul_add(x, y.mul_add(y, z * z)).sqrt().max(1e-9);
+        v.normal = [x / len, y / len, z / len];
+    }
+    mesh
+}
+
 /// The jacket strip for a round `len_mm` long: copper, the base darker
 /// over its first `BASE_LEN`, and each band darker by its factor. Row `j`
 /// is the jacket at `v = (j + 0.5) / TEX_H` of the length from the base,
@@ -549,8 +616,8 @@ mod tests {
         let meshes = round_meshes();
         assert_eq!(
             meshes.len(),
-            Round::ALL.len() + 3,
-            "the rounds, the streak, the core and the disc"
+            Round::ALL.len() + 4,
+            "the rounds, the streak, the core, the disc and the puff"
         );
         assert_eq!(meshes.len(), MESH_COUNT);
         for r in Round::ALL {
@@ -786,6 +853,39 @@ mod tests {
         assert!((b.size().y - 2.0).abs() < 1e-6 && (b.size().z - 2.0).abs() < 1e-6);
     }
 
+    /// The puff ball: radius 1 on every axis and every vertex exactly one
+    /// radius from the centre, a hundred-odd triangles, no picture, and
+    /// every normal a unit vector along its own radius. A normal that
+    /// pointed inward would light the ball inside out, and with
+    /// `cull_mode: None` nothing would hide it.
+    #[test]
+    fn the_puff_is_a_unit_ball_with_outward_normals() {
+        let meshes = round_meshes();
+        let m = &meshes[PUFF_OFFSET as usize];
+        assert!(m.texture.is_none(), "the puff wears the particle's colour");
+        let b = Bounds::of(m);
+        let s = b.size();
+        for (axis, extent) in [('x', s.x), ('y', s.y), ('z', s.z)] {
+            assert!(
+                (extent - 2.0).abs() < 1e-4,
+                "{axis}: radius {}",
+                extent * 0.5
+            );
+        }
+        assert!(b.center().length() < 1e-6, "centred: {}", b.center());
+        assert_eq!(m.vertices.len() % 3, 0, "not a triangle list");
+        // Two pole fans and four bands of quads, twelve sides.
+        assert_eq!(m.vertices.len(), (12 + 96 + 12) * 3);
+        assert!(m.vertices.len() < 400, "a few hundred at most");
+        for v in &m.vertices {
+            let pos = Vec3::from(v.pos);
+            let n = Vec3::from(v.normal);
+            assert!((pos.length() - 1.0).abs() < 1e-4, "radius {pos}");
+            assert!((n.length() - 1.0).abs() < 1e-4, "unit normal {n}");
+            assert!((n - pos.normalize()).length() < 1e-4, "outward: {n} at {pos}");
+        }
+    }
+
     /// The weapon table: the two 9 mm guns share a round, the rifles and
     /// the revolver have their own, the sniper its Lapua, the rocket none;
     /// an id off the table fires the sidearm's.
@@ -814,10 +914,12 @@ mod tests {
         assert_eq!(rs.streak(), 45);
         assert_eq!(rs.core(), 46);
         assert_eq!(rs.disc(), 47);
+        assert_eq!(rs.puff(), 48);
         assert_eq!(STREAK_OFFSET, 5, "the streak follows the last round");
         assert_eq!(CORE_OFFSET, 6, "the core follows the streak");
         assert_eq!(DISC_OFFSET, 7, "the disc follows the core");
-        assert_eq!(round_meshes().len(), 8);
+        assert_eq!(PUFF_OFFSET, 8, "the puff is last of the group");
+        assert_eq!(round_meshes().len(), 9);
         // Real sizes, in metres.
         assert!((Round::Nine.length() - 0.0155).abs() < 1e-7);
         assert!((diameter(Round::Lapua) - 0.0086).abs() < 1e-7);

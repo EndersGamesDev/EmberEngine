@@ -798,8 +798,11 @@ impl Tracer {
     }
 }
 
-/// One short-lived opaque cube: a spark, a splinter, a puff of dust or
-/// smoke. The frame owns the integration; this is the spawn.
+/// One short-lived opaque particle: a spark, a splinter, a puff of dust
+/// or smoke. The frame owns the integration; this is the spawn.
+///
+/// It was a cube of edge `size` and is now a ball of radius
+/// `size * PUFF_BALL` (`rounds::puff`): the same bulk with no corners.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Puff {
     pub pos: Vec3,
@@ -809,7 +812,16 @@ pub struct Puff {
     pub color: Vec3,
     /// Downward acceleration; zero for anything that drifts.
     pub gravity: f32,
+    /// Seconds before it is born: it neither moves, nor ages, nor is
+    /// drawn until this has run out. Zero for every burst; the muzzle
+    /// plume alone uses it, to let the flash have the first frames of a
+    /// shot to itself (`plume_delay_of`).
+    pub delay: f32,
 }
+
+/// A puff's drawn radius as a fraction of its `size`: the ball inscribed
+/// in the cube it replaced, so nothing grew when the shape changed.
+pub const PUFF_BALL: f32 = 0.5;
 
 /// A basis across a surface normal: two unit tangents, so a burst can fan
 /// out over the face it hit. A zero normal (a body, a shield, an event from
@@ -858,6 +870,9 @@ fn fan(
                 size,
                 color,
                 gravity,
+                // A burst is the impact: it is there the moment the round
+                // is.
+                delay: 0.0,
             }
         })
         .collect()
@@ -919,8 +934,8 @@ impl Material {
     }
 
     /// The burst at `at` off a face with `normal`: eight white-yellow sparks
-    /// under gravity off metal, six grey-brown dust cubes rising off stone,
-    /// six tan splinters off wood, five sand puffs off a sandbag.
+    /// under gravity off metal, six grey-brown balls of dust rising off
+    /// stone, six tan splinters off wood, five sand puffs off a sandbag.
     #[must_use]
     pub fn burst(self, at: Vec3, normal: Vec3) -> Vec<Puff> {
         match self {
@@ -1029,22 +1044,70 @@ pub fn ricochets(to: [f32; 3]) -> bool {
     h.trailing_zeros() >= 3
 }
 
-/// The muzzle plume: four grey cubes off `at` drifting along `dir` and
-/// rising, a quarter second, beside the flash star.
+/// The plume's cube edge, which is twice its drawn ball's radius.
+pub const PLUME_SIZE: f32 = 0.10;
+
+/// The radius of the ring the four plume puffs are spawned on, metres.
+pub const PLUME_RING: f32 = 0.04;
+
+/// How far down the bore from the muzzle the plume starts, metres: the
+/// flash star is born at the muzzle itself, so the smoke buds ahead of the
+/// star's base ring and grows away down the bore instead of over it. Short
+/// of the tip of even the smallest star's forward cone (0.126 m at
+/// `online::FLASH_FORWARD` is 0.20 m), so the smoke never buds off the end
+/// of the light.
+pub const PLUME_LEAD: f32 = 0.08;
+
+/// The drawn radius of one plume puff the instant it is born, metres.
 #[must_use]
-pub fn plume(at: Vec3, dir: Vec3) -> Vec<Puff> {
-    let (_, t1, t2) = tangents(dir);
+pub const fn plume_radius() -> f32 {
+    PLUME_SIZE * PUFF_BALL
+}
+
+/// How far off the bore the plume's outer edge stands when it is born,
+/// metres: the spawn ring plus one ball. This is the width of smoke a
+/// shot's petals have to reach past to read as the bigger thing on the
+/// frame the light hands over to the smoke.
+#[must_use]
+pub const fn plume_reach() -> f32 {
+    PLUME_RING + plume_radius()
+}
+
+/// How long a weapon's plume is held back: exactly the life of its flash,
+/// so the star has the first 35 to 60 ms of the shot to itself and the
+/// smoke arrives as the light goes. A shot reads as light first, smoke
+/// second.
+#[must_use]
+pub const fn plume_delay_of(weapon: u8) -> f32 {
+    weapon_feel(weapon).flash_ms
+}
+
+/// The muzzle plume of `weapon`: four grey balls off `at`, `PLUME_LEAD`
+/// down the bore, drifting along `dir` and rising, a quarter second,
+/// after the flash rather than beside it.
+///
+/// The delay rides on the puff instead of on a queue of pending plumes in
+/// the frame: one field and one branch in the retain that already walks
+/// every particle, against a second list with a second lifetime, a second
+/// expiry and a spawn point that would have gone stale (the local muzzle
+/// moves with the view between the shot and the flash's end).
+#[must_use]
+pub fn plume(at: Vec3, dir: Vec3, weapon: u8) -> Vec<Puff> {
+    let (n, t1, t2) = tangents(dir);
+    let from = at + n * PLUME_LEAD;
+    let delay = plume_delay_of(weapon);
     (0..4u8)
         .map(|k| {
             let a = f32::from(k) * std::f32::consts::FRAC_PI_2 + 0.5;
             let (s, c) = a.sin_cos();
             Puff {
-                pos: at + (t1 * c + t2 * s) * 0.04,
+                pos: from + (t1 * c + t2 * s) * PLUME_RING,
                 vel: dir * 1.2 + (t1 * c + t2 * s) * 0.35 + Vec3::Y * 0.5,
                 ttl: 0.25,
-                size: 0.10,
+                size: PLUME_SIZE,
                 color: Vec3::new(0.50, 0.48, 0.45),
                 gravity: 0.0,
+                delay,
             }
         })
         .collect()
@@ -1433,12 +1496,35 @@ mod feel_tests {
         assert_eq!(Material::Sand.burst(at, n).len(), 5);
         assert_eq!(body_sparks(at).len(), 6);
         assert_eq!(ricochet_sparks(at, n).len(), 4);
-        assert_eq!(plume(at, Vec3::Z).len(), 4);
+        assert_eq!(plume(at, Vec3::Z, 3).len(), 4);
         assert!(
-            plume(at, Vec3::Z)
+            plume(at, Vec3::Z, 3)
                 .iter()
                 .all(|p| p.vel.z > 1.0 && p.vel.y > 0.0)
         );
+        // Every burst is born at once; the plume waits out its weapon's
+        // flash and starts a little down the bore, not on the muzzle.
+        assert!(
+            metal
+                .iter()
+                .chain(&stone)
+                .chain(&body_sparks(at))
+                .chain(&ricochet_sparks(at, n))
+                .all(|p| p.delay == 0.0)
+        );
+        for id in 1..=WEAPON_COUNT {
+            let row = weapon_feel(id);
+            for puff in plume(at, Vec3::Z, id) {
+                assert!(
+                    (puff.delay - row.flash_ms).abs() < 1e-6,
+                    "id {id}: the plume waits out the flash"
+                );
+                assert!(
+                    puff.pos.z >= at.z + PLUME_LEAD - 1e-6,
+                    "id {id}: down the bore of the flash"
+                );
+            }
+        }
         // One ricochet in eight, by the end point, the same every time.
         let mut sung = 0;
         for k in 0..4000u32 {
