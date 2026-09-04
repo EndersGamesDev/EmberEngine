@@ -27,7 +27,8 @@ and captures every client window to <Out>/<Prefix>-<name>-<client>.png.
 An `rmb` step holds the RIGHT button (aim down the sights) across the wait
 and the capture, for at least N ms, so the scope is on screen when the
 picture is taken; `mouse` inside the same step fires while it is held.
--Map picks the lobby's map (v18 servers), -Cam pins the observer camera,
+-Map picks the lobby's map (v18 servers), -Mode the lobby's mode (v19
+servers: ffa, tdm or hill), -Cam pins the observer camera,
 -Weapon sets EMBER_WEAPON on client A (a native debug override of the drawn
 weapon, when the client supports it). -KeepRunning leaves everything up.
 #>
@@ -35,6 +36,7 @@ param(
     [int]$Port = 7778,
     [string]$Lobby = "v18cap",
     [string]$Map = "",
+    [string]$Mode = "",
     [string]$Cam = "",
     [int]$Weapon = 0,
     [int]$Clients = 2,
@@ -115,8 +117,12 @@ Write-Host ("server up on {0} after {1:n1}s (pid {2})" -f $Port, $sw.Elapsed.Tot
 function Start-Client([string]$handle, [string]$action, [hashtable]$envExtra) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $client
-    # The map is the creating client's seventh positional argument (arena-app online URL create LOBBY - HANDLE MAP); a joiner takes the lobby's.
-    $mapArg = if ($Map -and $action -eq "create") { " $Map" } else { "" }
+    # The map is the creating client's seventh positional argument and the mode (v19) its eighth (arena-app online URL create LOBBY - HANDLE MAP MODE); a joiner takes the lobby's. The mode needs the map in front of it, so an empty -Map goes as "" (the server's default) when -Mode is set.
+    $mapArg = ""
+    if ($action -eq "create" -and ($Map -or $Mode)) {
+        $mapArg = if ($Map) { " $Map" } else { ' ""' }
+        if ($Mode) { $mapArg += " $Mode" }
+    }
     $psi.Arguments = "online ws://127.0.0.1:$Port $action $Lobby - $handle$mapArg"
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
