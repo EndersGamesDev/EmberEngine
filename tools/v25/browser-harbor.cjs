@@ -1,6 +1,8 @@
 // Real Arena WASM + authored rendering-only harbor viewpoints/roster.
 // No visible browser, OS input, actual focus/pointer capture, or live server.
 // Build/bind separately; this script does not build or edit production code.
+// EMBER_QA_TIMING=1 adds 8 warmups + 32 GPU-completed frame-latency samples
+// per view. This serializes rendering for measurement, not FPS/GPU-only time.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,11 +31,25 @@ if (wanted) assert(wanted.length && new Set(wanted).size === wanted.length && wa
 const views = wanted ? wanted.map(name => viewpoints.find(v => v.name === name)) : viewpoints;
 const maxDraws = Number(process.env.EMBER_QA_MAX_DRAWS || 2000);
 const shadowDiagnostic = process.env.EMBER_QA_SHADOW_DIAGNOSTIC || '';
+const timingOption = process.env.EMBER_QA_TIMING || '';
+assert(['', '0', '1'].includes(timingOption), 'EMBER_QA_TIMING must be 0, 1, or unset');
+const timingEnabled = timingOption === '1';
+const timingWarmups = 8, timingSampleCount = 32;
 assert(['', 'dump', 'unshadowed'].includes(shadowDiagnostic), 'Unknown shader diagnostic mode');
 assert(Number.isFinite(maxDraws) && maxDraws > 0, 'EMBER_QA_MAX_DRAWS must be positive');
 const result = { purpose: 'Real WASM rendering-only fixtures; not authoritative layout, eight-player networking, collision, or performance proof',
   webRoot, output, map, arenaHalf, expectedProtocol: proto, fixtureSpawns: spawns,
-  dimensions: { width: 1600, height: 900 }, maxDrawsPerFrame: maxDraws, captures: [], errors: [], warnings: [], harborBuildLogs: [] };
+  dimensions: { width: 1600, height: 900 }, maxDrawsPerFrame: maxDraws, captures: [], errors: [], warnings: [], harborBuildLogs: [], contactBuildLogs: [] };
+if (timingEnabled) {
+  result.timing = {
+    metric: 'Synchronized update/submission/GPU-completion frame latency; not FPS or GPU-only time',
+    clock: 'Original unmodified performance.now, not the fixture virtual clock',
+    completion: 'WebGL2 gl.finish after each measured callback batch; GPU drained before warmups',
+    excludes: 'RAF scheduling wait, fixture snapshot injection, screenshot/readback, and Playwright transport',
+    limitations: 'Serial completion changes normal GPU pipelining; includes CPU update/submission and driver wait. Shared-desktop/Idle scheduling variance remains. Not a throughput benchmark.',
+    warmupFramesPerView: timingWarmups, sampleFramesPerView: timingSampleCount,
+  };
+}
 if (shadowDiagnostic) {
   result.shaderDiagnostic = shadowDiagnostic;
   result.purpose = 'ISOLATED SHADER DIAGNOSTIC, NOT A RELEASE CAPTURE: ' + result.purpose;
@@ -61,7 +77,7 @@ function state() {
   }
   return { t: 'state', tick: ++tick, players, bullets: [], pads: [], loot: [], team_score: [0, 0], hill: 255, round_pause: 0 };
 }
-function installFixture({ shadowDiagnostic }) {
+function installFixture({ shadowDiagnostic, timingEnabled }) {
   Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
   Object.defineProperty(navigator, 'getGamepads', { value: () => [], configurable: true });
   HTMLElement.prototype.focus = function() {};
@@ -79,6 +95,7 @@ function installFixture({ shadowDiagnostic }) {
   };
   const rawNow = performance.now.bind(performance), rawRaf = window.requestAnimationFrame.bind(window);
   let paused = false, now = 0, budget = 0, queued = false, next = 1, finish;
+  let timingPhase = 'off', timingWarmupFrames = 0, timingSamples = [];
   const pending = new Map();
   Object.defineProperty(performance, 'now', { configurable: true, value: () => paused ? now : rawNow() });
   const schedule = () => {
@@ -96,7 +113,22 @@ function installFixture({ shadowDiagnostic }) {
         }
       }
       const callbacks = [...pending.values()]; pending.clear();
+      const timed = timingEnabled && timingPhase !== 'off';
+      const drawsBefore = timed ? window.__qaDraws : 0;
+      const startedAt = timed ? rawNow() : 0;
       for (const callback of callbacks) callback(paused ? now : timestamp);
+      if (timed) {
+        // Submission alone is asynchronous. Wait for this context's actual
+        // GPU work before stopping the real (never virtual) wall clock.
+        window.__qaGl.finish();
+        const milliseconds = rawNow() - startedAt;
+        const glError = window.__qaGl.getError();
+        if (glError !== 0) throw new Error(`WebGL error during timing: ${glError}`);
+        const drawsPerFrame = window.__qaDraws - drawsBefore;
+        if (drawsPerFrame < 1) throw new Error('Timing callback batch did not render');
+        if (timingPhase === 'sample') timingSamples.push({ milliseconds, drawsPerFrame });
+        else timingWarmupFrames++;
+      }
       if (paused && budget === 0 && finish) { const resolve = finish; finish = undefined; resolve(); }
       schedule();
     });
@@ -111,6 +143,30 @@ function installFixture({ shadowDiagnostic }) {
     },
     read: () => ({ paused, now, budget }),
   };
+  if (timingEnabled) {
+    const requireIdle = () => {
+      if (!paused || budget !== 0 || finish || !window.__qaGl) throw new Error('Timing requires an idle controlled WebGL2 frame');
+    };
+    window.__qaTiming = {
+      warmup() {
+        requireIdle();
+        if (timingPhase !== 'off') throw new Error('Timing already active');
+        window.__qaGl.finish();
+        timingWarmupFrames = 0; timingSamples = []; timingPhase = 'warmup';
+      },
+      sample(expectedWarmups) {
+        requireIdle();
+        if (timingPhase !== 'warmup' || timingWarmupFrames !== expectedWarmups) throw new Error('Timing warmup count mismatch');
+        timingPhase = 'sample';
+      },
+      stop(expectedSamples) {
+        requireIdle();
+        if (timingPhase !== 'sample' || timingSamples.length !== expectedSamples) throw new Error('Timing sample count mismatch');
+        timingPhase = 'off';
+        return { warmupFrames: timingWarmupFrames, samples: timingSamples, virtualClockEnd: now };
+      },
+    };
+  }
   window.__qaDraws = 0;
   window.__qaShaders = [];
   if (shadowDiagnostic) {
@@ -192,6 +248,28 @@ async function pointCamera(view) {
     `Camera aim did not reach ${view.name}: ${JSON.stringify({ actual, yaw, pitch, dot })}`);
   return { desiredYaw: yaw, desiredPitch: pitch, actualInput: actual };
 }
+async function measureViewTiming() {
+  await page.evaluate(() => window.__qaTiming.warmup());
+  await advance(timingWarmups);
+  await page.evaluate(expected => window.__qaTiming.sample(expected), timingWarmups);
+  await advance(timingSampleCount);
+  const timing = await page.evaluate(expected => window.__qaTiming.stop(expected), timingSampleCount);
+  assert.equal(timing.warmupFrames, timingWarmups);
+  assert.equal(timing.samples.length, timingSampleCount);
+  for (const sample of timing.samples) {
+    assert(Number.isFinite(sample.milliseconds) && sample.milliseconds >= 0, 'Invalid real-clock timing sample');
+    assert(sample.drawsPerFrame > 0 && sample.drawsPerFrame <= maxDraws, 'Timing sample exceeded draw bounds');
+  }
+  const sorted = timing.samples.map(sample => sample.milliseconds).sort((a, b) => a - b);
+  timing.milliseconds = {
+    min: sorted[0], max: sorted.at(-1),
+    median: (sorted[timingSampleCount / 2 - 1] + sorted[timingSampleCount / 2]) / 2,
+    p95: sorted[Math.ceil(timingSampleCount * 0.95) - 1],
+    mean: sorted.reduce((sum, value) => sum + value, 0) / timingSampleCount,
+  };
+  timing.percentileMethod = 'Nearest-rank p95; median averages the two middle samples';
+  return timing;
+}
 async function main() {
   fs.mkdirSync(output, { recursive: true });
   const wasm = path.join(webRoot, 'pkg/arena_bg.wasm'), bindings = path.join(webRoot, 'pkg/arena.js');
@@ -217,6 +295,7 @@ async function main() {
     if (message.type() === 'error') result.errors.push(message.text());
     if (message.type() === 'warning') result.warnings.push(message.text());
     if (message.text().includes('authored harbor built')) result.harborBuildLogs.push(message.text());
+    if (message.text().includes('static contact shading baked')) result.contactBuildLogs.push(message.text());
   });
   await page.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   await page.routeWebSocket('**', ws => {
@@ -237,7 +316,7 @@ async function main() {
     });
     ws.onClose(() => { clearInterval(stream); socket = null; });
   });
-  await page.addInitScript(installFixture, { shadowDiagnostic });
+  await page.addInitScript(installFixture, { shadowDiagnostic, timingEnabled });
   await page.goto(`${origin}/fixture`);
   await page.evaluate(async origin => {
     const arena = await import('/pkg/arena.js'); await arena.default();
@@ -271,8 +350,11 @@ async function main() {
       'Rendering camera overlaps a synthetic remote body');
     assert(/8 in arena/.test(detail.status), `Client roster did not show eight players: ${detail.status}`);
     const file = path.join(output, `${view.name}.png`), bytes = await page.screenshot({ path: file });
-    result.captures.push({ view, camera, file, sha256: sha(bytes), ...detail });
-    console.log(JSON.stringify({ view: view.name, file, drawsPerFrame: detail.drawsPerFrame, glError: detail.glError }));
+    const capture = { view, camera, file, sha256: sha(bytes), ...detail };
+    result.captures.push(capture);
+    if (timingEnabled) capture.timing = await measureViewTiming();
+    console.log(JSON.stringify({ view: view.name, file, drawsPerFrame: detail.drawsPerFrame, glError: detail.glError,
+      ...(capture.timing ? { synchronizedLatencyMs: capture.timing.milliseconds } : {}) }));
   }
   const gallery = await context.newPage();
   await gallery.setContent('<style>body{margin:0;background:#20252b;color:white;font:16px sans-serif}main{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px}figure{margin:0}img{display:block;width:100%}figcaption{padding:6px}</style>'
