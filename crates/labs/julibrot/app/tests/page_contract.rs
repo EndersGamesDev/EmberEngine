@@ -579,9 +579,11 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     assert!(STATE.contains("pub fn pan_px("));
     // The slider goes through the crosshair anchor rather than the screen centre.
     assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
-    // A row load forgets the point, because the point belonged to the picture that was replaced.
+    // A row load clears the replaced picture's point before the atomic row restores its own.
     assert!(STATE.contains("pub fn clear_crosshair(&mut self)"));
     assert_eq!(MAIN.matches("api.app_clear_crosshair();").count(), 1);
+    assert!(SAVED.contains("pub target: Option<SavedCentre>"));
+    assert!(STATE.contains("self.crosshair = target;"));
     // The page draws the marker from the projection and never from a pixel it remembered.
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains("api.app_crosshair_json(bounds.width, bounds.height)"));
