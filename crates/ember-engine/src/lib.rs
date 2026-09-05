@@ -25,10 +25,10 @@ mod input;
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::init_diagnostics;
 pub use app::{EngineConfig, run};
-pub use feedback::{Feedback, Rumble};
 pub use environment::{Environment, Particle, Weather};
+pub use feedback::{Feedback, Rumble};
 pub use input::{InputState, PadButton, PadState};
-pub use renderer::{Camera, Fog, Frame, Instance, MeshData, MeshVertex, TextureData};
+pub use renderer::{Camera, Fog, Frame, Instance, MeshData, MeshVertex, Surface, TextureData};
 
 // Re-exported so game code doesn't need its own winit/glam dependency for
 // the common cases.

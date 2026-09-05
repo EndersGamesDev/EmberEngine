@@ -27,7 +27,7 @@ struct VsIn {
     @location(4) i_scale: vec3<f32>,
     @location(5) i_color: vec3<f32>,
     @location(6) i_rot: vec4<f32>,
-    @location(7) i_material: vec2<f32>, // wettable, casts/receives shadow
+    @location(7) i_material: vec4<f32>, // wettable, shadow, roughness (-1 legacy), metallic
 };
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -36,7 +36,7 @@ struct VsOut {
     @location(2) uv: vec2<f32>,
     @location(3) view_depth: f32,
     @location(4) world: vec3<f32>,
-    @location(5) @interpolate(flat) material: vec2<f32>,
+    @location(5) @interpolate(flat) material: vec4<f32>,
 };
 
 fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -149,6 +149,49 @@ fn shadow_visibility(world: vec3<f32>, normal: vec3<f32>, ndotl: f32) -> f32 {
     return mix(1.0, sum / 9.0, smoothstep(0.005, 0.06, border));
 }
 
+// Single-scattering GGX/Smith/Schlick, with perceptual roughness squared.
+// Sun intensity keeps the engine's normalized Lambert units (pi absorbed in
+// light intensity). No new texture, extra pass or optional GPU feature.
+fn surface_sun(albedo: vec3<f32>, n: vec3<f32>, view: vec3<f32>, light: vec3<f32>,
+    roughness: f32, metallic: f32) -> vec3<f32> {
+    let nl = max(dot(n, light), 0.0);
+    let nv = max(dot(n, view), 0.0001);
+    let h = safe_normalize(view + light);
+    let nh = clamp(dot(n, h), 0.0, 1.0);
+    let vh = clamp(dot(view, h), 0.0, 1.0);
+    let a = roughness * roughness;
+    let a2 = a * a;
+    let denominator = (1.0 - nh * nh) + nh * nh * a2;
+    // D*pi: pi cancels against the normalized light intensity below.
+    let distribution = a2 / max(denominator * denominator, 0.0000000001);
+    let smith_l = nv * sqrt(nl * nl * (1.0 - a2) + a2);
+    let smith_v = nl * sqrt(nv * nv * (1.0 - a2) + a2);
+    let masking = 0.5 / max(smith_l + smith_v, 0.00001);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - vh, 5.0);
+    let diffuse = albedo * (1.0 - metallic) * (vec3<f32>(1.0) - fresnel);
+    return (diffuse + fresnel * (distribution * masking)) * nl;
+}
+
+// An inexpensive broad reflection of the authored sky gradient, not a cubemap,
+// prefiltered IBL or scene reflection. Rough surfaces lose directional detail.
+// Do not sample the sharp sky sun here: direct specular already accounts for it.
+fn surface_sky(albedo: vec3<f32>, n: vec3<f32>, view: vec3<f32>,
+    roughness: f32, metallic: f32) -> vec3<f32> {
+    let reflected = reflect(-view, n);
+    let elevation = clamp(reflected.y, 0.0, 1.0);
+    let gradient = mix(scene.sky_horizon.rgb, scene.sky_zenith.rgb, sqrt(elevation));
+    let ground = vec3<f32>(0.08, 0.072, 0.058);
+    let sky = mix(ground, gradient, smoothstep(-0.15, 0.12, reflected.y));
+    let broad = mix(ground, scene.sky_horizon.rgb, 0.65);
+    let blurred = mix(sky, broad, roughness * roughness);
+    let nv = clamp(dot(n, view), 0.0, 1.0);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let grazing = max(vec3<f32>(1.0 - roughness), f0);
+    let fresnel = f0 + (grazing - f0) * pow(1.0 - nv, 5.0);
+    return blurred * fresnel;
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outdoors = scene.sun_direction.w > 0.5;
@@ -177,6 +220,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sheen = 0.18 * pow(max(dot(n, half_vec), 0.0), 8.0);
     let fill = fill_col * (0.55 * max(dot(n, fill_dir), 0.0));
     var radiance = albedo * (hemi + fill + sun_col * (sun_intensity * ndotl + sheen) * visibility);
+    if outdoors && in.material.z >= 0.0 {
+        let roughness = in.material.z;
+        let metallic = in.material.w;
+        let view = safe_normalize(scene.eye.xyz - in.world);
+        let bounded_albedo = clamp(albedo, vec3<f32>(0.0), vec3<f32>(1.0));
+        radiance = bounded_albedo * (1.0 - metallic) * 0.96 * (hemi + fill)
+            + surface_sun(bounded_albedo, n, view, sun_dir, roughness, metallic)
+                * sun_col * sun_intensity * visibility
+            + surface_sky(bounded_albedo, n, view, roughness, metallic);
+    }
     if outdoors && in.material.x > 0.5 && scene.sky_horizon.w > 0.001 {
         let view = safe_normalize(scene.eye.xyz - in.world);
         let wetness = scene.sky_horizon.w;

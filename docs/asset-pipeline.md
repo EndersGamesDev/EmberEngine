@@ -125,20 +125,13 @@ Worked example: `tools/swat_split.py` (Mixamo-rigged FBX → 15 GLB parts
   17.4 MB. Check the size before embedding.
 - **Meshes are de-indexed** into flat triangle lists at load, so vertex
   count is 3× the triangle count in memory.
-- The loader reads `TEXCOORD_0` and the material's base-colour texture
-  only; roughness/normal/AO maps in a source archive are ignored today.
+- The loader reads `TEXCOORD_0` and the material's base-colour texture only; roughness/metallic/normal/AO maps in a source archive are ignored today. Since v26, `Instance::with_surface(roughness, metallic)` can supply scalar outdoor material response after loading, but this does not import those maps or per-primitive source factors. See `docs/environment-weather.md`.
 - **8-bit only.** The image decoder accepts `R8G8B8A8`, `R8G8B8` and `R8`
   and returns `None` for anything else — **with no log line**. A 16-bit
   re-export from Blender therefore ships a correctly-shaped, entirely
   untextured model. Verify the *exported* PNG's bit depth, not the
   source's.
-- **Mipmaps exist as of arena v13.** Texture upload builds a full box-filtered
-  chain on the CPU, sets `mip_level_count` to the chain length and gives the
-  sampler `mipmap_filter: Linear`, so a detailed texture no longer shimmers at
-  distance; it costs ~33% more texture memory. Downscaling at bake time still
-  matters — every texture is embedded in the wasm bundle by `include_bytes!`,
-  so source resolution is still a download cost for every web player — but it
-  is now a **bundle-size** argument, not an aliasing one.
+- **Mipmaps exist as of arena v13.** Texture upload builds a full box-filtered chain on the CPU, sets `mip_level_count` to the chain length and gives the sampler `mipmap_filter: Linear`; it costs ~33% more texture memory. Since v26, RGB is averaged in linear light, then re-encoded to sRGB, while alpha stays linear. This preserves distant texture energy rather than darkening high-contrast detail. Downscaling at bake time still matters: source resolution is embedded download cost and determines close-up detail. Mipmaps do not eliminate aliasing on thin geometry or replace anisotropic filtering at grazing angles.
 - **No backface culling** (`cull_mode: None`): the interior of an open or
   non-manifold shape renders solid rather than vanishing.
 - **No blending** (`BlendState::REPLACE`): there is no additive or

@@ -222,20 +222,7 @@ impl Rig {
         let uniform = SceneUniform::new(frame, 1.0);
         self.queue
             .write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
-        let instances: Vec<InstanceRaw> = frame
-            .instances
-            .iter()
-            .map(|instance| InstanceRaw {
-                pos: instance.position.to_array(),
-                scale: instance.scale.to_array(),
-                color: instance.color.to_array(),
-                rot: instance.rot.to_array(),
-                material: [
-                    f32::from(u8::from(instance.wettable)),
-                    f32::from(u8::from(instance.casts_shadow)),
-                ],
-            })
-            .collect();
+        let instances: Vec<InstanceRaw> = frame.instances.iter().map(InstanceRaw::from).collect();
         if !instances.is_empty() {
             self.queue
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(&instances));
@@ -403,6 +390,258 @@ fn save_capture(name: &str, pixels: &[u8]) {
         image::save_buffer(path, pixels, SIZE, SIZE, image::ColorType::Rgba8)
             .expect("save requested environment diagnostic capture");
     }
+}
+
+fn material_test_frame() -> Frame {
+    Frame {
+        camera: Camera {
+            eye: Vec3::new(0.0, 0.0, 5.0),
+            target: Vec3::ZERO,
+            fov_y_deg: 60.0,
+        },
+        environment: Environment {
+            enabled: true,
+            sun_direction: Vec3::Z,
+            sun_color: Vec3::ONE,
+            sun_intensity: 0.7,
+            sky_zenith: Vec3::ZERO,
+            sky_horizon: Vec3::ZERO,
+            cloud_coverage: 0.0,
+            wetness: 0.0,
+            ..Environment::default()
+        },
+        fog: Fog {
+            color: [0.0; 3],
+            density: 0.0,
+        },
+        // White texture, constant albedo and front-face normal isolate material
+        // response. The plate leaves a wide untouched background border.
+        instances: vec![
+            Instance::new(
+                Vec3::ZERO,
+                Vec3::new(4.0, 4.0, 0.1),
+                Vec3::new(0.3, 0.12, 0.04),
+            )
+            .without_shadow(),
+        ],
+        ..Frame::default()
+    }
+}
+
+fn mean_luminance_in(pixels: &[u8], selected: impl Fn(u32, u32) -> bool) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0_u32;
+    for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+        let index = u32::try_from(index).expect("test image fits u32 indexing");
+        if selected(index % SIZE, index / SIZE) {
+            sum += 0.2126_f64.mul_add(
+                f64::from(pixel[0]),
+                0.7152_f64.mul_add(f64::from(pixel[1]), 0.0722 * f64::from(pixel[2])),
+            );
+            count += 1;
+        }
+    }
+    assert!(count > 0, "material pixel region must not be empty");
+    sum / f64::from(count)
+}
+
+fn changed_pixels_in(
+    a: &[u8],
+    b: &[u8],
+    threshold: u8,
+    selected: impl Fn(u32, u32) -> bool,
+) -> usize {
+    assert_eq!(a.len(), b.len());
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0.iter())
+        .enumerate()
+        .filter(|(index, (a, b))| {
+            let index = u32::try_from(*index).expect("test image fits u32 indexing");
+            selected(index % SIZE, index / SIZE)
+                && a[..3]
+                    .iter()
+                    .zip(&b[..3])
+                    .any(|(x, y)| x.abs_diff(*y) > threshold)
+        })
+        .count()
+}
+
+const fn material_background(x: u32, y: u32) -> bool {
+    x < 24 || y < 24 || x >= SIZE - 24 || y >= SIZE - 24
+}
+
+const fn material_center(x: u32, y: u32) -> bool {
+    x.abs_diff(SIZE / 2) <= 3 && y.abs_diff(SIZE / 2) <= 3
+}
+
+fn material_annulus(x: u32, y: u32) -> bool {
+    let dx = x.abs_diff(SIZE / 2);
+    let dy = y.abs_diff(SIZE / 2);
+    (64 * 64..=78 * 78).contains(&(dx * dx + dy * dy))
+}
+
+#[test]
+#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
+fn environment_gpu_material_roughness_controls_sun_lobe_width() {
+    let rig = pollster::block_on(Rig::new());
+    let mut frame = material_test_frame();
+    let mut response = Vec::new();
+    for (name, roughness) in [("smooth", 0.12), ("rough", 0.9)] {
+        frame.instances[0].surface = Some(Surface {
+            roughness,
+            metallic: 1.0,
+        });
+        frame.environment.sun_intensity = 0.7;
+        let lit = rig.render(&frame, false);
+        frame.environment.sun_intensity = 0.0;
+        let ambient = rig.render(&frame, false);
+        let center =
+            mean_luminance_in(&lit, material_center) - mean_luminance_in(&ambient, material_center);
+        let annulus = mean_luminance_in(&lit, material_annulus)
+            - mean_luminance_in(&ambient, material_annulus);
+        save_capture(&format!("material-{name}-sun"), &lit);
+        save_capture(&format!("material-{name}-ambient"), &ambient);
+        response.push((center, annulus, lit));
+    }
+    let (smooth_center, smooth_annulus, smooth) = &response[0];
+    let (rough_center, rough_annulus, rough) = &response[1];
+    // Subtract each material's no-sun reference so the roughness-dependent
+    // broad sky approximation cannot masquerade as a changed direct lobe.
+    assert!(
+        *smooth_center > *rough_center + 20.0,
+        "smooth metal needs a stronger central sun highlight: smooth={smooth_center}, rough={rough_center}"
+    );
+    assert!(
+        *rough_annulus > *smooth_annulus + 5.0,
+        "rough metal must spread sun energy farther off-axis: smooth={smooth_annulus}, rough={rough_annulus}"
+    );
+    assert!(changed_pixels(smooth, rough, 3) > 250);
+    assert_eq!(
+        changed_pixels_in(smooth, rough, 0, material_background),
+        0,
+        "instance roughness must not affect sky/background pixels"
+    );
+
+    // Very low light keeps the narrow peak below tone-map saturation. A too
+    // large denominator epsilon makes the supported .08 surface incorrectly
+    // dimmer than .10 at normal incidence, even though both are valid inputs.
+    frame.environment.sun_intensity = 0.0001;
+    frame.instances[0].color = Vec3::splat(0.05);
+    let mut peaks = Vec::new();
+    for (name, roughness) in [("minimum", 0.08), ("near-minimum", 0.1)] {
+        frame.instances[0] = frame.instances[0].with_surface(roughness, 1.0);
+        let pixels = rig.render(&frame, false);
+        peaks.push(mean_luminance_in(&pixels, |x, y| {
+            (127..=128).contains(&x) && (127..=128).contains(&y)
+        }));
+        save_capture(&format!("material-low-light-{name}"), &pixels);
+    }
+    assert!(
+        peaks[0] > peaks[1] + 3.0,
+        "decreasing valid minimum roughness must strengthen the unsaturated central highlight: {peaks:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
+fn environment_gpu_material_metallic_is_per_instance_and_opt_in() {
+    let rig = pollster::block_on(Rig::new());
+    let mut frame = material_test_frame();
+    let legacy = frame.instances[0];
+    frame.instances[0] = legacy.with_surface(0.35, 0.0);
+    let dielectric = rig.render(&frame, false);
+    frame.instances[0] = legacy.with_surface(0.35, 1.0);
+    let metal = rig.render(&frame, false);
+    assert!(
+        changed_pixels(&dielectric, &metal, 3) > 250,
+        "bare metal must not render identically to dielectric paint"
+    );
+    assert_eq!(
+        changed_pixels_in(&dielectric, &metal, 0, material_background),
+        0,
+        "instance metallic must not affect sky/background pixels"
+    );
+    save_capture("material-dielectric", &dielectric);
+    save_capture("material-metal", &metal);
+
+    frame.environment.enabled = false;
+    frame.instances[0] = legacy;
+    let disabled_legacy = rig.render(&frame, false);
+    for (roughness, metallic) in [(0.08, 0.0), (0.08, 1.0), (1.0, 0.0), (1.0, 1.0)] {
+        frame.instances[0] = legacy.with_surface(roughness, metallic);
+        assert_eq!(
+            rig.render(&frame, false),
+            disabled_legacy,
+            "disabled environment must ignore all explicit surface values"
+        );
+    }
+
+    frame.environment.enabled = true;
+    frame.instances = [-1.1, 1.1]
+        .map(|x| {
+            Instance::new(
+                Vec3::new(x, 0.0, 0.0),
+                Vec3::new(1.4, 2.0, 0.1),
+                legacy.color,
+            )
+            .without_shadow()
+            .with_surface(0.65, 0.0)
+        })
+        .to_vec();
+    let pair_before = rig.render(&frame, false);
+    frame.instances[0] = frame.instances[0].with_surface(0.15, 1.0);
+    let pair_after = rig.render(&frame, false);
+    assert!(
+        changed_pixels_in(&pair_before, &pair_after, 3, |x, y| {
+            (60..=88).contains(&x) && (108..=148).contains(&y)
+        }) > 200,
+        "left instance must receive its own changed material"
+    );
+    assert_eq!(
+        changed_pixels_in(&pair_before, &pair_after, 0, |x, _| x >= SIZE / 2),
+        0,
+        "changing the left material must not leak into the right instance or background"
+    );
+    frame.instances.reverse();
+    assert_eq!(
+        rig.render(&frame, false),
+        pair_after,
+        "non-overlapping material instances must survive reversed upload order"
+    );
+    save_capture("material-isolated-pair", &pair_after);
+}
+
+#[test]
+#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
+fn environment_gpu_material_highlight_tracks_view_without_changing_legacy() {
+    let rig = pollster::block_on(Rig::new());
+    let mut frame = material_test_frame();
+    let legacy = frame.instances[0];
+    let mut centers = Vec::new();
+    for (name, eye_x) in [("frontal", 0.0), ("oblique", 2.0)] {
+        // The camera always targets the same constant-albedo front-face point;
+        // its central patch stays far from silhouettes and uses no fog.
+        frame.camera.eye.x = eye_x;
+        frame.instances[0] = legacy;
+        let legacy_pixels = rig.render(&frame, false);
+        frame.instances[0] = legacy.with_surface(0.12, 1.0);
+        let material_pixels = rig.render(&frame, false);
+        centers.push((
+            mean_luminance_in(&legacy_pixels, material_center),
+            mean_luminance_in(&material_pixels, material_center),
+        ));
+        save_capture(&format!("material-view-{name}"), &material_pixels);
+    }
+    assert!(
+        (centers[0].0 - centers[1].0).abs() <= 1.0,
+        "legacy constant front-face lighting must remain view-independent: {centers:?}"
+    );
+    assert!(
+        centers[0].1 > centers[1].1 + 20.0,
+        "moving away from the sun reflection must move the sharp material highlight: {centers:?}"
+    );
 }
 
 #[test]
