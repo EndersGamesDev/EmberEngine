@@ -2730,18 +2730,6 @@ fn one_ulp_of_deep_zoom_renews_the_scene_without_a_worker_request() {
         ),
         "zoom is dispatch scale, not a reason to issue another orbit request"
     );
-    assert!(
-        reference_submission_requires_worker(
-            false,
-            true,
-            plane,
-            nudged.navigation.precision_mode,
-            nudged_precision.requested_bits,
-            CAP / 2,
-            Some(lease),
-        ),
-        "a longer span is regenerated because the kernel binds logical length to requested cap"
-    );
     assert!(viewer.owner_mut().accept_navigation_with_orbit(
         nudged.navigation.generation,
         nudged.navigation.centre_revision,
@@ -2778,6 +2766,29 @@ fn one_ulp_of_deep_zoom_renews_the_scene_without_a_worker_request() {
         nudged_precision.requested_bits,
         CAP,
         Some(renewed),
+    ));
+}
+
+#[test]
+fn a_longer_reference_span_is_not_leased_to_a_lower_cap() {
+    let plane = construct_plane(0.0, 0.0).expect("canonical plane");
+    let lease = ReferenceLeaseIdentity {
+        main_generation: 8,
+        source_generation: 7,
+        centre_revision: 4,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: 128,
+        orbit_length: 512,
+    };
+    assert!(reference_submission_requires_worker(
+        false,
+        true,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        256,
+        Some(lease),
     ));
 }
 
