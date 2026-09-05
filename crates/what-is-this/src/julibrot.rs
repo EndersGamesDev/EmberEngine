@@ -1,12 +1,18 @@
 //! Fixed Julibrot slide scenarios and bounded report records.
 
-use ember_game_what_is_this_v1::{KernelMeasurement, KernelStatus, SummaryStats};
-use serde::{Deserialize, Serialize};
+use ember_game_what_is_this_v1::KernelStatus;
+#[cfg(test)]
+use ember_game_what_is_this_v1::{KernelMeasurement, SummaryStats};
+#[cfg(test)]
+use serde::Deserialize;
+use serde::Serialize;
 
 const STAGE_ID: &str = "stage.julibrot-slide.v1";
 /// Maximum compact JSON bytes reserved for all Julibrot scenario measurements.
 pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 10 * 1_024;
+#[cfg(test)]
 const FACT_SAMPLE_CAP: usize = 12;
+#[cfg(test)]
 const NOTE_BYTE_CAP: usize = 1_280;
 
 /// Stable metadata for one scripted Julibrot control sequence.
@@ -99,6 +105,7 @@ pub const fn julibrot_scenarios() -> &'static [JulibrotScenarioSpec] {
     &SCENARIOS
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FrameObservation {
@@ -112,6 +119,7 @@ struct FrameObservation {
     uncovered_fraction_samples: Vec<f64>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[allow(
@@ -128,6 +136,7 @@ struct WallObservation {
     fence_us: Option<Vec<u64>>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioObservation {
@@ -146,22 +155,26 @@ struct ScenarioObservation {
     game_side_wall_ms: Vec<f64>,
 }
 
+#[cfg(test)]
 fn scenario(scenario_id: &str) -> Option<&'static JulibrotScenarioSpec> {
     SCENARIOS
         .iter()
         .find(|candidate| candidate.scenario_id == scenario_id)
 }
 
+#[cfg(test)]
 fn finite_nonnegative(values: &[f64]) -> bool {
     values
         .iter()
         .all(|value| value.is_finite() && *value >= 0.0)
 }
 
+#[cfg(test)]
 fn validate_optional_samples(values: Option<&[u64]>) -> bool {
     values.is_none_or(|samples| samples.len() <= FACT_SAMPLE_CAP)
 }
 
+#[cfg(test)]
 fn validate_observation(
     observation: &ScenarioObservation,
 ) -> Result<&'static JulibrotScenarioSpec, String> {
@@ -238,6 +251,7 @@ fn validate_observation(
     Ok(spec)
 }
 
+#[cfg(test)]
 fn summarize(samples: &[f64]) -> Option<SummaryStats> {
     if samples.is_empty() {
         return None;
@@ -260,13 +274,8 @@ fn summarize(samples: &[f64]) -> Option<SummaryStats> {
     })
 }
 
-/// Validates one browser observation and builds its bounded schema-1 measurement.
-///
-/// # Errors
-///
-/// Returns a typed explanation when the observation does not match the fixed scenario table or
-/// exceeds a stage-specific sample or byte cap.
-pub fn julibrot_measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
+#[cfg(test)]
+fn measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
     let observation = serde_json::from_str::<ScenarioObservation>(observation_json)
         .map_err(|error| format!("Julibrot scenario record is invalid: {error}"))?;
     let spec = validate_observation(&observation)?;
@@ -302,9 +311,8 @@ pub fn julibrot_measurement(observation_json: &str) -> Result<KernelMeasurement,
     })
 }
 
-/// Builds the schema-1 kernel record paired with an unavailable Julibrot stage.
-#[must_use]
-pub fn julibrot_unavailable_measurement(reason: &str) -> KernelMeasurement {
+#[cfg(test)]
+fn unavailable_measurement(reason: &str) -> KernelMeasurement {
     KernelMeasurement {
         kernel_id: "julibrot-slide.unavailable.v1".to_string(),
         workload: "load the same-origin Julibrot lab and reach a settled Final scene".to_string(),
@@ -357,13 +365,34 @@ pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Opt
         let Some(note) = kernel.notes.first() else {
             continue;
         };
-        let Ok(measured) = serde_json::from_str::<ScenarioObservation>(note) else {
+        let Ok(measured) = serde_json::from_str::<serde_json::Value>(note) else {
+            continue;
+        };
+        let Some(frames) = measured.get("frames") else {
             continue;
         };
         scenarios += 1;
-        observed = observed.saturating_add(measured.frames.observed);
-        clear_only = clear_only.saturating_add(measured.frames.clear_only);
-        held = held.saturating_add(measured.frames.held);
+        observed = observed.saturating_add(
+            frames
+                .get("observed")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or_default(),
+        );
+        clear_only = clear_only.saturating_add(
+            frames
+                .get("clear_only")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or_default(),
+        );
+        held = held.saturating_add(
+            frames
+                .get("held")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or_default(),
+        );
     }
     Some(format!(
         "The Julibrot slide drove {scenarios} fixed scenarios across {observed} observed frames: {clear_only} clear-only and {held} held."
@@ -424,7 +453,7 @@ mod tests {
         let records = SCENARIOS
             .into_iter()
             .map(|spec| {
-                julibrot_measurement(
+                measurement(
                     &serde_json::to_string(&observation_for(spec)).expect("fixture JSON"),
                 )
                 .expect("bounded scenario")
@@ -441,7 +470,7 @@ mod tests {
 
     #[test]
     fn unavailable_path_is_an_honest_schema_measurement() {
-        let record = julibrot_unavailable_measurement("WebGL2 unavailable");
+        let record = unavailable_measurement("WebGL2 unavailable");
         let stage = unavailable_stage("WebGL2 unavailable", 12.5);
         assert_eq!(record.status, KernelStatus::Unavailable);
         assert_eq!(
@@ -461,7 +490,7 @@ mod tests {
 
     #[test]
     fn scenario_record_round_trips_through_the_schema_measurement() {
-        let record = julibrot_measurement(
+        let record = measurement(
             &serde_json::to_string(&observation_for(SCENARIOS[0])).expect("fixture JSON"),
         )
         .expect("bounded scenario");
@@ -474,7 +503,7 @@ mod tests {
     fn measurement_rejects_a_changed_scenario_table() {
         let mut changed = observation_for(SCENARIOS[0]);
         changed.step_count += 1;
-        let error = julibrot_measurement(&serde_json::to_string(&changed).expect("fixture JSON"))
+        let error = measurement(&serde_json::to_string(&changed).expect("fixture JSON"))
             .expect_err("changed step table must be rejected");
         assert!(error.contains("fixed step table"));
     }

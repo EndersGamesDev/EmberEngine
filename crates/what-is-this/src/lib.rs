@@ -15,8 +15,7 @@ use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStat
 use serde::Serialize;
 
 pub use julibrot::{
-    JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_measurement, julibrot_scenarios,
-    julibrot_unavailable_measurement,
+    JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_scenarios,
 };
 pub use kernels::{FloatProbeResult, KernelSpec, KernelSuite, jank_chunk, kernel_specs};
 
@@ -764,5 +763,8 @@ mod tests {
         assert!(page.contains("id=\"julibrot-result\""));
         assert!(page.contains("The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input."));
         assert!(page.contains("get('stage') === 'julibrot-slide'"));
+        assert!(page.contains("new URL('labs/julibrot/', ROOT)"));
+        assert!(page.contains("const JULIBROT_NOTE_BYTE_CAP = 1_280"));
+        assert!(page.contains("wasm.julibrot_report_byte_budget()"));
     }
 }

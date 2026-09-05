@@ -174,6 +174,7 @@
     const RAW_SAMPLE_CAP = 120;
     const REPORT_BYTE_CAP = 52 * 1024;
     const JULIBROT_FACT_SAMPLE_CAP = 12;
+    const JULIBROT_NOTE_BYTE_CAP = 1_280;
     const JULIBROT_STAGE_DEADLINE_MS = 240_000;
     const JULIBROT_SETTLE_DEADLINE_MS = 30_000;
     const JULIBROT_URL = new URL('labs/julibrot/', ROOT);
@@ -1458,7 +1459,6 @@
     }
 
     function julibrotUnavailableRecord(unavailableReason) {
-      if (wasm) return JSON.parse(wasm.julibrot_unavailable_measurement_json(unavailableReason));
       return {
         kernel_id: 'julibrot-slide.unavailable.v1',
         workload: 'load the same-origin Julibrot lab and reach a settled Final scene',
@@ -1485,7 +1485,21 @@
         for (const spec of specs) {
           requireActive(run, token);
           const observation = await runJulibrotScenario(run, token, loaded.document, spec);
-          const record = JSON.parse(wasm.julibrot_measurement_json(JSON.stringify(observation)));
+          const { game_side_wall_ms: gameSideWallMs, ...note } = observation;
+          const noteText = JSON.stringify(note);
+          const noteBytes = new TextEncoder().encode(noteText).byteLength;
+          if (noteBytes > JULIBROT_NOTE_BYTE_CAP) throw new Error(`Julibrot scenario ${spec.scenario_id} note used ${noteBytes} bytes; cap is ${JULIBROT_NOTE_BYTE_CAP}`);
+          const record = {
+            kernel_id: `julibrot-slide.${spec.scenario_id}.v1`,
+            workload: `${spec.name}; baseline ${spec.baseline_row}; steps=${spec.step_count}; interval_ms=${spec.interval_ms}; raw=game-side input-dispatch ms`,
+            unit: 'ms',
+            warmup_runs: 0,
+            status: 'complete',
+            unavailable_reason: null,
+            raw_samples: gameSideWallMs,
+            summary: summarize(gameSideWallMs),
+            notes: [noteText],
+          };
           records.push(record);
           const bytes = new TextEncoder().encode(JSON.stringify(records)).byteLength;
           if (bytes > wasm.julibrot_report_byte_budget()) throw new Error(`Julibrot measurement records used ${bytes} bytes; stage budget is ${wasm.julibrot_report_byte_budget()}`);
