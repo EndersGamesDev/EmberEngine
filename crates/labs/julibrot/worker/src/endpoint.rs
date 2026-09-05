@@ -407,7 +407,8 @@ impl<P: OwnerPort> OwnerCore<P> {
         Ok(())
     }
 
-    /// Reports whether the producer returned all four slots and acknowledged the closing drain.
+    /// Reports whether all four slots returned and the producer acknowledged, or the closing
+    /// drain became terminal at its deadline; callers inspect `take_error` to distinguish them.
     pub(crate) const fn shutdown_acknowledged(&self) -> bool {
         self.reconciled
     }
