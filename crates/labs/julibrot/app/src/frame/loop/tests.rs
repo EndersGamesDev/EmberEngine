@@ -2730,6 +2730,18 @@ fn one_ulp_of_deep_zoom_renews_the_scene_without_a_worker_request() {
         ),
         "zoom is dispatch scale, not a reason to issue another orbit request"
     );
+    assert!(
+        reference_submission_requires_worker(
+            false,
+            true,
+            plane,
+            nudged.navigation.precision_mode,
+            nudged_precision.requested_bits,
+            CAP / 2,
+            Some(lease),
+        ),
+        "a longer span is regenerated because the kernel binds logical length to requested cap"
+    );
     assert!(viewer.owner_mut().accept_navigation_with_orbit(
         nudged.navigation.generation,
         nudged.navigation.centre_revision,

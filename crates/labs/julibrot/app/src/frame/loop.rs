@@ -400,7 +400,7 @@ fn perturbation_reference_is_current(
     reference: Option<ReferenceLeaseIdentity>,
 ) -> bool {
     reference.is_some_and(|lease| {
-        let orbit_is_sufficient = lease.orbit_length >= requested_iteration_cap
+        let orbit_is_sufficient = lease.orbit_length == requested_iteration_cap
             || lease.source_generation == main_generation;
         lease.main_generation == main_generation
             && lease.centre_revision == centre_revision
@@ -427,7 +427,7 @@ fn reference_submission_requires_worker(
             lease.plane != plane
                 || lease.precision_mode != precision_mode
                 || lease.precision_bits < requested_precision_bits
-                || lease.orbit_length < requested_iteration_cap
+                || lease.orbit_length != requested_iteration_cap
         })
 }
 
