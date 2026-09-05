@@ -326,12 +326,13 @@ impl BrowserFrameLoop {
             self.install_main(viewer, requested.object_angles, plane, map);
             return Ok(true);
         }
-        let precision_mode = PrecisionMode::from_u32(navigation.precision_mode).ok_or_else(|| {
-            AppError::Worker(format!(
-                "precision mode {} is outside 0..1",
-                navigation.precision_mode
-            ))
-        })?;
+        let precision_mode =
+            PrecisionMode::from_u32(navigation.precision_mode).ok_or_else(|| {
+                AppError::Worker(format!(
+                    "precision mode {} is outside 0..1",
+                    navigation.precision_mode
+                ))
+            })?;
         let precision = precision_for(
             navigation.zoom_log2,
             self.plan.requested_extent.width,
@@ -339,18 +340,18 @@ impl BrowserFrameLoop {
         )
         .map_err(math_error)?;
         let renews_lease = !super::super::reference_submission_requires_worker(
-                sampled,
-                self.accepted_reference_receipt
-                    .as_ref()
-                    .is_some_and(|receipt| receipt.view_centre == navigation.centre),
-                plane,
-                navigation.precision_mode,
-                precision.requested_bits,
-                requested.iteration_cap,
-                self.accepted_reference_receipt
-                    .as_ref()
-                    .map(|receipt| receipt.lease),
-            );
+            sampled,
+            self.accepted_reference_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.view_centre == navigation.centre),
+            plane,
+            navigation.precision_mode,
+            precision.requested_bits,
+            requested.iteration_cap,
+            self.accepted_reference_receipt
+                .as_ref()
+                .map(|receipt| receipt.lease),
+        );
         if renews_lease {
             let handle = self
                 .current_orbit
@@ -367,10 +368,9 @@ impl BrowserFrameLoop {
                     "compatible reference lease renewal was refused".to_string(),
                 ));
             }
-            let receipt = self
-                .accepted_reference_receipt
-                .as_mut()
-                .ok_or_else(|| AppError::Worker("compatible lease receipt is missing".to_string()))?;
+            let receipt = self.accepted_reference_receipt.as_mut().ok_or_else(|| {
+                AppError::Worker("compatible lease receipt is missing".to_string())
+            })?;
             receipt.lease.main_generation = navigation.generation;
             receipt.lease.centre_revision = navigation.centre_revision;
             receipt.view_centre = navigation.centre;

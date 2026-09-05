@@ -479,11 +479,11 @@ mod browser {
         SceneMode, backdrop_extent, coverage_pre_empts, horizon_facts, main_for_grid,
         published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
+    use crate::timing::ReferenceTimingSample;
     use crate::{
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
         RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
     };
-    use crate::timing::ReferenceTimingSample;
 
     mod backdrop;
     mod facts;

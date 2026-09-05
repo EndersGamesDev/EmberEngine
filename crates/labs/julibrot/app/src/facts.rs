@@ -269,10 +269,8 @@ impl<'a> PageFacts<'a> {
             orbit_length: nonzero(viewer.main.orbit_length),
             orbit_generation: nonzero(viewer.main.generation_applied),
             reference_verification: loop_facts.accepted_reference_verification(),
-            consumed_word_error_ulps: loop_facts
-                .accepted_reference_consumed_word_error_ulps(),
-            reference_precision_escalations: loop_facts
-                .accepted_reference_precision_escalations(),
+            consumed_word_error_ulps: loop_facts.accepted_reference_consumed_word_error_ulps(),
+            reference_precision_escalations: loop_facts.accepted_reference_precision_escalations(),
             owner_epoch: viewer.epoch,
             centre_revision: viewer.main.centre_revision,
             centre_from_reference_px: viewer.hot.centre_from_reference_px,

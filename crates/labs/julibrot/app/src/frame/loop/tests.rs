@@ -17,20 +17,20 @@ use super::{
     BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
     REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
     RefinementSchedule, RefusalClass, SceneMode, SubmissionKind, accepted_reference_facts,
-    apply_precision_mode, arrival_is_current,
-    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
-    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
-    published_iteration_cap, sampling_zoom_log2, schedule_exposure_fill,
+    apply_precision_mode, arrival_is_current, backdrop_extent, coverage_pre_empts,
+    defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
+    hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
+    perturbation_reference_is_current, published_iteration_cap,
+    reference_submission_requires_worker, sampling_zoom_log2, schedule_exposure_fill,
     select_reference_candidate, stamp_scene_level, stamped_extent, stamped_screen_map,
-    reference_submission_requires_worker, view_projection_changed,
+    view_projection_changed,
 };
 use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
 use ember_julibrot_present::{
     PaletteId, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
 };
-use ember_lab_heap::SpanArena;
 use ember_julibrot_worker::ReferenceVerification;
+use ember_lab_heap::SpanArena;
 
 /// Poll budget and wall the version-three present configuration refuses at.
 const SCENE_POLLS: u32 = 4_096;

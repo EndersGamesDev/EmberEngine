@@ -121,10 +121,7 @@ impl LevelTimingLedger {
         if self.workers.len() == LEVEL_TIMING_CAPACITY {
             self.workers.pop_front();
         }
-        self.workers.push_back(WorkerTiming {
-            edit,
-            sample,
-        });
+        self.workers.push_back(WorkerTiming { edit, sample });
     }
 
     /// Starts one record when app successfully submits its scene fence.
@@ -169,7 +166,8 @@ impl LevelTimingLedger {
     pub fn drop_scene(&mut self, scene_id: u64, measurement: Option<SubmissionMeasurement>) {
         if let Some(level) = self.level_mut(scene_id) {
             level.record.discarded = true;
-            let observed = measurement.and_then(|value| milliseconds_to_microseconds(value.wall_ms));
+            let observed =
+                measurement.and_then(|value| milliseconds_to_microseconds(value.wall_ms));
             level.record.scene_us = observed;
             level.record.scene_callback_observation_us = observed;
         }
@@ -288,15 +286,19 @@ mod tests {
             Some(Some(2_250))
         );
         assert_eq!(
-            records
-                .last()
-                .map(|item| item.warp_callback_observation_us),
+            records.last().map(|item| item.warp_callback_observation_us),
             Some(Some(750))
         );
         assert_eq!(records.last().map(|item| item.dispatch_us), Some(None));
         assert_eq!(records.last().map(|item| item.credit_wait_us), Some(None));
-        assert_eq!(records.last().map(|item| item.request_transfer_us), Some(Some(5)));
-        assert_eq!(records.last().map(|item| item.reference_upload_us), Some(Some(3)));
+        assert_eq!(
+            records.last().map(|item| item.request_transfer_us),
+            Some(Some(5))
+        );
+        assert_eq!(
+            records.last().map(|item| item.reference_upload_us),
+            Some(Some(3))
+        );
 
         let json = serde_json::to_value(&ledger).expect("timing ledger serializes");
         let newest = json
@@ -314,10 +316,16 @@ mod tests {
             "acceptance_us",
             "reference_upload_us",
         ] {
-            assert!(newest.contains_key(field), "missing honest timing field {field}");
+            assert!(
+                newest.contains_key(field),
+                "missing honest timing field {field}"
+            );
         }
         for legacy in ["dispatch_us", "scene_us", "warp_us", "worker_reference_us"] {
-            assert!(!newest.contains_key(legacy), "legacy field {legacy} leaked into JSON");
+            assert!(
+                !newest.contains_key(legacy),
+                "legacy field {legacy} leaked into JSON"
+            );
         }
     }
 }

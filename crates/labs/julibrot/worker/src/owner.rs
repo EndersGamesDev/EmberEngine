@@ -943,7 +943,8 @@ mod tests {
     }
 
     #[test]
-    fn compatible_orbit_acceptance_renews_main_without_replacing_the_reference() -> Result<(), OwnerError> {
+    fn compatible_orbit_acceptance_renews_main_without_replacing_the_reference()
+    -> Result<(), OwnerError> {
         let mut owner = navigation_owner()?;
         owner.stage_main(MainState {
             precision_bits: 256,

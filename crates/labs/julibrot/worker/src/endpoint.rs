@@ -1183,13 +1183,16 @@ mod tests {
         let mut harness = Harness::boot(64);
         assert_eq!(harness.submit(1, 64), SubmitOutcome::Transferred);
         let work = harness.wire.borrow_mut().begin_work().expect("in flight");
-        let caps = [128_u32, 256, 512, 1_024, 2_048, 4_096, 2_048, 1_024, 256, 512];
+        let caps = [
+            128_u32, 256, 512, 1_024, 2_048, 4_096, 2_048, 1_024, 256, 512,
+        ];
         let mut generation = 1;
         let mut maximum_drain_depth = 0;
         for cap in caps {
             generation += 1;
             assert_eq!(harness.submit(generation, cap), SubmitOutcome::Coalesced);
-            maximum_drain_depth = maximum_drain_depth.max(harness.core.facts().shutdown_queue_depth);
+            maximum_drain_depth =
+                maximum_drain_depth.max(harness.core.facts().shutdown_queue_depth);
             assert_eq!(harness.core.take_error(), None);
         }
         assert_eq!(maximum_drain_depth, 1, "the burst arms one bounded drain");
@@ -1208,7 +1211,10 @@ mod tests {
         assert_eq!(harness.core.pending_request_depth(), 0);
         assert_eq!(harness.core.facts().allocation_events, 2);
         assert_eq!(harness.wire.borrow().restarts, 1);
-        assert_eq!(harness.wire.borrow().delivered.last(), Some(&(generation, 512)));
+        assert_eq!(
+            harness.wire.borrow().delivered.last(),
+            Some(&(generation, 512))
+        );
         assert_eq!(harness.core.take_error(), None);
     }
 
