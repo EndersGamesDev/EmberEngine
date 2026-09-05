@@ -156,6 +156,9 @@ function surviving(facts) {
 }
 
 function liveStatus(facts) {
+  if (facts.held_previous_partition) {
+    return `showing held scene ${facts.held_previous_partition_scene_id} from the previous partition while the replacement renders${surviving(facts)}`;
+  }
   if (facts.completed_scene_id === null || facts.completed_scene_id === undefined) {
     return `waiting for first completed scene${surviving(facts)}`;
   }

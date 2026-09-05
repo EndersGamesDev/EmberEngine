@@ -51,6 +51,213 @@ impl SceneMode {
     }
 }
 
+/// A quiet requested view waits this long after its last bit-distinct edit before promotion.
+///
+/// Four hundred milliseconds keeps the deterministic request out of an ordinary slider gesture
+/// while remaining short enough that a deliberate pause visibly begins the final quality rung.
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+pub const STATIC_SETTLE_WINDOW_MS: f64 = 400.0;
+
+/// The app-side promotion policy remains disabled until the browser loop can carry an execution
+/// precision distinct from the selected control and present can publish the displayed tier.
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+pub const SETTLED_DETERMINISTIC_PROMOTION_ENABLED: bool = false;
+
+/// Cross-partition holding stays disabled until present retains the invalidated source frame and
+/// reports that source separately from the current partition.
+#[allow(dead_code, reason = "capability-gated additive presentation hook")]
+pub const PREVIOUS_PARTITION_HOLD_ENABLED: bool = false;
+
+/// Precision tier of the scene actually presented for the requested `PictureFast` view.
+#[allow(dead_code, reason = "capability-gated additive facts hook")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PresentedTier {
+    /// The normal moving or newly settled `PictureFast` result.
+    #[default]
+    Fast,
+    /// The static deterministic replacement after its own scene and warp completed.
+    Deterministic,
+}
+
+/// One transition the browser loop must apply through its precision seam.
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromotionAction {
+    /// Begin deterministic work for the unchanged requested view.
+    StartDeterministic {
+        /// Bit-distinct app revision the deterministic scene must retain.
+        requested_revision: u64,
+    },
+    /// Retire deterministic promotion work and resume the selected fast tier.
+    CancelDeterministic,
+}
+
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PromotionPhase {
+    #[default]
+    Inactive,
+    WaitingForFastFinal,
+    Settling,
+    Due,
+    Rendering,
+    ReadyToPresent,
+    Presented,
+}
+
+/// App-owned state machine for the static PictureFast-to-Deterministic quality rung.
+///
+/// The selected precision remains an input and is never mutated here. Callers use
+/// [`Self::effective_precision_mode`] only for worker, kernel, loop, and presentation execution,
+/// keep the fast Final visible while [`Self::holds_fast_final`] is true, and name scene and warp
+/// completion through the methods below.
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SettledPromotion {
+    requested_revision: Option<u64>,
+    quiet_since_ms_bits: Option<u64>,
+    phase: PromotionPhase,
+    deterministic_scene_id: Option<u64>,
+}
+
+#[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
+impl SettledPromotion {
+    /// Observes one fake-clock or browser-clock scheduling turn.
+    ///
+    /// `fast_final_presented` is true only after `PictureFast` Final's warp has completed and the
+    /// canvas presents it. The returned start action occurs once per unchanged revision.
+    #[must_use]
+    pub fn observe(
+        &mut self,
+        now_ms: f64,
+        requested_revision: u64,
+        selected_precision_mode: PrecisionMode,
+        fast_final_presented: bool,
+        enabled: bool,
+    ) -> Option<PromotionAction> {
+        if !enabled
+            || selected_precision_mode == PrecisionMode::Deterministic
+            || !now_ms.is_finite()
+        {
+            self.reset();
+            return None;
+        }
+        if self.requested_revision != Some(requested_revision) {
+            let cancel = matches!(
+                self.phase,
+                PromotionPhase::Due
+                    | PromotionPhase::Rendering
+                    | PromotionPhase::ReadyToPresent
+                    | PromotionPhase::Presented
+            );
+            self.requested_revision = Some(requested_revision);
+            self.quiet_since_ms_bits = Some(now_ms.to_bits());
+            self.phase = PromotionPhase::WaitingForFastFinal;
+            self.deterministic_scene_id = None;
+            return cancel.then_some(PromotionAction::CancelDeterministic);
+        }
+        if !fast_final_presented
+            && matches!(
+                self.phase,
+                PromotionPhase::WaitingForFastFinal | PromotionPhase::Settling
+            )
+        {
+            self.phase = PromotionPhase::WaitingForFastFinal;
+            return None;
+        }
+        if fast_final_presented && self.phase == PromotionPhase::WaitingForFastFinal {
+            self.phase = PromotionPhase::Settling;
+        }
+        if self.phase != PromotionPhase::Settling {
+            return None;
+        }
+        let quiet_since = self.quiet_since_ms_bits.map_or(now_ms, f64::from_bits);
+        if now_ms < quiet_since {
+            self.quiet_since_ms_bits = Some(now_ms.to_bits());
+            return None;
+        }
+        if now_ms - quiet_since < STATIC_SETTLE_WINDOW_MS {
+            return None;
+        }
+        self.phase = PromotionPhase::Due;
+        Some(PromotionAction::StartDeterministic { requested_revision })
+    }
+
+    /// Names the deterministic scene submitted for the due revision.
+    pub fn deterministic_submitted(&mut self, scene_id: u64) -> bool {
+        if self.phase != PromotionPhase::Due || scene_id == 0 {
+            return false;
+        }
+        self.phase = PromotionPhase::Rendering;
+        self.deterministic_scene_id = Some(scene_id);
+        true
+    }
+
+    /// Records scene completion without claiming that its image has reached the canvas.
+    pub fn deterministic_completed(&mut self, scene_id: u64) -> bool {
+        if self.phase != PromotionPhase::Rendering || self.deterministic_scene_id != Some(scene_id)
+        {
+            return false;
+        }
+        self.phase = PromotionPhase::ReadyToPresent;
+        true
+    }
+
+    /// Records the matching warp presentation and exposes the deterministic displayed tier.
+    pub fn deterministic_presented(&mut self, scene_id: u64) -> bool {
+        if self.phase != PromotionPhase::ReadyToPresent
+            || self.deterministic_scene_id != Some(scene_id)
+        {
+            return false;
+        }
+        self.phase = PromotionPhase::Presented;
+        true
+    }
+
+    /// Returns the execution precision while leaving the user's selected precision untouched.
+    #[must_use]
+    pub const fn effective_precision_mode(
+        &self,
+        selected_precision_mode: PrecisionMode,
+    ) -> PrecisionMode {
+        if matches!(selected_precision_mode, PrecisionMode::PictureFast)
+            && matches!(
+                self.phase,
+                PromotionPhase::Due
+                    | PromotionPhase::Rendering
+                    | PromotionPhase::ReadyToPresent
+                    | PromotionPhase::Presented
+            )
+        {
+            PrecisionMode::Deterministic
+        } else {
+            selected_precision_mode
+        }
+    }
+
+    /// Reports whether the fast Final remains the presentation source during promotion work.
+    #[must_use]
+    pub const fn holds_fast_final(&self) -> bool {
+        matches!(
+            self.phase,
+            PromotionPhase::Due | PromotionPhase::Rendering | PromotionPhase::ReadyToPresent
+        )
+    }
+
+    /// Returns the tier whose matching warp has reached the canvas.
+    #[must_use]
+    pub const fn presented_tier(&self) -> PresentedTier {
+        match self.phase {
+            PromotionPhase::Presented => PresentedTier::Deterministic,
+            _ => PresentedTier::Fast,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Latest-wins Preview, Interactive, Final scheduler with one scene in flight.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefinementSchedule {
@@ -244,6 +451,37 @@ const fn level_rank(level: RefinementLevel) -> u32 {
         RefinementLevel::Preview => 0,
         RefinementLevel::Interactive => 1,
         RefinementLevel::Final => 2,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) const fn hold_refused_warp_with_partition_capability(
+    frame_loop: &FrameLoop,
+    has_current_partition_scene: bool,
+    previous_partition_available: bool,
+) -> bool {
+    if matches!(frame_loop.scene_mode, SceneMode::Manual) {
+        return true;
+    }
+    frame_loop.refinement_pending() && (has_current_partition_scene || previous_partition_available)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(
+    dead_code,
+    reason = "capability-gated additive presentation facts hook"
+)]
+pub(super) const fn holding_previous_partition_with_capability(
+    frame_loop: &FrameLoop,
+    has_current_partition_scene: bool,
+    previous_partition_available: bool,
+) -> bool {
+    if has_current_partition_scene || !previous_partition_available {
+        return false;
+    }
+    match frame_loop.scene_mode {
+        SceneMode::Auto => frame_loop.refinement_pending(),
+        SceneMode::Manual => frame_loop.scene_update_pending,
     }
 }
 
@@ -472,10 +710,11 @@ impl FrameLoop {
     }
 
     pub(super) const fn hold_refused_warp(&self, has_retained_scene: bool) -> bool {
-        if matches!(self.scene_mode, SceneMode::Manual) {
-            return true;
-        }
-        has_retained_scene && self.refinement_pending()
+        hold_refused_warp_with_partition_capability(
+            self,
+            has_retained_scene,
+            PREVIOUS_PARTITION_HOLD_ENABLED,
+        )
     }
 
     #[cfg(target_arch = "wasm32")]

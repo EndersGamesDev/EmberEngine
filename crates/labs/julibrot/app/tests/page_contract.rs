@@ -732,6 +732,18 @@ fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands()
 }
 
 #[test]
+fn pending_partition_hold_and_presented_tier_hooks_are_explicitly_gated() {
+    assert!(FRAME.contains("pub const PREVIOUS_PARTITION_HOLD_ENABLED: bool = false;"));
+    assert!(FRAME.contains("hold_refused_warp_with_partition_capability("));
+    assert!(FRAME.contains("holding_previous_partition_with_capability("));
+    assert!(FRAME.contains("pub const SETTLED_DETERMINISTIC_PROMOTION_ENABLED: bool = false;"));
+    assert!(FRAME.contains("pub struct SettledPromotion"));
+    assert!(FRAME.contains("pub const fn presented_tier(&self) -> PresentedTier"));
+    assert!(MAIN.contains("if (facts.held_previous_partition)"));
+    assert!(MAIN.contains("from the previous partition while the replacement renders"));
+}
+
+#[test]
 fn timing_contract_keeps_all_bounds_and_labels_visible() {
     for required in [
         "ADAPTIVE_WARM_UPS: u32 = 3",

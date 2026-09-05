@@ -13,6 +13,11 @@ use ember_julibrot_math::{
     precision_for, scale_split, screen_to_plane,
 };
 
+use super::super::schedule::{
+    PresentedTier, PromotionAction, SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
+    STATIC_SETTLE_WINDOW_MS, SettledPromotion, hold_refused_warp_with_partition_capability,
+    holding_previous_partition_with_capability,
+};
 use super::{
     BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
     REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule,
@@ -823,6 +828,145 @@ impl FakeClock {
     }
 }
 
+#[test]
+fn settled_picture_fast_promotes_once_and_swaps_only_after_presentation() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    let revision = 7;
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    clock.advance(STATIC_SETTLE_WINDOW_MS - 1.0);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    clock.advance(1.0);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        Some(PromotionAction::StartDeterministic {
+            requested_revision: revision
+        })
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::PictureFast),
+        PrecisionMode::Deterministic
+    );
+    assert!(promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(promotion.deterministic_submitted(41));
+    assert!(promotion.deterministic_completed(41));
+    assert!(promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(promotion.deterministic_presented(41));
+    assert!(!promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Deterministic);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None,
+        "one unchanged view promotes only once"
+    );
+}
+
+#[test]
+fn requested_change_cancels_promotion_and_rearms_the_fast_tier() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    assert_eq!(
+        promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true),
+        None
+    );
+    let _ = promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true);
+    clock.advance(STATIC_SETTLE_WINDOW_MS);
+    assert!(matches!(
+        promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true),
+        Some(PromotionAction::StartDeterministic { .. })
+    ));
+    assert!(promotion.deterministic_submitted(73));
+
+    clock.advance(1.0);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, false, true),
+        Some(PromotionAction::CancelDeterministic)
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::PictureFast),
+        PrecisionMode::PictureFast
+    );
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(!promotion.deterministic_completed(73));
+
+    let _ = promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, true, true);
+    clock.advance(STATIC_SETTLE_WINDOW_MS);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, true, true),
+        Some(PromotionAction::StartDeterministic {
+            requested_revision: 12
+        })
+    );
+}
+
+#[test]
+fn explicit_deterministic_mode_and_the_disabled_hook_do_not_promote() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    clock.advance(STATIC_SETTLE_WINDOW_MS * 2.0);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 1, PrecisionMode::Deterministic, true, true),
+        None
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::Deterministic),
+        PrecisionMode::Deterministic
+    );
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            2,
+            PrecisionMode::PictureFast,
+            true,
+            SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
+        ),
+        None
+    );
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct TurnOutcome {
     scene_id: Option<u64>,
@@ -1549,6 +1693,36 @@ fn automatic_stale_hold_tracks_pending_replacement_work() {
 
     frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
     assert!(frame_loop.hold_refused_warp(true));
+}
+
+#[test]
+fn previous_partition_hold_spans_auto_and_manual_replacement_work() {
+    let mut automatic = FrameLoop::default();
+    automatic.accept_request(43, true);
+    assert!(hold_refused_warp_with_partition_capability(
+        &automatic, false, true
+    ));
+    assert!(holding_previous_partition_with_capability(
+        &automatic, false, true
+    ));
+    assert!(!holding_previous_partition_with_capability(
+        &automatic, true, true
+    ));
+
+    let mut manual = FrameLoop::default();
+    manual.set_scene_mode(SceneMode::Manual, 43, true);
+    manual.accept_request(44, true);
+    assert!(hold_refused_warp_with_partition_capability(
+        &manual, false, true
+    ));
+    assert!(holding_previous_partition_with_capability(
+        &manual, false, true
+    ));
+
+    automatic.schedule.pause();
+    assert!(!holding_previous_partition_with_capability(
+        &automatic, false, true
+    ));
 }
 
 #[test]
