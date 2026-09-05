@@ -877,8 +877,8 @@ impl ViewerController {
         })
     }
 
-    /// Moves the absolute plane origin, resetting the centre and target while preserving cap,
-    /// palette, and every VIEW control.
+    /// Moves the absolute plane origin, resetting the centre to it and preserving cap, palette,
+    /// and every VIEW control.
     ///
     /// This is MAIN work: a new origin selects different samples and needs a new reference orbit,
     /// which is exactly the publication the retired preset selection performed.
@@ -941,7 +941,6 @@ impl ViewerController {
         self.pending_reason = Some(OrbitReason::INITIAL);
         self.pending_reference_centre = None;
         self.navigation_centre_f64 = origin;
-        self.clear_crosshair();
         self.note_requested_change();
         Ok(())
     }

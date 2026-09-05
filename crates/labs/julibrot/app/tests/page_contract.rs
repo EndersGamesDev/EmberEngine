@@ -609,10 +609,16 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     }
 }
 
+/// A fresh viewer boots with a target, so the page must draw a crosshair on the first refresh.
+///
+/// Only the two STATE lines are new here: they pin that the constructed viewer installs the named
+/// constant as its target rather than `None`, while the value itself is pinned bit-exactly by the
+/// native test beside `SEAHORSE_VALLEY_TARGET`, where a formatter cannot move it. The three MAIN
+/// lines are the unchanged page wiring this default now depends on: they held before this default
+/// existed and are asserted so a later edit cannot quietly remove the draw path underneath it.
 #[test]
 fn boot_draws_the_default_seahorse_valley_target() {
-    assert!(STATE.contains("-0.743_643_887_037_151,"));
-    assert!(STATE.contains("0.131_825_904_205_33]"));
+    assert!(STATE.contains("BigCentre::from_f64(SEAHORSE_VALLEY_TARGET"));
     assert!(STATE.contains("crosshair: Some(target),"));
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains(

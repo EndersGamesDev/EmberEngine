@@ -6,7 +6,10 @@ use ember_julibrot_math::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{AppError, PresetRow, ViewerController, state::NAVIGATION_PRECISION_BITS};
+use crate::{
+    AppError, PresetRow, ViewerController,
+    state::{NAVIGATION_PRECISION_BITS, PRESET_ROWS, SEAHORSE_VALLEY_TARGET},
+};
 
 const PAGE_OBJECT_FIELDS: [&str; 6] = ["o12", "o13", "o14", "o23", "o24", "o34"];
 const PAGE_CAMERA_FIELDS: [&str; 10] = [
@@ -127,10 +130,21 @@ impl SavedView {
     ///
     /// # Errors
     ///
-    /// Returns a math failure if the preset origin cannot form the canonical exact centre.
+    /// Returns a math failure if the preset origin or target cannot form a canonical exact point.
     pub fn from_preset(row: PresetRow) -> Result<Self, AppError> {
         let centre = BigCentre::from_f64(row.plane_origin, NAVIGATION_PRECISION_BITS)
             .map_err(|error| math(&error))?;
+        // The whole-set row is the picture a fresh viewer boots, so it carries the boot target
+        // too: re-selecting it returns the exact state the lab opened with rather than a picture
+        // that looks identical and zooms somewhere else. Every other row is a state the lab never
+        // booted, and keeps the centre-anchored zoom it has always had.
+        let target = if row.name == PRESET_ROWS[0].name {
+            let target = BigCentre::from_f64(SEAHORSE_VALLEY_TARGET, NAVIGATION_PRECISION_BITS)
+                .map_err(|error| math(&error))?;
+            Some(encode_centre(&target)?)
+        } else {
+            None
+        };
         Ok(Self {
             object: row.object_angles.as_array(),
             origin: row.plane_origin,
@@ -142,7 +156,7 @@ impl SavedView {
             distance_five: row.view.distance_five,
             distance_four: row.view.distance_four,
             zoom_log2: 0.0,
-            target: None,
+            target,
             centre_f64: centre.to_f64_mirror(),
             centre: encode_centre(&centre)?,
         })
@@ -436,6 +450,62 @@ mod tests {
         loaded.apply_saved_view(&saved).expect("load saved row");
 
         assert_eq!(loaded.crosshair(), Some(&saved_target));
+    }
+
+    /// A row's target is part of the picture it saved, so a row that saved none loads none.
+    ///
+    /// This is the widened half of the restore rule: the row carries the target field either way,
+    /// and letting an older row keep whatever target happened to be current would restore a
+    /// picture the row never held and zoom about a point its author never chose.
+    #[test]
+    fn a_saved_row_without_a_target_clears_the_current_target_when_loaded() {
+        let source = ViewerController::new([960, 540]).expect("source viewer");
+        let mut saved = SavedView::capture(&source).expect("captured row");
+        saved.target = None;
+
+        let mut loaded = ViewerController::new([960, 540]).expect("loaded viewer");
+        loaded.set_crosshair([-91.0, 48.0]).expect("current target");
+        assert!(loaded.crosshair().is_some());
+
+        loaded.apply_saved_view(&saved).expect("load older row");
+
+        assert!(loaded.crosshair().is_none());
+    }
+
+    /// Re-selecting the whole-set row must reproduce the boot picture, target included, and no
+    /// other row may acquire a target it never had.
+    #[test]
+    fn mandelbrot_preset_carries_the_fresh_viewers_target() {
+        let row = crate::preset_row(0).expect("Mandelbrot preset");
+        assert_eq!(row.name, "Mandelbrot");
+        let saved = SavedView::from_preset(row).expect("serializable preset");
+        let target = saved
+            .target()
+            .expect("valid target")
+            .expect("preset target");
+        assert_eq!(
+            target.to_f64_mirror().map(f64::to_bits),
+            SEAHORSE_VALLEY_TARGET.map(f64::to_bits)
+        );
+
+        let booted = ViewerController::new([960, 540]).expect("fresh viewer");
+        assert_eq!(
+            target.to_f64_mirror().map(f64::to_bits),
+            booted
+                .crosshair_centre_f64()
+                .expect("the fresh viewer has its target")
+                .map(f64::to_bits)
+        );
+
+        for id in 1..u32::try_from(PRESET_ROWS.len()).expect("preset count fits") {
+            let other = crate::preset_row(id).expect("preset row");
+            let saved = SavedView::from_preset(other).expect("serializable preset");
+            assert!(
+                saved.target().expect("valid target").is_none(),
+                "preset {} acquired a target",
+                other.name
+            );
+        }
     }
 
     /// A deep centre must survive the encoding exactly, which is the whole reason it is stored.
