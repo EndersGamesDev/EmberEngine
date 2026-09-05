@@ -375,12 +375,15 @@ impl Presenter {
         if selection_replaced {
             self.ledger.mark_replaced();
         }
-        let retained_became_held = self.ledger.invalidate_incompatible(
+        let mut retained_became_held = false;
+        if self.ledger.invalidate_incompatible(
             main.state.delivered_iter_cap,
             main.state.plane_origin_f64,
             main.plane,
             precision_mode_name,
-        );
+        ) {
+            retained_became_held = true;
+        }
         if revision_advanced {
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
