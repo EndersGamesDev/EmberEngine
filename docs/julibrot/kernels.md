@@ -163,6 +163,18 @@ Perturbation performs at most one reference `textureLoad` per executed pixel-ite
 
 For `R = N mod q²`, exact copy-command arithmetic is `floor(N/q²) + 1[floor(R/q) > 0] + 1[R mod q > 0]`: one command per complete page, one for any complete rows in the partial page, and one for any tail row; command count, page-pass count, copied bytes, and encoder submissions remain separate facts.
 
+### 2.6 Wire-free stage-0 rendered-tile policy
+
+`TileGeometry` parameterizes physical width, physical height, and a symmetric retained apron while refusing an empty core or fixed-width overflow. `TileGeometry::DEFAULT` is exactly 256×256 physical samples, a 254×254 drawn core, one apron sample per edge, and 65,536 paired sample positions; `SourceScreenRect` uses a signed physical origin so an apron may extend before source pixel zero and derives its core rectangle without changing stored geometry. This implements the source-screen storage decision in “Where rendered tiles live and how the chart indexes them” without changing either WGSL kernel or current screen-grid dispatch.
+
+`ContentIdentity`, `MainIdentity`, and `ReferenceIdentity` form successively narrower semantic identities, and `TileJob::new` requires the reference to belong to the named MAIN generation. A job also carries its source rectangle, existing `RefinementLevel`, and exact `DemandKey`; none has a wire representation. `ReferenceLeaseSet` permits exactly one reference identity per MAIN generation while pins exist, returns move-only job leases, publishes the current lease count, and drops the pin only after the last job releases it, matching the shared-reference decision in “Per-tile refinement, backdrop, and scheduling”.
+
+`DemandKey` orders ascending as `(coverage_class,-visible_benefit,work_cost,stable_job_id)`, where `ClosesHole=0`, `DetailUpgrade=1`, and checked construction can derive `visible_benefit=visible_area×quality_gain`. `TileDemandQueue` is ordered by that key and separately refuses a duplicate stable ID, so its drain is independent of insertion order and every hole-closing job precedes every covered-region upgrade. `TileQuality::should_replace` compares Detail before Backdrop, Final before Interactive before Preview, then density, and admits only a strict improvement; a draft can fill an absent region but cannot displace a better same-surface representation.
+
+`PairedOutputSpanPlan` binds one job to distinct equal-length value and reconstruction `DataSpan`s matching the physical sample count. `PairedOutputCompletion` can observe the two sides in either order but yields `PublishedTileOutputs` only after both are complete, making a value-only or reconstruction-only result unpublishable as required by “Per-tile refinement, backdrop, and scheduling” and migration stage 0.
+
+`resident_tile_cost(n)` is the pure version-one descriptor arithmetic: every default tile has `2×65,536×16=2,097,152` sample bytes plus one 512-byte header, or 2,097,664 logical bytes. The native table oracle pins counts 1, 9, 12, 16, 28, 44, and 56 against “Cost model and eviction”. `ResidentTileProfile::constrained()` derives 28 tiles, 12 backdrop, 16 Detail/history, 56 sample pages, 57 span entries rounded to a minimum capacity of 64, and 64 total DATA pages including one descriptor and seven other pages; `expanded()` derives 56, 12, 44, 112, 113 rounded to 128, and 120 respectively.
+
 ## 3. INTERFACES
 
 Every interface in this section is this slice's side of the shared contract and is intentionally duplicated in the other slice documents; disagreement is recorded for joint review and the app document decides integration.
