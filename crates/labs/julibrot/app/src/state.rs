@@ -406,7 +406,7 @@ pub struct ViewerController {
     requested: RequestedControls,
     checked_plane: Plane,
     checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
-    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 2]>,
+    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 3]>,
     #[cfg(test)]
     plane_constructions: u64,
     #[cfg(test)]
@@ -492,7 +492,7 @@ impl ViewerController {
             requested,
             checked_plane: plane,
             checked_screen_maps: RefCell::new([None; 2]),
-            checked_scene_footprints: RefCell::new([None; 2]),
+            checked_scene_footprints: RefCell::new([None; 3]),
             #[cfg(test)]
             plane_constructions: 1,
             #[cfg(test)]
@@ -1212,8 +1212,8 @@ impl ViewerController {
         let footprint =
             scene_footprint(&object, &view, grid_extent[0], grid_extent[1]).map_err(math_error)?;
         let mut cached = self.checked_scene_footprints.borrow_mut();
-        cached[0] = cached[1];
-        cached[1] = Some(CheckedSceneFootprint { key, footprint });
+        cached.rotate_left(1);
+        cached[2] = Some(CheckedSceneFootprint { key, footprint });
         #[cfg(test)]
         self.footprint_constructions
             .set(self.footprint_constructions.get().saturating_add(1));
@@ -1901,6 +1901,27 @@ mod tests {
             .scene_footprint([800, 600])
             .expect("bit-distinct footprint key");
         assert_eq!(viewer.footprint_construction_count(), 4);
+    }
+
+    #[test]
+    fn footprint_cache_retains_the_three_refresh_extents() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let refresh_extents = [REFERENCE_GRID, [480, 270], [120, 68]];
+
+        for extent in refresh_extents {
+            viewer.scene_footprint(extent).expect("refresh footprint");
+        }
+        assert_eq!(viewer.footprint_construction_count(), 3);
+
+        for _ in 0..8 {
+            for extent in refresh_extents {
+                viewer
+                    .scene_footprint(extent)
+                    .expect("retained refresh footprint");
+            }
+        }
+        assert_eq!(viewer.footprint_construction_count(), 3);
     }
 
     #[test]
