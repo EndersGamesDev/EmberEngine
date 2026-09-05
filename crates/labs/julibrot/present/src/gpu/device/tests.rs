@@ -3,10 +3,10 @@ use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_p
 use ember_julibrot_worker::MainState;
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
+use super::ledger::LatticeRefusal;
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
-use super::ledger::LatticeRefusal;
 use crate::{PresentFacts, SubmissionKind, SubmissionMeasurement};
 
 #[test]
@@ -1141,7 +1141,9 @@ fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
             WarpKind::AnchorHomography,
             "the self plan on {source_extent:?} to {destination_extent:?} is not the identity kind"
         );
-        let lattice = exact.lattice.expect("a sampling plan names its lattice pair");
+        let lattice = exact
+            .lattice
+            .expect("a sampling plan names its lattice pair");
         assert_eq!(lattice.source(), source_extent);
         assert_eq!(lattice.destination(), destination_extent);
         assert!(
@@ -1246,8 +1248,14 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
     let (refused, reason) = enforce_lattice(unstated, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert!(!refused.source_valid);
-    assert!(refused.exposed, "a refusal is ground the next scene must fill");
-    assert_eq!(reason.map(LatticeRefusal::as_str), Some("plan named no lattice pair"));
+    assert!(
+        refused.exposed,
+        "a refusal is ground the next scene must fill"
+    );
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan named no lattice pair")
+    );
 
     let elsewhere = crate::WarpPlan {
         lattice: crate::LatticePair::new(source_extent, [480, 270]),
@@ -1365,7 +1373,8 @@ fn the_remaining_extent_paths_agree_by_construction_or_refuse() {
     let submit = include_str!("scene/submit.rs");
     assert!(
         submit.contains("self.ledger.begin(|texture_index| {")
-            && submit.contains("ensure_scene_texture(device, gpu, texture_index as usize, extent)?"),
+            && submit
+                .contains("ensure_scene_texture(device, gpu, texture_index as usize, extent)?"),
         "only the index the ledger hands out is reallocated, so the retained frame's recorded \
          extent stays the extent of its own texture"
     );
@@ -1403,7 +1412,10 @@ fn the_facts_publish_both_lattices_of_the_plan_they_recorded() {
         destination_extent,
     );
     facts.record_warp_plan(&held, Some(0.0));
-    assert_eq!([facts.warp_source_width, facts.warp_source_height], [120, 68]);
+    assert_eq!(
+        [facts.warp_source_width, facts.warp_source_height],
+        [120, 68]
+    );
     assert_eq!(facts.warp_kind, WarpKind::HoldStale);
 
     facts.record_warp_plan(&clear_warp_plan(false, true), None);

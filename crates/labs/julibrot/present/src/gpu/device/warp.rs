@@ -7,12 +7,12 @@ use crate::{
 };
 use ember_julibrot_math::scene_uncovered_fraction;
 
+use super::ledger::LatticeRefusal;
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
     enforce_lattice, pose_is_finite, warp_exposed_fraction,
 };
-use super::ledger::LatticeRefusal;
 
 impl Presenter {
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
@@ -83,7 +83,12 @@ impl Presenter {
         // whose grid is the current MAIN grid. A hold from a picture drawn at another extent is
         // scaled onto this lattice rather than laid on it pixel for pixel.
         let warp_destination_extent = destination_extent(pose.as_ref(), self.main.as_ref());
-        let plan = apply_hold_policy(plan, hold_source, hold_refused_warp, warp_destination_extent);
+        let plan = apply_hold_policy(
+            plan,
+            hold_source,
+            hold_refused_warp,
+            warp_destination_extent,
+        );
         // Every plan that samples a source states the two lattices it maps between, and a plan
         // whose destination corners leave that source is refused here rather than presented at a
         // scale the geometry does not have.

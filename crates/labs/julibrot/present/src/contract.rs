@@ -713,7 +713,10 @@ mod tests {
             approx_p95_error_px: Some(0.5),
         };
         facts.record_warp_plan(&anchored, Some(0.0));
-        assert_eq!([facts.warp_source_width, facts.warp_source_height], [120, 68]);
+        assert_eq!(
+            [facts.warp_source_width, facts.warp_source_height],
+            [120, 68]
+        );
         assert_eq!(facts.chart_residual, Some(0.25));
         assert_eq!(facts.warp_max_error_px, Some(1.75));
         assert_eq!(facts.warp_p95_error_px, Some(0.5));

@@ -260,8 +260,8 @@ mod tests {
         let delivery = LatticePair::new(PICTURE_FAST, SURFACE).expect("a real lattice pair");
         let composed = compose_homography(delivery.covering_map(), solved);
         let ratio = f64::from(PICTURE_FAST[0]) / f64::from(SURFACE[0]);
-        assert!((composed[0] - 2.0 * ratio).abs() < 1.0e-12);
-        assert!((composed[2] - 3.0 * ratio).abs() < 1.0e-12);
+        assert!(2.0_f64.mul_add(-ratio, composed[0]).abs() < 1.0e-12);
+        assert!(3.0_f64.mul_add(-ratio, composed[2]).abs() < 1.0e-12);
         assert_eq!(composed[8], 1.0);
         let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         assert_eq!(compose_homography(identity, solved), solved);

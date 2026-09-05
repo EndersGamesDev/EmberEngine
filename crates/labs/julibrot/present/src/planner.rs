@@ -221,10 +221,7 @@ pub fn renders_same_picture(first: &Pose, second: &Pose) -> bool {
 /// scene at the same pose to be refused again. That loop is what a held relief pose with a horizon
 /// inside its frame used to sit in, showing the clear colour with a completed Final in hand.
 fn exact_self(last_frame: &SceneFrame, to_pose: &Pose) -> Option<WarpPlan> {
-    let lattice = LatticePair::new(
-        last_frame.extent,
-        [to_pose.grid_width, to_pose.grid_height],
-    )?;
+    let lattice = LatticePair::new(last_frame.extent, [to_pose.grid_width, to_pose.grid_height])?;
     Some(WarpPlan {
         // Identity in the picture, not in pixels. The scene was delivered at its own extent and
         // the destination lattice is the pose's grid; the ladder makes those differ on purpose,
@@ -263,10 +260,7 @@ fn anchor_plan(
     let source = screen_corners(from_pose).map(|[x, y]| [x, y, 1.0]);
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
-    let lattice = LatticePair::new(
-        last_frame.extent,
-        [to_pose.grid_width, to_pose.grid_height],
-    )?;
+    let lattice = LatticePair::new(last_frame.extent, [to_pose.grid_width, to_pose.grid_height])?;
     // The solve works in the source pose's own pixel lattice: its anchors are that pose's screen
     // corners. The fragment divides by the source texture's extent instead, and the delivered
     // extent of a scene is not its pose's grid — the refinement ladder reduces one and not the

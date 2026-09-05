@@ -223,8 +223,7 @@ pub(super) fn enforce_lattice(
         }
         Some(_) => None,
     };
-    match refusal {
-        None => (plan, None),
-        Some(refusal) => (clear_warp_plan(plan.edge_on, true), Some(refusal)),
-    }
+    refusal.map_or((plan, None), |refusal| {
+        (clear_warp_plan(plan.edge_on, true), Some(refusal))
+    })
 }
