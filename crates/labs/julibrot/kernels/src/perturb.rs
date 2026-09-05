@@ -781,7 +781,8 @@ mod tests {
     #[test]
     #[allow(
         clippy::print_stderr,
-        reason = "this is the explicit boundary measurement"
+        clippy::too_many_lines,
+        reason = "the explicit measurement keeps every corpus row and coverage assertion together"
     )]
     fn boundary_envelope_corpus_covers_real_orbit_rebase_and_both_rescale_directions() {
         let boundary = f32::from_bits(16.0_f32.to_bits() - 1);
