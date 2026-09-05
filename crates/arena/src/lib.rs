@@ -10,11 +10,15 @@
 //! Online: either key set steers YOUR paddle; the server is authoritative.
 
 mod feel;
+#[cfg(test)]
+mod grip_tests;
+mod grips;
 mod online;
 mod props;
 mod rounds;
 mod script;
 mod sound;
+mod viewarms;
 mod weather;
 
 use ember_engine::glam::Vec3;

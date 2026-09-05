@@ -21,6 +21,7 @@ use ember_engine::{
 use serde::Deserialize;
 
 use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
+use crate::grips;
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
 use crate::script;
@@ -74,6 +75,7 @@ pub struct Assets {
     /// projectile.
     pub rocket: Vec<Part>,
     pub arms: Vec<Part>,
+    pub grips: grips::Grips,
     /// The scutum, drawn where the box plate used to be. Its model origin
     /// is the handle behind the boss, so the centres `push_shield` was
     /// given carry over unchanged.
@@ -110,6 +112,15 @@ impl Assets {
         } else {
             self.muzzles[SIDEARM as usize]
         }
+    }
+
+    pub fn grip_of(&self, id: u8) -> Option<&grips::WeaponGrip> {
+        let (_, own) = self.weapon_parts(id);
+        self.grips.get(if own && (1..=WEAPON_COUNT).contains(&id) {
+            id
+        } else {
+            SIDEARM
+        })
     }
 }
 
@@ -282,6 +293,7 @@ pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
                 fallback_to_sidearm = ?missing,
                 "viewmodel glb loaded"
             );
+            assets.grips = grips::load(&mut meshes);
             (meshes, Some(assets))
         }
         Err(e) => {
@@ -408,7 +420,8 @@ pub fn part_meshes(
     Option<ember_engine::rig::RigCharacter>,
 ) {
     match ember_engine::rig::skinned_from_glb(SWAT_GLB, SWAT_RIG, first_mesh) {
-        Ok((meshes, rc)) => {
+        Ok((mut meshes, mut rc)) => {
+            crate::viewarms::replace_parts(&mut meshes, &mut rc, first_mesh);
             tracing::info!("swat operator loaded ({} parts)", rc.parts.len());
             return (meshes, Some(rc));
         }
@@ -1261,6 +1274,15 @@ struct PendingShot {
     weapon: u8,
 }
 
+/// Remote shot visuals wait for this frame's body attachments. A continuation
+/// has no muzzle owner: its authoritative start is a reflection/pierce point.
+#[derive(Clone, Copy)]
+struct PendingRemoteShot {
+    owner: Option<u8>,
+    shot: PendingShot,
+    born: f32,
+}
+
 /// How long the end point of a body or shield hit is remembered as a point
 /// a later segment may start from. A pierce's second segment arrives in
 /// the same tick; a reflection's return segment ends a few ticks later.
@@ -1478,6 +1500,8 @@ pub struct ShooterGame {
     env_base: u32,
     /// Jointed player character; None = textured/plain boxes.
     rig_character: Option<ember_engine::rig::RigCharacter>,
+    /// Cached once per character; weapon gloves replace these omitted wrists.
+    grip_body_parts: Vec<ember_engine::rig::RigPart>,
     /// Per-player (yaw, `walk_phase`, amplitude) + previous render position.
     anim: HashMap<u8, (f32, f32, f32)>,
     prev_pos: HashMap<u8, Vec2>,
@@ -1552,6 +1576,8 @@ pub struct ShooterGame {
     /// My own shots waiting for the render pass to anchor their streaks at
     /// the viewmodel's muzzle.
     pending_shots: Vec<PendingShot>,
+    /// Remote muzzle-dependent visuals, finalized after body poses advance.
+    pending_remote_shots: Vec<PendingRemoteShot>,
     /// Where a round was reflected or pierced through, and when: the
     /// point the next segment of that round starts from. A segment that
     /// starts here is the same round going on, which draws a streak and
@@ -1656,6 +1682,7 @@ impl ShooterGame {
             decor: Vec::new(),
             env_base: 0,
             rig_character: None,
+            grip_body_parts: Vec::new(),
             anim: HashMap::new(),
             heard: Vec::new(),
             steps: StepClocks::default(),
@@ -1688,6 +1715,7 @@ impl ShooterGame {
             flashes: Vec::new(),
             casings: Vec::new(),
             pending_shots: Vec::new(),
+            pending_remote_shots: Vec::new(),
             continuations: Vec::new(),
             own_plume: false,
             own_anim: (0.0, 0.0, 0.0),
@@ -1766,43 +1794,15 @@ impl ShooterGame {
             if mine {
                 self.pending_shots.push(PendingShot { from, to, weapon });
             } else {
-                // The remote shot, seen and heard from its muzzle: the
-                // flash, the plume, and the gunshot at the distance's
-                // variant, late by the distance and panned to it.
-                //
-                // The sim fires from the shooter's eye (`EYE_STAND` a hand
-                // ahead of it) while the client draws that shooter's weapon
-                // at the hand, so the event's own origin is about 0.6 m
-                // above and behind the drawn barrel: hanging the light
-                // there put it in mid air with wall showing between it and
-                // the gun. `drawn_muzzle` is the barrel that is on screen.
-                // Nothing about the round moves: `from`, `to`, the head,
-                // the hit and the impact are the server's, and the muzzle
-                // only says where the streak is drawn from.
-                //
-                // A drawn gun further than `MUZZLE_SANITY` from where the
-                // sim fired is not this shot's gun — a body drawn off a
-                // snapshot we have not got, or an id whose interpolation
-                // is stale — and the round's own line is the honest
-                // anchor again.
-                let muzzle = self
-                    .drawn_muzzle(owner)
-                    .filter(|m| (*m - from).length() < MUZZLE_SANITY)
-                    .unwrap_or_else(|| from + dir * REMOTE_MUZZLE);
-                self.tracers.push(Tracer {
-                    from,
-                    muzzle,
-                    to,
-                    weapon,
+                // Interpolation, gait and crouch advance later in update.
+                // Resolve visual muzzles only after that frame's bodies have
+                // been placed; sound and authoritative impact handling stay
+                // in this event phase, in their original arrival order.
+                self.pending_remote_shots.push(PendingRemoteShot {
+                    owner: Some(owner),
+                    shot: PendingShot { from, to, weapon },
                     born: now,
                 });
-                self.flashes.push(Flash {
-                    pos: muzzle,
-                    dir,
-                    size: shot_flash(&row),
-                    until: now + row.flash_ms,
-                });
-                self.puffs(feel::plume(muzzle, dir, weapon));
                 let d = (from - ear.at).length();
                 sfx.push(Play::spatial(
                     feel::shot_sfx(weapon, Dist::at(d)),
@@ -1816,11 +1816,9 @@ impl ShooterGame {
             // A continuation left no muzzle: it starts where a shield
             // reflected it or a body let it through, and that point is the
             // server's exactly.
-            self.tracers.push(Tracer {
-                from,
-                muzzle: from,
-                to,
-                weapon,
+            self.pending_remote_shots.push(PendingRemoteShot {
+                owner: None,
+                shot: PendingShot { from, to, weapon },
                 born: now,
             });
         }
@@ -1885,6 +1883,46 @@ impl ShooterGame {
         if hit == SHOT_BODY || hit == SHOT_SHIELD {
             self.continuations.push((to, now));
         }
+    }
+
+    /// Use the same advanced interpolation and posed shoulders as the remote
+    /// weapons just rendered. Server trajectory, impact and birth time stay
+    /// untouched; only the streak's visual origin and muzzle effects attach.
+    fn finish_remote_shots(&mut self) {
+        for pending in self.pending_remote_shots.iter().copied() {
+            let PendingShot { from, to, weapon } = pending.shot;
+            let dir = (to - from).normalize_or_zero();
+            let muzzle = pending.owner.map_or(from, |owner| {
+                // A missing/dead body or implausibly distant interpolation
+                // cannot anchor this shot: retain the established line fallback.
+                self.drawn_muzzle(owner)
+                    .filter(|m| (*m - from).length() < MUZZLE_SANITY)
+                    .unwrap_or_else(|| from + dir * REMOTE_MUZZLE)
+            });
+            self.tracers.push(Tracer {
+                from,
+                muzzle,
+                to,
+                weapon,
+                born: pending.born,
+            });
+            if pending.owner.is_some() {
+                let row = weapon_feel(weapon);
+                self.flashes.push(Flash {
+                    pos: muzzle,
+                    dir,
+                    size: shot_flash(&row),
+                    until: pending.born + row.flash_ms,
+                });
+                self.fx.extend(
+                    feel::plume(muzzle, dir, weapon)
+                        .into_iter()
+                        .map(|puff| Fx::spawn(puff, pending.born)),
+                );
+            }
+        }
+        // Retain the allocation across frames, including burst fire.
+        self.pending_remote_shots.clear();
     }
 
     /// The loot slot (index into `loot_index`) of an obstacle, if it is a
@@ -1967,6 +2005,16 @@ impl ShooterGame {
 
     /// Install the jointed character (set by `run_online` after load).
     pub fn set_parts(&mut self, rc: Option<ember_engine::rig::RigCharacter>) {
+        self.grip_body_parts.clear();
+        if let Some(character) = &rc {
+            self.grip_body_parts
+                .extend(character.parts.iter().copied().filter(|part| {
+                    !matches!(
+                        part.joint,
+                        ember_engine::rig::joint::WRIST_L | ember_engine::rig::joint::WRIST_R
+                    )
+                }));
+        }
         self.rig_character = rc;
     }
 
@@ -2002,6 +2050,24 @@ impl ShooterGame {
     fn drawn_muzzle(&self, id: u8) -> Option<Vec3> {
         let p = self.latest.get(&id).filter(|p| p.alive)?;
         let aim = Vec2::new(p.ax, p.az);
+        if let (Some(rc), Some(a)) = (&self.rig_character, &self.assets)
+            && let Some(grip) = a.grip_of(shown_weapon(p.weapon))
+        {
+            let (_, phase, amp) = self.anim.get(&id).copied().unwrap_or_default();
+            let crouch = self.crouch_ease.get(&id).copied().unwrap_or(0.0);
+            let pose = ember_engine::rig::walk_pose(phase, amp, crouch, self.time, &rc.dims);
+            let mount = grips::mount(
+                rc,
+                &pose,
+                grip,
+                self.render_pos(id),
+                self.render_y(id),
+                aim,
+                p.pitch,
+                p.shield,
+            );
+            return Some(mount.base + mount.rotation * a.muzzle_of(shown_weapon(p.weapon)));
+        }
         let (_, _, hand_y, _) = body_heights(p.crouch);
         let hand = hand_at(self.render_pos(id), self.render_y(id), aim, hand_y);
         let yaw = -aim.y.atan2(aim.x);
@@ -3607,6 +3673,11 @@ impl EmberGame for ShooterGame {
                     steps_queued += 1;
                 }
             }
+            let mut attachment = None;
+            let grip = self
+                .assets
+                .as_ref()
+                .and_then(|a| a.grip_of(shown_weapon(p.weapon)));
             // Jointed rig when parts loaded; textured/plain boxes else.
             if let Some(rc) = &self.rig_character {
                 let crouch = self.crouch_ease.entry(id).or_insert(0.0);
@@ -3614,19 +3685,32 @@ impl EmberGame for ShooterGame {
                 *crouch += (target - *crouch) * (1.0 - (-10.0 * dt).exp());
                 // Bodies face where the player AIMS (shooter convention).
                 let aim_yaw = aim.x.atan2(aim.y);
-                let pose = ember_engine::rig::walk_pose(
+                let mut pose = ember_engine::rig::walk_pose(
                     walk_phase, walk_amp, *crouch, self.time, &rc.dims,
                 );
+                if let Some(grip) = grip {
+                    let mount = grips::mount(rc, &pose, grip, pos, feet_y, aim, p.pitch, p.shield);
+                    grips::pose_arms(rc, &mut pose, grip, mount, pos, feet_y, aim, p.shield);
+                    attachment = Some(mount);
+                }
+                // The replacement gloves already contain articulated fingers.
+                // Keep the operator's textured sleeves, but never draw a second
+                // pair of relaxed hands through the weapon grips.
+                let body_parts = if attachment.is_some() {
+                    &self.grip_body_parts
+                } else {
+                    &rc.parts
+                };
                 ember_engine::rig::push_rig(
                     &mut frame,
-                    &rc.parts,
+                    body_parts,
                     &rc.skel,
                     &pose,
                     pos,
                     feet_y,
                     aim_yaw,
                     [fc.x, fc.y, fc.z],
-                    0.95,
+                    grips::BODY_SCALE,
                 );
             } else if env > 0 {
                 frame.instances.push(
@@ -3662,7 +3746,7 @@ impl EmberGame for ShooterGame {
             // hand_y and pip_y are heights above the FEET, so both need this
             // player's own feet height added. Without it someone standing on
             // a crate carried their gun down at floor level.
-            let hand = hand_at(pos, feet_y, aim, hand_y);
+            let hand = attachment.map_or_else(|| hand_at(pos, feet_y, aim, hand_y), |m| m.base);
             let accent = weapon_accent(p.weapon);
             // The off-hand shield, on the side the pistol is not. The plate
             // is yawed only: a shield is carried upright whatever its owner
@@ -3677,9 +3761,14 @@ impl EmberGame for ShooterGame {
                 // for the same reason: the body box is 1.0 across, so
                 // anything held closer than 0.5 is held INSIDE the torso
                 // and the plate's face never shows.
-                let center = Vec3::new(pos.x, feet_y + hand_y + 0.20, pos.y)
-                    + Vec3::new(aim.x, 0.0, aim.y) * 0.52
-                    + Vec3::new(left.x, 0.0, left.y) * 0.34;
+                let center = attachment.map_or_else(
+                    || {
+                        Vec3::new(pos.x, feet_y + hand_y + 0.20, pos.y)
+                            + Vec3::new(aim.x, 0.0, aim.y) * 0.52
+                            + Vec3::new(left.x, 0.0, left.y) * 0.34
+                    },
+                    |m| m.shield,
+                );
                 let rot = Quat::from_rotation_y(-aim.y.atan2(aim.x));
                 // The scutum's origin is its handle, behind the boss, so it
                 // hangs on the same centre the box plate was given.
@@ -3688,6 +3777,11 @@ impl EmberGame for ShooterGame {
                         push_parts(&mut frame, &a.shield, center, rot, fc, Action::REST);
                     }
                     None => push_shield(&mut frame, center, rot, SHIELD_PLATE, fc * 0.85),
+                }
+                if attachment.is_some()
+                    && let Some(grip) = grip
+                {
+                    grips::push_hand(&mut frame, &grip.left, center - rot * grip.left.palm, rot);
                 }
             }
             if let Some(a) = &self.assets {
@@ -3701,10 +3795,13 @@ impl EmberGame for ShooterGame {
                     a,
                     shown_weapon(p.weapon),
                     hand,
-                    weapon_rot(yaw, p.pitch),
+                    attachment.map_or_else(|| weapon_rot(yaw, p.pitch), |m| m.rotation),
                     Action::REST,
                     p.ammo > 0 && !p.reloading,
                 );
+                if let (Some(mount), Some(grip)) = (attachment, grip) {
+                    grips::push(&mut frame, grip, mount.base, mount.rotation, !p.shield);
+                }
             } else {
                 push_gun(&mut frame, hand, aim, accent);
             }
@@ -3727,6 +3824,8 @@ impl EmberGame for ShooterGame {
                 );
             }
         }
+
+        self.finish_remote_shots();
 
         // Everything following the physical world and remote players is
         // an effect or camera-space furniture. The viewmodel is deliberately
@@ -4007,7 +4106,23 @@ impl EmberGame for ShooterGame {
                 base + look * 0.95
             } else if let Some(a) = &self.assets {
                 push_weapon(&mut frame, a, my_weapon, base, rot, action, loaded);
-                push_parts(&mut frame, &a.arms, base, rot, accent, action);
+                if let Some(grip) = a.grip_of(my_weapon) {
+                    let support = self.shield_raise <= 0.01;
+                    grips::push(&mut frame, grip, base, rot, support);
+                    if let Some(rc) = &self.rig_character {
+                        crate::viewarms::push(
+                            &mut frame,
+                            rc,
+                            base + rot * grip.right.wrist,
+                            support.then_some(base + rot * grip.left.wrist),
+                            eye,
+                            weapon_rot(yaw, self.pitch),
+                            Vec3::ONE,
+                        );
+                    }
+                } else {
+                    push_parts(&mut frame, &a.arms, base, rot, accent, action);
+                }
                 base + rot * a.muzzle_of(my_weapon)
             } else {
                 push_gun(&mut frame, base, forward2, accent);
@@ -4223,6 +4338,21 @@ impl EmberGame for ShooterGame {
                         SHIELD_PLATE * lerp(0.9, 1.0),
                         GUNMETAL * 1.6 + accent * 0.10,
                     ),
+                }
+                if let Some(a) = &self.assets
+                    && let Some(grip) = a.grip_of(my_weapon)
+                {
+                    grips::push_hand(&mut frame, &grip.left, center - rot * grip.left.palm, rot);
+                    if let Some(rc) = &self.rig_character {
+                        crate::viewarms::push_left(
+                            &mut frame,
+                            rc,
+                            center + rot * (grip.left.wrist - grip.left.palm),
+                            eye,
+                            weapon_rot(yaw, self.pitch),
+                            Vec3::ONE,
+                        );
+                    }
                 }
             }
         }
@@ -6631,6 +6761,458 @@ mod viewmodel_tests {
             assert!(
                 row_two < lateral,
                 "row two runs off: {row_two} vs {lateral}"
+            );
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod grip_muzzle_tests {
+    use super::*;
+
+    const REMOTE: u8 = 3;
+
+    #[derive(Clone, Copy, Debug)]
+    struct CaptureCase {
+        weapon: u8,
+        yaw: f32,
+        pitch: f32,
+        crouch: bool,
+        shield: bool,
+    }
+
+    fn remote(case: CaptureCase) -> PState {
+        PState {
+            id: REMOTE,
+            x: 9.0,
+            z: -2.0,
+            y: 3.5,
+            vy: 0.0,
+            ax: case.yaw.cos(),
+            az: case.yaw.sin(),
+            pitch: case.pitch,
+            hp: MAX_HP,
+            score: 0,
+            alive: true,
+            crouch: case.crouch,
+            shield: case.shield,
+            weapon: case.weapon,
+            ammo: 1,
+            reserve: 30,
+            reloading: false,
+            deaths: 0,
+            ack: 0,
+            ack_age_ticks: 0,
+            team: 0,
+        }
+    }
+
+    // Keep the fixture and its frame-level assertions together for diagnostics.
+    #[allow(clippy::too_many_lines)]
+    fn assert_rendered_muzzle(game: &mut ShooterGame, case: CaptureCase) {
+        game.latest.insert(REMOTE, remote(case));
+        // Interpolate position AND height while the gait and crouch ease
+        // change. Reading raw PState or last frame's pose must fail this test.
+        game.from.insert(
+            REMOTE,
+            PSnap {
+                x: 8.0,
+                z: -3.0,
+                y: 2.5,
+            },
+        );
+        game.to.insert(
+            REMOTE,
+            PSnap {
+                x: 9.0,
+                z: -2.0,
+                y: 3.5,
+            },
+        );
+        game.t = 0.25;
+        game.prev_pos.insert(REMOTE, Vec2::new(8.1, -2.9));
+        game.anim.insert(REMOTE, (0.0, 1.7, 0.6));
+        game.crouch_ease.insert(REMOTE, 0.4);
+        let (mesh, muzzle_local, right_mesh, left_mesh) = {
+            let assets = game.assets.as_ref().unwrap();
+            let (parts, _) = assets.weapon_parts(case.weapon);
+            let part = parts
+                .iter()
+                .find(|part| part.anim == PartAnim::Fixed && !part.is_strip)
+                .expect("the rendered gun has a rigid frame part");
+            let grip = assets.grip_of(case.weapon).unwrap();
+            (
+                part.mesh,
+                assets.muzzle_of(case.weapon),
+                grip.right.mesh,
+                grip.left.mesh,
+            )
+        };
+        for dt in [0.0, 0.001, 1.0 / 60.0] {
+            let frame = game.update(&InputState::default(), dt);
+            let guns: Vec<_> = frame
+                .instances
+                .iter()
+                .filter(|instance| instance.mesh == mesh)
+                .collect();
+            assert_eq!(
+                guns.len(),
+                1,
+                "{case:?}: expected exactly the remote gun, not a local viewmodel"
+            );
+            let gun = guns[0];
+            let rendered = gun.position + gun.rot * (muzzle_local * gun.scale);
+            let reported = game
+                .drawn_muzzle(REMOTE)
+                .expect("alive remote player's barrel exists");
+            assert!(
+                rendered.distance(reported) < 1e-5,
+                "{case:?}, dt {dt}: effect muzzle {reported} != rendered gun tip {rendered}"
+            );
+            assert_eq!(gun.scale, Vec3::ONE, "guns keep their authored metre scale");
+            assert!(gun.casts_shadow, "remote gun remains world geometry");
+            let right: Vec<_> = frame
+                .instances
+                .iter()
+                .filter(|instance| instance.mesh == right_mesh)
+                .collect();
+            assert_eq!(right.len(), 1, "{case:?}: exactly one attached right glove");
+            assert_eq!(right[0].position, gun.position);
+            assert_eq!(right[0].rot, gun.rot);
+            let left: Vec<_> = frame
+                .instances
+                .iter()
+                .filter(|instance| instance.mesh == left_mesh)
+                .collect();
+            assert_eq!(
+                left.len(),
+                1,
+                "{case:?}: exactly one support or shield glove"
+            );
+            if !case.shield {
+                assert_eq!(left[0].position, gun.position);
+                assert_eq!(left[0].rot, gun.rot);
+            }
+        }
+    }
+
+    #[test]
+    fn effect_muzzle_matches_actual_rendered_weapon_during_aim_crouch_and_interpolation() {
+        // Decode the large assets only once for all cases. This exercises
+        // ShooterGame's real render pass and private muzzle query together.
+        let (meshes, assets) = load_assets();
+        let first_rig_mesh = u32::try_from(meshes.len() + 1).unwrap();
+        let (_, character) =
+            ember_engine::rig::skinned_from_glb(SWAT_GLB, SWAT_RIG, first_rig_mesh)
+                .expect("the actual SWAT asset must load, not a fallback character");
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, Some(assets.expect("viewmodel loads")), None);
+        game.set_parts(Some(character));
+        game.my_id = Some(2);
+        game.script = None;
+        game.weather_override = Some(ember_engine::Weather::Clear);
+        game.time = 5.0;
+        // No local player PState: the local gun stays hidden, isolating the
+        // remote player's mesh IDs without input, sockets or a graphics device.
+        for weapon in 1..=WEAPON_COUNT {
+            for yaw in [-2.7, 0.0, 1.2] {
+                for pitch in [-MAX_PITCH, 0.0, MAX_PITCH] {
+                    for crouch in [false, true] {
+                        let case = CaptureCase {
+                            weapon,
+                            yaw,
+                            pitch,
+                            crouch,
+                            shield: false,
+                        };
+                        assert_rendered_muzzle(&mut game, case);
+                        if weapon == SIDEARM {
+                            assert_rendered_muzzle(
+                                &mut game,
+                                CaptureCase {
+                                    shield: true,
+                                    ..case
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        game.latest.get_mut(&REMOTE).unwrap().alive = false;
+        assert!(
+            game.drawn_muzzle(REMOTE).is_none(),
+            "dead players cannot emit a drawn muzzle"
+        );
+        game.latest.remove(&REMOTE);
+        assert!(
+            game.drawn_muzzle(REMOTE).is_none(),
+            "absent players cannot emit a drawn muzzle"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn queued_remote_shot_uses_this_frames_moving_crouching_barrel() {
+        let (meshes, assets) = load_assets();
+        let assets = assets.expect("viewmodel loads");
+        let weapon = 3;
+        let gun_mesh = assets
+            .weapon_parts(weapon)
+            .0
+            .iter()
+            .find(|part| part.anim == PartAnim::Fixed && !part.is_strip)
+            .expect("rigid weapon part")
+            .mesh;
+        let muzzle_local = assets.muzzle_of(weapon);
+        let (_, character) = part_meshes(u32::try_from(meshes.len() + 1).unwrap());
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, Some(assets), None);
+        game.set_parts(Some(character.expect("operator loads")));
+        let cached_parts = game.grip_body_parts.as_ptr();
+        assert!(!game.grip_body_parts.is_empty());
+        assert!(game.grip_body_parts.iter().all(|part| !matches!(
+            part.joint,
+            ember_engine::rig::joint::WRIST_L | ember_engine::rig::joint::WRIST_R
+        )));
+        game.my_id = Some(2);
+        game.script = None;
+        game.weather_override = Some(ember_engine::Weather::Clear);
+        game.time = 5.0;
+        let case = CaptureCase {
+            weapon,
+            yaw: 0.7,
+            pitch: 0.6,
+            crouch: true,
+            shield: false,
+        };
+        game.latest.insert(REMOTE, remote(case));
+        game.from.insert(
+            REMOTE,
+            PSnap {
+                x: 8.0,
+                z: -3.0,
+                y: 2.5,
+            },
+        );
+        game.to.insert(
+            REMOTE,
+            PSnap {
+                x: 9.0,
+                z: -2.0,
+                y: 3.5,
+            },
+        );
+        game.t = 0.1;
+        game.prev_pos.insert(REMOTE, Vec2::new(8.0, -3.0));
+        game.anim.insert(REMOTE, (0.0, 1.7, 0.6));
+        game.crouch_ease.insert(REMOTE, 0.25);
+        let old_muzzle = game.drawn_muzzle(REMOTE).unwrap();
+        let from = old_muzzle - Vec3::X * 0.4 + Vec3::Y * 0.3;
+        let to = from + Vec3::X * 12.0;
+        let reflected_to = to - Vec3::Z * 8.0;
+        let shot = |owner, start: Vec3, end: Vec3, hit| S2C::Shot {
+            owner,
+            weapon,
+            x0: start.x,
+            y0: start.y,
+            z0: start.z,
+            x1: end.x,
+            y1: end.y,
+            z1: end.z,
+            hit,
+            cover: 255,
+            victim: 255,
+            normal: [0, 0, 0],
+        };
+        // Actual channel delivery, before update advances interpolation and
+        // crouch. Querying drawn_muzzle only AFTER update missed this bug.
+        inbox.send(shot(REMOTE, from, to, SHOT_SHIELD)).unwrap();
+        inbox
+            .send(shot(REMOTE, to, reflected_to, SHOT_BODY))
+            .unwrap();
+        let expected_sound = feel::shot_sfx(weapon, Dist::at(from.distance(Vec3::Y * game.eye_h)));
+        let frame = game.update(&InputState::default(), 1.0 / 60.0);
+        let gun = frame
+            .instances
+            .iter()
+            .find(|part| part.mesh == gun_mesh)
+            .unwrap();
+        let rendered_muzzle = gun.position + gun.rot * (muzzle_local * gun.scale);
+        assert!(
+            rendered_muzzle.distance(old_muzzle) > 0.05,
+            "fixture must expose stale placement"
+        );
+        assert_eq!(
+            game.tracers.len(),
+            2,
+            "arrival order survives the deferred visual phase"
+        );
+        let trace = game.tracers[0];
+        assert_eq!(
+            (trace.from, trace.to, trace.weapon, trace.born),
+            (from, to, weapon, game.time)
+        );
+        assert!(trace.muzzle.distance(rendered_muzzle) < 1e-5);
+        assert_eq!(
+            game.flashes.len(),
+            1,
+            "reflection must not create another muzzle flash"
+        );
+        assert!(game.flashes[0].pos.distance(rendered_muzzle) < 1e-5);
+        assert_eq!(game.tracers[1].from, to);
+        assert_eq!(
+            game.tracers[1].muzzle, to,
+            "continuation begins at the authoritative shield hit"
+        );
+        assert_eq!(game.tracers[1].to, reflected_to);
+        let plume: Vec<_> = game
+            .fx
+            .iter()
+            .filter(|puff| puff.born > game.time)
+            .collect();
+        assert_eq!(
+            plume.len(),
+            4,
+            "only the initial shot emits delayed muzzle smoke"
+        );
+        assert!(plume.iter().all(|puff| puff.pos.distance(rendered_muzzle)
+            < feel::PLUME_LEAD + feel::plume_reach() + 1e-3));
+        assert!(
+            game.heard.iter().any(|play| play.sfx == expected_sound),
+            "gunshot stays in this frame's audio"
+        );
+        assert!(
+            game.heard.iter().any(|play| play.sfx == Sfx::ImpactMetal),
+            "shield impact stays immediate"
+        );
+        assert!(game.pending_remote_shots.is_empty());
+        assert_eq!(
+            game.grip_body_parts.as_ptr(),
+            cached_parts,
+            "render must not rebuild body-part storage"
+        );
+
+        // Dead and absent owners retain the server-line fallback, while the
+        // continuation marker remains a separate, owner-independent decision.
+        game.latest.get_mut(&REMOTE).unwrap().alive = false;
+        for owner in [REMOTE, 254] {
+            game.flashes.clear();
+            game.tracers.clear();
+            let start = Vec3::new(30.0, 2.0, 30.0);
+            let end = start + Vec3::Z * 5.0;
+            inbox.send(shot(owner, start, end, SHOT_BODY)).unwrap();
+            game.update(&InputState::default(), 1.0 / 60.0);
+            let fallback = start + Vec3::Z * REMOTE_MUZZLE;
+            assert_eq!(game.tracers.len(), 1);
+            assert!(game.tracers[0].muzzle.distance(fallback) < 1e-5);
+            assert!(game.flashes[0].pos.distance(fallback) < 1e-5);
+            assert_eq!(game.grip_body_parts.as_ptr(), cached_parts);
+        }
+        game.set_parts(None);
+        assert!(
+            game.grip_body_parts.is_empty(),
+            "replacing a character invalidates its cached parts"
+        );
+    }
+
+    #[test]
+    fn local_shield_input_moves_one_support_hand_and_sleeve_from_gun_to_shield() {
+        let (meshes, assets) = load_assets();
+        let assets = assets.expect("viewmodel loads");
+        let grip = *assets.grip_of(SIDEARM).unwrap();
+        let shield_mesh = assets.shield.first().expect("shield asset loads").mesh;
+        let (_, character) = part_meshes(u32::try_from(meshes.len() + 1).unwrap());
+        let character = character.expect("operator loads");
+        let old_hands: Vec<_> = character
+            .parts
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.joint,
+                    ember_engine::rig::joint::WRIST_L | ember_engine::rig::joint::WRIST_R
+                )
+            })
+            .map(|part| part.mesh)
+            .collect();
+        let sleeves: Vec<_> = character
+            .parts
+            .iter()
+            .filter(|part| {
+                matches!(
+                    part.joint,
+                    ember_engine::rig::joint::SHOULDER_L
+                        | ember_engine::rig::joint::ELBOW_L
+                        | ember_engine::rig::joint::SHOULDER_R
+                        | ember_engine::rig::joint::ELBOW_R
+                )
+            })
+            .map(|part| part.mesh)
+            .collect();
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, Some(assets), None);
+        game.set_parts(Some(character));
+        game.my_id = Some(2);
+        let mut own = remote(CaptureCase {
+            weapon: SIDEARM,
+            yaw: 0.0,
+            pitch: 0.0,
+            crouch: false,
+            shield: false,
+        });
+        own.id = 2;
+        game.latest.insert(2, own);
+        game.was_alive = true;
+        game.script = None;
+        game.weather_override = Some(ember_engine::Weather::Clear);
+        // This is in-memory game input, never a key sent to the host/window.
+        let input = InputState::from_parts(&[KeyCode::KeyQ], &[], (0.0, 0.0), None);
+        let mut frame = Frame::default();
+        for _ in 0..16 {
+            frame = game.update(&input, 1.0 / 60.0);
+        }
+        assert!(game.shield_raise > 0.9);
+        let one = |mesh| {
+            let instances: Vec<_> = frame
+                .instances
+                .iter()
+                .filter(|part| part.mesh == mesh)
+                .collect();
+            assert_eq!(instances.len(), 1, "mesh {mesh} duplicated or omitted");
+            instances[0]
+        };
+        let shield = one(shield_mesh);
+        let left = one(grip.left.mesh);
+        let right = one(grip.right.mesh);
+        let palm = left.position + left.rot * (grip.left.palm * left.scale);
+        assert!(
+            palm.distance(shield.position) < 1e-5,
+            "left palm must grip the shield handle"
+        );
+        assert_eq!(left.rot, shield.rot);
+        assert!(
+            left.position.distance(right.position) > 0.1,
+            "support hand must leave the gun"
+        );
+        assert!(!left.casts_shadow && !right.casts_shadow && !shield.casts_shadow);
+        for mesh in sleeves {
+            assert!(
+                !one(mesh).casts_shadow,
+                "first-person sleeve casts a shadow"
+            );
+        }
+        for mesh in game
+            .assets
+            .as_ref()
+            .unwrap()
+            .arms
+            .iter()
+            .map(|part| part.mesh)
+            .chain(old_hands)
+        {
+            assert!(
+                frame.instances.iter().all(|part| part.mesh != mesh),
+                "old relaxed hand {mesh} still drawn"
             );
         }
     }

@@ -382,6 +382,158 @@ pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT
     out
 }
 
+/// Which anatomical arm to pose. Imported rigs can place their left shoulder
+/// on either side of X; the solver reads the geometry instead of assuming it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArmSide {
+    Left,
+    Right,
+}
+
+impl ArmSide {
+    /// Shoulder, elbow and wrist indices in the shared humanoid joint tree.
+    #[must_use]
+    pub const fn joints(self) -> [usize; 3] {
+        match self {
+            Self::Left => [joint::SHOULDER_L, joint::ELBOW_L, joint::WRIST_L],
+            Self::Right => [joint::SHOULDER_R, joint::ELBOW_R, joint::WRIST_R],
+        }
+    }
+}
+
+/// Solved joint positions before the character's world yaw, scale and feet
+/// placement. A target beyond the limb's reach is clamped without stretching.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArmSolution {
+    pub shoulder: Vec3,
+    pub elbow: Vec3,
+    pub wrist: Vec3,
+    pub reached: bool,
+}
+
+fn arm_solution(joints: &[(Vec3, Quat); joint::COUNT], side: ArmSide, target: Vec3) -> ArmSolution {
+    let [shoulder, elbow, wrist] = side.joints();
+    ArmSolution {
+        shoulder: joints[shoulder].0,
+        elbow: joints[elbow].0,
+        wrist: joints[wrist].0,
+        reached: target.is_finite() && joints[wrist].0.distance_squared(target) < 1e-8,
+    }
+}
+
+/// Set a joint's character-space rotation while retaining the imported bind
+/// correction. Assigning the desired world rotation directly to `local_rot`
+/// would apply that correction twice and turn imported forearms away again.
+fn set_joint_world_rotation(skel: &Skeleton, pose: &mut Pose, joint: usize, rotation: Quat) {
+    let joints = world_joints(skel, pose);
+    let parent = skel.joints[joint]
+        .parent
+        .map_or(Quat::IDENTITY, |p| joints[p].1);
+    pose.local_rot[joint] =
+        (parent.conjugate() * rotation * skel.correction[joint].conjugate()).normalize();
+}
+
+/// Stable elbow bend direction, projected off the shoulder-to-wrist line.
+/// A target exactly along the preferred pole uses the least parallel torso
+/// axis as a deterministic fallback; no camera direction or RNG is involved.
+fn elbow_pole(direction: Vec3, shoulder: Vec3, torso: (Vec3, Quat)) -> Vec3 {
+    let lateral = (torso.1.conjugate() * (shoulder - torso.0)).x;
+    let side = if lateral < 0.0 { -1.0 } else { 1.0 };
+    let hint = torso.1 * Vec3::new(side * 0.85, -0.55, -0.25).normalize();
+    let projected = hint - direction * hint.dot(direction);
+    if projected.length_squared() > 1e-6 {
+        return projected.normalize();
+    }
+    let mut best = torso.1 * Vec3::X;
+    for axis in [Vec3::Y, Vec3::Z] {
+        let candidate = torso.1 * axis;
+        if candidate.dot(direction).abs() < best.dot(direction).abs() {
+            best = candidate;
+        }
+    }
+    (best - direction * best.dot(direction)).normalize()
+}
+
+/// Pose one two-bone arm onto a wrist socket after locomotion.
+///
+/// `target` and optional hand orientation
+/// are in character space, as returned by `world_joints`; callers transform
+/// weapon-space sockets through their weapon placement and inverse body frame.
+///
+/// Only shoulder, elbow and (when supplied) wrist rotations change. Bone
+/// offsets and lengths are untouched. Unreachable targets stop at the reach
+/// limit; invalid targets or zero-length limbs leave the pose unchanged.
+/// Call this once per arm, then render the same Pose with `push_rig`.
+#[must_use]
+pub fn solve_arm(
+    skel: &Skeleton,
+    pose: &mut Pose,
+    side: ArmSide,
+    target: Vec3,
+    wrist_rotation: Option<Quat>,
+) -> ArmSolution {
+    let [shoulder, elbow, wrist] = side.joints();
+    let initial = world_joints(skel, pose);
+    let unchanged = arm_solution(&initial, side, target);
+    let start = initial[shoulder].0;
+    let upper = skel.joints[elbow].offset.length();
+    let lower = skel.joints[wrist].offset.length();
+    if !target.is_finite()
+        || !start.is_finite()
+        || !upper.is_finite()
+        || !lower.is_finite()
+        || upper < 1e-6
+        || lower < 1e-6
+        || skel.joints[elbow].parent != Some(shoulder)
+        || skel.joints[wrist].parent != Some(elbow)
+    {
+        return ArmSolution {
+            reached: false,
+            ..unchanged
+        };
+    }
+    let delta = target - start;
+    let requested_distance = delta.length();
+    if !requested_distance.is_finite() {
+        return ArmSolution {
+            reached: false,
+            ..unchanged
+        };
+    }
+    let torso = initial[joint::SPINE];
+    let direction = if requested_distance > 1e-6 {
+        delta / requested_distance
+    } else {
+        (initial[wrist].0 - start)
+            .try_normalize()
+            .unwrap_or(torso.1 * Vec3::Z)
+    };
+    // Leave a tiny bend at both singular limits to keep an elbow's side
+    // well-defined when aiming straight through full extension or flexion.
+    let margin = ((upper + lower) * 1e-5).min(upper.min(lower) * 0.25);
+    let distance = requested_distance.clamp((upper - lower).abs() + margin, upper + lower - margin);
+    let wrist_target = start + direction * distance;
+    let along = distance.mul_add(distance, lower.mul_add(-lower, upper * upper)) / (2.0 * distance);
+    let height = along.mul_add(-along, upper * upper).max(0.0).sqrt();
+    let elbow_target = start + direction * along + elbow_pole(direction, start, torso) * height;
+
+    let upper_rotation = Quat::from_rotation_arc(
+        (initial[elbow].0 - start).normalize(),
+        (elbow_target - start).normalize(),
+    ) * initial[shoulder].1;
+    set_joint_world_rotation(skel, pose, shoulder, upper_rotation);
+    let upper_solved = world_joints(skel, pose);
+    let lower_rotation = Quat::from_rotation_arc(
+        (upper_solved[wrist].0 - upper_solved[elbow].0).normalize(),
+        (wrist_target - upper_solved[elbow].0).normalize(),
+    ) * upper_solved[elbow].1;
+    set_joint_world_rotation(skel, pose, elbow, lower_rotation);
+    if let Some(rotation) = wrist_rotation.filter(|q| q.is_finite() && q.length_squared() > 1e-8) {
+        set_joint_world_rotation(skel, pose, wrist, rotation.normalize());
+    }
+    arm_solution(&world_joints(skel, pose), side, target)
+}
+
 /// Procedural locomotion pose.
 ///
 /// `phase` advances with distance walked (radians), `amp` eases the gait in
@@ -932,6 +1084,140 @@ mod tests {
             p[ankle] = Vec3::new(s * 0.16, 0.14, 0.0);
         }
         p
+    }
+
+    fn assert_arm_lengths(skel: &Skeleton, side: ArmSide, solution: ArmSolution) {
+        let [_, elbow, wrist] = side.joints();
+        assert!(
+            (solution.shoulder.distance(solution.elbow) - skel.joints[elbow].offset.length()).abs()
+                < 1e-5
+        );
+        assert!(
+            (solution.elbow.distance(solution.wrist) - skel.joints[wrist].offset.length()).abs()
+                < 1e-5
+        );
+        assert!(
+            solution.shoulder.is_finite()
+                && solution.elbow.is_finite()
+                && solution.wrist.is_finite()
+        );
+    }
+
+    #[test]
+    fn arm_ik_reaches_sockets_in_corrected_rotated_and_crouching_rigs_without_stretching() {
+        let default_dims = HumanoidDims::default();
+        let imported = skeleton_from_bind(&bind_a_pose());
+        for (skel, dims) in [(humanoid(&default_dims), default_dims), imported] {
+            for crouch in [0.0, 0.6, 1.0] {
+                for phase in [0.0, 1.7, 4.1] {
+                    let mut pose = walk_pose(phase, 0.8, crouch, 2.0, &dims);
+                    pose.local_rot[joint::ROOT] = Quat::from_rotation_y(0.9);
+                    for side in [ArmSide::Left, ArmSide::Right] {
+                        let [shoulder, _, wrist] = side.joints();
+                        let before = world_joints(&skel, &pose);
+                        let old_rotations = pose.local_rot;
+                        let old_root = pose.root_pos;
+                        let torso = before[joint::SPINE].1;
+                        let target = before[shoulder].0 + torso * Vec3::new(0.03, -0.11, 0.27);
+                        let orientation =
+                            torso * Quat::from_rotation_z(0.7) * Quat::from_rotation_y(-0.3);
+                        let solution = solve_arm(&skel, &mut pose, side, target, Some(orientation));
+                        assert!(
+                            solution.reached,
+                            "{side:?}, crouch {crouch}, phase {phase}: {solution:?} vs {target}"
+                        );
+                        assert!(solution.wrist.distance(target) < 1e-5);
+                        assert_arm_lengths(&skel, side, solution);
+                        let after = world_joints(&skel, &pose);
+                        assert!(after[wrist].1.dot(orientation).abs() > 0.99999);
+                        assert_eq!(pose.root_pos, old_root);
+                        for (index, old) in old_rotations.iter().enumerate() {
+                            if !side.joints().contains(&index) {
+                                assert_eq!(
+                                    pose.local_rot[index], *old,
+                                    "IK changed unrelated joint {index}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arm_ik_reads_actual_shoulder_sides_and_is_repeatable() {
+        let (skel, dims) = skeleton_from_bind(&bind_a_pose());
+        // The imported fixture's left is +X, opposite the built-in rig.
+        for side in [ArmSide::Left, ArmSide::Right] {
+            let mut pose = walk_pose(0.0, 0.0, 0.0, 0.0, &dims);
+            let [shoulder, _, _] = side.joints();
+            let before = world_joints(&skel, &pose);
+            let torso = before[joint::SPINE];
+            let target = before[shoulder].0 + Vec3::Z * 0.3;
+            let first = solve_arm(&skel, &mut pose, side, target, None);
+            let relative_elbow = first.elbow - first.shoulder;
+            let side_x = first.shoulder.x - torso.0.x;
+            assert!(
+                relative_elbow.x * side_x > 0.0,
+                "elbow stays outside its own shoulder"
+            );
+            assert!(relative_elbow.y < 0.0, "elbow points down");
+            let first_rotations = pose.local_rot;
+            let mut repeat = walk_pose(0.0, 0.0, 0.0, 0.0, &dims);
+            let second = solve_arm(&skel, &mut repeat, side, target, None);
+            assert_eq!(first, second);
+            assert_eq!(first_rotations, repeat.local_rot);
+        }
+    }
+
+    #[test]
+    fn arm_ik_clamps_unreachable_targets_and_handles_singular_poles() {
+        let dims = HumanoidDims::default();
+        let skel = humanoid(&dims);
+        for side in [ArmSide::Left, ArmSide::Right] {
+            let [shoulder, _, _] = side.joints();
+            let initial = world_joints(&skel, &Pose::default());
+            let start = initial[shoulder].0;
+            let sign = if start.x < 0.0 { -1.0 } else { 1.0 };
+            for offset in [
+                Vec3::Z * 100.0,
+                Vec3::ZERO,
+                Vec3::new(sign * 0.85, -0.55, -0.25).normalize() * 0.3,
+            ] {
+                let mut pose = Pose::default();
+                let solution = solve_arm(&skel, &mut pose, side, start + offset, None);
+                assert_arm_lengths(&skel, side, solution);
+                assert!(
+                    pose.local_rot
+                        .iter()
+                        .all(|q| q.is_finite() && (q.length_squared() - 1.0).abs() < 1e-5)
+                );
+                if offset.length() > 1.0 || offset.length() < 1e-6 {
+                    assert!(!solution.reached, "unreachable target must be reported");
+                } else {
+                    assert!(
+                        solution.reached,
+                        "parallel elbow pole still reaches the wrist"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arm_ik_invalid_targets_or_degenerate_limbs_preserve_the_pose() {
+        let dims = HumanoidDims::default();
+        let mut skel = humanoid(&dims);
+        let mut pose = walk_pose(1.0, 0.7, 0.6, 3.0, &dims);
+        let unchanged = pose.local_rot;
+        for target in [Vec3::splat(f32::NAN), Vec3::splat(f32::INFINITY)] {
+            assert!(!solve_arm(&skel, &mut pose, ArmSide::Right, target, None).reached);
+            assert_eq!(pose.local_rot, unchanged);
+        }
+        skel.joints[joint::ELBOW_R].offset = Vec3::ZERO;
+        assert!(!solve_arm(&skel, &mut pose, ArmSide::Right, Vec3::ONE, None).reached);
+        assert_eq!(pose.local_rot, unchanged);
     }
 
     #[test]

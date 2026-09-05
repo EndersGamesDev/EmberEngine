@@ -223,6 +223,10 @@ The ask behind v13 was a detailed picture on every polygon. This renderer sample
 
 Anything beyond those two — per-face detail maps, normal or roughness maps — is a renderer change, not a pipeline change. See the engine-side constraints above.
 
+## Weapon-specific grips
+
+Arena v23 adds a separate weapon-local glove bake and wrist-socket/arm attachment pipeline. It preserves the original weapon GLB; each gun receives its own articulated source-hand pose instead of inheriting the sidearm's fixed hand mesh. See `docs/weapon-grips.md` and `tools/v23/README.md` for the contract, build commands and headless visual checks.
+
 ## The recorded-sample slot: `crates/arena/assets/sfx/`
 
 Every arena sound cue is synthesised in `crates/arena/src/sound.rs` (arena v20's kit: noise bursts, sines, envelopes, filters, a comb tail), so the repo ships no recordings and owes nobody a licence. The slot for the next tier exists anyway: a file at `crates/arena/assets/sfx/<name>.wav`, named after the `Sfx` cue it replaces, is baked in with `include_bytes!` and decoded by a small RIFF reader in `sound.rs` (no new dependency), and when it is present `source(sfx)` hands back the recording instead of the synth. The contract is narrow on purpose: **RIFF WAVE, PCM format 1, 16-bit signed, one channel, 44 100 Hz**. Anything else (a float WAV, stereo, 48 kHz, an ADPCM or WAVE_FORMAT_EXTENSIBLE header) is rejected by the reader, whose test is `a_wav_in_the_slot_replaces_the_synth`, and the synth is used; there is no resampler and no channel mix, so convert offline (`ffmpeg -i in.wav -ac 1 -ar 44100 -sample_fmt s16 out.wav`). The same rule as every other baked asset applies: the bundle is one file with no runtime fetch, so a second of 16-bit mono is 88 KB that every web player downloads, and a cue should be trimmed to the length its envelope needs. The folder is empty in v20 except for its README, and that is recorded in `docs/plans/backlog.md` as the next tier, not a promise.
