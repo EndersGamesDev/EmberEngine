@@ -6,7 +6,10 @@
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const ARENA_HALF: f32 = 24.0;
-pub const MOVE_SPEED: f32 = 9.0;
+pub const MOVE_SPEED: f32 = 2.0;
+/// Base horizontal speed while airborne. Kept separate from `MOVE_SPEED` so
+/// grounded movement can be tuned without changing the authored jump routes.
+pub const AIR_MOVE_SPEED: f32 = 9.0;
 /// Shift: faster. C: slower (and a lower profile, cosmetically).
 pub const SPRINT_MULT: f32 = 1.6;
 pub const CROUCH_MULT: f32 = 0.55;
@@ -1407,16 +1410,48 @@ fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
 /// the client's prediction: a rule applied at one call site and not the
 /// other is a desync, and a signature change is the only way to make the
 /// compiler say so.
+fn speed_at(base: f32, sprint: bool, crouch: bool, shield: bool) -> f32 {
+    base * if crouch {
+        CROUCH_MULT
+    } else if sprint && !shield {
+        SPRINT_MULT
+    } else {
+        1.0
+    }
+}
+
 #[must_use]
 pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
-    MOVE_SPEED
-        * if crouch {
-            CROUCH_MULT
-        } else if sprint && !shield {
-            SPRINT_MULT
-        } else {
-            1.0
-        }
+    speed_at(MOVE_SPEED, sprint, crouch, shield)
+}
+
+/// The horizontal speed to use before this movement step.
+///
+/// Grounded players use the current walking speed. A jump launches at the
+/// legacy air speed on its very first tick, and stays there until landing, so
+/// authored routes keep their horizontal jump reach while ordinary movement
+/// slows down. This is shared by the server and client prediction.
+#[must_use]
+pub fn movement_speed(
+    pos: [f32; 2],
+    y: f32,
+    vy: f32,
+    jump: bool,
+    sprint: bool,
+    crouch: bool,
+    shield: bool,
+    obstacles: &[Obstacle],
+) -> f32 {
+    // A body can overlap the edge of a roof while still rising or falling.
+    // It is not standing there until the vertical step has resolved its
+    // velocity to zero, so keep its full air speed through that landing.
+    let grounded = vy == 0.0 && y <= support_height(pos, PLAYER_R, y, obstacles) + 1e-3;
+    let base = if grounded && !jump {
+        MOVE_SPEED
+    } else {
+        AIR_MOVE_SPEED
+    };
+    speed_at(base, sprint, crouch, shield)
 }
 
 /// Player movement: sanitize the intent, then integrate one axis at a time
@@ -2291,11 +2326,21 @@ impl Sim {
                 continue;
             }
 
-            // Shared movement code (also used by client prediction);
-            // stance speed is server-authoritative — no speed cheats.
-            let speed = stance_speed(input.sprint, input.crouch, input.shield);
             let (old_pos, feet_height, vertical_speed) =
                 (self.players[i].pos, self.players[i].y, self.players[i].vy);
+            // Shared movement code (also used by client prediction).
+            // A jump keeps its authored air reach while the ground speed is
+            // server-authoritative, so no client can claim a faster walk.
+            let speed = movement_speed(
+                old_pos,
+                feet_height,
+                vertical_speed,
+                input.jump,
+                input.sprint,
+                input.crouch,
+                input.shield,
+                &self.obstacles,
+            );
             let pos = move_circle(old_pos, feet_height, input.mv, speed, dt, &self.obstacles);
             let v = step_vertical(
                 pos,
@@ -3112,6 +3157,35 @@ mod tests {
         // Crouch wins if both are held.
         let both = run(true, true);
         assert!((both - crouch).abs() < 0.2);
+    }
+
+    #[test]
+    fn jump_reach_is_independent_of_ground_speed() {
+        let jump_distance = |sprint: bool| -> f32 {
+            let mut sim = Sim::new(9);
+            sim.obstacles.clear();
+            sim.add_player(0);
+            sim.players[0].pos = [-20.0, 0.0];
+            let start = sim.players[0].pos[0];
+            let mut was_airborne = false;
+            for tick in 0..180 {
+                sim.step(&|_| PlayerIn {
+                    mv: [1.0, 0.0],
+                    sprint,
+                    jump: tick == 0,
+                    ..Default::default()
+                });
+                let p = &sim.players[0];
+                was_airborne |= p.vy != 0.0;
+                if was_airborne && p.vy == 0.0 {
+                    return p.pos[0] - start;
+                }
+            }
+            panic!("jump did not land");
+        };
+
+        assert!((jump_distance(false) - 6.75).abs() < 1e-3);
+        assert!((jump_distance(true) - 10.8).abs() < 1e-3);
     }
 
     #[test]
@@ -4048,14 +4122,24 @@ mod tests {
     fn a_box_blocks_on_the_ground_but_not_from_above() {
         let obs = one_box();
         let top = obstacle_height(&obs[0]);
+        // Keep the 4.5 m travel distance independent of the ground-speed
+        // tuning: collision should be what decides the result here.
+        let walk_time = 4.5 / MOVE_SPEED;
         // Walking into the crate from outside gets stopped.
-        let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, walk_time, &obs);
         assert!(
             walked[0] < -1.5 - PLAYER_R + 0.01,
             "walked into box: {walked:?}"
         );
         // The same move with the feet above the crate's top goes through.
-        let over = move_circle([-3.0, 0.0], top + 0.1, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        let over = move_circle(
+            [-3.0, 0.0],
+            top + 0.1,
+            [1.0, 0.0],
+            MOVE_SPEED,
+            walk_time,
+            &obs,
+        );
         assert!(over[0] > -1.0, "could not walk over the box: {over:?}");
     }
 
@@ -5171,9 +5255,10 @@ mod tests {
         )]
     }
 
-    /// Walks +x for `ticks` at `y`, one sim tick at a time, so a box in the
+    /// Walks +x for `distance` at `y`, one sim tick at a time, so a box in the
     /// way is met at its face rather than jumped over by a long dt.
-    fn walk(mut pos: [f32; 2], y: f32, ticks: u32, obs: &[Obstacle]) -> [f32; 2] {
+    fn walk(mut pos: [f32; 2], y: f32, distance: f32, obs: &[Obstacle]) -> [f32; 2] {
+        let ticks = (distance / (MOVE_SPEED * FIXED_DT)).ceil() as u32;
         for _ in 0..ticks {
             pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
         }
@@ -5184,25 +5269,25 @@ mod tests {
     fn a_raised_box_blocks_only_a_body_that_reaches_it() {
         let obs = roof();
         // On the floor the head (1.86) is under the bottom (2.5): walk
-        // straight through, 60 ticks = 9 units, from -4 to 5.
-        let under = walk([-4.0, 0.0], 0.0, 60, &obs);
+        // straight through, 9 units from -4 to 5.
+        let under = walk([-4.0, 0.0], 0.0, 9.0, &obs);
         assert!(
             under[0] > 4.0,
             "blocked by a roof from the floor: {under:?}"
         );
         // Feet at 1.0: head 2.86 is inside the box and the feet are more
         // than a step below its top, so its side is a wall.
-        let mid = walk([-4.0, 0.0], 1.0, 60, &obs);
+        let mid = walk([-4.0, 0.0], 1.0, 9.0, &obs);
         assert!(
             mid[0] <= -2.0 - PLAYER_R + 1e-3,
             "walked through the roof's side: {mid:?}"
         );
         // Standing on it: walk across.
-        let over = walk([-4.0, 0.0], 2.9, 60, &obs);
+        let over = walk([-4.0, 0.0], 2.9, 9.0, &obs);
         assert!(over[0] > 4.0, "could not walk across the roof: {over:?}");
         // And a floor box is exactly what it was: a wall from the floor.
         let floor_box = one_box();
-        let walked = walk([-3.0, 0.0], 0.0, 60, &floor_box);
+        let walked = walk([-3.0, 0.0], 0.0, 9.0, &floor_box);
         assert!(
             walked[0] <= -1.5 - PLAYER_R + 1e-3,
             "a floor box stopped blocking: {walked:?}"
@@ -5645,7 +5730,9 @@ mod tests {
         );
         let (mut y, mut vy) = (0.0f32, 0.0f32);
         let mut reached = false;
-        for _ in 0..200 {
+        let distance_to_exit = roof.max[0] + 1.0 - pos[0];
+        let max_ticks = (distance_to_exit / (MOVE_SPEED * FIXED_DT)).ceil() as u32 + 1;
+        for _ in 0..max_ticks {
             pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
             let VStep { y: ny, vy: nvy, .. } = step_vertical(pos, y, vy, false, FIXED_DT, obs);
             y = ny;
@@ -7921,12 +8008,12 @@ mod tests {
     /// run here, and if that changes the pin is regenerated the same way,
     /// from the tree that is being pinned.
     const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
-        0x62b2_7bcc_b997_35fc,
-        0x0f6b_fe48_debd_f47e,
-        0x892d_dc01_c008_1454,
-        0x0a98_bd84_cf17_ed5c,
-        0x81b9_c2bf_38b9_453c,
-        0xb5a5_3150_6c66_2954,
+        0x4944_3134_a14b_0e8a,
+        0x4c17_b3ff_f3af_edb9,
+        0x3b07_bf25_804e_e990,
+        0x38d9_f0cb_d285_276a,
+        0xf9b7_362a_8987_ca64,
+        0x3353_1ec0_c3fb_d8c8,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a
@@ -8109,7 +8196,16 @@ mod tests {
                 sim.loot.iter().map(|l| l.respawn_t <= FIXED_DT).collect();
             sim.step(&|_| input);
             // The client's replay of the same tick.
-            let speed = stance_speed(input.sprint, input.crouch, input.shield);
+            let speed = movement_speed(
+                pos,
+                y,
+                vy,
+                input.jump,
+                input.sprint,
+                input.crouch,
+                input.shield,
+                &sim.obstacles,
+            );
             let npos = move_circle(pos, y, input.mv, speed, FIXED_DT, &sim.obstacles);
             let v = step_vertical(npos, y, vy, input.jump, FIXED_DT, &sim.obstacles);
             let predicted = v
@@ -8205,7 +8301,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        for _ in 0..60 {
+        let ticks = (9.0 / (MOVE_SPEED * FIXED_DT)).ceil() as u32;
+        for _ in 0..ticks {
             step_with(&mut sim, &inputs);
             assert!(sim.loot_events.is_empty(), "walking under the block paid");
             assert_eq!(sim.players[0].y, 0.0);

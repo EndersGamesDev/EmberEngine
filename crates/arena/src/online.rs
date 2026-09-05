@@ -11,7 +11,7 @@ use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
     HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, Projectile,
     RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, move_circle,
-    stance_speed, step_vertical, weapon_name, weapon_stats,
+    movement_speed, step_vertical, weapon_name, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{
@@ -872,7 +872,9 @@ struct PSnap {
 struct Cmd {
     seq: u32,
     mv: [f32; 2],
-    speed: f32,
+    sprint: bool,
+    crouch: bool,
+    shield: bool,
     jump: bool,
     sent_at: f32,
 }
@@ -2668,7 +2670,17 @@ impl EmberGame for ShooterGame {
                                 let mut left = dur;
                                 while left > 1e-6 {
                                     let step = left.min(FIXED_DT);
-                                    p = move_circle(p, y, c.mv, c.speed, step, &self.obstacles);
+                                    let speed = movement_speed(
+                                        p,
+                                        y,
+                                        vy,
+                                        press,
+                                        c.sprint,
+                                        c.crouch,
+                                        c.shield,
+                                        &self.obstacles,
+                                    );
+                                    p = move_circle(p, y, c.mv, speed, step, &self.obstacles);
                                     let stepped =
                                         step_vertical(p, y, vy, press, step, &self.obstacles);
                                     press = false;
@@ -3085,11 +3097,6 @@ impl EmberGame for ShooterGame {
             .my_id
             .and_then(|id| self.latest.get(&id))
             .is_some_and(|p| p.alive);
-        // Prediction reads the same rule the server applies, shield included
-        // — a raised shield cancels sprint, and predicting otherwise would
-        // rubber-band anyone who raised one while running.
-        let speed = stance_speed(sprint, crouch, shield);
-
         // Send intents at a fixed cadence (also the keepalive), remembering
         // each command until the server acks it.
         if self.my_id.is_some() && !self.lost && self.since_input >= 0.05 {
@@ -3107,7 +3114,9 @@ impl EmberGame for ShooterGame {
                 self.history.push_back(Cmd {
                     seq,
                     mv: [mv.x, mv.y],
-                    speed,
+                    sprint,
+                    crouch,
+                    shield,
                     jump: jump_press,
                     sent_at: self.time,
                 });
@@ -3160,6 +3169,19 @@ impl EmberGame for ShooterGame {
         // handler above rebases this on the server's authority.
         if me_alive {
             let was = self.pred_pos;
+            // Prediction reads the same ground/air rule the server applies,
+            // shield included — otherwise a jump or raised shield would
+            // rubber-band.
+            let speed = movement_speed(
+                self.pred_pos.to_array(),
+                self.pred_y,
+                self.pred_vy,
+                self.pred_jump,
+                sprint,
+                crouch,
+                shield,
+                &self.obstacles,
+            );
             let p = move_circle(
                 self.pred_pos.to_array(),
                 self.pred_y,

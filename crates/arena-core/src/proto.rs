@@ -211,7 +211,15 @@ use crate::shooter::HILL_FREE;
 /// the ungated `ListLobbies`). `Shot.normal` is `serde(default)` and
 /// deliberately not a bump trigger of its own: a peer that reads a zero
 /// normal lays its mark flat on the floor and plays the same game.
-pub const PROTO_VERSION: u16 = 17;
+///
+/// v18: grounded movement slows to 2 m/s while jumps retain their former
+/// horizontal reach. No frame changed shape, but a cached v17 client would
+/// predict 9 m/s on the ground against a v18 server, repeatedly collide with
+/// cover at a different point, and be corrected every state. The inverse
+/// direction is just as misleading: a v18 client would believe it moves at
+/// 2 m/s while the old server carries it at 9. The exact join gate makes the
+/// stale build reload instead of letting peers play different movement rules.
+pub const PROTO_VERSION: u16 = 18;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;

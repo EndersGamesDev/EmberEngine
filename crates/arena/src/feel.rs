@@ -1544,14 +1544,11 @@ pub fn gait(speed: f32) -> Option<Gait> {
 ///
 /// The legs are not a metronome: `puppet::advance_anim` advances the walk
 /// phase by 6 radians per metre and a plant falls every PI of them, so at
-/// this arena's 9 m/s walk the animation plants about 17 times a second and
-/// at a 14.4 m/s sprint about 27. Played straight that is a rattle, not a
-/// pair of boots (measured on a scripted client: 7 plants in 0.35 s). The
-/// speeds are the game's and are not up for negotiation here, so the ear
-/// gets a floor instead: a step sounds only if this body has been quiet for
-/// at least this long, and it still lands ON a plant, so the sound is on a
-/// foot that is going down. 0.34 s is about three steps a second, a brisk
-/// walk.
+/// this arena's 2 m/s walk the animation plants about 4 times a second and
+/// at a 3.2 m/s sprint about 6. The ear gets a floor instead: a step sounds
+/// only if this body has been quiet for at least this long, and it still lands
+/// ON a plant, so the sound is on a foot that is going down. 0.34 s is about
+/// three steps a second, a brisk walk.
 pub const WALK_GAP: f32 = 0.34;
 
 /// The same for a sprint: about four steps a second, and a fifth quicker
@@ -1817,10 +1814,7 @@ mod feel_tests {
             "{} cues over {phase} radians",
             cues.len()
         );
-        assert!(
-            cues.len() > 4,
-            "a second of walking is more than four steps"
-        );
+        assert!(cues.len() >= 4, "a second of walking reaches four steps");
     }
 
     /// A sprint is a different cue at a higher rate, and it is louder.
@@ -1892,13 +1886,11 @@ mod feel_tests {
     /// spin.
     ///
     /// `puppet::advance_anim` adds 6 radians of walk phase per metre and a
-    /// foot plants every PI of them, so this arena's 9 m/s walk plants
-    /// about 17 times a second and its 14.4 m/s sprint about 27. Played
-    /// plant for plant that is a machine gun, which is what a scripted
-    /// client recorded before this floor existed: 7 steps in 0.35 s. One
-    /// second of each gait is walked here through the same phase arithmetic
-    /// the animation uses, and what comes out is a step rate a boot could
-    /// make, with the sprint quicker than the walk.
+    /// foot plants every PI of them, so this arena's 2 m/s walk plants
+    /// about 4 times a second and its 3.2 m/s sprint about 6. One second of
+    /// each gait is walked here through the same phase arithmetic the
+    /// animation uses, and what comes out is a step rate a boot could make,
+    /// with the sprint quicker than the walk.
     #[test]
     fn the_cadence_is_boots_and_not_the_leg_animation() {
         let walk = stance_speed(false, false, false);
@@ -1925,7 +1917,7 @@ mod feel_tests {
             steps
         };
         let plants = plants_crossed(0.0, walk * 6.0);
-        assert!(plants > 15, "the legs really do plant that fast: {plants}");
+        assert!(plants >= 4, "the legs really do plant four times: {plants}");
         let heard_walking = sound(walk);
         let heard_running = sound(run);
         assert!(

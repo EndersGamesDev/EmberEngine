@@ -292,8 +292,8 @@ pub(crate) mod level_helpers {
     #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
     use crate::shooter::{
-        BODY_H_STAND, FIXED_DT, GameMode, Level, MAX_HP, MOVE_SPEED, Obstacle, PLAYER_R, PlayerIn,
-        STEP_UP, Sim, VStep, move_circle, step_vertical, support_height,
+        BODY_H_STAND, FIXED_DT, GameMode, Level, MAX_HP, Obstacle, PLAYER_R, PlayerIn, STEP_UP,
+        Sim, VStep, move_circle, movement_speed, step_vertical, support_height,
     };
     use std::collections::HashMap;
 
@@ -426,16 +426,17 @@ pub(crate) mod level_helpers {
         obs: &[Obstacle],
     ) -> Option<([f32; 2], f32)> {
         let (mut vy, mut grounded) = (0.0f32, true);
-        let per_tick = MOVE_SPEED * FIXED_DT;
         for _ in 0..ticks {
+            let jump = grounded && y < target_h - 1e-3;
+            let speed = movement_speed(pos, y, vy, jump, false, false, false, obs);
+            let per_tick = speed * FIXED_DT;
             // Intent scaled so the last step lands on the point instead of
             // overshooting it; move_circle clamps anything longer to unit.
             let mv = [
                 (target[0] - pos[0]) / per_tick,
                 (target[1] - pos[1]) / per_tick,
             ];
-            let jump = grounded && y < target_h - 1e-3;
-            pos = move_circle(pos, y, mv, MOVE_SPEED, FIXED_DT, obs);
+            pos = move_circle(pos, y, mv, speed, FIXED_DT, obs);
             let VStep {
                 y: ny,
                 vy: nvy,
@@ -460,13 +461,14 @@ pub(crate) mod level_helpers {
         ticks: u32,
         obs: &[Obstacle],
     ) -> Option<[f32; 2]> {
-        let per_tick = MOVE_SPEED * FIXED_DT;
         for _ in 0..ticks {
+            let speed = movement_speed(pos, 0.0, 0.0, false, false, false, false, obs);
+            let per_tick = speed * FIXED_DT;
             let mv = [
                 (target[0] - pos[0]) / per_tick,
                 (target[1] - pos[1]) / per_tick,
             ];
-            pos = move_circle(pos, 0.0, mv, MOVE_SPEED, FIXED_DT, obs);
+            pos = move_circle(pos, 0.0, mv, speed, FIXED_DT, obs);
             if dist(pos, target) < 0.05 {
                 return Some(pos);
             }
@@ -490,13 +492,15 @@ pub(crate) mod level_helpers {
         for tick in 0..300 {
             let ahead = (target[0] - pos[0]) * dir[0] + (target[1] - pos[1]) * dir[1];
             let mv = if ahead > 0.0 { dir } else { [0.0, 0.0] };
-            pos = move_circle(pos, y, mv, MOVE_SPEED, FIXED_DT, obs);
+            let jump = tick == 0;
+            let speed = movement_speed(pos, y, vy, jump, false, false, false, obs);
+            pos = move_circle(pos, y, mv, speed, FIXED_DT, obs);
             let VStep {
                 y: ny,
                 vy: nvy,
                 grounded,
                 ..
-            } = step_vertical(pos, y, vy, tick == 0, FIXED_DT, obs);
+            } = step_vertical(pos, y, vy, jump, FIXED_DT, obs);
             y = ny;
             vy = nvy;
             if tick > 0 && grounded {
@@ -595,7 +599,7 @@ mod tests {
     use super::*;
     use crate::shooter::{
         BODY_H_STAND, FIXED_DT, GameMode, MAP_FREIGHT_YARD, MOVE_SPEED, PLAYER_R, STEP_UP, Sim,
-        move_circle, stance_speed, step_vertical, support_height,
+        move_circle, movement_speed, step_vertical, support_height,
     };
 
     /// The frozen v18 Trench City, written once from `Level::trench_city()`
@@ -1207,7 +1211,6 @@ mod tests {
         let start = [0.0, dock.max[1] + 0.7];
         assert!(open_floor(start, obs), "{start:?} is not open floor");
         assert_eq!(support_height(start, PLAYER_R, 0.0, obs), 0.0);
-        let speed = stance_speed(true, false, false);
         let (mut pos, mut y, mut vy) = (start, 0.0f32, 0.0f32);
         let mut hits = Vec::new();
         let mut landed_on = None;
@@ -1217,8 +1220,10 @@ mod tests {
             } else {
                 [0.0, 0.0]
             };
+            let jump = tick == 0;
+            let speed = movement_speed(pos, y, vy, jump, true, false, false, obs);
             pos = move_circle(pos, y, mv, speed, FIXED_DT, obs);
-            let v = step_vertical(pos, y, vy, tick == 0, FIXED_DT, obs);
+            let v = step_vertical(pos, y, vy, jump, FIXED_DT, obs);
             y = v.y;
             vy = v.vy;
             if v.bonked == Some(k) {
@@ -1281,7 +1286,8 @@ mod tests {
             assert!(open_floor(start, obs), "{start:?} is not open floor");
             let (mut pos, mut y, mut vy, mut grounded) = (start, 0.0f32, 0.0f32, true);
             for _ in 0..200 {
-                pos = move_circle(pos, y, [0.0, -sign], MOVE_SPEED, FIXED_DT, obs);
+                let speed = movement_speed(pos, y, vy, grounded, false, false, false, obs);
+                pos = move_circle(pos, y, [0.0, -sign], speed, FIXED_DT, obs);
                 let v = step_vertical(pos, y, vy, grounded, FIXED_DT, obs);
                 y = v.y;
                 vy = v.vy;
