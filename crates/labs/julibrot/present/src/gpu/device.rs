@@ -19,6 +19,8 @@ use census::{
     arm_fence, arm_glitch_readback, create_fence, create_glitch_count_target,
     create_glitch_readback, encode_glitch_count, ensure_glitch_count_resources,
 };
+#[cfg(test)]
+use ledger::hold_rows;
 use ledger::{
     apply_hold_policy, clear_warp_plan, identity_rows, pose_is_finite, select_warp_source,
     warp_exposed_fraction,
@@ -36,7 +38,7 @@ use uniforms::{
 };
 use warp::{color, create_warp_pipeline, warp_load_color};
 #[cfg(test)]
-use warp::{planned_exposed_fraction, relief_redraw_clear_fraction};
+use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fraction};
 
 mod census;
 mod ledger;
@@ -54,6 +56,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStenci
 const FENCE_BYTES: u64 = 4;
 const HOT_HOMOGRAPHY_BYTE_OFFSET: u64 = 144;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
+const SCENE_GRID_BYTE_OFFSET: u64 = 0;
 const EXPOSURE_FACT_STEPS: u32 = 9;
 const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
 const RGBA8_BYTES_PER_TEXEL: u32 = 4;
