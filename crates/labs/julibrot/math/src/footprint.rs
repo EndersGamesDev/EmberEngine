@@ -323,11 +323,13 @@ fn displayed_height(height_scale: f64, record_height: f64) -> f64 {
     height_scale * (record_height + 2.0) * 0.5
 }
 
-/// The scene shader's primitive rule: every vertex must project, and none may be past the pole.
+/// The scene shader's primitive rule: every vertex must project, and none may pass the near limit.
 ///
-/// A vertex past the five-dimensional near limit is behind that camera, and the point the
-/// projective algebra returns for it is its mirror image. The shader refuses such a vertex, so a
-/// primitive holding one is not drawn and covers nothing.
+/// The limit cuts at `0.05 * distance_five`, so it discards the band still in front of the
+/// five-dimensional camera as well as everything past it. The shader refuses such a vertex and
+/// places it outside the clip volume with a zero validity, which leaves at most a hairline of the
+/// primitive along the edge joining its two surviving vertices; this mirror drops the primitive
+/// whole, which is the drawn rule that hairline approximates.
 fn drawn_triangle(triangle: [Option<([f64; 2], bool)>; 3]) -> Option<[[f64; 2]; 3]> {
     let mut points = [[0.0_f64; 2]; 3];
     let mut clamped = 0_u8;

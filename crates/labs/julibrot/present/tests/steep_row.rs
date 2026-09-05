@@ -1,16 +1,35 @@
-//! Scene placement at a fully rotated five-dimensional pose.
+#![allow(
+    clippy::suboptimal_flops,
+    reason = "the binary32 mirror keeps the shader's own operation order, which a fused multiply-add changes"
+)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "the vertex stage reads the same binary32 lanes this mirror narrows to"
+)]
+#![allow(
+    clippy::print_stdout,
+    reason = "the census tests report the counts their assertions bound"
+)]
+//! Scene placement at a fully rotated five-dimensional pose, read from the payloads present uploads.
 //!
 //! The row reproduced here is a saved view whose settled Final frame showed a curtain of vertical
-//! streaks and a flat slab with a sharp diagonal edge: a mixed slice, all ten camera angles
-//! nonzero, height scale 3.565, both perspective poles at eight, zoom zero. A settled frame may
+//! streaks and a flat slab with a straight diagonal edge: a mixed slice, all ten camera angles
+//! nonzero, height scale 3.565, both perspective limits at eight, zoom zero. A settled frame may
 //! not assert geometry the object does not have, so every drawn vertex has to be placed by the one
 //! projection the pose defines, and a vertex that projection does not define may not be drawn.
+//!
+//! The census below reads the binary32 `SceneUniform` and HOT lanes that present writes to the
+//! GPU, not only the binary64 pose kept beside them, so a difference between the two is a
+//! measurement rather than an assumption.
 
 use ember_julibrot_math::{
-    ObjectAngles, Plane, Pose, PoseMap, ViewControls, construct_plane, screen_to_plane,
+    ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, grid_screen, project_scene_point, project_scene_record_vertex,
+    CLASSIC_PALETTE, SceneUniform, camera_rotation, camera_rotation_pairs, camera_translation,
+    grid_screen, project_scene_point, project_scene_record_vertex, project_scene_vertex,
+    project_scene_vertex_exact, view_scale,
 };
 
 const EXTENT: [u32; 2] = [960, 540];
@@ -59,6 +78,12 @@ const fn steep_view() -> ViewControls {
     }
 }
 
+/// Builds the pose the way the app does.
+///
+/// `map_for` (`crates/labs/julibrot/app/src/state.rs:1576-1588`) takes the grid extent, computes
+/// `aspect` as the binary64 quotient of its two axes, calls `screen_to_plane` with the same five
+/// arguments, and turns `DegenerateViewMap` into `PoseMap::EdgeOn`. Nothing else in the app builds
+/// a map, and the escape grid is sampled through the packed rows of this one.
 fn pose_with(view: ViewControls) -> Pose {
     let object = steep_object();
     let plane = construct_plane(object).expect("the row's object angles construct a plane");
@@ -104,64 +129,276 @@ fn placement(pose: &Pose, screen: [f64; 2], record: [f32; 4]) -> Option<([f64; 2
         .expect("the fixture iteration cap is nonzero")
 }
 
-/// A sample lifted past the five-dimensional near limit is behind that camera and is not drawn.
+/// The exact binary32 payloads present writes for this row.
 ///
-/// The projective algebra still returns a point for such a vertex, mirrored through the pole. At
-/// this row the mirrored point is up to 148.8 px from anywhere the surface reaches, and the frame
-/// drew the whole band it sits in. Screen point (-480, -134.5) is grid sample (0, 135), whose
-/// fifth coordinate at the chart floor is +15.67 against a near limit of 7.6.
+/// `SceneUniform::new` is the constructor `submit_scene` uses
+/// (`crates/labs/julibrot/present/src/gpu/device/scene/submit.rs:49-58`), and the HOT lanes are
+/// the ones the HOT write fills (`crates/labs/julibrot/present/src/gpu/device/warp.rs:98-123`).
+struct Uploaded {
+    scene: SceneUniform,
+    rotation_pairs: [[f32; 4]; 5],
+    translation: [[f32; 4]; 2],
+    observer: [f32; 4],
+    scale: [f32; 4],
+}
+
+fn uploaded(pose: &Pose) -> Uploaded {
+    let scene = SceneUniform::new(
+        [pose.grid_width, pose.grid_height],
+        3,
+        ITERATION_CAP,
+        0,
+        pose.grid_width * pose.grid_height,
+        pose.plane,
+        pose.map,
+        CLASSIC_PALETTE,
+    )
+    .expect("the row's map packs into the scene payload");
+    Uploaded {
+        scene,
+        rotation_pairs: camera_rotation_pairs(pose.view.camera).expect("finite camera angles"),
+        translation: camera_translation(pose.view.camera_translation).expect("finite translation"),
+        observer: camera_rotation(pose.view.camera_yaw, pose.view.camera_pitch)
+            .expect("finite observer"),
+        scale: view_scale(
+            pose.view.height_scale,
+            pose.view.distance_five,
+            pose.view.distance_four,
+        )
+        .expect("finite view scale"),
+    }
+}
+
+/// The shader's own factor order: 45, 35, 25, 15, 34, 24, 23, 14, 13, 12, as `(i, j, lane, slot)`.
+const ROTATION_ORDER: [(usize, usize, usize, usize); 10] = [
+    (3, 4, 4, 2),
+    (2, 4, 4, 0),
+    (1, 4, 3, 2),
+    (0, 4, 3, 0),
+    (2, 3, 2, 2),
+    (1, 3, 2, 0),
+    (1, 2, 1, 2),
+    (0, 3, 1, 0),
+    (0, 2, 0, 2),
+    (0, 1, 0, 0),
+];
+
+/// The fifth coordinate the vertex stage builds, in the binary32 the shader uses.
+///
+/// `None` is the shader's own horizon test: a non-positive packed map denominator.
+fn uploaded_fifth(uploaded: &Uploaded, column: u32, row: u32, record_height: f32) -> Option<f32> {
+    let scene = &uploaded.scene;
+    let screen_x = grid_screen(column, scene.grid[0]) as f32;
+    let screen_y = grid_screen(row, scene.grid[1]) as f32;
+    let dot = |lane: [f32; 4]| lane[0] * screen_x + lane[1] * screen_y + lane[2];
+    let homogeneous = [
+        dot(scene.screen_to_plane_row_0),
+        dot(scene.screen_to_plane_row_1),
+        dot(scene.screen_to_plane_row_2),
+    ];
+    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
+        return None;
+    }
+    let offset = [
+        homogeneous[0] / homogeneous[2],
+        homogeneous[1] / homogeneous[2],
+    ];
+    if !offset.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    let chart_scale = 4.0 * scene.screen_to_plane_row_2[3] / scene.grid[0] as f32;
+    let mut point: [f32; 5] = core::array::from_fn(|axis| {
+        if axis == 4 {
+            uploaded.scale[0] * (record_height + 2.0) * 0.5
+        } else {
+            chart_scale * (offset[0] * scene.basis_u[axis] + offset[1] * scene.basis_v[axis])
+        }
+    });
+    for (first, second, lane, slot) in ROTATION_ORDER {
+        let cosine = uploaded.rotation_pairs[lane][slot];
+        let sine = uploaded.rotation_pairs[lane][slot + 1];
+        let a = cosine * point[first] - sine * point[second];
+        let b = sine * point[first] + cosine * point[second];
+        point[first] = a;
+        point[second] = b;
+    }
+    for axis in 0..4 {
+        point[axis] += uploaded.translation[0][axis];
+    }
+    point[4] += uploaded.translation[1][0];
+    Some(point[4])
+}
+
+/// The census the lane's numbers rest on, read from the uploaded binary32 payloads.
+///
+/// Every count here comes from `SceneUniform` and the HOT lanes and is compared against the same
+/// census taken in binary64 through the pose, so a field that differed between the two would show
+/// up as a differing count rather than as an assumption nobody checked.
 #[test]
-fn a_vertex_past_the_five_dimensional_pole_is_refused_at_the_steep_row() {
+fn the_uploaded_payloads_carry_the_same_census_as_the_pose() {
+    let pose = pose_with(steep_view());
+    let uploaded = uploaded(&pose);
+    assert_eq!(uploaded.scene.span[2], 0, "the row's map is not edge-on");
+    assert_eq!(uploaded.scene.screen_to_plane_row_2[3], 1.0, "apron one");
+    assert!((uploaded.scale[0] - 3.565).abs() < 1.0e-6);
+    assert_eq!(uploaded.scale[1], 8.0);
+    assert_eq!(uploaded.scale[2], 8.0);
+    assert_eq!(uploaded.observer, [1.0, 0.0, 1.0, 0.0]);
+
+    let limit = 0.95 * f64::from(uploaded.scale[1]);
+    let mut uploaded_horizon = 0_u64;
+    let mut uploaded_past = 0_u64;
+    let mut pose_horizon = 0_u64;
+    let mut pose_past = 0_u64;
+    let mut disagreements = 0_u64;
+    let mut total = 0_u64;
+    for row in (0..EXTENT[1]).step_by(3) {
+        for column in (0..EXTENT[0]).step_by(3) {
+            total += 1;
+            let screen = sample_screen(column, row);
+            let fifth = uploaded_fifth(&uploaded, column, row, -2.0);
+            let has_plane_point = map_denominator(&pose, screen) > 0.0;
+            let uploaded_over = fifth.is_some_and(|fifth| f64::from(fifth) > limit);
+            let pose_over = has_plane_point && project_scene_point(&pose, screen, -2.0).is_none();
+            uploaded_horizon += u64::from(fifth.is_none());
+            pose_horizon += u64::from(!has_plane_point);
+            uploaded_past += u64::from(uploaded_over);
+            pose_past += u64::from(pose_over);
+            if fifth.is_none() == has_plane_point || uploaded_over != pose_over {
+                disagreements += 1;
+            }
+        }
+    }
+    println!(
+        "uploaded: horizon {uploaded_horizon} past-limit {uploaded_past} of {total}; pose: horizon {pose_horizon} past-limit {pose_past}; disagreements {disagreements}"
+    );
+    assert!(
+        uploaded_horizon > 0 && uploaded_past > 0,
+        "the uploaded payload must reach both refusals, or the lane's numbers describe nothing"
+    );
+    assert!(
+        disagreements * 200 <= total,
+        "the uploaded payload and the pose disagree about {disagreements} of {total} samples"
+    );
+}
+
+/// A sample lifted past the near limit is refused, and the refusal is the limit's, not a shortcut.
+///
+/// The limit cuts at `0.05 * d₅`, so the band `(0.95 d₅, d₅)` is still in front of the
+/// five-dimensional camera and is discarded along with everything past `d₅`. Screen point
+/// (-480, -134.5) is grid sample (0, 135); at every record height below its lift is non-zero, so
+/// no identity shortcut lies on this path.
+#[test]
+fn a_vertex_past_the_five_dimensional_near_limit_is_refused_at_the_steep_row() {
     let pose = pose_with(steep_view());
     let screen = sample_screen(0, 135);
     assert!(
         map_denominator(&pose, screen) > 0.0,
-        "the sample has a plane point, so only the fifth pole can refuse it"
+        "the sample has a plane point, so only the near limit can refuse it"
     );
-    assert_eq!(
-        project_scene_point(&pose, screen, -2.0),
-        None,
-        "a vertex behind the five-dimensional camera may not be placed"
-    );
-    assert_eq!(project_scene_point(&pose, screen, 0.0), None);
-    assert_eq!(project_scene_point(&pose, screen, 2.0), None);
+    for record_height in [-1.0, 0.0, 1.0, 2.0] {
+        assert_eq!(
+            project_scene_point(&pose, screen, record_height),
+            None,
+            "a lifted vertex past the near limit may not be placed"
+        );
+    }
+    assert_eq!(project_scene_vertex_exact(&pose, screen, -2.0), None);
 }
 
-/// The refusal is the pole's, not a blanket one: the rest of the frame still projects exactly.
+/// The whole forward chain returns the screen point a zero-lift sample came from.
 ///
-/// Where the fifth pole is not passed, the forward projection of a sample at the chart floor is
-/// the screen-to-plane map's own inverse, so the round trip returns the screen point it started
-/// from. Measured over every one of the 518400 samples of this row, the worst such round trip is
-/// 6.4e-7 px.
+/// This is the claim the identity shortcut rests on, so it is measured through
+/// `project_scene_vertex_exact`, which takes no shortcut. Where the near limit is not passed the
+/// chain reproduces its own argument; where it is, it refuses.
 #[test]
-fn every_sample_the_steep_row_still_draws_round_trips_to_its_own_screen_point() {
+fn the_exact_chain_round_trips_every_zero_lift_sample_the_steep_row_draws() {
     let pose = pose_with(steep_view());
     let mut drawn = 0_u64;
     let mut worst = 0.0_f64;
     for row in (0..EXTENT[1]).step_by(7) {
         for column in (0..EXTENT[0]).step_by(7) {
             let screen = sample_screen(column, row);
-            let Some((point, _)) = placement(&pose, screen, FLOOR_ESCAPE_RECORD) else {
+            let Some((point, _)) = project_scene_vertex_exact(&pose, screen, -2.0) else {
                 continue;
             };
             drawn += 1;
             worst = worst.max((point[0] - screen[0]).hypot(point[1] - screen[1]));
         }
     }
-    assert!(drawn > 0, "the row draws no sample at all");
+    assert!(drawn > 5_000, "only {drawn} samples reached the chain");
     assert!(
         worst <= 1.0e-6,
-        "a drawn sample at the chart floor landed {worst} px from its own screen point"
+        "the exact chain moved a zero-lift sample {worst} px from its own screen point"
     );
+}
+
+/// The identity shortcut agrees with the chain it stands in for, wherever the stage runs that chain.
+///
+/// The vertex stage runs the forward chain per sample only when the height amplitude is nonzero;
+/// at amplitude zero it takes its own whole-frame flat return, which is the shader's rule and not
+/// a shortcut standing in for anything. So the agreement is asserted on the lifting poses, and the
+/// flat poses are counted instead: the number printed is how many samples the chain would refuse
+/// at the four-dimensional or observer limit while the flat chart draws them.
+#[test]
+fn the_zero_lift_shortcut_agrees_with_the_exact_chain_wherever_the_stage_runs_it() {
+    let mut yaw_only = ViewControls::NEUTRAL;
+    yaw_only.camera[0] = 0.6;
+    yaw_only.height_scale = 3.565;
+    let mut flattened = steep_view();
+    flattened.height_scale = 0.0;
+    let mut lifted_identity = ViewControls::NEUTRAL;
+    lifted_identity.height_scale = 3.565;
+    let table = [
+        ("identity lifted", lifted_identity),
+        ("yaw only", yaw_only),
+        ("the steep row", steep_view()),
+        ("identity flat", ViewControls::NEUTRAL),
+        ("the steep row with no height", flattened),
+    ];
+    for (name, view) in table {
+        let pose = pose_with(view);
+        let lifting = view.height_scale != 0.0;
+        let mut compared = 0_u64;
+        let mut flat_only = 0_u64;
+        for row in (0..EXTENT[1]).step_by(29) {
+            for column in (0..EXTENT[0]).step_by(31) {
+                let screen = sample_screen(column, row);
+                let shortcut = project_scene_vertex(&pose, screen, -2.0);
+                let exact = project_scene_vertex_exact(&pose, screen, -2.0);
+                match (shortcut, exact) {
+                    (Some((shortcut, _)), Some((exact, _))) => {
+                        compared += 1;
+                        let separation = (shortcut[0] - exact[0]).hypot(shortcut[1] - exact[1]);
+                        assert!(
+                            separation <= 1.0e-6,
+                            "{name}: the shortcut and the chain differ by {separation} px"
+                        );
+                    }
+                    (None, None) => {}
+                    (Some(_), None) => {
+                        flat_only += 1;
+                        assert!(
+                            !lifting,
+                            "{name}: the shortcut placed a vertex the chain refuses"
+                        );
+                    }
+                    (None, Some(_)) => {
+                        panic!("{name}: the chain placed a vertex the shortcut refuses")
+                    }
+                }
+            }
+        }
+        println!("{name}: compared {compared}, drawn flat but refused by the chain {flat_only}");
+        assert!(compared > 0, "{name}: the pose drew nothing to compare");
+    }
 }
 
 /// A horizon record has no plane point, so it has no vertex, so nothing is drawn for it.
 ///
 /// Placing it at its flat screen point put a slab at the near depth over relief that is in front
-/// of it; at this row 17560 of 518400 samples (3.39%) are horizon, a wedge in the lower left of
-/// the frame whose straight boundary is the plane's own horizon line. The scene pass clears to the
-/// exterior colour those samples carry, so refusing the vertex changes nothing while the
-/// projection is the identity and removes the slab once it is not.
+/// of it. The scene pass clears to the exterior colour those samples carry, so refusing the vertex
+/// changes nothing while the projection is the identity and removes the slab once it is not.
 #[test]
 fn a_horizon_record_is_refused_rather_than_placed_flat() {
     let pose = pose_with(steep_view());
@@ -178,86 +415,71 @@ fn a_horizon_record_is_refused_rather_than_placed_flat() {
     assert!(placement(&pose, inside, FLOOR_ESCAPE_RECORD).is_some());
 }
 
-/// An in-set sample and an escaped neighbour of the same height are placed by the same projection.
-///
-/// An in-set sample's relief height is the chart floor, and so is an escaped sample that left the
-/// disc on its first iteration: the two vertices are the same point of the same surface. No pose
-/// may separate them, and no pose may place one of them flat while it projects the other.
+/// An in-set sample is placed by the chain like any other record, not by a flat rule of its own.
 #[test]
-fn an_in_set_vertex_shares_its_escaped_neighbour_s_projection_over_the_pose_table() {
-    let mut yaw_only = ViewControls::NEUTRAL;
-    yaw_only.camera[0] = 0.6;
-    yaw_only.height_scale = 3.565;
-    let mut flattened = steep_view();
-    flattened.height_scale = 0.0;
-    let table = [
-        ("identity", ViewControls::NEUTRAL),
-        ("yaw only", yaw_only),
-        ("the steep row", steep_view()),
-        ("the steep row with no height", flattened),
-    ];
-    for (name, view) in table {
-        let pose = pose_with(view);
-        let mut compared = 0_u64;
-        for row in (0..EXTENT[1]).step_by(29) {
-            for column in (0..EXTENT[0]).step_by(31) {
-                let screen = sample_screen(column, row);
-                let interior = placement(&pose, screen, IN_SET_RECORD);
-                let escaped = placement(&pose, screen, FLOOR_ESCAPE_RECORD);
-                match (interior, escaped) {
-                    (Some((interior, _)), Some((escaped, _))) => {
-                        compared += 1;
-                        let separation = (interior[0] - escaped[0]).hypot(interior[1] - escaped[1]);
-                        assert!(
-                            separation <= 1.0,
-                            "{name}: an in-set vertex and its escaped neighbour of the same height are {separation} px apart, more than one cell"
-                        );
-                    }
-                    (None, None) => {}
-                    _ => panic!(
-                        "{name}: one of two vertices of the same height was drawn and the other refused at {screen:?}"
-                    ),
-                }
-            }
-        }
-        assert!(compared > 0, "{name}: the pose drew nothing to compare");
-    }
-}
-
-/// The relief this row asks for is a curtain, and that part of the picture is honest.
-///
-/// One iteration of escape count moves a vertex 0.19 to 3.99 px across the frame at height scale
-/// 3.565, and the whole height domain travels 95 to 1350 px. Two adjacent samples six iterations
-/// apart therefore stand about twelve pixels apart on screen. That is the height control doing
-/// what it was asked, not a defect, and it is why the frame is mostly wall.
-#[test]
-fn the_steep_row_s_relief_travel_is_the_height_control_and_stays_finite() {
+fn an_in_set_vertex_is_placed_by_the_chain_like_any_other_record() {
     let pose = pose_with(steep_view());
-    let screen = sample_screen(EXTENT[0] / 2, EXTENT[1] / 2);
-    let floor = placement(&pose, screen, FLOOR_ESCAPE_RECORD).expect("the frame centre draws");
-    let one_iteration = project_scene_point(&pose, screen, -2.0 + 4.0 / f64::from(ITERATION_CAP))
-        .expect("one iteration above the floor draws");
-    let travel = (one_iteration[0] - floor.0[0]).hypot(one_iteration[1] - floor.0[1]);
+    let mut compared = 0_u64;
+    for row in (0..EXTENT[1]).step_by(29) {
+        for column in (0..EXTENT[0]).step_by(31) {
+            let screen = sample_screen(column, row);
+            let interior = placement(&pose, screen, IN_SET_RECORD);
+            let exact = project_scene_vertex_exact(&pose, screen, -2.0);
+            assert_eq!(
+                interior.is_some(),
+                exact.is_some(),
+                "an in-set vertex is drawn exactly when the chain places it"
+            );
+            let (Some((interior, _)), Some((exact, _))) = (interior, exact) else {
+                continue;
+            };
+            compared += 1;
+            let separation = (interior[0] - exact[0]).hypot(interior[1] - exact[1]);
+            assert!(
+                separation <= 1.0e-6,
+                "an in-set vertex landed {separation} px from the chain's answer"
+            );
+            let escaped = placement(&pose, screen, FLOOR_ESCAPE_RECORD)
+                .expect("the escaped floor neighbour shares the in-set height");
+            assert!(
+                (interior[0] - escaped.0[0]).hypot(interior[1] - escaped.0[1]) <= 1.0e-9,
+                "two records of the same height were placed apart"
+            );
+        }
+    }
     assert!(
-        (2.0..2.02).contains(&travel),
-        "one iteration moved the frame centre {travel} px"
+        compared > 100,
+        "only {compared} in-set vertices were placed"
     );
 }
 
-/// A flat chart keeps every sample exactly where the screen-to-plane map put it.
+/// A flat chart keeps every sample where the map put it, and the chain agrees that it should.
 #[test]
-fn a_flat_chart_places_every_record_at_its_own_screen_point() {
+fn a_flat_chart_agrees_with_the_chain_that_every_sample_stays_put() {
     let mut view = steep_view();
     view.height_scale = 0.0;
     let pose = pose_with(view);
+    let mut compared = 0_u64;
     for row in (0..EXTENT[1]).step_by(53) {
         for column in (0..EXTENT[0]).step_by(59) {
             let screen = sample_screen(column, row);
             for record in [FLOOR_ESCAPE_RECORD, IN_SET_RECORD, HORIZON_RECORD] {
                 assert_eq!(placement(&pose, screen, record), Some((screen, 1.0)));
             }
+            if let Some((exact, _)) = project_scene_vertex_exact(&pose, screen, -2.0) {
+                compared += 1;
+                let separation = (exact[0] - screen[0]).hypot(exact[1] - screen[1]);
+                assert!(
+                    separation <= 1.0e-6,
+                    "the flat early return claims an identity the chain misses by {separation} px"
+                );
+            }
         }
     }
+    assert!(
+        compared > 0,
+        "the flat chart placed nothing through the chain"
+    );
 }
 
 /// The plane the pose defines is real: the fixture is not silently edge-on.
@@ -268,7 +490,6 @@ fn the_steep_row_fixture_has_an_invertible_screen_to_plane_map() {
         panic!("the steep row's map is invertible, so the fixture must not be edge-on")
     };
     assert_eq!(map.apron_scale, 1.0);
-    let plane: Plane = pose.plane;
-    assert!(plane.basis_u.iter().all(|value| value.is_finite()));
-    assert!(plane.basis_v.iter().all(|value| value.is_finite()));
+    assert!(pose.plane.basis_u.iter().all(|value| value.is_finite()));
+    assert!(pose.plane.basis_v.iter().all(|value| value.is_finite()));
 }

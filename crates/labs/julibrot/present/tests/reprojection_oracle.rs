@@ -1330,7 +1330,7 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
     assert_eq!(camera[8], 0.0, "q35");
 
     for (distance_five, expected_clear_only, expected_relief_redraws, expected_homographies) in
-        [(8.0, 0, 89, 1), (2.0, 0, 85, 5)]
+        [(8.0, 24, 65, 1), (2.0, 81, 9, 0)]
     {
         let flat_view = ViewControls {
             camera,

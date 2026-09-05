@@ -136,11 +136,12 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let ambient = ambient_camera(Ambient5(display, height));
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    // A lifted sample past the five-dimensional near limit is behind that camera. The projective
-    // algebra still returns a point for it, mirrored through the pole, and the former clamp drew
-    // that mirror image; the four-dimensional and observer poles below already refuse instead. A
-    // refused vertex takes its whole primitive with it, so the frame shows sky rather than a
-    // surface the object does not have there.
+    // A lifted sample past the 0.05*d5 near limit is refused. The band (0.95*d5, d5) is still in
+    // FRONT of the five-dimensional camera and is discarded with the rest: the limit is a near
+    // plane, not the pole, and it is where the perspective magnification passes twenty. Past d5
+    // itself the projective algebra returns the point's mirror image, which the former clamp drew.
+    // Refusing the whole band matches what the four-dimensional and observer limits below already
+    // do, and shows sky rather than a surface at a position the record field did not give.
     let denominator_five = distance_five - ambient.fifth;
     if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
