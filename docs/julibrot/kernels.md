@@ -24,6 +24,10 @@ No kernel result authors simulation, collision, protocol, reconciliation, or gam
 
 This lane records the stage-0 tile-job model as wire-free kernels policy with no dispatch or delivered-value change: source-screen geometry, content/MAIN/reference identity, paired value-and-reconstruction publication, reference leases, demand ordering, and resident-budget arithmetic follow “Where rendered tiles live and how the chart indexes them”, “Per-tile refinement, backdrop, and scheduling”, “Device-floor resource model”, “Cost model and eviction”, and migration stage 0 in [the tiled-reprojection design](tiled-reprojection.md). The implementation remains self-contained so later app and presentation work can adopt it additively.
 
+### Native conformance decisions — 2026-09-05
+
+Final conformance constructs the Deterministic and PictureFast reference policies independently before running separate shallow, perturbation, category-colour, clear-colour, and warp helpers; the highest paired zoom is the greatest plan that also admits Deterministic's sixteen verification digits. The boundary corpus constructs its records through the real reference builder and covers a later escape, a rebase, and both normalization directions while retaining the four-times-observed error bound on its tight rows; these are native mirrors, not browser readback evidence.
+
 ## 2. Design and arithmetic
 
 ### 2.1 Coordinates, planes, and pixels

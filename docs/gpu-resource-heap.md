@@ -86,6 +86,8 @@ The dual entry's leaked-differences ledger format is retained here: every diverg
 
 DATA and IMAGE uploads are rectangular `write_texture` operations equivalent to `texSubImage3D` regions, descriptor edits are coalesced `write_buffer` ranges aligned to complete 16-byte records, and the frame uniform is one fixed-size write per rendered frame.
 
+Executor decisions dated 2026-09-05 retain square-padded DATA uploads as the default and expose an opt-in valid-row path whose native oracle reduces a 4,096-record reference from 1,048,576 uploaded bytes to 65,536; browser layout and readback proof remains required before enablement. Selected dispatch headers are compared once per page range, metadata tables pack through retained executor scratch, resource-word publication does not repack metadata, and one bounded set of SCRATCH views plus fixed attachment slots is reused across pages.
+
 Writes issued before a submission are ordered before its draws, but updating a region still read by queued work can serialize staging, driver copies, and raster work; large streaming uploads therefore target newly allocated regions and publish their descriptors only after the copy is queued, while in-place hot updates are labeled as potential stalls.
 
 The uniforms-only-per-frame law forbids rebuilding dynamic descriptor or handle streams every frame: frame state alone is rewritten per frame, descriptors change on allocation or content relocation, and Benchmark B's heap handles live in a static instance buffer created at scene setup.
