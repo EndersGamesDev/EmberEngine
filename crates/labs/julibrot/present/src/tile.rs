@@ -70,6 +70,8 @@ pub struct TileContentKey {
     pub main_generation: u32,
     /// Delivered iteration-cap semantics.
     pub iteration_cap: u32,
+    /// Formula semantics used to interpret the value records.
+    pub formula_abi: u32,
     /// Precision policy used to produce values.
     pub precision_mode: PrecisionMode,
     /// Existing escape-record interpretation version.
@@ -684,6 +686,7 @@ mod tests {
             slice: slice(),
             main_generation: 4,
             iteration_cap: 512,
+            formula_abi: 1,
             precision_mode: PrecisionMode::PictureFast,
             record_abi: 1,
             reference_generation: 4,

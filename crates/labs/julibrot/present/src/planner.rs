@@ -372,13 +372,9 @@ impl ErrorSamples {
         if self.len == 0 {
             return None;
         }
-        let percentile_index = self
-            .len
-            .saturating_mul(95)
-            .div_ceil(100)
-            .saturating_sub(1);
-        let (_, percentile, _) = self.values[..self.len]
-            .select_nth_unstable_by(percentile_index, f64::total_cmp);
+        let percentile_index = self.len.saturating_mul(95).div_ceil(100).saturating_sub(1);
+        let (_, percentile, _) =
+            self.values[..self.len].select_nth_unstable_by(percentile_index, f64::total_cmp);
         Some((self.maximum, *percentile))
     }
 }

@@ -329,6 +329,17 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
     assert_eq!(plan.rows, identity_rows());
     assert!(!plan.exposed);
 
+    let mut geometric = plan;
+    geometric.kind = WarpKind::AnchorHomography;
+    let mut former_source = WarpSourceSlot::default();
+    former_source.write_hot(&geometric, false);
+    assert!(
+        former_source
+            .frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a pre-transition geometric slot cannot discover the held frame"
+    );
+
     let mut source = WarpSourceSlot::default();
     source.write_hot(&plan, false);
     assert_eq!(
@@ -488,12 +499,11 @@ enum ComposedPixel {
     Main,
 }
 
-/// Runs the pass's real depth and stencil state over one pixel, in draw order.
+/// Runs the pass's real depth-range and stencil state over one pixel, in draw order.
 ///
 /// Nothing here knows the intended answer: it reads `scene_draw_order`, `scene_stencil`,
 /// `stencil_reference` and `SCENE_DEPTH_COMPARE` — the same values the pipelines and the
-/// encoder are built from — and applies the fixed-function rules to them. Restore the old
-/// backdrop-first, stencil-free composition and the interior cases below fail.
+/// encoder are built from — and applies the fixed-function rules to them.
 fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
     let mut colour = ComposedPixel::Sky;
     let mut depth = 1.0_f32;
@@ -509,6 +519,8 @@ fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
         let state = scene_stencil(*layer);
         let reference = stencil_reference(*layer);
         let face = state.front;
+        let [minimum_depth, maximum_depth] = scene_depth_range(*layer, backdrop.is_some());
+        let fragment = (maximum_depth - minimum_depth).mul_add(fragment, minimum_depth);
         let operation = if !compares(
             face.compare,
             f64::from(reference & state.read_mask),
@@ -562,10 +574,9 @@ fn stencil_write(operation: wgpu::StencilOperation, reference: u32, stored: u32)
 
 /// The composition rule, driven through the state the pass actually carries.
 ///
-/// The two grids are independent samplings of the same field, so the coarse backdrop's chords
-/// land nearer than the fine surface over large areas. Depth alone therefore lets the backdrop
-/// punch through the interior of the picture; the stencil is what makes the main grid own every
-/// pixel it reaches, and the backdrop own exactly the rest.
+/// The two grids are independent samplings of the same field, so the coarse backdrop is assigned
+/// the farther half of the viewport depth range and the main grid the nearer half. Each grid still
+/// depth-orders its own folds, while the main owns every pixel it reaches.
 #[test]
 fn the_backdrop_shows_only_where_the_main_grid_has_no_fragment() {
     for main in [0.1_f32, 0.5, 0.9] {
@@ -601,6 +612,14 @@ fn the_backdrop_is_ordered_against_itself_by_depth() {
     assert_eq!(scene_stencil(SceneLayer::Backdrop).write_mask, 0);
     assert!(compares(SCENE_DEPTH_COMPARE, 0.25, 0.75));
     assert!(!compares(SCENE_DEPTH_COMPARE, 0.75, 0.25));
+}
+
+#[test]
+fn backdrop_then_main_uses_disjoint_depth_ranges() {
+    assert_eq!(scene_draw_order(true), [SceneLayer::Backdrop, SceneLayer::Main]);
+    assert_eq!(scene_depth_range(SceneLayer::Backdrop, true), [0.5, 1.0]);
+    assert_eq!(scene_depth_range(SceneLayer::Main, true), [0.0, 0.5]);
+    assert_eq!(scene_depth_range(SceneLayer::Main, false), [0.0, 1.0]);
 }
 
 /// The status-one census counts the MAIN grid's records, with or without a backdrop attached.

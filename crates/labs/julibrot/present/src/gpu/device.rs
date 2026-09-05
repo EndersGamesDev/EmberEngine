@@ -62,21 +62,39 @@ enum SceneLayer {
     Backdrop,
     Main,
 }
-const MAIN_THEN_BACKDROP: [SceneLayer; 2] = [SceneLayer::Main, SceneLayer::Backdrop];
+const BACKDROP_THEN_MAIN: [SceneLayer; 2] = [SceneLayer::Backdrop, SceneLayer::Main];
 const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
 
-/// The main grid is drawn FIRST and the backdrop second.
+/// The coarse backdrop is drawn first and the main grid over it.
 ///
-/// Depth alone cannot compose the two: they are independent samplings of the same escape-time
-/// field, their record heights are uncorrelated, and the coarse backdrop's long chords land nearer
-/// than the fine surface over large areas, so a depth test admits the backdrop straight through the
-/// interior of the picture. The stencil decides instead — see [`scene_stencil`].
+/// The depth ranges keep the independently sampled layers ordered while preserving depth ordering
+/// inside each mesh; see [`scene_depth_range`]. The stencil separately records main coverage.
 const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
     if has_backdrop {
-        &MAIN_THEN_BACKDROP
+        &BACKDROP_THEN_MAIN
     } else {
         &MAIN_ONLY
     }
+}
+
+/// Disjoint viewport-depth ranges make every main fragment at least as near as every backdrop
+/// fragment without disabling depth ordering inside either mesh.
+const fn scene_depth_range(layer: SceneLayer, has_backdrop: bool) -> [f32; 2] {
+    if !has_backdrop {
+        return [0.0, 1.0];
+    }
+    match layer {
+        SceneLayer::Backdrop => [0.5, 1.0],
+        SceneLayer::Main => [0.0, 0.5],
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "WebGPU viewport dimensions are f32 and device texture extents are below exact f32 integer range"
+)]
+const fn viewport_dimension(value: u32) -> f32 {
+    value as f32
 }
 
 /// The stencil value a drawn main-grid fragment leaves behind, and so the value the backdrop is
@@ -94,11 +112,9 @@ const fn stencil_reference(layer: SceneLayer) -> u32 {
 
 /// The composition rule, as the fixed-function state that enforces it.
 ///
-/// The main grid stamps every fragment it draws, whatever its depth; the backdrop is admitted only
-/// where the stamp is absent and stamps nothing itself. So the backdrop is visible exactly where
-/// the main grid has no fragment — its sky, its discarded records, and the frame outside its own
-/// extent — and never over a drawn main record. Within each layer the depth buffer still orders the
-/// layer against itself, so the backdrop keeps its own internal ordering.
+/// The main grid stamps every fragment it draws and the backdrop stamps nothing. The disjoint
+/// viewport-depth ranges make the later main grid win wherever it draws; the backdrop remains in
+/// its holes. Within each layer the depth buffer still orders the layer against itself.
 const fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
     let face = match layer {
         SceneLayer::Main => wgpu::StencilFaceState {
@@ -218,10 +234,12 @@ impl WarpSourceSlot {
         retained: Option<&'a crate::SceneFrame>,
         held: Option<&'a crate::state::HeldScene>,
     ) -> Option<&'a crate::SceneFrame> {
-        select_warp_source(
-            self.planned,
-            retained.or_else(|| held.map(|held| &held.frame)),
-        )
+        let source = if self.held_stale {
+            held.map(|held| &held.frame)
+        } else {
+            retained
+        };
+        select_warp_source(self.planned, source)
     }
     fn relief_frame<'a>(
         &self,

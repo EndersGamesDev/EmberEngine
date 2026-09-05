@@ -313,7 +313,7 @@ Math defines the twenty-scalar `ViewControls`, `ObjectAngles`, `Homography`, `Po
 
 `FrameState<'a>` is `{ surface_view:&'a wgpu::TextureView,canvas_width:u32,canvas_height:u32,refresh_id:u64,now_ms:f64 }`; `FrameReceipt` is `{ refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,precision_mode:&'static str,status:PresentStatus }`, both are CPU-only, and receipt contains no wall before fence completion.
 
-`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` observes each pending fence at most once per call and never waits, while `Presenter::facts(&self)->PresentFacts` is an immutable, non-polling snapshot.
+`Presenter::poll_fixed(&mut self,now_ms:f64)->PresentEvents` observes each pending fence at most once per call and returns at most two ordered events in fixed storage; the existing `Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` is the source-compatible app adapter, while `Presenter::facts(&self)->PresentFacts` is an immutable, non-polling snapshot.
 
 `SceneFrame` stores the scene id, the pose at which it was sampled, palette, cap, level, extent, texture index, precision provenance, and measurement. `WarpPlan` stores its three packed rows, source validity, kind, chart residual, measured max and p95 error, and the exact source scene and texture identities it was solved against.
 
