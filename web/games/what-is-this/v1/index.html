@@ -2060,7 +2060,8 @@
     });
     runAgainButton.addEventListener('click', prepareForGuess);
 
-    prepareForGuess();
+    if (JULIBROT_STAGE_ONLY) beginRun(null);
+    else prepareForGuess();
   </script>
 </body>
 </html>
