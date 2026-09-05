@@ -358,10 +358,12 @@ impl ErrorSamples {
         Some(())
     }
 
+    #[cfg(test)]
     const fn len(&self) -> usize {
         self.len
     }
 
+    #[cfg(test)]
     fn iter(&self) -> core::slice::Iter<'_, f64> {
         self.values[..self.len].iter()
     }
