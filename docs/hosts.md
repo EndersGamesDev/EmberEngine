@@ -187,6 +187,10 @@ The on-host units from `install-watchdog.sh` pass the name through `EMBER_HOST_N
 
 Catalog entries without a `kind` are hosted games; `kind: "lab"` means the entry has no host, protocol, or handover fields, opens its live relative path directly from the hub, and is excluded from host discovery and lobby listing.
 
+### Julibrot slide diagnostic stage
+
+The what-is-this v1 page includes `stage.julibrot-slide.v1`, a same-origin browser stage that loads `labs/julibrot/`, waits for a settled Final scene, drives the lab's existing DOM controls with ordinary `input` or `change` events, and reads the lab's rendered Facts list once per animation frame. It runs fixed object-angle, height-at-two-perspective-distances, deep-scale, A-to-B morph, iteration-cap, exact 2,000 ms hold, and 30-step alternating-slider scenarios. The report records bounded per-scenario samples for game-side step wall, settle-to-paint, frame exposure and the worker, credit, transfer, upload, dispatch and fence walls the lab currently publishes; an absent fact stays explicitly unavailable. A browser below the lab's WebGL2 floor records the lab's refusal reason as an unavailable stage rather than failing the diagnostic game.
+
 Builds belong on a compute server while the workstation holding the Pages push key performs the publish. On the server, from the same checkout, run:
 
 ```sh
