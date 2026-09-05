@@ -9,6 +9,7 @@
     clippy::too_many_lines
 )]
 
+use std::cell::RefCell;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -17,8 +18,8 @@ use wgpu::util::DeviceExt as _;
 
 use crate::span::SpanIdentity;
 use crate::{
-    DataSpan, DialectLimits, DispatchError, DispatchPlan, RegisteredKernel, SpanArena, SpanError,
-    SpanPlan, StaticHeaders,
+    DataSpan, DialectLimits, DispatchError, DispatchPlan, PackedDescriptor, RegisteredKernel,
+    SpanArena, SpanError, SpanPlan, StaticHeaders,
 };
 
 const RESOURCE_SLOTS: usize = 8;
@@ -36,6 +37,49 @@ pub struct GpuKernelExecutorConfig {
     pub max_header_pages: u32,
     pub max_header_sets: u32,
     pub kernel_uniform_bytes: u32,
+}
+
+/// Capability-gated DATA upload layout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SpanUploadMode {
+    /// Preserve the established one-full-square-staging-page upload.
+    #[default]
+    PaddedPages,
+    /// Upload only complete logical rows plus an optional exact-width tail row.
+    ValidRows,
+}
+
+#[derive(Debug)]
+struct MetadataPackingScratch {
+    descriptors: Vec<PackedDescriptor>,
+    directory_words: Vec<u32>,
+}
+
+#[derive(Debug)]
+struct RetainedPageScratch<T> {
+    views: Vec<T>,
+}
+
+impl<T> RetainedPageScratch<T> {
+    fn new(views: Vec<T>) -> Result<Self, ExecutorError> {
+        if views.is_empty() || views.len() > 4 {
+            return Err(ExecutorError::Contract(
+                "page scratch requires between one and four retained views",
+            ));
+        }
+        Ok(Self { views })
+    }
+
+    fn selected(&self, count: usize) -> Result<[Option<&T>; 4], ExecutorError> {
+        if count == 0 || count > self.views.len() {
+            return Err(ExecutorError::Contract(
+                "page output count exceeds retained scratch views",
+            ));
+        }
+        Ok(std::array::from_fn(|index| {
+            (index < count).then(|| &self.views[index])
+        }))
+    }
 }
 
 /// Created capacity and byte facts; none are inferred measurements.
@@ -206,11 +250,11 @@ impl HeaderReservations {
         })
     }
 
-    fn resolve<'a>(
+    fn resolve_set<'a>(
         &'a self,
         executor: &Arc<()>,
         handle: &HeaderSetHandle,
-        selector: DispatchSelector,
+        set: u32,
     ) -> Result<(&'a StaticHeaders, u32), DispatchError> {
         if !Arc::ptr_eq(executor, &handle.owner) {
             return Err(DispatchError::ForeignHeaderSet);
@@ -224,13 +268,30 @@ impl HeaderReservations {
             .as_ref()
             .filter(|_| entry.generation == handle.generation)
             .ok_or(DispatchError::StaleHeaderSet)?;
-        if selector.set >= reservation.headers.len() as u32 {
+        if set >= reservation.headers.len() as u32 {
             return Err(DispatchError::HeaderSetSelection {
-                set: selector.set,
+                set,
                 set_count: reservation.headers.len() as u32,
             });
         }
-        let headers = &reservation.headers[selector.set as usize];
+        let headers = &reservation.headers[set as usize];
+        if handle.set_count != reservation.headers.len() as u32
+            || handle.base_offset != reservation.first_set * self.max_header_pages * self.stride
+            || handle.stride != self.stride
+        {
+            return Err(DispatchError::StaleHeaderSet);
+        }
+        let absolute_offset = (reservation.first_set + set) * self.max_header_pages * self.stride;
+        Ok((headers, absolute_offset))
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        executor: &Arc<()>,
+        handle: &HeaderSetHandle,
+        selector: DispatchSelector,
+    ) -> Result<(&'a StaticHeaders, u32), DispatchError> {
+        let (headers, set_offset) = self.resolve_set(executor, handle, selector.set)?;
         if selector.page >= headers.offsets.len() as u32 {
             return Err(DispatchError::HeaderPageSelection {
                 set: selector.set,
@@ -238,15 +299,7 @@ impl HeaderReservations {
                 page_count: headers.offsets.len() as u32,
             });
         }
-        if handle.set_count != reservation.headers.len() as u32
-            || handle.base_offset != reservation.first_set * self.max_header_pages * self.stride
-            || handle.stride != self.stride
-        {
-            return Err(DispatchError::StaleHeaderSet);
-        }
-        let absolute_offset =
-            (reservation.first_set + selector.set) * self.max_header_pages * self.stride
-                + headers.offsets[selector.page as usize];
+        let absolute_offset = set_offset + headers.offsets[selector.page as usize];
         Ok((headers, absolute_offset))
     }
 
@@ -392,6 +445,7 @@ pub struct GpuKernelExecutor {
     arena: SpanArena,
     data: wgpu::Texture,
     scratch: wgpu::Texture,
+    page_scratch: RetainedPageScratch<wgpu::TextureView>,
     data_view: Arc<wgpu::TextureView>,
     heap_layout: wgpu::BindGroupLayout,
     heap_group: wgpu::BindGroup,
@@ -404,6 +458,8 @@ pub struct GpuKernelExecutor {
     header_owner: Arc<()>,
     header_reservations: HeaderReservations,
     compatibility_header: Option<(StaticHeaders, HeaderSetHandle)>,
+    span_upload_mode: SpanUploadMode,
+    metadata_packing: RefCell<MetadataPackingScratch>,
     next_kernel_id: u64,
 }
 
@@ -454,17 +510,34 @@ impl GpuKernelExecutor {
             wgpu::TextureFormat::Rgba32Float,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
+        let page_scratch = RetainedPageScratch::new(
+            (0..config.scratch_layers)
+                .map(|layer| {
+                    scratch.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("heap executor retained one-layer SCRATCH attachment"),
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: layer,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+        )?;
+        let mut packed_descriptors = Vec::with_capacity(config.descriptor_capacity as usize);
+        arena.heap().pack_table_into(&mut packed_descriptors);
+        let mut packed_directory = Vec::with_capacity(config.directory_binding_bytes as usize / 4);
+        arena.directory().pack_words_into(&mut packed_directory);
         let descriptor_buffer = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("heap executor descriptor UBO"),
-                contents: bytemuck::cast_slice(&arena.heap().packed_table()),
+                contents: bytemuck::cast_slice(&packed_descriptors),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         ));
         let directory_buffer = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("heap executor span directory UBO"),
-                contents: bytemuck::cast_slice(&arena.directory().packed_words()),
+                contents: bytemuck::cast_slice(&packed_directory),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         ));
@@ -542,6 +615,7 @@ impl GpuKernelExecutor {
             arena,
             data,
             scratch,
+            page_scratch,
             data_view,
             heap_layout,
             heap_group,
@@ -558,8 +632,24 @@ impl GpuKernelExecutor {
                 header_stride,
             ),
             compatibility_header: None,
+            span_upload_mode: SpanUploadMode::PaddedPages,
+            metadata_packing: RefCell::new(MetadataPackingScratch {
+                descriptors: packed_descriptors,
+                directory_words: packed_directory,
+            }),
             next_kernel_id: 1,
         })
+    }
+
+    /// Selects the capability-gated DATA upload layout for later `write_span` calls.
+    pub const fn set_span_upload_mode(&mut self, mode: SpanUploadMode) {
+        self.span_upload_mode = mode;
+    }
+
+    /// Returns the selected DATA upload layout.
+    #[must_use]
+    pub const fn span_upload_mode(&self) -> SpanUploadMode {
+        self.span_upload_mode
     }
 
     #[must_use]
@@ -732,6 +822,9 @@ impl GpuKernelExecutor {
             });
         }
         let side = span.page_records.isqrt();
+        if side == 0 || side * side != span.page_records {
+            return Err(ExecutorError::Contract("span page is not square"));
+        }
         for (page, handle) in span.handles().iter().enumerate() {
             let descriptor = self
                 .arena
@@ -742,33 +835,59 @@ impl GpuKernelExecutor {
             let end = bytes
                 .len()
                 .min(start + span.page_records as usize * RECORD_BYTES);
-            let mut padded = vec![0_u8; span.page_records as usize * RECORD_BYTES];
-            padded[..end - start].copy_from_slice(&bytes[start..end]);
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.data,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: u32::from(descriptor.x),
-                        y: u32::from(descriptor.y),
-                        z: u32::from(descriptor.layer),
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &padded,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(side * 16),
-                    rows_per_image: Some(side),
-                },
-                wgpu::Extent3d {
-                    width: side,
-                    height: side,
-                    depth_or_array_layers: 1,
-                },
-            );
+            let valid_records = u32::try_from((end - start) / RECORD_BYTES)
+                .map_err(|_| ExecutorError::Contract("upload record count overflow"))?;
+            match self.span_upload_mode {
+                SpanUploadMode::PaddedPages => {
+                    let mut padded = vec![0_u8; span.page_records as usize * RECORD_BYTES];
+                    padded[..end - start].copy_from_slice(&bytes[start..end]);
+                    self.write_texture_region(descriptor, &padded, UploadRegion::padded_page(side));
+                }
+                SpanUploadMode::ValidRows => {
+                    for region in valid_row_regions(valid_records, side).into_iter().flatten() {
+                        let region_start = start + region.source_offset_bytes;
+                        let region_end = region_start + region.source_len_bytes;
+                        self.write_texture_region(
+                            descriptor,
+                            &bytes[region_start..region_end],
+                            region,
+                        );
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    fn write_texture_region(
+        &self,
+        descriptor: crate::Descriptor,
+        bytes: &[u8],
+        region: UploadRegion,
+    ) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.data,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: u32::from(descriptor.x),
+                    y: u32::from(descriptor.y) + region.origin_y,
+                    z: u32::from(descriptor.layer),
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: region.bytes_per_row,
+                rows_per_image: region.rows_per_image,
+            },
+            wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Builds immutable headers for exactly one active dense prefix.
@@ -881,9 +1000,8 @@ impl GpuKernelExecutor {
         Ok(())
     }
 
-    /// Publishes allocator metadata and resource-directory words without touching resident headers.
+    /// Publishes resource-directory words without touching allocator metadata or resident headers.
     pub fn sync_dispatch_resources(&self, dispatch: &ExecutorDispatch) {
-        self.sync_heap_metadata();
         self.queue.write_buffer(
             &self.resources_buffer,
             0,
@@ -932,13 +1050,41 @@ impl GpuKernelExecutor {
             .as_ref()
             .filter(|(headers, _)| headers == &dispatch.headers)
             .ok_or(DispatchError::HeaderMismatch)?;
-        for page in 0..dispatch.plan.passes.len() as u32 {
-            self.encode_dispatch_selected(
+        self.encode_dispatch_selected_set(encoder, kernel, dispatch, handle, 0)
+    }
+
+    /// Encodes every page of one selected immutable header set after one complete-set comparison.
+    ///
+    /// The selected resident headers are resolved and compared with the dispatch once. Each page
+    /// then uses the already-validated offset range without repeating that comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed kernel, foreign/stale handle, set selection, header mismatch, output, or
+    /// destination failures.
+    pub fn encode_dispatch_selected_set(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &GpuKernel,
+        dispatch: &ExecutorDispatch,
+        header_sets: &HeaderSetHandle,
+        set: u32,
+    ) -> Result<(), ExecutorError> {
+        if kernel.id != dispatch.kernel_id {
+            return Err(ExecutorError::Contract("dispatch kernel mismatch"));
+        }
+        let (headers, set_offset) =
+            self.header_reservations
+                .resolve_set(&self.header_owner, header_sets, set)?;
+        let offsets =
+            selected_header_offsets(headers, &dispatch.headers, dispatch.plan.passes.len(), set)?;
+        for (page, header_offset) in dispatch.plan.passes.iter().zip(offsets.iter().copied()) {
+            self.encode_page(
                 encoder,
                 kernel,
-                dispatch,
-                handle,
-                DispatchSelector { set: 0, page },
+                dispatch.page_side,
+                page,
+                set_offset + header_offset,
             )?;
         }
         Ok(())
@@ -1007,15 +1153,22 @@ impl GpuKernelExecutor {
     }
 
     pub(super) fn sync_heap_metadata(&self) {
+        let mut scratch = self.metadata_packing.borrow_mut();
+        let MetadataPackingScratch {
+            descriptors,
+            directory_words,
+        } = &mut *scratch;
+        self.arena.heap().pack_table_into(descriptors);
+        self.arena.directory().pack_words_into(directory_words);
         self.queue.write_buffer(
             &self.descriptor_buffer,
             0,
-            bytemuck::cast_slice(&self.arena.heap().packed_table()),
+            bytemuck::cast_slice(descriptors),
         );
         self.queue.write_buffer(
             &self.directory_buffer,
             0,
-            bytemuck::cast_slice(&self.arena.directory().packed_words()),
+            bytemuck::cast_slice(directory_words),
         );
     }
 
@@ -1066,29 +1219,21 @@ impl GpuKernelExecutor {
             .into());
         }
         let side = u32::from(page_side);
-        let views = page
-            .destinations
-            .iter()
-            .enumerate()
-            .map(|(layer, _)| self.scratch_view(layer as u32))
-            .collect::<Vec<_>>();
-        let attachments = views
-            .iter()
-            .map(|view| {
-                Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })
+        let views = self.page_scratch.selected(page.destinations.len())?;
+        let attachments = views.map(|view| {
+            view.map(|view| wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })
-            .collect::<Vec<_>>();
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("heap dialect page into SCRATCH"),
-                color_attachments: &attachments,
+                color_attachments: &attachments[..page.destinations.len()],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -1151,16 +1296,6 @@ impl GpuKernelExecutor {
         }
         Ok(())
     }
-
-    fn scratch_view(&self, layer: u32) -> wgpu::TextureView {
-        self.scratch.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("heap executor one-layer SCRATCH attachment"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: layer,
-            array_layer_count: Some(1),
-            ..Default::default()
-        })
-    }
 }
 
 fn make_dispatch(
@@ -1188,6 +1323,78 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
             regions * pass.destinations.len() as u32
         })
         .sum()
+}
+
+fn selected_header_offsets<'a>(
+    resident: &'a StaticHeaders,
+    dispatch: &StaticHeaders,
+    pass_count: usize,
+    set: u32,
+) -> Result<&'a [u32], DispatchError> {
+    if resident != dispatch {
+        return Err(DispatchError::HeaderMismatch);
+    }
+    if pass_count != resident.offsets.len() {
+        let first_unpaired = pass_count.min(resident.offsets.len()) as u32;
+        return Err(DispatchError::HeaderPageSelection {
+            set,
+            page: first_unpaired,
+            page_count: resident.offsets.len() as u32,
+        });
+    }
+    Ok(&resident.offsets)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UploadRegion {
+    source_offset_bytes: usize,
+    source_len_bytes: usize,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+    bytes_per_row: Option<u32>,
+    rows_per_image: Option<u32>,
+}
+
+impl UploadRegion {
+    const fn padded_page(side: u32) -> Self {
+        let records = side as usize * side as usize;
+        Self {
+            source_offset_bytes: 0,
+            source_len_bytes: records * RECORD_BYTES,
+            origin_y: 0,
+            width: side,
+            height: side,
+            bytes_per_row: Some(side * RECORD_BYTES as u32),
+            rows_per_image: Some(side),
+        }
+    }
+}
+
+fn valid_row_regions(valid_records: u32, side: u32) -> [Option<UploadRegion>; 2] {
+    let full_rows = valid_records / side;
+    let tail = valid_records % side;
+    let row_bytes = side as usize * RECORD_BYTES;
+    [
+        (full_rows > 0).then_some(UploadRegion {
+            source_offset_bytes: 0,
+            source_len_bytes: full_rows as usize * row_bytes,
+            origin_y: 0,
+            width: side,
+            height: full_rows,
+            bytes_per_row: Some(side * RECORD_BYTES as u32),
+            rows_per_image: Some(full_rows),
+        }),
+        (tail > 0).then_some(UploadRegion {
+            source_offset_bytes: full_rows as usize * row_bytes,
+            source_len_bytes: tail as usize * RECORD_BYTES,
+            origin_y: full_rows,
+            width: tail,
+            height: 1,
+            bytes_per_row: None,
+            rows_per_image: None,
+        }),
+    ]
 }
 
 pub(super) fn texture(
@@ -1303,7 +1510,120 @@ mod tests {
 
     use crate::{DispatchError, DispatchPlan, Handle, PagePass, SpanArena, StaticHeaders};
 
-    use super::{DispatchSelector, HeaderReservations, copy_command_count};
+    use super::{
+        DispatchSelector, HeaderReservations, RetainedPageScratch, UploadRegion,
+        copy_command_count, selected_header_offsets, valid_row_regions,
+    };
+
+    #[test]
+    fn page_scratch_is_bounded_and_reused_across_final_pages() {
+        let scratch = RetainedPageScratch::new(vec![10_u32, 20, 30, 40])
+            .expect("four retained views fit the executor wall");
+        let pointer = scratch.views.as_ptr();
+        let capacity = scratch.views.capacity();
+        for _ in 0..8 {
+            assert_eq!(
+                scratch.selected(2).expect("two retained views select"),
+                [Some(&10), Some(&20), None, None]
+            );
+            assert_eq!(scratch.views.as_ptr(), pointer);
+            assert_eq!(scratch.views.capacity(), capacity);
+        }
+        assert!(RetainedPageScratch::new(vec![0_u32; 5]).is_err());
+    }
+
+    #[test]
+    fn one_selected_header_comparison_exposes_the_whole_page_range() {
+        let mut arena = SpanArena::new(64, 1, 16, 1_024, 8).expect("arena");
+        let span = arena.allocate_span(2_048, 16).expect("eight-page span");
+        let dispatch = StaticHeaders::for_span(&span, 256).expect("dispatch headers");
+        let resident = dispatch.clone();
+        let selected = selected_header_offsets(&resident, &dispatch, 8, 0)
+            .expect("one comparison admits the selected set");
+        assert_eq!(selected, &[0, 256, 512, 768, 1_024, 1_280, 1_536, 1_792]);
+        let mut mismatch = dispatch.clone();
+        mismatch.bytes[0] ^= 1;
+        assert_eq!(
+            selected_header_offsets(&resident, &mismatch, 8, 0),
+            Err(DispatchError::HeaderMismatch)
+        );
+    }
+
+    #[test]
+    fn selected_header_comparison_rejects_an_unpaired_dispatch_page() {
+        let mut arena = SpanArena::new(64, 1, 16, 1_024, 8).expect("arena");
+        let span = arena.allocate_span(512, 16).expect("two-page span");
+        let headers = StaticHeaders::for_span(&span, 256).expect("dispatch headers");
+        assert_eq!(
+            selected_header_offsets(&headers, &headers, 3, 4),
+            Err(DispatchError::HeaderPageSelection {
+                set: 4,
+                page: 2,
+                page_count: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn row_exact_reference_layout_removes_sixteen_fold_upload_amplification() {
+        let logical_len = 4_096_u32;
+        let page_records = 65_536_u32;
+        let side = 256_u32;
+        let page_count = logical_len.div_ceil(page_records);
+        let padded_upload_bytes = usize::try_from(page_count).expect("page count fits")
+            * UploadRegion::padded_page(side).source_len_bytes;
+        let valid_upload_bytes = (0..page_count)
+            .map(|page| {
+                let page_start = page * page_records;
+                let valid_records = logical_len.saturating_sub(page_start).min(page_records);
+                valid_row_regions(valid_records, side)
+                    .into_iter()
+                    .flatten()
+                    .map(|region| region.source_len_bytes)
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+        assert_eq!(padded_upload_bytes, 1_048_576);
+        assert_eq!(valid_upload_bytes, 65_536);
+        assert_eq!(
+            valid_row_regions(4_096, 256),
+            [
+                Some(UploadRegion {
+                    source_offset_bytes: 0,
+                    source_len_bytes: 65_536,
+                    origin_y: 0,
+                    width: 256,
+                    height: 16,
+                    bytes_per_row: Some(4_096),
+                    rows_per_image: Some(16),
+                }),
+                None,
+            ]
+        );
+        assert_eq!(
+            valid_row_regions(257, 256),
+            [
+                Some(UploadRegion {
+                    source_offset_bytes: 0,
+                    source_len_bytes: 4_096,
+                    origin_y: 0,
+                    width: 256,
+                    height: 1,
+                    bytes_per_row: Some(4_096),
+                    rows_per_image: Some(1),
+                }),
+                Some(UploadRegion {
+                    source_offset_bytes: 4_096,
+                    source_len_bytes: 16,
+                    origin_y: 1,
+                    width: 1,
+                    height: 1,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }),
+            ]
+        );
+    }
 
     #[test]
     fn exact_row_copy_count_keeps_full_and_tail_rows_separate() {

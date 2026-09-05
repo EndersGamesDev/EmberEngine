@@ -485,7 +485,15 @@ impl HeapAllocator {
     /// Returns a full table snapshot suitable for one UBO upload.
     #[must_use]
     pub fn packed_table(&self) -> Vec<PackedDescriptor> {
-        self.slots.iter().map(|slot| slot.descriptor).collect()
+        let mut packed = Vec::with_capacity(self.slots.len());
+        self.pack_table_into(&mut packed);
+        packed
+    }
+
+    /// Replaces caller-owned packing scratch with the full descriptor table.
+    pub fn pack_table_into(&self, packed: &mut Vec<PackedDescriptor>) {
+        packed.clear();
+        packed.extend(self.slots.iter().map(|slot| slot.descriptor));
     }
 
     /// Returns the selected square side.
@@ -549,6 +557,25 @@ mod tests {
         assert_eq!(
             PackedDescriptor::MISSING.unpack(),
             Err(HeapError::MissingDescriptor)
+        );
+    }
+
+    #[test]
+    fn caller_owned_descriptor_packing_reuses_its_allocation() {
+        let mut allocator = HeapAllocator::new(8, 1, 16).expect("geometry is valid");
+        let mut packed = Vec::new();
+        allocator.pack_table_into(&mut packed);
+        let pointer = packed.as_ptr();
+        let capacity = packed.capacity();
+        let handle = allocator
+            .allocate(HeapKind::Data, 2, 2)
+            .expect("fixture allocation fits");
+        allocator.pack_table_into(&mut packed);
+        assert_eq!(packed.as_ptr(), pointer);
+        assert_eq!(packed.capacity(), capacity);
+        assert_eq!(
+            packed[handle.index() as usize].unpack().expect("live"),
+            allocator.resolve(handle).expect("live")
         );
     }
 

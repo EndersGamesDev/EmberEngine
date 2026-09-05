@@ -1,5 +1,8 @@
 //! GPU-kernel contracts and CPU mirrors for the Julibrot lab.
 
+/// Extra decimal digits used by the deterministic reference-orbit verification pass.
+pub const DETERMINISTIC_VERIFICATION_DIGITS: u32 = 16;
+
 mod conformance;
 mod dialect;
 mod error;
@@ -8,6 +11,7 @@ mod perturb;
 mod records;
 mod refinement;
 mod shallow;
+mod tile_job;
 
 pub use conformance::{
     ConformanceResult, ConformanceVerdict, PERTURB_SMOOTH_TOLERANCE, SHALLOW_SMOOTH_TOLERANCE,
@@ -30,3 +34,12 @@ pub use refinement::{
     plan_refinement,
 };
 pub use shallow::{KernelSample, escape_shallow_pixel, escape_shallow_point};
+pub use tile_job::{
+    ContentIdentity, CoverageClass, DEFAULT_TILE_APRON, DEFAULT_TILE_CORE_SIDE,
+    DEFAULT_TILE_LOGICAL_BYTES, DEFAULT_TILE_SAMPLE_BYTES, DEFAULT_TILE_SIDE, DemandKey,
+    MainIdentity, PairedOutputCompletion, PairedOutputSpanPlan, PublishedTileOutputs,
+    ReferenceIdentity, ReferenceLease, ReferenceLeaseSet, ResidentTileCost, ResidentTileProfile,
+    SourceScreenRect, StableJobId, TILE_HEADER_BYTES, TILE_SAMPLE_RECORD_BYTES, TileDemandQueue,
+    TileGeometry, TileJob, TileJobError, TileOutput, TileQuality, TileResidency,
+    resident_tile_cost, tile_cost,
+};

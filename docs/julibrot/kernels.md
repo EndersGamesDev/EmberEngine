@@ -20,6 +20,14 @@ The heap dependency remains the shipped `ember-lab-heap` implementation: `DataSp
 
 No kernel result authors simulation, collision, protocol, reconciliation, or gameplay truth; a result is presentation data and a stale or failed dispatch produces a typed refusal or stale visual, never a truth-state change.
 
+### Stage-0 tile-job decisions — 2026-09-05
+
+This lane records the stage-0 tile-job model as wire-free kernels policy with no dispatch or delivered-value change: source-screen geometry, content/MAIN/reference identity, paired value-and-reconstruction publication, reference leases, demand ordering, and resident-budget arithmetic follow “Where rendered tiles live and how the chart indexes them”, “Per-tile refinement, backdrop, and scheduling”, “Device-floor resource model”, “Cost model and eviction”, and migration stage 0 in [the tiled-reprojection design](tiled-reprojection.md). The implementation remains self-contained so later app and presentation work can adopt it additively.
+
+### Native conformance decisions — 2026-09-05
+
+Final conformance constructs Deterministic and PictureFast reference policies independently only for the deep perturbation arm: the fast arm calls production `precision_for` and `ReferenceOrbitBuilder::new_with_policy(PictureFast, Preview)`, while the deterministic arm calls its distinct verified policy. The shallow render arm uses one shared `ShallowUniform` pack and `escape_shallow_pixel` call, and the shallow bailout helper uses one shared `escape_shallow_point` call, because neither surface accepts a precision mode. Special terminals share one synthetic-record renderer, category colour shares one `shade_lit_escape_record` call, clear colour shares one `selected.clear_rgba` call, and warp rows share one uniform pack because those production surfaces likewise accept no precision policy. The tests name these surfaces policy-independent by contract and make no exact-versus-fast claim for them. The highest paired deep zoom is the greatest plan that also admits the additive deterministic verification-digit margin. The boundary corpus constructs its records through the real reference builder and covers a later escape, a rebase, and both normalization directions; both single-record rows retain the four-times-observed error bound, while the later-escape rebase row proves conservatism only until a multi-step observation oracle exists. These are native mirrors, not browser readback evidence.
+
 ## 2. Design and arithmetic
 
 ### 2.1 Coordinates, planes, and pixels
@@ -158,6 +166,18 @@ The per-level worst-case work is `C = width·height·iteration_cap` pixel-iterat
 Perturbation performs at most one reference `textureLoad` per executed pixel-iteration, while shallow performs none; rebase does not add an outer iteration, so `rebase_count ≤ executed_iterations ≤ iteration_cap`.
 
 For `R = N mod q²`, exact copy-command arithmetic is `floor(N/q²) + 1[floor(R/q) > 0] + 1[R mod q > 0]`: one command per complete page, one for any complete rows in the partial page, and one for any tail row; command count, page-pass count, copied bytes, and encoder submissions remain separate facts.
+
+### 2.6 Wire-free stage-0 rendered-tile policy
+
+`TileGeometry` parameterizes physical width, physical height, and a symmetric retained apron while refusing an empty core or fixed-width overflow. `TileGeometry::DEFAULT` is exactly 256×256 physical samples, a 254×254 drawn core, one apron sample per edge, and 65,536 paired sample positions; `SourceScreenRect` uses a signed physical origin so an apron may extend before source pixel zero and derives its core rectangle without changing stored geometry. This implements the source-screen storage decision in “Where rendered tiles live and how the chart indexes them” without changing either WGSL kernel or current screen-grid dispatch.
+
+`ContentIdentity`, `MainIdentity`, and `ReferenceIdentity` form successively narrower semantic identities, and `TileJob::new` requires the reference to belong to the named MAIN generation. A job also carries its source rectangle, existing `RefinementLevel`, and exact `DemandKey`; none has a wire representation. `ReferenceLeaseSet` permits exactly one reference identity per MAIN generation while pins exist, returns move-only job leases, publishes the current lease count, and drops the pin only after the last job releases it, matching the shared-reference decision in “Per-tile refinement, backdrop, and scheduling”.
+
+`DemandKey` orders ascending as `(coverage_class,-visible_benefit,work_cost,stable_job_id)`, where `ClosesHole=0`, `DetailUpgrade=1`, and checked construction can derive `visible_benefit=visible_area×quality_gain`. `TileDemandQueue` is ordered by that key and separately refuses a duplicate stable ID, so its drain is independent of insertion order and every hole-closing job precedes every covered-region upgrade. `TileQuality::should_replace` folds the two stored axes into the effective ladder Backdrop before Detail Preview before Detail Interactive before Detail Final; a Backdrop's refinement label and every density value are ignored by this CPU predicate. It admits only a strict rung improvement, is a pure policy predicate, and no other type enforces it yet; a draft can fill an absent region but cannot displace a better same-surface representation.
+
+`PairedOutputSpanPlan` binds one job to distinct equal-length value and reconstruction `DataSpan`s matching the physical sample count. `PairedOutputCompletion` can observe the two sides in either order but yields `PublishedTileOutputs` only after both are complete, making a value-only or reconstruction-only result unpublishable as required by “Per-tile refinement, backdrop, and scheduling” and migration stage 0.
+
+`tile_cost(geometry,n)` derives paired sample bytes from `geometry.sample_count()×2×16` plus one 512-byte header per tile, while `resident_tile_cost(n)` is its default-geometry wrapper. The constants derive the 254 core side, 2,097,152 sample bytes, and 2,097,664 logical bytes from the public geometry and ABI constants. The native oracle pins 128, 256, and 512 physical sides and pins default counts 1, 9, 12, 16, 28, 44, and 56 against “Cost model and eviction”. `ResidentTileProfile::constrained()` derives 28 tiles, 12 backdrop, 16 Detail/history, 56 sample pages, 57 span entries rounded to a minimum capacity of 64, and 64 total DATA pages including one descriptor and seven other pages; `expanded()` derives 56, 12, 44, 112, 113 rounded to 128, and 120 respectively.
 
 ## 3. INTERFACES
 

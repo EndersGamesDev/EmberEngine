@@ -511,12 +511,17 @@ pub fn perturb_scaled_offset_for_accumulated_error(
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU32;
+
     use super::{
-        MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
-        perturb_scaled_offset, perturb_scaled_pixel, reconstruct, scale,
+        MAX_RESCALE_STEPS, ScaledState, add, finite_scalar, ldexp, normalize_scaled,
+        perturb_scaled_offset, perturb_scaled_pixel, radius_squared, reconstruct, scale,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel, SampleStatus};
-    use ember_julibrot_math::{EscapeParams, Homography, Plane, ReferenceOrbitRecord, ScaleSplit};
+    use ember_julibrot_math::{
+        BigCentre, EscapeParams, Homography, OrbitStep, Plane, ReferenceOrbitBuilder,
+        ReferenceOrbitRecord, ScaleSplit, precision_for,
+    };
 
     const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.0 };
 
@@ -776,42 +781,168 @@ mod tests {
     #[test]
     #[allow(
         clippy::print_stderr,
-        reason = "this is the explicit boundary measurement"
+        clippy::too_many_lines,
+        reason = "the explicit measurement keeps every corpus row and coverage assertion together"
     )]
-    fn boundary_envelope_is_conservative_and_within_four_times_observed_error() {
-        let boundary = ReferenceOrbitRecord {
-            re: f32::from_bits(16.0_f32.to_bits() - 1),
-            im: 0.0,
-        };
-        let offset = [2.0_f32.powi(-21), 0.0, 0.0, 0.0];
-        let uniforms = uniform(1, 1);
-        let actual =
-            perturb_scaled_offset(&uniforms, &[boundary], offset).expect("boundary kernel mirror");
-        let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
-            &[boundary],
-            offset.map(f64::from),
-            uniforms.scale_exponent,
-            EscapeParams::new(1),
-        )
-        .expect("boundary math mirror");
-        let result = crate::evaluate_perturbation_conformance(
-            ember_julibrot_math::PrecisionMode::PictureFast,
-            actual,
-            expected,
-            envelope,
+    fn boundary_envelope_corpus_covers_real_orbit_rebase_and_both_rescale_directions() {
+        let boundary = f32::from_bits(16.0_f32.to_bits() - 1);
+        let boundary_orbit = real_boundary_orbit([f64::from(boundary), 0.0, 0.0, 0.0], 1);
+        let rebase_orbit = real_boundary_orbit([-10.0, 0.0, 0.0, 0.0], 2);
+        assert_eq!(
+            boundary_orbit,
+            [ReferenceOrbitRecord {
+                re: boundary,
+                im: 0.0
+            }]
         );
-        assert_eq!(result.verdict, crate::ConformanceVerdict::Boundary);
-        let mut gpu = reconstruct(boundary);
-        gpu[0] += offset[0];
-        let exact_re = f64::from(boundary.re) + f64::from(offset[0]);
-        let observed_norm_error =
-            (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
+        assert_eq!(
+            rebase_orbit,
+            [
+                ReferenceOrbitRecord { re: -10.0, im: 0.0 },
+                ReferenceOrbitRecord { re: 100.0, im: 0.0 },
+            ]
+        );
+        let boundary_delta = 2.0_f32.powi(-21);
+        let rebase_delta = f32::from_bits(26.0_f32.to_bits() - 1);
+        let cases = [
+            (
+                "large-mantissa rescale",
+                boundary_orbit.as_slice(),
+                [boundary_delta * 2.0_f32.powi(100), 0.0, 0.0, 0.0],
+                -100,
+                1,
+                None,
+                0.0,
+                Some(-36),
+                true,
+            ),
+            (
+                "small-mantissa rescale",
+                boundary_orbit.as_slice(),
+                [boundary_delta * 2.0_f32.powi(-100), 0.0, 0.0, 0.0],
+                100,
+                1,
+                None,
+                0.0,
+                Some(36),
+                true,
+            ),
+            (
+                "later escape with rebase",
+                rebase_orbit.as_slice(),
+                [rebase_delta, 0.0, 0.0, 0.0],
+                0,
+                2,
+                Some(1),
+                1.0,
+                None,
+                false,
+            ),
+        ];
+        let mut boundary_count = 0_usize;
+        let mut tight_rows = 0_usize;
+        for (
+            name,
+            orbit,
+            offset,
+            exponent,
+            cap,
+            escape_index,
+            rebases,
+            normalized_exponent,
+            tight,
+        ) in cases
+        {
+            let mut uniforms = uniform(cap, cap);
+            uniforms.scale_exponent = exponent;
+            let actual =
+                perturb_scaled_offset(&uniforms, orbit, offset).expect("boundary kernel mirror");
+            let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
+                orbit,
+                offset.map(f64::from),
+                exponent,
+                EscapeParams::new(cap),
+            )
+            .expect("boundary math mirror");
+            let result = crate::evaluate_perturbation_conformance(
+                ember_julibrot_math::PrecisionMode::PictureFast,
+                actual,
+                expected,
+                envelope,
+            );
+            assert_eq!(
+                result.verdict,
+                crate::ConformanceVerdict::Boundary,
+                "{name}"
+            );
+            assert_eq!(actual.escape_index, escape_index, "{name}");
+            assert_eq!(actual.record.rebase_count, rebases, "{name}");
+            let (observed_norm_error, observed_exponent) =
+                observed_initial_norm_error(orbit[0], offset, exponent);
+            assert!(envelope.escape_norm2_error >= observed_norm_error, "{name}");
+            if let Some(normalized_exponent) = normalized_exponent {
+                assert_eq!(observed_exponent, normalized_exponent, "{name}");
+            }
+            if tight {
+                assert!(
+                    envelope.escape_norm2_error <= 4.0 * observed_norm_error,
+                    "{name}: envelope={} observed={observed_norm_error}",
+                    envelope.escape_norm2_error,
+                );
+                tight_rows += 1;
+            }
+            boundary_count += usize::from(result.boundary);
+        }
         eprintln!(
-            "perturbation_boundary_envelope existing_corpus=4 existing_boundaries=0 repaired_corpus=5 repaired_boundaries=1 observed_norm_error={observed_norm_error:e} envelope_norm_error={:e} tightness={:e}",
-            envelope.escape_norm2_error,
-            envelope.escape_norm2_error / observed_norm_error,
+            "perturbation_boundary_envelope real_orbit_records={} corpus={} boundaries={boundary_count} later_escapes=1 rebases=1 rescale_directions=2 tight_rows={tight_rows} untested_rows={} tightness_limit=4 conservatism_violations=0",
+            boundary_orbit.len() + rebase_orbit.len(),
+            cases.len(),
+            cases.len() - tight_rows,
         );
-        assert!(envelope.escape_norm2_error >= observed_norm_error);
-        assert!(envelope.escape_norm2_error <= 4.0 * observed_norm_error);
+        assert_eq!(boundary_count, cases.len());
+        assert_eq!(tight_rows, 2);
+        assert_eq!(cases.len() - tight_rows, 1);
+    }
+
+    fn real_boundary_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
+        let plan = precision_for(14.0, 960, cap).expect("boundary precision plan");
+        let centre =
+            BigCentre::from_f64(centre, plan.requested_bits).expect("finite boundary centre");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(cap))
+            .expect("boundary reference builder");
+        loop {
+            match builder
+                .step(NonZeroU32::new(cap).expect("nonzero boundary cap"))
+                .expect("boundary reference step")
+            {
+                OrbitStep::Pending { .. } => {}
+                OrbitStep::Complete(orbit) => return orbit.records,
+            }
+        }
+    }
+
+    fn observed_initial_norm_error(
+        record: ReferenceOrbitRecord,
+        offset: [f32; 4],
+        exponent: i32,
+    ) -> (f64, i32) {
+        let state = normalize_scaled(ScaledState {
+            delta: [offset[0], offset[1]],
+            delta_c: [offset[2], offset[3]],
+            exponent,
+            glitch: false,
+        });
+        let represented_delta = scale(state.delta, state.exponent);
+        let observed_z = add(reconstruct(record), represented_delta);
+        let factor = 2.0_f64.powi(exponent);
+        let exact_delta = [f64::from(offset[0]) * factor, f64::from(offset[1]) * factor];
+        let exact_z = [
+            f64::from(record.re) + exact_delta[0],
+            f64::from(record.im) + exact_delta[1],
+        ];
+        let error = (f64::from(radius_squared(observed_z))
+            - exact_z[0].mul_add(exact_z[0], exact_z[1] * exact_z[1]))
+        .abs();
+        (error, state.exponent)
     }
 }
