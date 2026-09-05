@@ -121,6 +121,39 @@ pub(super) const fn identity_rows() -> [[f32; 4]; 3] {
     ]
 }
 
+/// Rows that hold a completed picture of `source_extent` on a destination lattice of another size.
+///
+/// A hold shows the last completed picture unchanged while the next scene renders, and the two
+/// lattices cover the same field of view whatever their pixel counts: the chart span a pose
+/// covers across its width is `4 / 2^zoom` however many pixels sample it, which is why a
+/// reprojection between two extents scales by exactly this ratio (`planner.rs` lines 415 to 417).
+/// The warp fragment normalises the mapped source pixel by the source texture's own dimensions,
+/// and a scene texture is allocated at exactly the delivered extent of the scene drawn into it,
+/// so the ratio between the two extents is the whole of the mapping. Equal extents give identity.
+///
+/// An unusable extent returns `None` so the caller refuses the hold rather than placing the
+/// picture somewhere the geometry does not put it.
+pub(super) fn hold_rows(
+    source_extent: [u32; 2],
+    destination_extent: [u32; 2],
+) -> Option<[[f32; 4]; 3]> {
+    if source_extent
+        .into_iter()
+        .chain(destination_extent)
+        .any(|extent| extent == 0)
+    {
+        return None;
+    }
+    let scale = [
+        f64::from(source_extent[0]) / f64::from(destination_extent[0]),
+        f64::from(source_extent[1]) / f64::from(destination_extent[1]),
+    ];
+    let rows = crate::pack_homography_rows([
+        scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0,
+    ])?;
+    (rows[0][0] > 0.0 && rows[1][1] > 0.0).then_some(rows)
+}
+
 pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
     crate::WarpPlan {
         rows: identity_rows(),
@@ -140,6 +173,7 @@ pub(super) fn apply_hold_policy(
     mut plan: crate::WarpPlan,
     retained: Option<&crate::SceneFrame>,
     hold_refused_warp: bool,
+    destination_extent: [u32; 2],
 ) -> crate::WarpPlan {
     if !hold_refused_warp || plan.kind != WarpKind::ClearOnly {
         return plan;
@@ -147,7 +181,12 @@ pub(super) fn apply_hold_policy(
     let Some(frame) = retained else {
         return plan;
     };
-    plan.rows = identity_rows();
+    // A hold whose scale cannot be stated is refused: the clear plan asserts no geometry, while a
+    // picture placed at the wrong scale asserts geometry that does not exist.
+    let Some(rows) = hold_rows(frame.extent, destination_extent) else {
+        return plan;
+    };
+    plan.rows = rows;
     plan.source_scene_id = Some(frame.scene_id);
     plan.source_texture_index = Some(frame.texture_index);
     plan.source_valid = true;

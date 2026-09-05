@@ -77,7 +77,15 @@ impl Presenter {
             .ledger
             .retained()
             .or_else(|| self.ledger.held().map(|held| &held.frame));
-        let plan = apply_hold_policy(plan, hold_source, hold_refused_warp);
+        // The lattice the plan rows are expressed against: the pose this HOT payload publishes,
+        // whose grid is the current MAIN grid. A hold from a picture drawn at another extent is
+        // scaled onto this lattice rather than laid on it pixel for pixel.
+        let plan = apply_hold_policy(
+            plan,
+            hold_source,
+            hold_refused_warp,
+            destination_extent(pose.as_ref(), self.main.as_ref()),
+        );
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -227,6 +235,10 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
+        let warp_destination_extent = destination_extent(
+            self.hot[hot_slot.index() as usize].as_ref(),
+            self.main.as_ref(),
+        );
         let source_slot = self.hot_warp_source[hot_slot.index() as usize];
         let source = source_slot
             .frame(self.ledger.retained(), self.ledger.held())
@@ -265,6 +277,7 @@ impl Presenter {
                 clear_warp_plan(false, true),
                 source.as_ref(),
                 source_slot.hold_on_redraw_refusal,
+                warp_destination_extent,
             );
             self.rewrite_hot_warp(hot_slot, &fallback);
             self.hot_exposed[hot_slot.index() as usize] = fallback.exposed;
@@ -298,6 +311,7 @@ impl Presenter {
                 });
             self.facts.record_relief_coverage(exposed_fraction);
         } else {
+            self.write_warp_destination_extent(warp_destination_extent);
             encode_image_warp(
                 &mut encoder,
                 &self.gpu,
@@ -340,6 +354,21 @@ impl Presenter {
         })
     }
 
+    /// Publishes the destination lattice the plan rows were built against to the warp fragment.
+    ///
+    /// The fragment builds its destination point from the chart and `scene.grid.xy`
+    /// (`warp_shader.rs` line 20), and that buffer is last written by a scene submission or by a
+    /// relief redraw, either of which can name a different extent than the pose this warp is
+    /// planned against: a refinement-level change between the last completed scene and the
+    /// current grid, or a redraw that names the retained records' extent. Writing the pose's own
+    /// grid immediately before the warp submission keeps the fragment's destination lattice the
+    /// one the rows assume. Both writers restate the whole uniform before their own pass, so this
+    /// cannot reach a scene pass.
+    fn write_warp_destination_extent(&self, extent: [u32; 2]) {
+        self.queue
+            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&extent));
+    }
+
     fn clear_hot_source(&self, hot_slot: HotSlot) {
         self.queue.write_buffer(
             &self.gpu.hot_buffer,
@@ -361,6 +390,14 @@ impl Presenter {
             bytemuck::bytes_of(&u32::from(plan.source_valid)),
         );
     }
+}
+
+/// The destination pixel lattice a plan is expressed against: the pose's grid, else MAIN's.
+pub(super) fn destination_extent(pose: Option<&Pose>, main: Option<&PresentMain>) -> [u32; 2] {
+    pose.map_or_else(
+        || main.map_or([0, 0], |main| [main.grid.width, main.grid.height]),
+        |pose| [pose.grid_width, pose.grid_height],
+    )
 }
 
 pub(super) fn planned_exposed_fraction(

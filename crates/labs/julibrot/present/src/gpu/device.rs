@@ -23,6 +23,8 @@ use ledger::{
     apply_hold_policy, clear_warp_plan, identity_rows, pose_is_finite, select_warp_source,
     warp_exposed_fraction,
 };
+#[cfg(test)]
+use ledger::hold_rows;
 use redraw::encode_relief_redraw;
 #[cfg(test)]
 use redraw::relief_scene_uniform;
@@ -36,7 +38,7 @@ use uniforms::{
 };
 use warp::{color, create_warp_pipeline, warp_load_color};
 #[cfg(test)]
-use warp::{planned_exposed_fraction, relief_redraw_clear_fraction};
+use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fraction};
 
 mod census;
 mod ledger;

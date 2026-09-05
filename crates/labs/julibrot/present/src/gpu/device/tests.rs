@@ -167,6 +167,9 @@ fn census_failure_or_delay_never_refuses_or_delays_the_scene() {
     }
 }
 
+/// The pixel lattice every binding fixture samples and presents on.
+const BINDING_EXTENT: [u32; 2] = [64, 36];
+
 fn binding_pose() -> Pose {
     Pose {
         epoch: 1,
@@ -274,7 +277,12 @@ fn clear_plan_is_identity_but_never_samples() {
 fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 37);
-    let held = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        ledger.retained(),
+        true,
+        BINDING_EXTENT,
+    );
     assert_eq!(held.kind, WarpKind::HoldStale);
     assert_eq!(held.source_scene_id, Some(sampled.scene_id));
     assert_eq!(held.source_texture_index, Some(sampled.texture_index));
@@ -321,10 +329,10 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
 
     let refused = clear_warp_plan(false, true);
     assert_eq!(
-        apply_hold_policy(refused, Some(&held.frame), false).kind,
+        apply_hold_policy(refused, Some(&held.frame), false, BINDING_EXTENT).kind,
         WarpKind::ClearOnly
     );
-    let plan = apply_hold_policy(refused, Some(&held.frame), true);
+    let plan = apply_hold_policy(refused, Some(&held.frame), true, BINDING_EXTENT);
     assert_eq!(plan.kind, WarpKind::HoldStale);
     assert_eq!(plan.rows, identity_rows());
     assert!(!plan.exposed);
@@ -377,7 +385,12 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
 fn auto_refusal_still_clears_and_manual_bounded_warp_stays_accepted() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 41);
-    let cleared = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), false);
+    let cleared = apply_hold_policy(
+        clear_warp_plan(false, true),
+        ledger.retained(),
+        false,
+        BINDING_EXTENT,
+    );
     assert_eq!(cleared.kind, WarpKind::ClearOnly);
     assert!(!cleared.source_valid);
 
@@ -386,12 +399,12 @@ fn auto_refusal_still_clears_and_manual_bounded_warp_stays_accepted() {
     bounded.source_scene_id = Some(sampled.scene_id);
     bounded.source_texture_index = Some(sampled.texture_index);
     bounded.source_valid = true;
-    let accepted = apply_hold_policy(bounded, ledger.retained(), true);
+    let accepted = apply_hold_policy(bounded, ledger.retained(), true, BINDING_EXTENT);
     assert_eq!(accepted, bounded);
 
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(
-        &apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true),
+        &apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true, BINDING_EXTENT),
         Some(0.0),
     );
     assert_eq!(facts.warp_kind, WarpKind::HoldStale);
@@ -664,7 +677,12 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
         Some(sampled.scene_id),
         "the retained picture survives a replaced selection"
     );
-    let held = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        ledger.retained(),
+        true,
+        BINDING_EXTENT,
+    );
     assert_eq!(held.kind, WarpKind::HoldStale);
     assert_eq!(held.source_scene_id, Some(sampled.scene_id));
     assert!(held.source_valid);
@@ -903,7 +921,12 @@ fn a_held_reduced_extent_picture_fills_the_destination_rather_than_a_centred_thu
     let source_extent = [120, 68];
     let destination_extent = [960, 540];
     let held = frame_at_extent(57, source_extent);
-    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&held),
+        true,
+        destination_extent,
+    );
     assert_eq!(plan.kind, WarpKind::HoldStale);
     assert!(plan.source_valid);
     for chart in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [0.0, 0.0]] {
@@ -923,7 +946,12 @@ fn a_held_full_extent_picture_is_not_magnified_into_a_centre_crop() {
     let source_extent = [960, 540];
     let destination_extent = [120, 68];
     let held = frame_at_extent(58, source_extent);
-    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&held),
+        true,
+        destination_extent,
+    );
     assert_eq!(plan.kind, WarpKind::HoldStale);
     let corner = warp_source_uv(plan.rows, destination_extent, source_extent, [1.0, 1.0])
         .expect("a hold keeps the destination corner in front of the source");
@@ -939,7 +967,48 @@ fn a_held_full_extent_picture_is_not_magnified_into_a_centre_crop() {
 fn a_held_picture_at_the_destination_extent_holds_by_identity() {
     let extent = [960, 540];
     let held = frame_at_extent(59, extent);
-    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true, extent);
     assert_eq!(plan.kind, WarpKind::HoldStale);
     assert_eq!(plan.rows, identity_rows());
+}
+
+/// A hold whose scale cannot be stated is refused rather than placed somewhere.
+#[test]
+fn a_hold_with_an_unusable_extent_stays_a_clear_plan() {
+    assert_eq!(hold_rows([0, 68], [960, 540]), None);
+    assert_eq!(hold_rows([120, 68], [960, 0]), None);
+    assert_eq!(hold_rows([960, 540], [960, 540]), Some(identity_rows()));
+
+    let mut degenerate = frame_at_extent(60, [120, 68]);
+    degenerate.extent = [120, 0];
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&degenerate),
+        true,
+        [960, 540],
+    );
+    assert_eq!(plan.kind, WarpKind::ClearOnly);
+    assert!(!plan.source_valid);
+}
+
+/// The warp names its own destination lattice instead of inheriting the last scene's.
+///
+/// The fragment divides the chart by `scene.grid.xy`, and that buffer is last written by a scene
+/// submission at MAIN's extent or by a relief redraw at the retained records' extent. Either can
+/// disagree with the pose a plan was built against, and the plan rows would then be read on a
+/// lattice they were not written for.
+#[test]
+fn the_image_warp_states_the_destination_lattice_it_planned_against() {
+    let source = include_str!("warp.rs");
+    assert!(source.contains("self.write_warp_destination_extent(warp_destination_extent);"));
+    assert!(source.contains("fn write_warp_destination_extent(&self, extent: [u32; 2])"));
+    assert_eq!(
+        destination_extent(Some(&binding_pose()), None),
+        BINDING_EXTENT
+    );
+    assert_eq!(
+        destination_extent(None, Some(&binding_main())),
+        BINDING_EXTENT
+    );
+    assert_eq!(destination_extent(None, None), [0, 0]);
 }
