@@ -15,19 +15,21 @@ use ember_julibrot_math::{
 
 use super::{
     BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
-    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule,
-    RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
-    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
-    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
-    published_iteration_cap, sampling_zoom_log2, schedule_exposure_fill,
-    select_reference_candidate, stamp_scene_level, stamped_extent, stamped_screen_map,
-    view_projection_changed,
+    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
+    RefinementSchedule, RefusalClass, SceneMode, SubmissionKind, accepted_reference_facts,
+    apply_precision_mode, arrival_is_current, backdrop_extent, coverage_pre_empts,
+    defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
+    hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
+    perturbation_reference_is_current, published_iteration_cap,
+    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
+    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
+    stamped_screen_map, view_projection_changed,
 };
 use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
 use ember_julibrot_present::{
     PaletteId, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
 };
+use ember_julibrot_worker::ReferenceVerification;
 use ember_lab_heap::SpanArena;
 
 /// Poll budget and wall the version-three present configuration refuses at.
@@ -196,17 +198,38 @@ fn the_exact_origin_row_at_zoom_fourteen_corrects_to_a_glitch_free_final() {
     const ROUND_LIMIT: u32 = 4;
     /// Reference length the delivered row reported for this view.
     const EXHAUSTED_AT: u32 = 41;
+    let plane = Plane {
+        basis_u: [0.0, 0.0, 1.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
+    let current = ReferenceLeaseIdentity {
+        main_generation: 14,
+        source_generation: 14,
+        centre_revision: 7,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: 128,
+        orbit_length: EXHAUSTED_AT,
+    };
     assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
     assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
     assert!(!perturbation_reference_is_current(
-        14.0,
-        14,
-        Some((12, 12.0))
+        12,
+        7,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        CAP,
+        Some(current)
     ));
     assert!(perturbation_reference_is_current(
-        14.0,
         14,
-        Some((14, 14.0))
+        7,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        CAP,
+        Some(current)
     ));
 
     let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
@@ -215,10 +238,6 @@ fn the_exact_origin_row_at_zoom_fourteen_corrects_to_a_glitch_free_final() {
         precision.requested_bits,
     )
     .expect("finite seahorse centre");
-    let plane = Plane {
-        basis_u: [0.0, 0.0, 1.0, 0.0],
-        basis_v: [0.0, 0.0, 0.0, 1.0],
-    };
     let extent = GridExtent {
         width: WIDTH,
         height: HEIGHT,
@@ -2650,4 +2669,221 @@ fn the_backdrop_dispatch_is_behind_the_main_reference_and_zoom_guards() {
         references < ready && ready < route,
         "the backdrop route must follow both guards, found at {references}/{ready}/{route}"
     );
+}
+
+// Compatible-reference lease regressions for lane jb-slide-data.
+
+#[test]
+fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
+    const WIDTH: u32 = 960;
+    const HEIGHT: u32 = 540;
+    const CAP: u32 = 512;
+    let mut viewer = ViewerController::new([WIDTH, HEIGHT]).expect("canonical viewer");
+    let initial = viewer
+        .take_reference_submission()
+        .expect("startup navigation");
+    assert!(viewer.owner_mut().accept_navigation_without_orbit(
+        initial.navigation.generation,
+        initial.navigation.centre_revision,
+    ));
+
+    viewer.set_zoom_log2(14.0).expect("deep zoom");
+    let accepted = viewer
+        .take_reference_submission()
+        .expect("deep view requests its first orbit");
+    let accepted_centre = accepted.navigation.centre.clone();
+    let plane = viewer.checked_plane();
+    let precision = precision_for(14.0, WIDTH, CAP).expect("deep precision");
+    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+        accepted.navigation.generation,
+        accepted.navigation.centre_revision,
+        7,
+        CAP,
+        precision.requested_bits,
+    ));
+    let lease = ReferenceLeaseIdentity {
+        main_generation: accepted.navigation.generation,
+        source_generation: accepted.navigation.generation,
+        centre_revision: accepted.navigation.centre_revision,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: precision.requested_bits,
+        orbit_length: CAP,
+    };
+
+    let nudged_zoom = f64::from_bits(14.0_f64.to_bits() + 1);
+    viewer.set_zoom_log2(nudged_zoom).expect("one-ulp zoom");
+    let nudged = viewer
+        .take_reference_submission()
+        .expect("the owner exposes the coalesced navigation");
+    let nudged_precision = precision_for(nudged_zoom, WIDTH, CAP).expect("nudged precision");
+    assert_eq!(nudged.navigation.centre, accepted_centre);
+    assert!(
+        !reference_submission_requires_worker(
+            false,
+            true,
+            plane,
+            nudged.navigation.precision_mode,
+            nudged_precision.requested_bits,
+            CAP,
+            Some(lease),
+        ),
+        "zoom is dispatch scale, not a reason to issue another orbit request"
+    );
+    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+        nudged.navigation.generation,
+        nudged.navigation.centre_revision,
+        7,
+        CAP,
+        precision.requested_bits,
+    ));
+    let mut renewed = lease;
+    renew_reference_lease_identity(
+        &mut renewed,
+        nudged.navigation.generation,
+        nudged.navigation.centre_revision,
+        nudged.navigation.precision_mode,
+    );
+    assert!(perturbation_reference_is_current(
+        nudged.navigation.generation,
+        nudged.navigation.centre_revision,
+        plane,
+        nudged.navigation.precision_mode,
+        nudged_precision.requested_bits,
+        CAP,
+        Some(renewed),
+    ));
+
+    viewer.pan_px([300.0, 0.0]).expect("past-threshold pan");
+    let moved = viewer
+        .take_reference_submission()
+        .expect("the moved centre exposes a worker submission");
+    let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+    assert!(displacement[0].hypot(displacement[1]) > f64::from(WIDTH) / 4.0);
+    assert!(reference_submission_requires_worker(
+        false,
+        moved.navigation.centre == accepted_centre,
+        plane,
+        moved.navigation.precision_mode,
+        nudged_precision.requested_bits,
+        CAP,
+        Some(renewed),
+    ));
+}
+
+#[test]
+fn a_different_plane_invalidates_a_lease_at_the_identical_generation() {
+    let plane = Plane {
+        basis_u: [0.0, 0.0, 1.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
+    let different_plane = Plane {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
+    let lease = ReferenceLeaseIdentity {
+        main_generation: 11,
+        source_generation: 11,
+        centre_revision: 6,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: 128,
+        orbit_length: 512,
+    };
+    assert!(!perturbation_reference_is_current(
+        11,
+        6,
+        different_plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        512,
+        Some(lease),
+    ));
+}
+
+#[test]
+fn lease_renewal_refreshes_generation_revision_and_precision_from_navigation() {
+    let plane = Plane {
+        basis_u: [0.0, 0.0, 1.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
+    let mut lease = ReferenceLeaseIdentity {
+        main_generation: 4,
+        source_generation: 4,
+        centre_revision: 2,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: 128,
+        orbit_length: 512,
+    };
+    renew_reference_lease_identity(&mut lease, 5, 3, PrecisionMode::Deterministic as u32);
+    assert!(perturbation_reference_is_current(
+        5,
+        3,
+        plane,
+        PrecisionMode::Deterministic as u32,
+        128,
+        512,
+        Some(lease),
+    ));
+    assert!(!perturbation_reference_is_current(
+        5,
+        3,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        512,
+        Some(lease),
+    ));
+}
+
+#[test]
+fn a_longer_reference_span_is_not_leased_to_a_lower_cap() {
+    let plane = Plane {
+        basis_u: [0.0, 0.0, 1.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
+    let lease = ReferenceLeaseIdentity {
+        main_generation: 8,
+        source_generation: 7,
+        centre_revision: 4,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: 128,
+        orbit_length: 512,
+    };
+    assert!(reference_submission_requires_worker(
+        false,
+        true,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        128,
+        256,
+        Some(lease),
+    ));
+}
+
+#[test]
+fn accepted_reference_facts_keep_verification_separate_from_escalations() {
+    let deferred = accepted_reference_facts(ReferenceVerification::Deferred, None, 0);
+    assert_eq!(deferred.reference_verification, "Deferred");
+    assert_eq!(deferred.consumed_word_error_ulps, None);
+    assert_eq!(deferred.precision_escalations, 0);
+
+    let stable = accepted_reference_facts(ReferenceVerification::Stable, Some(2), 0);
+    assert_eq!(stable.reference_verification, "Stable");
+    assert_eq!(stable.consumed_word_error_ulps, Some(2));
+    assert_eq!(stable.precision_escalations, 0);
+
+    let stable_after_escalation =
+        accepted_reference_facts(ReferenceVerification::Stable, Some(1), 3);
+    assert_eq!(stable_after_escalation.reference_verification, "Stable");
+    assert_eq!(stable_after_escalation.consumed_word_error_ulps, Some(1));
+    assert_eq!(stable_after_escalation.precision_escalations, 3);
+
+    let deferred_after_escalation =
+        accepted_reference_facts(ReferenceVerification::Deferred, None, 2);
+    assert_eq!(deferred_after_escalation.reference_verification, "Deferred");
+    assert_eq!(deferred_after_escalation.consumed_word_error_ulps, None);
+    assert_eq!(deferred_after_escalation.precision_escalations, 2);
 }

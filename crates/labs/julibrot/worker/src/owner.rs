@@ -533,6 +533,46 @@ impl ViewerOwner {
         true
     }
 
+    /// Accepts the latest navigation selection under an app-certified compatible orbit lease.
+    ///
+    /// The app must prove that the reference centre, plane, precision policy, and stored orbit
+    /// remain sufficient for the new selection. This owner transition only renews MAIN identity;
+    /// it preserves the existing orbit resource and keeps HOT's current reference displacement.
+    #[must_use]
+    pub fn accept_navigation_with_orbit(
+        &mut self,
+        generation: u32,
+        centre_revision: u32,
+        orbit_id: u32,
+        orbit_length: u32,
+        precision_bits: u32,
+    ) -> bool {
+        let Some(navigation) = self.navigation.as_mut() else {
+            return false;
+        };
+        if navigation.in_flight_generation != Some(generation) {
+            return false;
+        }
+        navigation.in_flight_generation = None;
+        if generation != self.latest_requested_generation.get()
+            || centre_revision != self.staged_main.get().centre_revision
+            || orbit_id == 0
+            || orbit_length == 0
+            || precision_bits == 0
+        {
+            return false;
+        }
+        let mut main = self.staged_main.get();
+        main.generation_applied = generation;
+        main.centre_revision = centre_revision;
+        main.precision_bits = precision_bits;
+        main.orbit_length = orbit_length;
+        main.orbit_id = orbit_id;
+        main.reference_shift_px = [0.0; 2];
+        self.staged_main.set(main);
+        true
+    }
+
     /// Stages latest-generation orbit fields and accepted-reference motion.
     #[must_use]
     pub fn accept_orbit(
@@ -898,6 +938,45 @@ mod tests {
         assert_eq!(state.main.orbit_id, 0);
         assert_eq!(state.main.reference_shift_px, [0.0; 2]);
         assert_ne!(state.hot.centre_from_reference_px, [0.0; 2]);
+        assert_eq!(owner.reference_centre(), Some(reference_before));
+        Ok(())
+    }
+
+    #[test]
+    fn compatible_orbit_acceptance_renews_main_without_replacing_the_reference()
+    -> Result<(), OwnerError> {
+        let mut owner = navigation_owner()?;
+        owner.stage_main(MainState {
+            precision_bits: 256,
+            orbit_length: 512,
+            orbit_id: 9,
+            reference_shift_px: [3.0, -2.0],
+            ..MainState::default()
+        });
+        let reference_before = owner
+            .reference_centre()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        let generation = owner.navigate(NavigationDelta {
+            zoom_delta_log2: f64::EPSILON,
+            ..NavigationDelta::default()
+        });
+        let submission = owner
+            .take_navigation_submission()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        assert!(owner.accept_navigation_with_orbit(
+            generation,
+            submission.centre_revision,
+            9,
+            512,
+            256,
+        ));
+        let state = owner.drain_main();
+        assert_eq!(state.main.generation_applied, generation);
+        assert_eq!(state.main.centre_revision, submission.centre_revision);
+        assert_eq!(state.main.precision_bits, 256);
+        assert_eq!(state.main.orbit_length, 512);
+        assert_eq!(state.main.orbit_id, 9);
+        assert_eq!(state.main.reference_shift_px, [0.0; 2]);
         assert_eq!(owner.reference_centre(), Some(reference_before));
         Ok(())
     }

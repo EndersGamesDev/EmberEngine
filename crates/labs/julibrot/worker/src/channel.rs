@@ -923,7 +923,7 @@ impl ChannelCore {
         &mut self,
         request: OrbitRequest,
     ) -> Result<Option<OrbitRequest>, ChannelError> {
-        if request.max_iter() != self.config.max_iter {
+        if request.max_iter() > self.config.max_iter {
             if !self.is_reconciled() {
                 return Ok(Some(request));
             }

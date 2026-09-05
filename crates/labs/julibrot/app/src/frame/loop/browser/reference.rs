@@ -146,8 +146,9 @@ impl BrowserFrameLoop {
         response: &ember_julibrot_worker::OrbitResponseView,
         submitted: Option<SubmittedReference>,
     ) -> Result<(OrbitDisposition, bool), AppError> {
+        let response_observed_us = monotonic_now_us();
         let Some(submitted) = submitted.filter(|submitted| {
-            submitted.precision_mode == viewer.requested().precision_mode.as_str()
+            submitted.precision_mode == viewer.requested().precision_mode as u32
                 && super::super::arrival_is_current(
                     response.cancelled(),
                     response.generation(),
@@ -162,6 +163,7 @@ impl BrowserFrameLoop {
             self.sampled_resume_level = None;
             return Ok((OrbitDisposition::Stale, false));
         }
+        let upload_started_us = monotonic_now_us();
         let records = response
             .records
             .transfer_record_bytes()
@@ -179,11 +181,12 @@ impl BrowserFrameLoop {
             let _freed = self.executor.free_span(span);
             return Err(heap_error(error));
         }
+        let upload_finished_us = monotonic_now_us();
         let registered = RegisteredOrbit {
             span: span.clone(),
             length: response.length(),
             precision_bits: response.precision_bits(),
-            precision_mode: submitted.precision_mode,
+            precision_mode: viewer_precision_mode(submitted.precision_mode),
         };
         let handle = match self.orbits.insert(response.generation(), registered) {
             Ok(handle) => handle,
@@ -211,6 +214,7 @@ impl BrowserFrameLoop {
                 return Err(math_error(error));
             }
         };
+        let accepted_view_centre = submitted.view_centre.clone();
         if let Err(error) = viewer.configure_navigation_context(
             submitted.view_centre,
             submitted.reference_centre.clone(),
@@ -227,6 +231,21 @@ impl BrowserFrameLoop {
         self.replace_current_orbit(handle)?;
         self.accepted_reference = Some(submitted.reference_centre);
         self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
+        self.accepted_reference_receipt = Some(AcceptedReferenceReceipt {
+            lease: super::super::ReferenceLeaseIdentity {
+                main_generation: response.generation(),
+                source_generation: response.generation(),
+                centre_revision: response.centre_revision(),
+                plane: submitted.plane,
+                precision_mode: submitted.precision_mode,
+                precision_bits: response.precision_bits(),
+                orbit_length: response.length(),
+            },
+            view_centre: accepted_view_centre,
+            verification: response.reference_verification(),
+            max_consumed_word_error_ulps: response.max_consumed_word_error_ulps(),
+            precision_escalations: response.precision_escalations(),
+        });
         self.sampled_request_at_length = None;
         if submitted.sampled {
             self.sampled_reference_rounds = self.sampled_reference_rounds.saturating_add(1);
@@ -237,8 +256,6 @@ impl BrowserFrameLoop {
             self.sampled_resume_level = None;
         }
         self.main = viewer.drain_main()?.main;
-        self.level_timings
-            .record_worker(response.centre_revision(), response.compute_us(), None);
         self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
         match self
             .sampled_resume_level
@@ -255,6 +272,21 @@ impl BrowserFrameLoop {
         let map = viewer.screen_map(self.prepared_extent())?;
         let plane = viewer.checked_plane();
         self.install_main(viewer, requested.object_angles, plane, map);
+        let accepted_us = monotonic_now_us();
+        self.level_timings.record_reference(
+            response.centre_revision(),
+            ReferenceTimingSample {
+                worker_generation: Some(u64::from(response.compute_us())),
+                credit_wait: None,
+                request_transfer: submitted.request_transfer_us,
+                worker_round_trip_callback_observation: elapsed_us(
+                    submitted.transferred_at_us,
+                    response_observed_us,
+                ),
+                acceptance: elapsed_us(response_observed_us, accepted_us),
+                reference_upload: elapsed_us(upload_started_us, upload_finished_us),
+            },
+        );
         Ok((disposition, true))
     }
 
@@ -294,12 +326,66 @@ impl BrowserFrameLoop {
             self.install_main(viewer, requested.object_angles, plane, map);
             return Ok(true);
         }
+        let precision_mode =
+            PrecisionMode::from_u32(navigation.precision_mode).ok_or_else(|| {
+                AppError::Worker(format!(
+                    "precision mode {} is outside 0..1",
+                    navigation.precision_mode
+                ))
+            })?;
         let precision = precision_for(
             navigation.zoom_log2,
             self.plan.requested_extent.width,
             requested.iteration_cap,
         )
         .map_err(math_error)?;
+        let renews_lease = !super::super::reference_submission_requires_worker(
+            sampled,
+            self.accepted_reference_receipt
+                .as_ref()
+                .is_some_and(|receipt| receipt.view_centre == navigation.centre),
+            plane,
+            navigation.precision_mode,
+            precision.requested_bits,
+            requested.iteration_cap,
+            self.accepted_reference_receipt
+                .as_ref()
+                .map(|receipt| receipt.lease),
+        );
+        if renews_lease {
+            let handle = self
+                .current_orbit
+                .ok_or_else(|| AppError::Worker("compatible lease has no orbit".to_string()))?;
+            let orbit = self.orbits.get(handle).map_err(registry_error)?;
+            if !viewer.owner_mut().accept_navigation_with_orbit(
+                navigation.generation,
+                navigation.centre_revision,
+                handle.id,
+                orbit.length,
+                orbit.precision_bits,
+            ) {
+                return Err(AppError::Worker(
+                    "compatible reference lease renewal was refused".to_string(),
+                ));
+            }
+            let receipt = self.accepted_reference_receipt.as_mut().ok_or_else(|| {
+                AppError::Worker("compatible lease receipt is missing".to_string())
+            })?;
+            super::super::renew_reference_lease_identity(
+                &mut receipt.lease,
+                navigation.generation,
+                navigation.centre_revision,
+                navigation.precision_mode,
+            );
+            receipt.view_centre = navigation.centre;
+            self.main = viewer.drain_main()?.main;
+            self.rebuild_grid_if_needed(requested.iteration_cap)?;
+            self.loop_state.scene_input_ready(navigation.generation);
+            self.prepared_level = None;
+            let map = viewer.screen_map(self.prepared_extent())?;
+            self.install_main(viewer, requested.object_angles, plane, map);
+            return Ok(true);
+        }
         let centre =
             EncodedCentre::encode_math(&submission.reference_centre, navigation.centre_revision)
                 .map_err(worker_error)?;
@@ -309,12 +395,7 @@ impl BrowserFrameLoop {
             depth_digits(navigation.zoom_log2),
             precision.requested_bits,
             requested.iteration_cap,
-            PrecisionMode::from_u32(navigation.precision_mode).ok_or_else(|| {
-                AppError::Worker(format!(
-                    "precision mode {} is outside 0..1",
-                    navigation.precision_mode
-                ))
-            })?,
+            precision_mode,
             submission.reason,
         )
         .map_err(worker_error)?;
@@ -326,10 +407,22 @@ impl BrowserFrameLoop {
                     AppError::Worker(format!("reference upload reserve failed: {error}"))
                 })?;
         }
-        if self.owner_endpoint.submit(request) == SubmitOutcome::GenerationExhausted {
+        let transfer_started_us = monotonic_now_us();
+        let submit_outcome = self.owner_endpoint.submit(request);
+        let transfer_finished_us = monotonic_now_us();
+        if submit_outcome == SubmitOutcome::GenerationExhausted {
             let _finished = viewer.finish_reference_submission(navigation.generation);
             return Err(AppError::GenerationExhausted);
         }
+        let (request_transfer_us, transferred_at_us) =
+            if submit_outcome == SubmitOutcome::Transferred {
+                (
+                    elapsed_us(transfer_started_us, transfer_finished_us),
+                    transfer_finished_us,
+                )
+            } else {
+                (None, None)
+            };
         self.submitted_references.push(SubmittedReference {
             generation: navigation.generation,
             view_centre: navigation.centre,
@@ -337,7 +430,9 @@ impl BrowserFrameLoop {
             sampled,
             zoom_log2: navigation.zoom_log2,
             plane,
-            precision_mode: viewer_precision_mode(navigation.precision_mode),
+            precision_mode: navigation.precision_mode,
+            request_transfer_us,
+            transferred_at_us,
         });
         Ok(false)
     }
@@ -345,14 +440,57 @@ impl BrowserFrameLoop {
     pub(super) fn scene_ready(&self, zoom_log2: f64) -> bool {
         match KernelMode::for_zoom(zoom_log2) {
             KernelMode::Shallow => self.shallow_centre.is_some(),
-            KernelMode::Perturbation => super::super::perturbation_reference_is_current(
-                zoom_log2,
-                self.main.generation_applied,
-                self.current_orbit
-                    .zip(self.accepted_reference_zoom_log2)
-                    .map(|(handle, reference_zoom_log2)| (handle.generation, reference_zoom_log2)),
-            ),
+            KernelMode::Perturbation => {
+                let Some(receipt) = self.accepted_reference_receipt.as_ref() else {
+                    return false;
+                };
+                let requested_precision_bits = precision_for(
+                    zoom_log2,
+                    self.plan.requested_extent.width,
+                    self.main.requested_iter_cap,
+                )
+                .map_or(u32::MAX, |precision| precision.requested_bits);
+                self.current_orbit.is_some()
+                    && super::super::perturbation_reference_is_current(
+                        self.main.generation_applied,
+                        self.main.centre_revision,
+                        self.requested_plane,
+                        self.main.precision_mode,
+                        requested_precision_bits,
+                        self.main.requested_iter_cap,
+                        Some(receipt.lease),
+                    )
+            }
         }
+    }
+
+    /// Returns the accepted reference's honest verification tier.
+    #[must_use]
+    pub fn accepted_reference_verification(&self) -> Option<&'static str> {
+        self.accepted_reference_receipt.as_ref().map(|receipt| {
+            super::super::accepted_reference_facts(
+                receipt.verification,
+                receipt.max_consumed_word_error_ulps,
+                receipt.precision_escalations,
+            )
+            .reference_verification
+        })
+    }
+
+    /// Returns the accepted reference's measured consumed-word error when verification ran.
+    #[must_use]
+    pub fn accepted_reference_consumed_word_error_ulps(&self) -> Option<u32> {
+        self.accepted_reference_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.max_consumed_word_error_ulps)
+    }
+
+    /// Returns the number of precision escalations paid before reference acceptance.
+    #[must_use]
+    pub fn accepted_reference_precision_escalations(&self) -> Option<u32> {
+        self.accepted_reference_receipt
+            .as_ref()
+            .map(|receipt| receipt.precision_escalations)
     }
 
     fn replace_current_orbit(&mut self, next: OrbitHandle) -> Result<(), AppError> {
@@ -365,5 +503,19 @@ impl BrowserFrameLoop {
     fn remove_orbit(&mut self, handle: OrbitHandle) -> Result<(), AppError> {
         let orbit = self.orbits.remove(handle).map_err(registry_error)?;
         self.executor.free_span(orbit.span).map_err(heap_error)
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn monotonic_now_us() -> Option<u64> {
+    let milliseconds = web_sys::window()?.performance()?.now();
+    (milliseconds.is_finite() && milliseconds >= 0.0)
+        .then(|| (milliseconds * 1_000.0).floor().min(u64::MAX as f64) as u64)
+}
+
+const fn elapsed_us(start: Option<u64>, end: Option<u64>) -> Option<u64> {
+    match (start, end) {
+        (Some(start), Some(end)) if end >= start => Some(end - start),
+        _ => None,
     }
 }

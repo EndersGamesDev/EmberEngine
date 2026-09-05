@@ -123,6 +123,9 @@ pub(crate) trait OwnerPort {
     /// Stops the current producer and starts a fresh one from the cached module artifact.
     fn restart_producer(&mut self) -> Result<(), ChannelError>;
 
+    /// Stops the producer without replacing it after a closing drain becomes terminal.
+    fn terminate_producer(&mut self);
+
     /// Reads the owner-side monotonic clock in microseconds.
     fn now_us(&self) -> Result<u64, ChannelError>;
 }
@@ -241,12 +244,8 @@ impl<P: OwnerPort> OwnerCore<P> {
             return SubmitOutcome::Coalesced;
         }
         self.pending_request = Some(request);
-        if requested_cap != self.config.max_iter {
+        if requested_cap > self.config.max_iter {
             self.arm_resize(requested_cap);
-        } else if let Some(drain) = self.drain.as_mut()
-            && drain.resize.is_some()
-        {
-            drain.resize = Some(requested_cap);
         }
         let transferred = self.pump_request();
         self.bump_facts();
@@ -408,7 +407,8 @@ impl<P: OwnerPort> OwnerCore<P> {
         Ok(())
     }
 
-    /// Reports whether the producer returned all four slots and acknowledged the closing drain.
+    /// Reports whether all four slots returned and the producer acknowledged, or the closing
+    /// drain became terminal at its deadline; callers inspect `take_error` to distinguish them.
     pub(crate) const fn shutdown_acknowledged(&self) -> bool {
         self.reconciled
     }
@@ -466,11 +466,14 @@ impl<P: OwnerPort> OwnerCore<P> {
         };
         let acknowledged = drain.acknowledged && home;
         self.reconciled = acknowledged;
-        let Some(max_iter) = drain.resize else {
-            return Ok(());
-        };
+        let resize = drain.resize;
         if acknowledged {
-            return self.restart_pool(max_iter);
+            return if let Some(max_iter) = resize {
+                self.restart_pool(max_iter)
+            } else {
+                self.finish_close();
+                Ok(())
+            };
         }
         let armed_us = drain.armed_us;
         let now_us = self.port.now_us()?;
@@ -478,7 +481,10 @@ impl<P: OwnerPort> OwnerCore<P> {
             return Ok(());
         }
         let missing = self.first_missing_slot();
-        self.restart_pool(max_iter)?;
+        match resize {
+            Some(max_iter) => self.restart_pool(max_iter)?,
+            None => self.finish_close(),
+        }
         Err(ChannelError::new(
             ErrorCode::BufferStarved,
             missing.0 as u32,
@@ -510,7 +516,10 @@ impl<P: OwnerPort> OwnerCore<P> {
             return;
         }
         match self.drain.as_mut() {
-            Some(drain) => drain.resize = Some(max_iter),
+            Some(drain) => {
+                let target = drain.resize.unwrap_or(self.config.max_iter);
+                drain.resize = Some(target.max(max_iter));
+            }
             None => {
                 self.drain = Some(Drain {
                     resize: Some(max_iter),
@@ -568,6 +577,19 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.port.probe_abi()
     }
 
+    fn finish_close(&mut self) {
+        self.port.terminate_producer();
+        self.request_owned.clear();
+        self.orbit_owned.clear();
+        self.arrivals.clear();
+        self.orbit_leases = 0;
+        self.pool_epoch = self.pool_epoch.wrapping_add(1);
+        self.ready = false;
+        self.reconciled = true;
+        self.drain = None;
+        self.refresh_facts();
+    }
+
     fn replace_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
         self.allocate_pool(max_iter)?;
         self.arrivals.clear();
@@ -603,7 +625,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.request_owned.push(slot);
             return false;
         };
-        if request.max_iter() != self.config.max_iter {
+        if request.max_iter() > self.config.max_iter {
             let requested_cap = request.max_iter();
             self.pending_request = Some(request);
             self.request_owned.push(slot);
@@ -954,6 +976,15 @@ mod tests {
             Ok(())
         }
 
+        fn terminate_producer(&mut self) {
+            let mut wire = self.wire.borrow_mut();
+            wire.producer = FakeProducer {
+                closed: true,
+                ..FakeProducer::default()
+            };
+            wire.to_owner.clear();
+        }
+
         fn now_us(&self) -> Result<u64, ChannelError> {
             Ok(self.wire.borrow().now_us)
         }
@@ -1074,13 +1105,13 @@ mod tests {
     }
 
     #[test]
-    fn a_lower_cap_with_work_in_flight_resizes_instead_of_refusing_a_length() {
+    fn a_lower_cap_reuses_the_stable_pool_without_refusing_a_length() {
         let mut harness = Harness::boot(512);
         assert_eq!(harness.submit(1, 512), SubmitOutcome::Transferred);
         let work = harness.wire.borrow_mut().begin_work().expect("in flight");
 
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
-        assert_eq!(harness.core.pending_request_depth(), 1);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
+        assert_eq!(harness.core.pending_request_depth(), 0);
         assert_eq!(
             harness.core.take_error(),
             None,
@@ -1100,29 +1131,33 @@ mod tests {
         );
 
         assert_eq!(harness.core.pending_request_depth(), 0);
-        assert_eq!(harness.core.facts().allocation_events, 2);
-        assert_eq!(harness.wire.borrow().restarts, 1);
+        assert_eq!(harness.core.facts().allocation_events, 1);
+        assert_eq!(harness.wire.borrow().restarts, 0);
         assert_eq!(harness.wire.borrow().delivered, vec![(1, 512), (2, 64)]);
         assert_eq!(harness.core.take_error(), None);
 
         harness.produce(64);
         assert_eq!(
             harness.drain_arrival(OrbitDisposition::Applied),
-            (2, 64, buffer_capacity(64).unwrap()),
-            "the next orbit arrives in a buffer of exactly the new capacity"
+            (2, 64, buffer_capacity(512).unwrap()),
+            "the lower-cap orbit arrives in the unchanged stable pool"
         );
         assert_eq!(harness.core.facts().applied_count, 1);
     }
 
     #[test]
-    fn the_cap_sequence_512_64_4096_512_never_wedges_the_pending_request() {
+    fn the_cap_sequence_grows_the_stable_pool_only_once() {
         let mut harness = Harness::boot(512);
         let mut generation = 1;
         assert_eq!(harness.submit(generation, 512), SubmitOutcome::Transferred);
-        for cap in [64_u32, 4_096, 512] {
+        for (cap, expected) in [
+            (64_u32, SubmitOutcome::Transferred),
+            (4_096, SubmitOutcome::Coalesced),
+            (512, SubmitOutcome::Transferred),
+        ] {
             let work = harness.wire.borrow_mut().begin_work().expect("in flight");
             generation += 1;
-            assert_eq!(harness.submit(generation, cap), SubmitOutcome::Coalesced);
+            assert_eq!(harness.submit(generation, cap), expected);
             harness
                 .wire
                 .borrow_mut()
@@ -1139,9 +1174,49 @@ mod tests {
             );
         }
         let facts = harness.core.facts();
-        assert_eq!(facts.allocation_events, 4);
+        assert_eq!(facts.allocation_events, 2);
         assert_eq!(facts.stale_count, 3);
-        assert_eq!(harness.wire.borrow().restarts, 3);
+        assert_eq!(harness.wire.borrow().restarts, 1);
+    }
+
+    #[test]
+    fn ten_cap_changes_collapse_into_one_growth_drain_without_starvation() {
+        let mut harness = Harness::boot(64);
+        assert_eq!(harness.submit(1, 64), SubmitOutcome::Transferred);
+        let work = harness.wire.borrow_mut().begin_work().expect("in flight");
+        let caps = [
+            128_u32, 256, 512, 1_024, 2_048, 4_096, 2_048, 1_024, 256, 512,
+        ];
+        let mut generation = 1;
+        let mut maximum_drain_depth = 0;
+        for cap in caps {
+            generation += 1;
+            assert_eq!(harness.submit(generation, cap), SubmitOutcome::Coalesced);
+            maximum_drain_depth =
+                maximum_drain_depth.max(harness.core.facts().shutdown_queue_depth);
+            assert_eq!(harness.core.take_error(), None);
+        }
+        assert_eq!(maximum_drain_depth, 1, "the burst arms one bounded drain");
+
+        harness
+            .wire
+            .borrow_mut()
+            .finish_work(work.0, work.1, &orbit_records(8))
+            .unwrap();
+        harness.pump();
+        assert_eq!(
+            harness.drain_arrival(OrbitDisposition::Stale).0,
+            1,
+            "the old arrival is returned instead of starving the pool"
+        );
+        assert_eq!(harness.core.pending_request_depth(), 0);
+        assert_eq!(harness.core.facts().allocation_events, 2);
+        assert_eq!(harness.wire.borrow().restarts, 1);
+        assert_eq!(
+            harness.wire.borrow().delivered.last(),
+            Some(&(generation, 512))
+        );
+        assert_eq!(harness.core.take_error(), None);
     }
 
     #[test]
@@ -1152,7 +1227,7 @@ mod tests {
         let held_epoch = harness.core.pool_epoch();
         let (held, _) = harness.core.take_arrival().expect("one queued arrival");
 
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
+        assert_eq!(harness.submit(2, 4_096), SubmitOutcome::Coalesced);
         assert_eq!(harness.core.facts().allocation_events, 1);
         assert_eq!(harness.core.pending_request_depth(), 1);
 
@@ -1172,7 +1247,7 @@ mod tests {
         );
         harness.pump();
         assert_eq!(harness.core.pending_request_depth(), 0);
-        assert_eq!(harness.wire.borrow().delivered.last(), Some(&(2, 64)));
+        assert_eq!(harness.wire.borrow().delivered.last(), Some(&(2, 4_096)));
 
         let now_us = harness.wire.borrow().now_us;
         harness
@@ -1184,10 +1259,10 @@ mod tests {
             2,
             "a lease from the superseded pool is charged and dropped, never transferred"
         );
-        harness.produce(64);
+        harness.produce(4_096);
         assert_eq!(
             harness.drain_arrival(OrbitDisposition::Applied),
-            (2, 64, buffer_capacity(64).unwrap())
+            (2, 4_096, buffer_capacity(4_096).unwrap())
         );
     }
 
@@ -1208,6 +1283,43 @@ mod tests {
             SubmitOutcome::GenerationExhausted
         );
         assert_eq!(harness.core.take_error(), None);
+    }
+
+    #[test]
+    fn a_closing_drain_with_a_missing_slot_terminates_at_the_deadline() {
+        let mut harness = Harness::boot(64);
+        assert_eq!(harness.submit(1, 64), SubmitOutcome::Transferred);
+        harness.produce(4);
+        let held_epoch = harness.core.pool_epoch();
+        let (held, _) = harness.core.take_arrival().expect("one leased slot");
+
+        harness.core.shutdown().unwrap();
+        harness.pump();
+        assert!(!harness.core.shutdown_acknowledged());
+        harness.core.port_mut().wire.borrow_mut().now_us =
+            u64::from(crate::BUFFER_RETURN_DEADLINE_US);
+        let facts = harness.core.facts();
+        assert!(harness.core.shutdown_acknowledged());
+        assert_eq!(facts.shutdown_queue_depth, 0);
+        assert_eq!(facts.request_buffers_owned_main, 0);
+        assert_eq!(facts.orbit_buffers_owned_main, 0);
+        assert_eq!(
+            harness.core.take_error(),
+            Some(ChannelError::new(
+                ErrorCode::BufferStarved,
+                Pool::Orbit as u32,
+                0,
+                0
+            )),
+            "the terminal refusal names the slot that never returned"
+        );
+
+        let now_us = harness.wire.borrow().now_us;
+        harness
+            .core
+            .return_slot(held, held_epoch, OrbitDisposition::Stale, now_us)
+            .unwrap();
+        assert_eq!(harness.core.facts().orbit_buffers_owned_main, 0);
     }
 
     #[test]
@@ -1383,7 +1495,7 @@ mod tests {
         let mut harness = Harness::boot(512);
         assert_eq!(harness.submit(1, 512), SubmitOutcome::Transferred);
         let work = harness.wire.borrow_mut().begin_work().expect("in flight");
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
         harness
             .wire
             .borrow_mut()
@@ -1397,7 +1509,7 @@ mod tests {
             WorkerChannel::new(WorkerConfig { max_iter: 512 }, WorkerMode::SameThread).unwrap();
         assert_eq!(owner.submit(request(1, 512)), SubmitOutcome::Transferred);
         let lease = producer.next_request().unwrap().unwrap();
-        assert_eq!(owner.submit(request(2, 64)), SubmitOutcome::Coalesced);
+        assert_eq!(owner.submit(request(2, 64)), SubmitOutcome::Transferred);
         producer
             .complete(lease, &orbit_records(8), 64, 1_000, 250_000)
             .unwrap();
