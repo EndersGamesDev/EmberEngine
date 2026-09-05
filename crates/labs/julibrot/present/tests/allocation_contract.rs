@@ -100,10 +100,10 @@ fn pose(displacement: [f64; 2]) -> Pose {
     }
 }
 
-const fn frame(pose: Pose) -> SceneFrame {
+const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
-        pose,
+        pose: *pose,
         palette: PaletteId::Classic,
         iteration_cap: 256,
         level: RefinementLevel::Final,
@@ -129,7 +129,7 @@ const fn frame(pose: Pose) -> SceneFrame {
 fn planning_the_full_error_corpus_allocates_nothing() {
     let from = pose([0.0; 2]);
     let to = pose([5.0, -3.0]);
-    let retained = frame(from);
+    let retained = frame(&from);
     let plan = || {
         Warp::reproject(
             &retained,
