@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
@@ -21,6 +22,7 @@ use ember_engine::{
 };
 use serde::Deserialize;
 
+use crate::contact;
 use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
 use crate::grips;
 use crate::harbor::HarborArt;
@@ -1425,6 +1427,9 @@ pub struct ShooterGame {
     climate: weather::Climate,
     weather_override: Option<ember_engine::Weather>,
     obstacles: Vec<Obstacle>,
+    /// Immutable static contact field, rebuilt only after changed level joins.
+    occlusion: Option<Arc<ember_engine::OcclusionField>>,
+    occlusion_cache: contact::Cache,
     metas: HashMap<u8, PlayerMeta>,
     from: HashMap<u8, PSnap>,
     to: HashMap<u8, PSnap>,
@@ -1657,6 +1662,8 @@ impl ShooterGame {
             climate: weather::Climate::Yard,
             weather_override: weather::capture_override(),
             obstacles: Vec::new(),
+            occlusion: None,
+            occlusion_cache: contact::Cache::default(),
             metas: HashMap::new(),
             from: HashMap::new(),
             to: HashMap::new(),
@@ -2417,6 +2424,9 @@ impl EmberGame for ShooterGame {
                     self.round_pause = 0.0;
                     self.round_line = None;
                     self.obstacles = level.obstacles;
+                    self.occlusion =
+                        self.occlusion_cache
+                            .for_level(&map, self.arena_half, &self.obstacles);
                     self.pads_pos = level.pads;
                     self.decor = level.decor;
                     self.pads_active = vec![true; self.pads_pos.len()];
@@ -3516,6 +3526,7 @@ impl EmberGame for ShooterGame {
             instances: Vec::with_capacity(160),
             fog,
             environment,
+            occlusion: self.occlusion.clone(),
             particles: weather::rain(
                 camera.eye,
                 self.time,
@@ -3560,6 +3571,7 @@ impl EmberGame for ShooterGame {
                         Vec3::ONE,
                     )
                     .with_mesh(pr.mesh(Prop::Floor))
+                    .with_surface(0.94, 0.0)
                     .with_wetness(),
                 );
             }
@@ -5097,6 +5109,8 @@ mod wire_tests {
     }
 
     #[test]
+    // One continuous join/replay/map-change sequence verifies cache ownership.
+    #[allow(clippy::too_many_lines)]
     fn harbor_join_selects_port_art_and_prediction_replays_outside_old_bounds() {
         let (chan, inbox, _wire) = net::NetChan::detached_duplex();
         let mut game = ShooterGame::with_chan(chan, None, None);
@@ -5117,6 +5131,11 @@ mod wire_tests {
         assert_eq!(game.arena_half, 48.0);
         assert_eq!(game.climate, weather::Climate::Harbor);
         assert_eq!(game.obstacles, Level::harbor().obstacles);
+        let harbor_contact = game.occlusion.clone().expect("harbor contact field");
+        assert!(Arc::ptr_eq(
+            frame.occlusion.as_ref().expect("rendered contact field"),
+            &harbor_contact
+        ));
         assert!(
             frame.instances.iter().any(|i| i.mesh >= 1000),
             "port art is selected"
@@ -5141,6 +5160,10 @@ mod wire_tests {
         for _ in 0..30 {
             game.update(&walk, FIXED_DT);
         }
+        assert!(Arc::ptr_eq(
+            game.occlusion.as_ref().unwrap(),
+            &harbor_contact
+        ));
         assert!(
             (game.pred_pos.x - 40.0).abs() < 0.01,
             "4 m/s prediction past x24: {:?}",
@@ -5195,6 +5218,9 @@ mod wire_tests {
         assert!(!game.is_harbor);
         assert_eq!(game.arena_half, 24.0);
         assert_eq!(game.climate, weather::Climate::City);
+        let city_contact = game.occlusion.as_ref().expect("city contact field");
+        assert!(!Arc::ptr_eq(city_contact, &harbor_contact));
+        assert!(Arc::ptr_eq(frame.occlusion.as_ref().unwrap(), city_contact));
         assert!(
             !frame.instances.iter().any(|i| i.mesh >= 1000),
             "old maps do not inherit harbor scenery"

@@ -22,6 +22,7 @@ use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use crate::OcclusionField;
 use crate::environment::{Environment, Particle};
 
 /// A vertex of a registered mesh (matches the built-in cube's layout).
@@ -132,6 +133,16 @@ const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
     ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
 ];
 
+/// Scalar outdoor surface response; textures still supply base color only.
+/// Coated/painted metal is dielectric (`metallic = 0`), not bare metal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Surface {
+    /// Perceptual roughness; sanitized to 0.08..=1 at GPU upload.
+    pub roughness: f32,
+    /// Bare-metal fraction; sanitized to 0..=1 at GPU upload.
+    pub metallic: f32,
+}
+
 /// One draw unit: a colored mesh instance (default: the unit cube),
 /// optionally rotated. Vertices are scaled first, then rotated.
 #[derive(Clone, Copy, Debug)]
@@ -148,6 +159,8 @@ pub struct Instance {
     pub casts_shadow: bool,
     /// Allow the environment's wetness to add sky and sun reflections.
     pub wettable: bool,
+    /// None preserves legacy shading. Used only with an outdoor environment.
+    pub surface: Option<Surface>,
 }
 
 impl Instance {
@@ -161,6 +174,7 @@ impl Instance {
             mesh: 0,
             casts_shadow: true,
             wettable: false,
+            surface: None,
         }
     }
 
@@ -191,6 +205,18 @@ impl Instance {
     #[must_use]
     pub const fn with_wetness(mut self) -> Self {
         self.wettable = true;
+        self
+    }
+
+    /// Opt into view-dependent outdoor material lighting. This adds neither
+    /// material maps nor scene-geometry reflections. Invalid values are made
+    /// finite and clamped on upload (roughness fallback 1, metallic fallback 0).
+    #[must_use]
+    pub const fn with_surface(mut self, roughness: f32, metallic: f32) -> Self {
+        self.surface = Some(Surface {
+            roughness,
+            metallic,
+        });
         self
     }
 }
@@ -253,6 +279,8 @@ pub struct Frame {
     pub fog: Fog,
     /// Opt-in outdoor sky, directional light, shadows and wet reflections.
     pub environment: Environment,
+    /// Immutable static indirect-light visibility. Bake once, then share each frame.
+    pub occlusion: Option<Arc<OcclusionField>>,
     /// Camera-facing alpha particles drawn after opaque geometry.
     pub particles: Vec<Particle>,
 }
@@ -276,6 +304,8 @@ struct SceneUniform {
     wind_time: [f32; 4],
     camera_right: [f32; 4],
     camera_up: [f32; 4],
+    occlusion_min_strength: [f32; 4],
+    occlusion_cell: [f32; 4],
 }
 
 impl SceneUniform {
@@ -362,6 +392,14 @@ impl SceneUniform {
             ],
             camera_right: right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
+            occlusion_min_strength: frame
+                .occlusion
+                .as_ref()
+                .map_or([0.0; 4], |field| field.min().extend(0.65).to_array()),
+            occlusion_cell: frame
+                .occlusion
+                .as_ref()
+                .map_or([1.0; 4], |field| field.cell_size().extend(0.0).to_array()),
         }
     }
 }
@@ -393,8 +431,31 @@ struct InstanceRaw {
     scale: [f32; 3],
     color: [f32; 3],
     rot: [f32; 4],
-    /// Wettable, then casts/receives shadows.
-    material: [f32; 2],
+    /// Wettable, shadow receiver, roughness (-1 = legacy), metallic.
+    material: [f32; 4],
+}
+
+impl From<&Instance> for InstanceRaw {
+    fn from(instance: &Instance) -> Self {
+        let (roughness, metallic) = instance.surface.map_or((-1.0, 0.0), |surface| {
+            (
+                finite_clamp(surface.roughness, 1.0, 0.08, 1.0),
+                finite_clamp(surface.metallic, 0.0, 0.0, 1.0),
+            )
+        });
+        Self {
+            pos: instance.position.to_array(),
+            scale: instance.scale.to_array(),
+            color: instance.color.to_array(),
+            rot: instance.rot.to_array(),
+            material: [
+                f32::from(u8::from(instance.wettable)),
+                f32::from(u8::from(instance.casts_shadow)),
+                roughness,
+                metallic,
+            ],
+        }
+    }
 }
 
 #[repr(C)]
@@ -457,6 +518,9 @@ pub struct Renderer {
     shadow_pipeline: wgpu::RenderPipeline,
     particle_pipeline: wgpu::RenderPipeline,
     shadow: ShadowTargets,
+    occlusion_layout: wgpu::BindGroupLayout,
+    occlusion_bind: wgpu::BindGroup,
+    occlusion_field: Option<Arc<OcclusionField>>,
     particle_buf: wgpu::Buffer,
     scene_uniform_buf: wgpu::Buffer,
     scene_uniform_bind: wgpu::BindGroup,
@@ -760,10 +824,17 @@ impl Renderer {
 
         let shadow_layout = create_shadow_layout(&device);
         let shadow = create_shadow_targets(&device, &shadow_layout);
+        let occlusion_layout = create_occlusion_layout(&device);
+        let occlusion_bind = create_occlusion_bind(&device, &queue, &occlusion_layout, None);
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
-                bind_group_layouts: &[&scene_uniform_layout, &mesh_tex_layout, &shadow_layout],
+                bind_group_layouts: &[
+                    &scene_uniform_layout,
+                    &mesh_tex_layout,
+                    &shadow_layout,
+                    &occlusion_layout,
+                ],
                 push_constant_ranges: &[],
             });
         let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
@@ -861,6 +932,9 @@ impl Renderer {
             shadow_pipeline,
             particle_pipeline,
             shadow,
+            occlusion_layout,
+            occlusion_bind,
+            occlusion_field: None,
             particle_buf,
             scene_uniform_buf,
             scene_uniform_bind,
@@ -965,6 +1039,23 @@ impl Renderer {
         #[cfg(target_arch = "wasm32")]
         let scene_pass_due = true;
 
+        // The immutable Arc identity is the upload key; normal frames never rebake
+        // or upload. Reset to a tiny neutral texture when leaving the map.
+        let same_occlusion = match (&self.occlusion_field, &frame.occlusion) {
+            (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if scene_pass_due && !same_occlusion {
+            self.occlusion_bind = create_occlusion_bind(
+                &self.device,
+                &self.queue,
+                &self.occlusion_layout,
+                frame.occlusion.as_deref(),
+            );
+            self.occlusion_field.clone_from(&frame.occlusion);
+        }
+
         let surface_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1019,16 +1110,7 @@ impl Renderer {
                 } else {
                     &mut noncasters[m]
                 };
-                bucket.push(InstanceRaw {
-                    pos: i.position.to_array(),
-                    scale: i.scale.to_array(),
-                    color: i.color.to_array(),
-                    rot: i.rot.to_array(),
-                    material: [
-                        f32::from(u8::from(i.wettable)),
-                        f32::from(u8::from(i.casts_shadow)),
-                    ],
-                });
+                bucket.push(InstanceRaw::from(i));
             }
             let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
             let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
@@ -1136,6 +1218,7 @@ impl Renderer {
                     pass.set_pipeline(&self.scene_pipeline);
                     pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
                     pass.set_bind_group(2, &self.shadow.bind, &[]);
+                    pass.set_bind_group(3, &self.occlusion_bind, &[]);
                     pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                     for (mi, range) in &ranges {
                         let mesh = &self.meshes[*mi];
@@ -1359,6 +1442,100 @@ fn particle_instances(frame: &Frame, uniform: &SceneUniform) -> Vec<ParticleRaw>
         .collect()
 }
 
+fn create_occlusion_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let volume = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("static indirect visibility layout"),
+        entries: &[
+            volume(0),
+            volume(1),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+// Two core-WebGL2 RGBA8 volumes; no float filtering, mip chain or extra pass.
+fn create_occlusion_bind(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    field: Option<&OcclusionField>,
+) -> wgpu::BindGroup {
+    let [width, height, depth_or_array_layers] = field.map_or([1; 3], OcclusionField::dimensions);
+    let make = |label, data: &[u8]| {
+        device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                data,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    };
+    let a = make(
+        "indirect visibility XY",
+        field.map_or(&[255; 4], OcclusionField::texture_a),
+    );
+    let b = make(
+        "indirect visibility Z",
+        field.map_or(&[255; 4], OcclusionField::texture_b),
+    );
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("indirect visibility trilinear sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("static indirect visibility"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&a),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&b),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    })
+}
+
 fn create_shadow_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("packed shadow texture layout"),
@@ -1422,7 +1599,7 @@ fn create_shadow_targets(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) 
 const fn mesh_vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
     const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
-    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4, 7 => Float32x2];
+    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4, 7 => Float32x4];
     [
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -1696,9 +1873,9 @@ fn load_png_rgba8(path: &str) -> Result<TextureData, String> {
 /// Level sizes follow WebGPU's rule (`max(1, dim >> level)`, chain length
 /// `32 - leading_zeros(max(w, h))`), so a 1x1 texture stays one level and
 /// an odd dimension drops its last row or column rather than clamping the
-/// size up. Each level is the 2x2 box average of the one above, computed in
-/// 8-bit space without an sRGB round trip: for the albedo pictures this
-/// engine draws the error is well under a code and not worth the decode.
+/// size up. Each level averages RGB in linear light, then encodes it back
+/// to sRGB bytes; alpha is already linear and is averaged directly. The
+/// lookup tables avoid doing transfer-function powers for every texel.
 ///
 /// # Panics
 ///
@@ -1730,22 +1907,83 @@ fn mip_chain(tex: &TextureData) -> (u32, Vec<u8>) {
     (levels, bytes)
 }
 
-/// One mip step: the 2x2 box average of `src` (`sw` x `sh` RGBA8), rounded
-/// to nearest. A dimension already at 1 samples the same texel twice so the
-/// average stays exact; the last row or column of an odd dimension is
-/// dropped, matching the `>> 1` size rule the GPU applies.
+/// Transfer tables for sRGB albedo mips, initialized once per process.
+///
+/// Output thresholds are the linear-light equivalents of half-byte sRGB
+/// values. Searching them rounds the encoded mean exactly, without a large
+/// approximate inverse table or an expensive per-channel power operation.
+struct SrgbMipTables {
+    decode: [f64; 256],
+    thresholds: [f64; 255],
+}
+
+impl SrgbMipTables {
+    fn get() -> &'static Self {
+        static TABLES: std::sync::OnceLock<SrgbMipTables> = std::sync::OnceLock::new();
+        TABLES.get_or_init(|| {
+            let linear = |encoded: f64| {
+                if encoded <= 0.04045 {
+                    encoded / 12.92
+                } else {
+                    ((encoded + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            Self {
+                decode: std::array::from_fn(|i| {
+                    linear(f64::from(u8::try_from(i).expect("sRGB table index fits u8")) / 255.0)
+                }),
+                thresholds: std::array::from_fn(|i| {
+                    linear(
+                        (f64::from(u8::try_from(i).expect("sRGB threshold index fits u8")) + 0.5)
+                            / 255.0,
+                    )
+                }),
+            }
+        })
+    }
+
+    fn average(&self, samples: [u8; 4]) -> u8 {
+        let mean = samples
+            .iter()
+            .map(|&sample| self.decode[usize::from(sample)])
+            .sum::<f64>()
+            * 0.25;
+        u8::try_from(
+            self.thresholds
+                .partition_point(|&threshold| threshold <= mean),
+        )
+        .expect("there are only 255 encoding thresholds")
+    }
+}
+
+/// One mip step averages RGB in linear light and alpha directly.
+///
+/// A dimension already at 1 samples the same texel twice so the average
+/// stays exact; the last row or column of an odd dimension is dropped,
+/// matching the `>> 1` size rule the GPU applies.
 fn downsample_rgba8(src: &[u8], sw: u32, sh: u32) -> (u32, u32, Vec<u8>) {
     let dw = (sw >> 1).max(1);
     let dh = (sh >> 1).max(1);
-    let texel = |x: u32, y: u32, c: u32| u32::from(src[((y * sw + x) * 4 + c) as usize]);
+    let texel = |x: u32, y: u32, c: u32| src[((y * sw + x) * 4 + c) as usize];
+    let srgb = SrgbMipTables::get();
     let mut out = Vec::with_capacity((dw * dh * 4) as usize);
     for y in 0..dh {
         let (y0, y1) = (2 * y, (2 * y + 1).min(sh - 1));
         for x in 0..dw {
             let (x0, x1) = (2 * x, (2 * x + 1).min(sw - 1));
             for c in 0..4 {
-                let sum = texel(x0, y0, c) + texel(x1, y0, c) + texel(x0, y1, c) + texel(x1, y1, c);
-                out.push(((sum + 2) / 4) as u8);
+                let samples = [
+                    texel(x0, y0, c),
+                    texel(x1, y0, c),
+                    texel(x0, y1, c),
+                    texel(x1, y1, c),
+                ];
+                out.push(if c == 3 {
+                    let sum: u32 = samples.iter().map(|&sample| u32::from(sample)).sum();
+                    ((sum + 2) / 4) as u8
+                } else {
+                    srgb.average(samples)
+                });
             }
         }
     }
@@ -1800,6 +2038,38 @@ fn cube_vertices() -> Vec<Vertex> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn surface_upload_preserves_legacy_flags_and_finite_material_bounds() {
+        let instance = Instance::new(Vec3::ONE, Vec3::splat(2.0), Vec3::splat(0.3));
+        assert_eq!(InstanceRaw::from(&instance).material, [0.0, 1.0, -1.0, 0.0]);
+        let authored = instance
+            .with_surface(0.45, 0.8)
+            .without_shadow()
+            .with_wetness();
+        let raw = InstanceRaw::from(&authored);
+        assert_eq!(raw.material, [1.0, 0.0, 0.45, 0.8]);
+        assert_eq!(raw.pos, [1.0; 3]);
+        assert_eq!(raw.scale, [2.0; 3]);
+        assert_eq!(raw.color, [0.3; 3]);
+        for (roughness, metallic, expected) in [
+            (-1.0, -2.0, [0.08, 0.0]),
+            (2.0, 3.0, [1.0, 1.0]),
+            (f32::NAN, f32::NAN, [1.0, 0.0]),
+            (f32::INFINITY, f32::NEG_INFINITY, [1.0, 0.0]),
+        ] {
+            let raw = InstanceRaw::from(&instance.with_surface(roughness, metallic));
+            assert_eq!(&raw.material[2..], &expected);
+        }
+        assert_eq!(std::mem::size_of::<InstanceRaw>(), 68);
+        let layouts = mesh_vertex_layouts();
+        assert_eq!(layouts[1].array_stride, 68);
+        assert_eq!(
+            layouts[1].attributes[4].format,
+            wgpu::VertexFormat::Float32x4
+        );
+        assert_eq!(layouts[1].attributes[4].offset, 52);
+    }
+
     fn tex(width: u32, height: u32, rgba8: Vec<u8>) -> TextureData {
         TextureData {
             width,
@@ -1844,26 +2114,29 @@ mod tests {
     }
 
     #[test]
-    fn level_one_is_the_rounded_box_average() {
+    fn mip_level_one_averages_rgb_in_linear_light_and_alpha_linearly() {
         #[rustfmt::skip]
         let px = vec![
-            0, 10, 20, 255,   255, 30, 40, 255,
-            100, 50, 60, 255, 200, 70, 80, 255,
+            0, 10, 20, 0,   255, 30, 40, 64,
+            100, 50, 60, 128, 200, 70, 80, 255,
         ];
         let (levels, bytes) = mip_chain(&tex(2, 2, px.clone()));
         assert_eq!(levels, 2);
         assert_eq!(&bytes[..16], &px[..], "level 0 is untouched");
-        // (0 + 255 + 100 + 200 + 2) / 4 = 139; (10+30+50+70+2)/4 = 40; (20+40+60+80+2)/4 = 50.
-        assert_eq!(&bytes[16..], &[139, 40, 50, 255]);
+        // RGB is decode -> average -> encode, not the old [139, 40, 50].
+        // Alpha remains the rounded integer average (0+64+128+255)/4.
+        assert_eq!(&bytes[16..], &[175, 46, 55, 112]);
     }
 
     #[test]
-    fn a_dimension_already_at_one_samples_its_texel_twice() {
+    fn mip_thin_dimension_duplicates_samples_without_gamma_on_alpha() {
         // 1 wide, 2 tall: the second column clamps onto the first, so the
         // result is the exact mean of the two rows.
-        let (levels, bytes) = mip_chain(&tex(1, 2, vec![10, 20, 30, 255, 30, 40, 50, 255]));
-        assert_eq!(levels, 2);
-        assert_eq!(&bytes[8..], &[20, 30, 40, 255]);
+        for (w, h) in [(1, 2), (2, 1)] {
+            let (levels, bytes) = mip_chain(&tex(w, h, vec![10, 20, 30, 0, 30, 40, 50, 255]));
+            assert_eq!(levels, 2);
+            assert_eq!(&bytes[8..], &[22, 32, 41, 128]);
+        }
     }
 
     #[test]
@@ -1879,6 +2152,151 @@ mod tests {
     }
 
     #[test]
+    fn mip_black_white_checkerboard_preserves_linear_energy() {
+        let (levels, bytes) = mip_chain(&tex(
+            2,
+            2,
+            vec![
+                0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0,
+            ],
+        ));
+        assert_eq!(levels, 2);
+        assert_eq!(&bytes[16..], &[188, 188, 188, 128]);
+    }
+
+    #[test]
+    fn mip_all_uniform_byte_values_survive_every_level() {
+        for value in 0..=u8::MAX {
+            let rgba = [value, 255 - value, value / 2, value];
+            let (_, bytes) = mip_chain(&tex(8, 4, rgba.repeat(32)));
+            assert!(bytes.as_chunks::<4>().0.iter().all(|pixel| *pixel == rgba));
+        }
+    }
+
+    #[test]
+    fn mip_lookup_rounding_matches_the_transfer_formula() {
+        fn reference(samples: [u8; 4]) -> u8 {
+            let linear = samples.map(|byte| {
+                let encoded = f64::from(byte) / 255.0;
+                if encoded <= 0.04045 {
+                    encoded / 12.92
+                } else {
+                    ((encoded + 0.055) / 1.055).powf(2.4)
+                }
+            });
+            let mean = linear.into_iter().sum::<f64>() / 4.0;
+            let encoded = if mean <= 0.003_130_8 {
+                mean * 12.92
+            } else {
+                1.055_f64.mul_add(mean.powf(1.0 / 2.4), -0.055)
+            };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                (encoded * 255.0).round() as u8
+            }
+        }
+        let tables = SrgbMipTables::get();
+        for a in 0..=u8::MAX {
+            for b in 0..=u8::MAX {
+                for samples in [[a, b, a, b], [a, b, a.wrapping_mul(37), b.wrapping_add(83)]] {
+                    assert_eq!(tables.average(samples), reference(samples), "{samples:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mip_odd_non_square_edges_keep_the_existing_sampling_rule() {
+        let mut source = [255, 255, 255, 255].repeat(15);
+        for (x, y, pixel) in [
+            (0, 0, [0, 0, 0, 0]),
+            (1, 0, [255, 255, 255, 255]),
+            (0, 1, [255, 255, 255, 255]),
+            (1, 1, [0, 0, 0, 0]),
+        ] {
+            let at = (y * 3 + x) * 4;
+            source[at..at + 4].copy_from_slice(&pixel);
+        }
+        let (w, h, first) = downsample_rgba8(&source, 3, 5);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(first, [188, 188, 188, 128, 255, 255, 255, 255]);
+        // The bright last column/row is still excluded; the second level
+        // consumes the encoded first level through the same transfer rule.
+        let (_, chain) = mip_chain(&tex(3, 5, source));
+        assert_eq!(&chain[60..68], first);
+        assert_eq!(&chain[68..], &[225, 225, 225, 192]);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "CPU texture-upload preparation benchmark; run with --release --nocapture"]
+    #[allow(clippy::print_stdout)] // An explicitly requested, opt-in benchmark report.
+    fn mip_upload_cpu_cost_1024() {
+        // The pre-fix implementation is retained only as the measured
+        // baseline. Both paths include allocations and level-zero copies;
+        // this measures CPU preparation, not GPU submission or frame time.
+        fn legacy_chain(tex: &TextureData) -> (u32, Vec<u8>) {
+            let levels = 32 - tex.width.max(tex.height).leading_zeros();
+            let mut bytes = Vec::with_capacity(tex.rgba8.len() / 3 * 4 + 64);
+            bytes.extend_from_slice(&tex.rgba8);
+            let mut source: std::borrow::Cow<'_, [u8]> = std::borrow::Cow::Borrowed(&tex.rgba8);
+            let (mut w, mut h) = (tex.width, tex.height);
+            for _ in 1..levels {
+                let (nw, nh) = ((w >> 1).max(1), (h >> 1).max(1));
+                let sample =
+                    |x: u32, y: u32, c: u32| u32::from(source[((y * w + x) * 4 + c) as usize]);
+                let mut next = Vec::with_capacity((nw * nh * 4) as usize);
+                for y in 0..nh {
+                    let (y0, y1) = (2 * y, (2 * y + 1).min(h - 1));
+                    for x in 0..nw {
+                        let (x0, x1) = (2 * x, (2 * x + 1).min(w - 1));
+                        for c in 0..4 {
+                            let sum = sample(x0, y0, c)
+                                + sample(x1, y0, c)
+                                + sample(x0, y1, c)
+                                + sample(x1, y1, c);
+                            next.push(u8::try_from((sum + 2) / 4).unwrap());
+                        }
+                    }
+                }
+                bytes.extend_from_slice(&next);
+                source = std::borrow::Cow::Owned(next);
+                (w, h) = (nw, nh);
+            }
+            (levels, bytes)
+        }
+        let mut pixels = Vec::with_capacity(1024 * 1024 * 4);
+        for y in 0..1024_u32 {
+            for x in 0..1024_u32 {
+                let grain = (x * 13 + y * 7) ^ ((x / 32) * 83 + (y / 64) * 41);
+                pixels.extend_from_slice(&[
+                    u8::try_from(grain & 255).unwrap(),
+                    u8::try_from((grain / 3 + 67) & 255).unwrap(),
+                    u8::try_from((grain / 7 + 113) & 255).unwrap(),
+                    255,
+                ]);
+            }
+        }
+        let input = tex(1024, 1024, pixels);
+        let measure = |make: fn(&TextureData) -> (u32, Vec<u8>)| {
+            std::hint::black_box(make(std::hint::black_box(&input)));
+            let started = std::time::Instant::now();
+            for _ in 0..16 {
+                std::hint::black_box(make(std::hint::black_box(&input)));
+            }
+            started.elapsed().as_secs_f64() * 1000.0 / 16.0
+        };
+        let old_ms = measure(legacy_chain);
+        let linear_ms = measure(mip_chain);
+        println!(
+            "1024x1024 RGBA CPU full-chain preparation, 16 warmed runs: \
+             old encoded {old_ms:.3} ms/texture; linear-light {linear_ms:.3} ms/texture; \
+             ratio {:.2}x (not GPU upload or frame time)",
+            linear_ms / old_ms
+        );
+    }
+
+    #[test]
     fn fog_default_is_the_old_shader_constants() {
         let f = Fog::default();
         assert_eq!(f.color, [0.012, 0.020, 0.045]);
@@ -1888,7 +2306,7 @@ mod tests {
 
     #[test]
     fn scene_uniform_keeps_fog_offsets_and_packs_environment_in_vec4s() {
-        assert_eq!(SceneUniform::SIZE, 336, "three mat4 + nine vec4");
+        assert_eq!(SceneUniform::SIZE, 368, "three mat4 + eleven vec4");
         let frame = Frame {
             fog: Fog {
                 color: [0.1, 0.2, 0.3],
@@ -1899,9 +2317,11 @@ mod tests {
         let u = SceneUniform::new(&frame, 1.0);
         assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
         let bytes = bytemuck::bytes_of(&u);
-        assert_eq!(bytes.len(), 336);
+        assert_eq!(bytes.len(), 368);
         assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
         assert_eq!(&bytes[76..80], &0.4f32.to_le_bytes());
+        assert_eq!(&bytes[336..352], bytemuck::bytes_of(&[0.0_f32; 4]));
+        assert_eq!(&bytes[352..368], bytemuck::bytes_of(&[1.0_f32; 4]));
     }
 
     #[test]

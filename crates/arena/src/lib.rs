@@ -10,6 +10,7 @@
 //! Online: either key set steers YOUR paddle; the server is authoritative.
 
 mod ads;
+mod contact;
 mod feel;
 #[cfg(test)]
 mod grip_tests;

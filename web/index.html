@@ -329,7 +329,7 @@
     // Fallback for a failed games.json fetch. Must track the live version:
     // an older build speaks an older PROTO_VERSION, and the server refuses
     // a lobby on anything but an exact match.
-    let arenaLivePath = 'games/arena/v22/';
+    let arenaLivePath = 'games/arena/v27/';
     for (const g of catalog.games) {
       if (g.id === 'arena') {
         const live = g.versions.find((v) => v.live) || g.versions[0];
