@@ -298,7 +298,7 @@ fn measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
     Ok(KernelMeasurement {
         kernel_id: format!("julibrot-slide.{}.v1", spec.scenario_id),
         workload: format!(
-            "{}; baseline {}; steps={}; interval_ms={}; raw=game-side input-dispatch ms",
+            "{}; baseline {}; steps={}; interval_ms={}; raw=game-side step wall ms",
             spec.name, spec.baseline_row, spec.step_count, spec.interval_ms
         ),
         unit: "ms".to_string(),
