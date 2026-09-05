@@ -772,6 +772,31 @@ fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
     pose.view = view;
     pose.grid_width = 960;
     pose.grid_height = 540;
+    let mut main = binding_main();
+    let mut invalid_grid = main.grid.clone();
+    invalid_grid.width = 0;
+    let backdrop_map = ember_julibrot_math::Homography {
+        apron_scale: 2.0,
+        ..ember_julibrot_math::Homography::IDENTITY
+    };
+    main.backdrop = Some(crate::PresentBackdrop {
+        grid: invalid_grid,
+        iteration_cap: 64,
+        plane: pose.plane,
+        map: PoseMap::Mapped(backdrop_map),
+    });
+    assert!(
+        validate_backdrop(
+            main.backdrop.as_ref().expect("candidate backdrop exists"),
+            ember_lab_heap::DialectLimits {
+                descriptor_capacity: u32::MAX,
+                span_capacity: u32::MAX,
+                handle_capacity: u32::MAX,
+            },
+        )
+        .is_err(),
+        "the submit path refuses this candidate before publishing its coverage"
+    );
     let relief = crate::WarpPlan {
         kind: WarpKind::ReliefRedraw,
         source_valid: true,
@@ -783,11 +808,10 @@ fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
         None,
         "HOT publication cannot assume the candidate backdrop will validate"
     );
-    let main_only = relief_redraw_clear_fraction(&pose, None, false)
+    let main_only = relief_redraw_clear_fraction(&pose, Some(&main), false)
         .expect("the main-only coverage mirror is finite");
-    let candidate_backdrop =
-        ember_julibrot_math::scene_uncovered_fraction(&object, &view, 960, 540, 2.0)
-            .expect("the candidate backdrop coverage mirror is finite");
+    let candidate_backdrop = relief_redraw_clear_fraction(&pose, Some(&main), true)
+        .expect("the unvalidated candidate coverage mirror is finite");
     assert!(main_only > candidate_backdrop);
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(&relief, None);
