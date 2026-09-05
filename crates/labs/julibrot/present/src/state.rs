@@ -35,10 +35,10 @@ pub enum SceneCompletion {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct HeldScene {
-    pub(super) frame: SceneFrame,
-    pub(super) partition: FramePartition,
-    pub(super) held_since_scene_id: u64,
+pub struct HeldScene {
+    pub frame: SceneFrame,
+    pub partition: FramePartition,
+    pub held_since_scene_id: u64,
 }
 
 /// Pure refresh-loop exposure state: only a completed scene may clear it.
