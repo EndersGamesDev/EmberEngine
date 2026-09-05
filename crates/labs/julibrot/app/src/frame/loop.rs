@@ -475,9 +475,9 @@ mod browser {
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
     use super::{
-        BACKDROP_PRESENT_LEVEL, CoverageTurn, FrameLoop, RefusalClass, SceneMode, backdrop_extent,
-        coverage_pre_empts, horizon_facts, main_for_grid, published_iteration_cap,
-        sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
+        BACKDROP_PRESENT_LEVEL, CoverageTurn, FrameLoop, PAGE_MAX_ITERATION_CAP, RefusalClass,
+        SceneMode, backdrop_extent, coverage_pre_empts, horizon_facts, main_for_grid,
+        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::{
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
