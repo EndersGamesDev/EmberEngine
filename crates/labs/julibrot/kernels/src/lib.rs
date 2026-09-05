@@ -1,5 +1,8 @@
 //! GPU-kernel contracts and CPU mirrors for the Julibrot lab.
 
+/// Extra decimal digits used by the deterministic reference-orbit verification pass.
+pub const DETERMINISTIC_VERIFICATION_DIGITS: u32 = 16;
+
 mod conformance;
 mod dialect;
 mod error;

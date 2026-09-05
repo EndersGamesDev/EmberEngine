@@ -840,6 +840,7 @@ mod tests {
             ),
         ];
         let mut boundary_count = 0_usize;
+        let mut tight_rows = 0_usize;
         for (
             name,
             orbit,
@@ -878,25 +879,29 @@ mod tests {
             assert_eq!(actual.record.rebase_count, rebases, "{name}");
             let (observed_norm_error, observed_exponent) =
                 observed_initial_norm_error(orbit[0], offset, exponent);
+            assert!(envelope.escape_norm2_error >= observed_norm_error, "{name}");
             if let Some(normalized_exponent) = normalized_exponent {
                 assert_eq!(observed_exponent, normalized_exponent, "{name}");
             }
             if tight {
-                assert!(envelope.escape_norm2_error >= observed_norm_error, "{name}");
                 assert!(
                     envelope.escape_norm2_error <= 4.0 * observed_norm_error,
                     "{name}: envelope={} observed={observed_norm_error}",
                     envelope.escape_norm2_error,
                 );
+                tight_rows += 1;
             }
             boundary_count += usize::from(result.boundary);
         }
         eprintln!(
-            "perturbation_boundary_envelope real_orbit_records={} corpus={} boundaries={boundary_count} later_escapes=1 rebases=1 rescale_directions=2 tightness_limit=4 violations=0",
+            "perturbation_boundary_envelope real_orbit_records={} corpus={} boundaries={boundary_count} later_escapes=1 rebases=1 rescale_directions=2 tight_rows={tight_rows} untested_rows={} tightness_limit=4 conservatism_violations=0",
             boundary_orbit.len() + rebase_orbit.len(),
             cases.len(),
+            cases.len() - tight_rows,
         );
         assert_eq!(boundary_count, cases.len());
+        assert_eq!(tight_rows, 2);
+        assert_eq!(cases.len() - tight_rows, 1);
     }
 
     fn real_boundary_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
