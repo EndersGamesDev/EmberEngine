@@ -640,7 +640,10 @@ mod tests {
             TilePoseHeader::H25_PROVENANCE,
             TilePoseHeader::H26_OWNERSHIP,
         ];
-        assert_eq!(named_indices, core::array::from_fn::<_, 27, _>(|index| index));
+        assert_eq!(
+            named_indices,
+            core::array::from_fn::<_, 27, _>(|index| index)
+        );
 
         let mut header_bytes = AlignedBytes([0_u8; 512]);
         for texel in 0..TilePoseHeader::RESERVED_START {
@@ -653,16 +656,21 @@ mod tests {
         }
         let header = *bytemuck::from_bytes::<TilePoseHeader>(&header_bytes.0);
         validate_pose_header(&header).expect("reserved header lanes are zero");
-        assert_eq!(header.texels[TilePoseHeader::H00_IDENTITIES].lanes, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(header.texels[TilePoseHeader::H26_OWNERSHIP].lanes, [105.0, 106.0, 107.0, 108.0]);
+        assert_eq!(
+            header.texels[TilePoseHeader::H00_IDENTITIES].lanes,
+            [1.0, 2.0, 3.0, 4.0]
+        );
+        assert_eq!(
+            header.texels[TilePoseHeader::H26_OWNERSHIP].lanes,
+            [105.0, 106.0, 107.0, 108.0]
+        );
         assert_eq!(bytemuck::bytes_of(&header), header_bytes.0);
 
         let pair_lanes = [31.0_f32, 1.0, 2.0, 0.0, 0.25, -0.5, 7.0, 1.0];
         let mut pair_bytes = AlignedBytes([0_u8; 32]);
         for (lane, value) in pair_lanes.into_iter().enumerate() {
             let start = lane * size_of::<f32>();
-            pair_bytes.0[start..start + size_of::<f32>()]
-                .copy_from_slice(&value.to_ne_bytes());
+            pair_bytes.0[start..start + size_of::<f32>()].copy_from_slice(&value.to_ne_bytes());
         }
         let pair = *bytemuck::from_bytes::<DescriptorSamplePair>(&pair_bytes.0);
         assert_eq!(pair.s0.lanes, [31.0, 1.0, 2.0, 0.0]);

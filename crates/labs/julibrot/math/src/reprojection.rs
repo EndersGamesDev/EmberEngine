@@ -374,12 +374,9 @@ mod tests {
             chart_scale * homogeneous[1] / homogeneous[2],
         ];
         for _ in 0..12 {
-            let projected = project_ambient_point(
-                pose,
-                absolute_plane_point(pose, coordinate),
-                value,
-            )
-            .expect("lifted fixture remains visible");
+            let projected =
+                project_ambient_point(pose, absolute_plane_point(pose, coordinate), value)
+                    .expect("lifted fixture remains visible");
             let error = [
                 projected.screen[0] - pixel[0],
                 projected.screen[1] - pixel[1],
@@ -409,8 +406,8 @@ mod tests {
                     (shifted_b.screen[1] - projected.screen[1]) / STEP,
                 ],
             ];
-            let determinant = jacobian[0][1]
-                .mul_add(-jacobian[1][0], jacobian[0][0] * jacobian[1][1]);
+            let determinant =
+                jacobian[0][1].mul_add(-jacobian[1][0], jacobian[0][0] * jacobian[1][1]);
             assert!(determinant.abs() > 1.0e-12);
             let delta = [
                 jacobian[0][1].mul_add(-error[1], error[0] * jacobian[1][1]) / determinant,
@@ -419,12 +416,8 @@ mod tests {
             coordinate[0] -= delta[0];
             coordinate[1] -= delta[1];
         }
-        let projected = project_ambient_point(
-            pose,
-            absolute_plane_point(pose, coordinate),
-            value,
-        )
-        .expect("solved lifted fixture remains visible");
+        let projected = project_ambient_point(pose, absolute_plane_point(pose, coordinate), value)
+            .expect("solved lifted fixture remains visible");
         assert!(
             (projected.screen[0] - pixel[0]).hypot(projected.screen[1] - pixel[1])
                 <= SOURCE_ROUND_TRIP_EPSILON
