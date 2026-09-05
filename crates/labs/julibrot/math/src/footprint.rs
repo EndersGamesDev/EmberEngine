@@ -200,8 +200,10 @@ pub fn scene_uncovered_fraction(
         view,
         matrix: camera_matrix(view),
     };
-    Ok(uncovered_points(&chain, [grid_w, grid_h], apron_scale) as f64
-        / COVERAGE_CENSUS_POINTS as f64)
+    Ok(
+        uncovered_points(&chain, [grid_w, grid_h], apron_scale) as f64
+            / COVERAGE_CENSUS_POINTS as f64,
+    )
 }
 
 /// The fixed part of the scene vertex chain, built once per pose.
@@ -545,8 +547,8 @@ mod tests {
     use super::{
         APRON_CANDIDATES, CENSUS_HEIGHTS, COVERAGE_CENSUS_POINTS, COVERAGE_LATTICE_POINTS,
         COVERAGE_LATTICE_SIDE, COVERAGE_MESH_SIDE, MINIMUM_BACKDROP_GAIN_POINTS, SceneFootprint,
-        VertexChain, displayed_height, rasterize_height, scene_footprint,
-        scene_uncovered_fraction, uncovered_fraction, uncovered_points,
+        VertexChain, displayed_height, rasterize_height, scene_footprint, scene_uncovered_fraction,
+        uncovered_fraction, uncovered_points,
     };
     use crate::screen::camera_matrix;
     use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
@@ -713,7 +715,10 @@ mod tests {
             .expect("main coverage is measurable");
         let with_backdrop = scene_uncovered_fraction(&object, &view, 960, 540, 2.0)
             .expect("backdrop coverage is measurable");
-        assert!(main > with_backdrop, "{main} did not improve to {with_backdrop}");
+        assert!(
+            main > with_backdrop,
+            "{main} did not improve to {with_backdrop}"
+        );
         assert!((with_backdrop - 571.0 / 3969.0).abs() < 1.0e-12);
     }
 

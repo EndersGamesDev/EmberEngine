@@ -543,14 +543,17 @@ mod tests {
             texel.lanes = [f32::from(index), 1.0, -2.0, 3.5];
         }
         validate_pose_header(&header).expect("reserved header lanes are zero");
-        let pair = DescriptorSamplePair::new(
-            [31.0, 1.0, 2.0, 0.0],
-            [0.25, -0.5, 7.0, 1.0],
-        );
+        let pair = DescriptorSamplePair::new([31.0, 1.0, 2.0, 0.0], [0.25, -0.5, 7.0, 1.0]);
         let header_bytes = bytemuck::bytes_of(&header);
         let pair_bytes = bytemuck::bytes_of(&pair);
-        assert_eq!(*bytemuck::from_bytes::<TilePoseHeader>(header_bytes), header);
-        assert_eq!(*bytemuck::from_bytes::<DescriptorSamplePair>(pair_bytes), pair);
+        assert_eq!(
+            *bytemuck::from_bytes::<TilePoseHeader>(header_bytes),
+            header
+        );
+        assert_eq!(
+            *bytemuck::from_bytes::<DescriptorSamplePair>(pair_bytes),
+            pair
+        );
         assert_eq!(size_of::<DescriptorTexel>(), 16);
         assert_eq!(align_of::<DescriptorTexel>(), 16);
         assert_eq!(size_of::<TilePoseHeader>(), 512);
@@ -558,9 +561,12 @@ mod tests {
         assert_eq!(DescriptorCostLedger::SAMPLE_BYTES_PER_TILE, 2_097_152);
         assert_eq!(DescriptorCostLedger::HEADER_BYTES_PER_TILE, 512);
         assert_eq!(DescriptorCostLedger::LOGICAL_BYTES_PER_TILE, 2_097_664);
+        assert_eq!(DescriptorCostLedger::logical_bytes(1), Some(2_097_664));
         assert_eq!(DescriptorCostLedger::logical_bytes(9), Some(18_878_976));
         assert_eq!(DescriptorCostLedger::logical_bytes(12), Some(25_171_968));
+        assert_eq!(DescriptorCostLedger::logical_bytes(16), Some(33_562_624));
         assert_eq!(DescriptorCostLedger::logical_bytes(28), Some(58_734_592));
+        assert_eq!(DescriptorCostLedger::logical_bytes(44), Some(92_297_216));
         assert_eq!(DescriptorCostLedger::logical_bytes(56), Some(117_469_184));
     }
 
@@ -617,15 +623,36 @@ mod tests {
             (RenderControlChange::Observer, TileInvalidation::Keep),
             (RenderControlChange::Zoom, TileInvalidation::Keep),
             (RenderControlChange::Extent, TileInvalidation::Keep),
-            (RenderControlChange::PlanePreservingObject, TileInvalidation::Keep),
+            (
+                RenderControlChange::PlanePreservingObject,
+                TileInvalidation::Keep,
+            ),
             (RenderControlChange::InPlaneOrigin, TileInvalidation::Keep),
             (RenderControlChange::Display, TileInvalidation::Keep),
-            (RenderControlChange::SliceTilt, TileInvalidation::NewPartition),
-            (RenderControlChange::OutOfPlaneOrigin, TileInvalidation::NewPartition),
-            (RenderControlChange::IterationCap, TileInvalidation::NewPartition),
-            (RenderControlChange::Precision, TileInvalidation::NewPartition),
-            (RenderControlChange::RecordAbi, TileInvalidation::NewPartition),
-            (RenderControlChange::MainGeneration, TileInvalidation::NewPartition),
+            (
+                RenderControlChange::SliceTilt,
+                TileInvalidation::NewPartition,
+            ),
+            (
+                RenderControlChange::OutOfPlaneOrigin,
+                TileInvalidation::NewPartition,
+            ),
+            (
+                RenderControlChange::IterationCap,
+                TileInvalidation::NewPartition,
+            ),
+            (
+                RenderControlChange::Precision,
+                TileInvalidation::NewPartition,
+            ),
+            (
+                RenderControlChange::RecordAbi,
+                TileInvalidation::NewPartition,
+            ),
+            (
+                RenderControlChange::MainGeneration,
+                TileInvalidation::NewPartition,
+            ),
         ];
         for (change, expected) in rows {
             assert_eq!(tile_invalidation(change), expected);

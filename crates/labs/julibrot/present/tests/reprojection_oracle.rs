@@ -5,8 +5,8 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, height_for_record,
-    grid_screen, project_scene_point, project_scene_vertex, shade_lit_escape_record,
+    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, grid_screen,
+    height_for_record, project_scene_point, project_scene_vertex, shade_lit_escape_record,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -170,10 +170,7 @@ fn pixel_screen(extent: [u32; 2], column: u32, row: u32) -> [f64; 2] {
 }
 
 fn draw_screen(extent: [u32; 2], column: u32, row: u32) -> [f64; 2] {
-    [
-        grid_screen(column, extent[0]),
-        grid_screen(row, extent[1]),
-    ]
+    [grid_screen(column, extent[0]), grid_screen(row, extent[1])]
 }
 
 fn render_retained(pose: &Pose) -> Vec<KernelSample> {

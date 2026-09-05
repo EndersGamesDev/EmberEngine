@@ -313,7 +313,9 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
         sampled.precision_mode,
     ));
     assert!(ledger.retained().is_none());
-    let held = ledger.held().expect("the incompatible transition keeps one image");
+    let held = ledger
+        .held()
+        .expect("the incompatible transition keeps one image");
     assert_eq!(held.frame.scene_id, sampled.scene_id);
     assert_eq!(held.partition.plane, sampled.pose.plane);
 

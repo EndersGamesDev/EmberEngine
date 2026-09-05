@@ -117,8 +117,8 @@ pub fn reconstruct_source_sample(
         value,
     };
     let projected = project_ambient_point(pose, sample.ambient_four, value)?;
-    let pixel_error = (projected.screen[0] - source_pixel[0])
-        .hypot(projected.screen[1] - source_pixel[1]);
+    let pixel_error =
+        (projected.screen[0] - source_pixel[0]).hypot(projected.screen[1] - source_pixel[1]);
     let depth_error = (projected.linear_depth - depth.zeta_f).abs();
     if pixel_error > SOURCE_ROUND_TRIP_EPSILON || depth_error > SOURCE_ROUND_TRIP_EPSILON {
         return Err(ReprojectionError::SourceRoundTrip);
@@ -175,10 +175,7 @@ fn absolute_plane_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
     core::array::from_fn(|axis| {
         f64::from(pose.plane.basis_u[axis]).mul_add(
             coordinate[0],
-            f64::from(pose.plane.basis_v[axis]).mul_add(
-                coordinate[1],
-                pose.plane_origin[axis],
-            ),
+            f64::from(pose.plane.basis_v[axis]).mul_add(coordinate[1], pose.plane_origin[axis]),
         )
     })
 }
@@ -200,7 +197,13 @@ fn project_ambient_point(
     let local_four: [f64; 4] =
         core::array::from_fn(|axis| ambient_four[axis] - pose.plane_origin[axis]);
     let height = pose.view.height_scale * (value.record_height + 2.0) * 0.5;
-    let mut ambient = [local_four[0], local_four[1], local_four[2], local_four[3], height];
+    let mut ambient = [
+        local_four[0],
+        local_four[1],
+        local_four[2],
+        local_four[3],
+        height,
+    ];
     apply_camera_rotation(&mut ambient, &pose.view);
     for (coordinate, translation) in ambient.iter_mut().zip(pose.view.camera_translation) {
         *coordinate += translation;

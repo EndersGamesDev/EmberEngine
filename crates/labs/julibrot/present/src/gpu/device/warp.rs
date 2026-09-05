@@ -1,11 +1,11 @@
 use crate::fence::FenceLedger;
-use ember_julibrot_math::scene_uncovered_fraction;
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
     PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
     WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
     exterior_zero, pack_homography_rows, palette, view_scale, warp_shader,
 };
+use ember_julibrot_math::scene_uncovered_fraction;
 
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
@@ -299,7 +299,9 @@ impl Presenter {
             self.facts.record_relief_redraw();
             self.facts.warp_exposed_fraction = self.hot[hot_slot.index() as usize]
                 .as_ref()
-                .and_then(|pose| relief_redraw_clear_fraction(pose, self.main.as_ref(), has_backdrop));
+                .and_then(|pose| {
+                    relief_redraw_clear_fraction(pose, self.main.as_ref(), has_backdrop)
+                });
         } else {
             encode_image_warp(
                 &mut encoder,

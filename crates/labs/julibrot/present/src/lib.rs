@@ -17,9 +17,9 @@ mod warp_shader;
 
 pub use contract::{
     DropReason, FenceRefusal, FramePartition, FrameReceipt, FrameState, PresentBackdrop,
-    PresentConfig, PresentError, PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus,
-    SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement, WarpKind, WarpPlan,
-    WarpValidation,
+    PresentConfig, PresentError, PresentEvent, PresentFacts, PresentHot, PresentMain,
+    PresentStatus, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement, WarpKind,
+    WarpPlan, WarpValidation,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};
@@ -45,8 +45,8 @@ pub use tile::{
     CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
     DescriptorTexel, ExactF32, ExactF64, PoseMapKey, RenderControlChange, SliceIdentity,
     SourcePixelRect, TileContentKey, TileInvalidation, TilePoseHeader, TileQuality, TileRenderKey,
-    TileResidency, TileRung, TransitionPresentation, select_same_surface_owner,
-    tile_invalidation, transition_presentation, validate_pose_header,
+    TileResidency, TileRung, TransitionPresentation, select_same_surface_owner, tile_invalidation,
+    transition_presentation, validate_pose_header,
 };
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SCENE_PAYLOAD_BYTES,

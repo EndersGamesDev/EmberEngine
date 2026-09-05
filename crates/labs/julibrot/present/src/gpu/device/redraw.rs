@@ -27,9 +27,9 @@ impl Presenter {
                 .ok()
                 .and_then(|()| backdrop_scene_uniform(backdrop, selected).ok())
         });
-        let backdrop_extent = backdrop_uniform.as_ref().and_then(|_| {
-            backdrop.map(|backdrop| [backdrop.grid.width, backdrop.grid.height])
-        });
+        let backdrop_extent = backdrop_uniform
+            .as_ref()
+            .and_then(|_| backdrop.map(|backdrop| [backdrop.grid.width, backdrop.grid.height]));
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
         ensure_backdrop_indices(&self.device, &mut self.gpu, backdrop_extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
