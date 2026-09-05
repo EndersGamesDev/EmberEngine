@@ -15,7 +15,7 @@ const path = require('node:path');
     await page.getByRole('button',{name:'Race online ↗'}).click();
     await page.locator('#handle').fill('FireQA');
     await page.locator('#newlobby').fill(`qa-${Date.now().toString(36)}`);
-    await page.waitForFunction(()=>!document.getElementById('host-chip').textContent.includes('no server'),null,{timeout:20000});
+    await page.waitForFunction(()=>document.getElementById('host-chip').textContent.startsWith('server:'),null,{timeout:45000});
     await page.getByRole('button',{name:'Create race'}).click();
     await page.waitForSelector('#ember-root canvas',{timeout:20000});
     await page.waitForFunction(()=>document.getElementById('hud-car').textContent==='V8-R');
