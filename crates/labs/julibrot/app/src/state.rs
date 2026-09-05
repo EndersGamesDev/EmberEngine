@@ -400,13 +400,16 @@ pub struct ReferenceSubmission {
 }
 
 /// App-facing controller whose storage authority remains the worker-owned records.
+///
+/// Its exact three-entry map and footprint caches use FIFO with promote-on-hit, preserving
+/// recently reused refresh keys across a fourth insertion.
 #[derive(Debug)]
 pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
     checked_plane: Plane,
-    checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
-    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 2]>,
+    checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 3]>,
+    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 3]>,
     #[cfg(test)]
     plane_constructions: u64,
     #[cfg(test)]
@@ -491,8 +494,8 @@ impl ViewerController {
             owner,
             requested,
             checked_plane: plane,
-            checked_screen_maps: RefCell::new([None; 2]),
-            checked_scene_footprints: RefCell::new([None; 2]),
+            checked_screen_maps: RefCell::new([None; 3]),
+            checked_scene_footprints: RefCell::new([None; 3]),
             #[cfg(test)]
             plane_constructions: 1,
             #[cfg(test)]
@@ -1168,21 +1171,27 @@ impl ViewerController {
         let view = self.requested.view;
         let zoom_log2 = self.requested.zoom_log2;
         let key = ScreenMapKey::new(object, view, zoom_log2, grid_extent);
-        let cached = self
-            .checked_screen_maps
-            .borrow()
-            .iter()
-            .copied()
-            .flatten()
-            .find(|cached| cached.key == key)
-            .map(|cached| cached.map);
-        if let Some(cached) = cached {
-            return Ok(cached);
+        {
+            let mut cached = self.checked_screen_maps.borrow_mut();
+            if let Some((index, hit)) =
+                cached
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .find_map(|(index, cached)| {
+                        cached
+                            .filter(|candidate| candidate.key == key)
+                            .map(|candidate| (index, candidate))
+                    })
+            {
+                cached[index..].rotate_left(1);
+                return Ok(hit.map);
+            }
         }
         let map = map_for(object, view, zoom_log2, grid_extent)?;
         let mut cached = self.checked_screen_maps.borrow_mut();
-        cached[0] = cached[1];
-        cached[1] = Some(CheckedScreenMap { key, map });
+        cached.rotate_left(1);
+        cached[2] = Some(CheckedScreenMap { key, map });
         #[cfg(test)]
         self.map_constructions
             .set(self.map_constructions.get().saturating_add(1));
@@ -1198,22 +1207,28 @@ impl ViewerController {
         let object = self.requested.object_angles;
         let view = self.requested.view;
         let key = SceneFootprintKey::new(object, view, grid_extent);
-        let cached = self
-            .checked_scene_footprints
-            .borrow()
-            .iter()
-            .copied()
-            .flatten()
-            .find(|cached| cached.key == key)
-            .map(|cached| cached.footprint);
-        if let Some(cached) = cached {
-            return Ok(cached);
+        {
+            let mut cached = self.checked_scene_footprints.borrow_mut();
+            if let Some((index, hit)) =
+                cached
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .find_map(|(index, cached)| {
+                        cached
+                            .filter(|candidate| candidate.key == key)
+                            .map(|candidate| (index, candidate))
+                    })
+            {
+                cached[index..].rotate_left(1);
+                return Ok(hit.footprint);
+            }
         }
         let footprint =
             scene_footprint(&object, &view, grid_extent[0], grid_extent[1]).map_err(math_error)?;
         let mut cached = self.checked_scene_footprints.borrow_mut();
-        cached[0] = cached[1];
-        cached[1] = Some(CheckedSceneFootprint { key, footprint });
+        cached.rotate_left(1);
+        cached[2] = Some(CheckedSceneFootprint { key, footprint });
         #[cfg(test)]
         self.footprint_constructions
             .set(self.footprint_constructions.get().saturating_add(1));
@@ -1848,6 +1863,25 @@ mod tests {
     }
 
     #[test]
+    fn screen_map_cache_retains_three_extents_and_promotes_hits() {
+        let viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let extents = [REFERENCE_GRID, [480, 270], [120, 68], [800, 600]];
+
+        for extent in extents[..3].iter().copied() {
+            viewer.screen_map(extent).expect("initial map");
+        }
+        assert_eq!(viewer.map_construction_count(), 3);
+
+        viewer.screen_map(extents[0]).expect("promoted hot map");
+        viewer.screen_map(extents[3]).expect("fourth map");
+        viewer.screen_map(extents[0]).expect("retained hot map");
+        assert_eq!(viewer.map_construction_count(), 4);
+
+        viewer.screen_map(extents[1]).expect("evicted cold map");
+        assert_eq!(viewer.map_construction_count(), 5);
+    }
+
+    #[test]
     fn footprint_cache_is_bit_exact_on_object_view_and_extent() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         set_close_owner_row(&mut viewer);
@@ -1901,6 +1935,43 @@ mod tests {
             .scene_footprint([800, 600])
             .expect("bit-distinct footprint key");
         assert_eq!(viewer.footprint_construction_count(), 4);
+    }
+
+    #[test]
+    fn footprint_cache_retains_the_three_refresh_extents() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let refresh_extents = [REFERENCE_GRID, [480, 270], [120, 68]];
+
+        for extent in refresh_extents {
+            viewer.scene_footprint(extent).expect("refresh footprint");
+        }
+        assert_eq!(viewer.footprint_construction_count(), 3);
+
+        for _ in 0..8 {
+            for extent in refresh_extents {
+                viewer
+                    .scene_footprint(extent)
+                    .expect("retained refresh footprint");
+            }
+        }
+        assert_eq!(viewer.footprint_construction_count(), 3);
+
+        viewer
+            .scene_footprint(refresh_extents[0])
+            .expect("promoted hot footprint");
+        viewer
+            .scene_footprint([800, 600])
+            .expect("fourth footprint");
+        viewer
+            .scene_footprint(refresh_extents[0])
+            .expect("retained hot footprint");
+        assert_eq!(viewer.footprint_construction_count(), 4);
+
+        viewer
+            .scene_footprint(refresh_extents[1])
+            .expect("evicted cold footprint");
+        assert_eq!(viewer.footprint_construction_count(), 5);
     }
 
     #[test]
