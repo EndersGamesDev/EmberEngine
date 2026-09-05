@@ -453,10 +453,8 @@ mod tests {
         let records = SCENARIOS
             .into_iter()
             .map(|spec| {
-                measurement(
-                    &serde_json::to_string(&observation_for(spec)).expect("fixture JSON"),
-                )
-                .expect("bounded scenario")
+                measurement(&serde_json::to_string(&observation_for(spec)).expect("fixture JSON"))
+                    .expect("bounded scenario")
             })
             .collect::<Vec<_>>();
         let bytes = serde_json::to_vec(&records)

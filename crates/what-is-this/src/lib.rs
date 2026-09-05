@@ -14,9 +14,7 @@ mod render_bar;
 use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStatus};
 use serde::Serialize;
 
-pub use julibrot::{
-    JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_scenarios,
-};
+pub use julibrot::{JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_scenarios};
 pub use kernels::{FloatProbeResult, KernelSpec, KernelSuite, jank_chunk, kernel_specs};
 
 /// One report-derived sentence shown on the final verdict card.
