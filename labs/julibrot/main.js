@@ -1,5 +1,5 @@
 const ABI = 3;
-globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1788619556";
+globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1788622311";
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");
@@ -666,8 +666,8 @@ async function artifactBytes(path) {
 
 async function boot() {
   try {
-    const api = await import("./pkg/ember_lab_julibrot.js?v=1788619556");
-    await api.default("./pkg/ember_lab_julibrot_bg.wasm?v=1788619556");
+    const api = await import("./pkg/ember_lab_julibrot.js?v=1788622311");
+    await api.default("./pkg/ember_lab_julibrot_bg.wasm?v=1788622311");
     const mainVersion = api.julibrot_abi_version();
     if (mainVersion !== ABI) throw new Error(`VersionSkew: main wasm ${mainVersion}, loader ${ABI}`);
     await api.start_julibrot("julibrot", "status");
@@ -676,8 +676,8 @@ async function boot() {
       timer_quantum_ms: timer.quantum_ms,
       timing_status: timer.quantum_ms === null ? "unavailable: timer exposed no positive transition" : "requires visible replay",
       timer_probe: timer,
-      wasm_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot_bg.wasm?v=1788619556"),
-      javascript_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot.js?v=1788619556"),
+      wasm_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot_bg.wasm?v=1788622311"),
+      javascript_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot.js?v=1788622311"),
       wasm_instance_count: 2,
     });
     const facts = Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS);

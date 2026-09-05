@@ -4,12 +4,20 @@
       "id": "arena",
       "title": "Arena Shooter",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "First-person drop-in shooter on an authored map, in three modes picked per lobby: free for all (first to 20 frags), team deathmatch (blue against red, no friendly fire, team spawns, first team to 30) and king of the hill (the spot under the king block; alone on it earns a point a second, contested earns nothing, first to 60). Every round ends, names its winner and restarts after a 10 s pause with every score reset and every block re-armed. WASD + mouse look, Space jump, RMB aim, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises a Roman scutum that sends a bullet back at the shooter and detonates a rocket; E cuts with the Murasama, kills outright and goes straight through a raised shield. Headshots kill outright too, so aim high. v18 is the weapons update: seven guns, each a different bullet — the sidearm you spawn with, the Vityaz SMG, the AK-47, the heavy revolver whose slug drops, a sniper that pierces one body, and the RPG-7 with a 3 m splash that hurts you too — and you get them by jumping so your head hits a ? block from below, Mario-style; a random gun pops out with one magazine and one reserve, no refills, and when it runs dry the sidearm is back. Two maps, picked per lobby: Freight Yard, a rail yard at golden hour with two trains of containers, an open yard, a loading dock under the king block, and backlots to spawn in; and Trench City, the fought-over European square, its four pads replaced by four ? blocks at the tunnel mouths, so the blocks are the one reward on both maps. v20 is the realism pass: every round flies at its gun's real muzzle velocity and stops at the first thing on its path, you see it as a tracer with an impact that matches the material it hit, and you hear a layered gunshot delayed and panned by distance, a crack when a round passes within three metres, impacts, casings and per-gun reloads. v21 adds boots: a footstep on every plant of the walk, so the cadence is the legs you can see, a heavier and louder one at a sprint, and nothing at all while crouched at any speed, which is what crouching buys you. Gamepad play with per-gun rumble on Chromium; keyboard and mouse everywhere. Fullscreen: F11 on the native client, F or the button on the page.",
+      "desc": "Online first-person shooter for up to eight players, with three hand-authored maps: Breakwater Harbor, a 96 × 96 m cargo terminal with a warehouse flank, tactical container lanes, gantry cranes and a moored ship; Freight Yard, a compact rail yard; and Trench City, a fought-over European square. Choose free for all, 4v4 team deathmatch or king of the hill. Seven weapons have individual sight animations and optical zoom; ADS and grounded crouching improve accuracy, while movement, jumping and sustained fire widen spread. Start with a weaker sidearm and earn stronger guns from jump-to-hit loot blocks. Walk at 4 m/s, sprint, crouch silently and keep the original jump reach. Fitted weapon grips, sun and shadows, moving clouds, weather, visible bullet paths, spatial sound and gamepad support. WASD + mouse, Space jump, RMB aim, R reload, Shift sprint, C crouch, Q shield, E melee, Tab scoreboard and F fullscreen.",
       "versions": [
+        {
+          "v": "v25",
+          "path": "games/arena/v25/",
+          "live": true,
+          "proto": 20,
+          "handover": true,
+          "note": "Breakwater Harbor: a hand-authored 96 × 96 m tactical port for eight players, with a moored ship, cranes, container routes, proper large-map collision and 4 m/s walking"
+        },
         {
           "v": "v24",
           "path": "games/arena/v24/",
-          "live": true,
+          "live": false,
           "proto": 19,
           "handover": true,
           "note": "aim, settle, fire: individual weapon zoom and sight animations, ADS plus crouch accuracy, movement penalties, recovering spread, a weaker starter sidearm and slower ground movement with preserved jumps"

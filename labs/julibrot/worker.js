@@ -2,8 +2,8 @@ const ABI = 3;
 
 async function boot() {
   try {
-    const module = await import("./pkg/ember_lab_julibrot.js?v=1788619556");
-    await module.default("./pkg/ember_lab_julibrot_bg.wasm?v=1788619556");
+    const module = await import("./pkg/ember_lab_julibrot.js?v=1788622311");
+    await module.default("./pkg/ember_lab_julibrot_bg.wasm?v=1788622311");
     const delivered = module.worker_main(ABI);
     if (delivered !== ABI) {
       throw new Error(`VersionSkew: worker wasm ${delivered}, loader ${ABI}`);
