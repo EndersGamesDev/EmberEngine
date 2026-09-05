@@ -763,6 +763,6 @@ mod tests {
         assert!(page.contains("data-stage=\"stage.julibrot-slide.v1\""));
         assert!(page.contains("id=\"julibrot-result\""));
         assert!(page.contains("The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input."));
-        assert!(page.contains("stage=julibrot-slide"));
+        assert!(page.contains("get('stage') === 'julibrot-slide'"));
     }
 }

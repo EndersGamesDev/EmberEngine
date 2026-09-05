@@ -145,8 +145,8 @@ pub fn julibrot_scenario_inventory_json() -> String {
 /// stage-specific byte and sample cap is invalid.
 #[wasm_bindgen]
 pub fn julibrot_measurement_json(observation_json: &str) -> Result<String, JsValue> {
-    let measurement = crate::julibrot_measurement(observation_json)
-        .map_err(|error| JsValue::from_str(&error))?;
+    let measurement =
+        crate::julibrot_measurement(observation_json).map_err(|error| JsValue::from_str(&error))?;
     serde_json::to_string(&measurement).map_err(|error| {
         JsValue::from_str(&format!("could not encode Julibrot measurement: {error}"))
     })

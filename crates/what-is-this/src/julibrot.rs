@@ -140,7 +140,6 @@ struct ScenarioObservation {
     walls_us: WallObservation,
     unavailable_fields: Vec<String>,
     scripted_hold_wall_ms: Option<f64>,
-    #[serde(skip_serializing)]
     game_side_wall_ms: Vec<f64>,
 }
 
@@ -269,8 +268,14 @@ pub fn julibrot_measurement(observation_json: &str) -> Result<KernelMeasurement,
     let observation = serde_json::from_str::<ScenarioObservation>(observation_json)
         .map_err(|error| format!("Julibrot scenario record is invalid: {error}"))?;
     let spec = validate_observation(&observation)?;
-    let note = serde_json::to_string(&observation)
+    let mut note_value = serde_json::to_value(&observation)
         .map_err(|error| format!("Julibrot scenario record could not be encoded: {error}"))?;
+    note_value
+        .as_object_mut()
+        .ok_or_else(|| "Julibrot scenario record did not encode as an object".to_string())?
+        .remove("game_side_wall_ms");
+    let note = serde_json::to_string(&note_value)
+        .map_err(|error| format!("Julibrot scenario note could not be encoded: {error}"))?;
     if note.len() > NOTE_BYTE_CAP {
         return Err(format!(
             "Julibrot scenario {} note is {} bytes; cap is {NOTE_BYTE_CAP}",
@@ -430,7 +435,7 @@ mod tests {
                 julibrot_measurement(
                     &serde_json::to_string(&observation_for(spec)).expect("fixture JSON"),
                 )
-                    .expect("bounded scenario")
+                .expect("bounded scenario")
             })
             .collect::<Vec<_>>();
         let bytes = serde_json::to_vec(&records)
