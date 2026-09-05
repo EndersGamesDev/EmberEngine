@@ -161,6 +161,8 @@ The heap does not supply render-pose identity, source-depth semantics, chart-foo
 
 ## Validity, compatibility, and invalidation
 
+Implementation decision, 2026-09-05 on `lane/jb-retain`: stage 0 retains one completed pre-transition image as a partition-stamped held source while the first scene of a new partition is in flight. That source admits only an unchanged hold, never cross-partition reprojection, and is replaced by the first accepted completion in the new partition. This transitional two-image ledger preserves honest visible continuity while the descriptor-map tile cache remains unshipped.
+
 A rendered tile is semantically valid for every requested render pose when its `content_key` matches. Source and requested camera positions may be arbitrarily different; pose distance affects projected coverage, error, and usefulness, but it does not change the mathematical value or source depth that was rendered.
 
 “The model has not changed” means the same canonical slice and MAIN generation with compatible value, depth, and record ABIs. The source render pose is deliberately part of tile identity but deliberately not part of semantic validity.

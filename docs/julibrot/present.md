@@ -122,6 +122,10 @@ If a new level has a different extent, only the available target is reallocated 
 
 Scene requests while a target is already in flight return `PresentError::SceneBusy` instead of allocating a third texture, blocking, or overwriting work; an accepted reference shift rebases each retained or pending scene from its own sampled pose, never from `max_by_key(epoch)` or a newer HOT pose.
 
+Partition-retention decision, 2026-09-05 on `lane/jb-retain`: an incompatible slice, delivered cap, precision mode, or MAIN generation moves the last completed image into one explicit held slot instead of erasing its texture identity. The held image keeps the partition stamp under which it completed and may participate only in an unchanged `HoldStale` plan; it is never a source for a homography or relief redraw across partitions. One new-partition scene may remain in flight beside that held image, and its first accepted completion replaces the held slot. This implements the held-transition portion of [tiled reprojection's validity and invalidation design](tiled-reprojection.md#validity-compatibility-and-invalidation) without changing the tile migration path.
+
+The corresponding additive facts are `held_frame_partition` and `held_since_scene_id`. They identify the stale source rather than claiming it belongs to the requested partition, and they clear when a matching completed scene replaces it or when its underlying texture is explicitly forgotten. Choosing whether automatic or manual scheduling presents that honest hold remains app policy.
+
 ### 2.5 Exact plane-chart homography
 
 Let `M_p` be pose `p`'s accepted screen-to-plane map and `B_p=[u_p v_p]` its once-rounded basis. A screen point first passes through `M_p`; its reference-relative ambient point then follows from `B_p`, pixel scale, centre displacement, and plane origin without materializing an absolute deep GPU coordinate.
