@@ -55,6 +55,33 @@ struct MetadataPackingScratch {
     directory_words: Vec<u32>,
 }
 
+#[derive(Debug)]
+struct RetainedPageScratch<T> {
+    views: Vec<T>,
+}
+
+impl<T> RetainedPageScratch<T> {
+    fn new(views: Vec<T>) -> Result<Self, ExecutorError> {
+        if views.is_empty() || views.len() > 4 {
+            return Err(ExecutorError::Contract(
+                "page scratch requires between one and four retained views",
+            ));
+        }
+        Ok(Self { views })
+    }
+
+    fn selected(&self, count: usize) -> Result<[Option<&T>; 4], ExecutorError> {
+        if count == 0 || count > self.views.len() {
+            return Err(ExecutorError::Contract(
+                "page output count exceeds retained scratch views",
+            ));
+        }
+        Ok(std::array::from_fn(|index| {
+            (index < count).then(|| &self.views[index])
+        }))
+    }
+}
+
 /// Created capacity and byte facts; none are inferred measurements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutorCapacity {
@@ -418,6 +445,7 @@ pub struct GpuKernelExecutor {
     arena: SpanArena,
     data: wgpu::Texture,
     scratch: wgpu::Texture,
+    page_scratch: RetainedPageScratch<wgpu::TextureView>,
     data_view: Arc<wgpu::TextureView>,
     heap_layout: wgpu::BindGroupLayout,
     heap_group: wgpu::BindGroup,
@@ -482,6 +510,19 @@ impl GpuKernelExecutor {
             wgpu::TextureFormat::Rgba32Float,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
+        let page_scratch = RetainedPageScratch::new(
+            (0..config.scratch_layers)
+                .map(|layer| {
+                    scratch.create_view(&wgpu::TextureViewDescriptor {
+                        label: Some("heap executor retained one-layer SCRATCH attachment"),
+                        dimension: Some(wgpu::TextureViewDimension::D2),
+                        base_array_layer: layer,
+                        array_layer_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect(),
+        )?;
         let mut packed_descriptors = Vec::with_capacity(config.descriptor_capacity as usize);
         arena.heap().pack_table_into(&mut packed_descriptors);
         let mut packed_directory = Vec::with_capacity(config.directory_binding_bytes as usize / 4);
@@ -574,6 +615,7 @@ impl GpuKernelExecutor {
             arena,
             data,
             scratch,
+            page_scratch,
             data_view,
             heap_layout,
             heap_group,
@@ -1176,29 +1218,21 @@ impl GpuKernelExecutor {
             .into());
         }
         let side = u32::from(page_side);
-        let views = page
-            .destinations
-            .iter()
-            .enumerate()
-            .map(|(layer, _)| self.scratch_view(layer as u32))
-            .collect::<Vec<_>>();
-        let attachments = views
-            .iter()
-            .map(|view| {
-                Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })
+        let views = self.page_scratch.selected(page.destinations.len())?;
+        let attachments = views.map(|view| {
+            view.map(|view| wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })
-            .collect::<Vec<_>>();
+        });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("heap dialect page into SCRATCH"),
-                color_attachments: &attachments,
+                color_attachments: &attachments[..page.destinations.len()],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -1260,16 +1294,6 @@ impl GpuKernelExecutor {
             }
         }
         Ok(())
-    }
-
-    fn scratch_view(&self, layer: u32) -> wgpu::TextureView {
-        self.scratch.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("heap executor one-layer SCRATCH attachment"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: layer,
-            array_layer_count: Some(1),
-            ..Default::default()
-        })
     }
 }
 
@@ -1486,9 +1510,26 @@ mod tests {
     use crate::{DispatchError, DispatchPlan, Handle, PagePass, SpanArena, StaticHeaders};
 
     use super::{
-        DispatchSelector, HeaderReservations, SpanUploadMode, UploadRegion, copy_command_count,
-        planned_upload_bytes, selected_header_offsets, valid_row_regions,
+        DispatchSelector, HeaderReservations, RetainedPageScratch, SpanUploadMode, UploadRegion,
+        copy_command_count, planned_upload_bytes, selected_header_offsets, valid_row_regions,
     };
+
+    #[test]
+    fn page_scratch_is_bounded_and_reused_across_final_pages() {
+        let scratch = RetainedPageScratch::new(vec![10_u32, 20, 30, 40])
+            .expect("four retained views fit the executor wall");
+        let pointer = scratch.views.as_ptr();
+        let capacity = scratch.views.capacity();
+        for _ in 0..8 {
+            assert_eq!(
+                scratch.selected(2).expect("two retained views select"),
+                [Some(&10), Some(&20), None, None]
+            );
+            assert_eq!(scratch.views.as_ptr(), pointer);
+            assert_eq!(scratch.views.capacity(), capacity);
+        }
+        assert!(RetainedPageScratch::new(vec![0_u32; 5]).is_err());
+    }
 
     #[test]
     fn one_selected_header_comparison_exposes_the_whole_page_range() {
