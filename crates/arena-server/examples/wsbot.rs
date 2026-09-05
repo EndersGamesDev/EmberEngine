@@ -24,7 +24,8 @@
 //!
 //! MODES is an optional comma-separated list that switches on the parts of
 //! the protocol the default spray never touches: `shield` holds Q, `jump`
-//! presses Space about once a second, `nofire` keeps the trigger up.
+//! presses Space about once a second, `nofire` keeps the trigger up,
+//! `ads` holds aim down sights, and `crouch` holds the low stance.
 //!
 //! `jump` PULSES deliberately. Since v11 the flag is a press the sim consumes
 //! on one tick, so a bot that held it set would re-launch off every surface
@@ -221,14 +222,14 @@ fn main() {
                     pitch: (t * 0.6).sin() * 0.7,
                     fire: !nofire,
                     sprint: hunt.is_none() && (t as u64).is_multiple_of(3),
-                    crouch: false,
+                    crouch: has("crouch"),
                     reload: false,
                     // A press, not a level - see the module docs. `jump`
                     // presses every 24 frames; `bonk` only under a block.
                     jump: (jump && frame.is_multiple_of(24)) || bonk_press,
                     shield,
                     melee: false,
-                    ads: false,
+                    ads: has("ads"),
                 },
             );
         }

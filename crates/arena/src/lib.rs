@@ -9,6 +9,7 @@
 //! Local controls: P1 (blue, near) A/D · P2 (red, far) ←/→ · first to 7.
 //! Online: either key set steers YOUR paddle; the server is authoritative.
 
+mod ads;
 mod feel;
 #[cfg(test)]
 mod grip_tests;

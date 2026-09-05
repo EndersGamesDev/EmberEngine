@@ -219,7 +219,14 @@ use crate::shooter::HILL_FREE;
 /// direction is just as misleading: a v18 client would believe it moves at
 /// 2 m/s while the old server carries it at 9. The exact join gate makes the
 /// stale build reload instead of letting peers play different movement rules.
-pub const PROTO_VERSION: u16 = 18;
+///
+/// v19: weapon handling is authoritative and timed: ADS fraction, recovering
+/// bloom, crouched/moving/airborne cones, and a weaker six-round starter pistol.
+/// A v18 peer can decode the added state fields but would still display instant
+/// scope precision and the old zero-spread weapons. It plays a different game,
+/// so the exact join gate requires a rebuild. The earlier ground-speed v18
+/// change remains intact, including the old horizontal jump reach.
+pub const PROTO_VERSION: u16 = 19;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -303,6 +310,18 @@ pub struct PState {
     pub reserve: u8,
     #[serde(default)]
     pub reloading: bool,
+    /// Authoritative timed sight raise, 0 = hip and 1 = fully sighted.
+    #[serde(default)]
+    pub ads_fraction: f32,
+    /// Current effective weapon half-cone in radians for the accuracy reticle.
+    #[serde(default)]
+    pub spread: f32,
+    /// Recoverable recoil radians before ADS/stance multipliers.
+    ///
+    /// Reporting this separately lets a HUD apply new movement without guessing bloom
+    /// by inverting an old effective cone (airborne floors are not invertible).
+    #[serde(default)]
+    pub recoil_bloom: f32,
     /// Authoritative death count for the scoreboard.
     #[serde(default)]
     pub deaths: u32,
@@ -428,11 +447,10 @@ pub enum C2S {
         /// above for why defaulting is NOT sufficient here and the gate moved.
         #[serde(default)]
         melee: bool,
-        /// Aiming down the sights (RMB or LT), HELD like `shield`: it
-        /// tightens the spread cone of the round fired this tick. Defaulted
-        /// so a v13 client simply never tightens its cone, and a v13 server
-        /// simply drops a v18 client's scope, which is one of the reasons
-        /// the gate moved (`PROTO_VERSION`).
+        /// Aiming down the sights (RMB or LT), HELD like `shield`. The
+        /// server advances weapon-specific sight raise over time, not an
+        /// instant cone switch. Defaulted for decoding only: pre-19 peers
+        /// play different handling rules and cannot join (`PROTO_VERSION`).
         #[serde(default)]
         ads: bool,
     },
@@ -937,6 +955,9 @@ mod tests {
             ammo: 7,
             reserve: 30,
             reloading: false,
+            ads_fraction: 0.625,
+            spread: 0.012,
+            recoil_bloom: 0.025,
             deaths: 1,
             ack: 42,
             ack_age_ticks: 7,
@@ -947,6 +968,9 @@ mod tests {
         assert!(s.contains("\"team\":1"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
+        assert_eq!(back.ads_fraction, 0.625);
+        assert_eq!(back.spread, 0.012);
+        assert_eq!(back.recoil_bloom, 0.025);
         assert_eq!(
             back.ack_age_ticks, 7,
             "the ack age has to survive the codec"
@@ -960,6 +984,13 @@ mod tests {
             "hp":3,"score":0,"alive":true,"crouch":false}"#;
         let p: PState = serde_json::from_str(old_state).unwrap();
         assert!(!p.shield, "an absent shield reads as lowered");
+        assert_eq!(p.ads_fraction, 0.0, "old frames decode as unsighted");
+        assert_eq!(p.spread, 0.0, "old frames have no reported cone");
+        assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
+        assert_eq!(
+            PROTO_VERSION, 19,
+            "timed handling requires the matching peer"
+        );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();
         assert!(matches!(back, C2S::Input { shield: false, .. }));
@@ -1141,7 +1172,7 @@ mod tests {
         // everywhere, and exactly why decoding is not the test: the only
         // rounds it draws are the ones a 30 Hz state catches in flight,
         // and at v17's speeds a round is in flight for a handful of states
-        // at most. The sidearm's 60 m at 280 m/s is 0.21 s, six states;
+        // at most. The current sidearm's 30 m at 280 m/s is three states;
         // the sniper's 120 m at 900 is four; an AK round across an open
         // 20 m lane is caught once or never. A v16 client on a v17 server
         // sees a game where nothing flies and bodies fall.

@@ -591,6 +591,9 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             ammo: p.ammo,
                             reserve: p.reserve,
                             reloading: p.reload_t > 0.0,
+                            ads_fraction: p.ads_fraction,
+                            spread: p.spread,
+                            recoil_bloom: p.recoil_bloom(),
                             deaths: p.death_count,
                             ack: lobby.inputs.get(&p.id).map_or(0, |(_, s, _, _)| *s),
                             ack_age_ticks: lobby

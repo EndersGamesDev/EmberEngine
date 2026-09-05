@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use arena_core::proto::color_for;
 use arena_core::shooter::{
     Cover, HILL_CONTESTED, HILL_FREE, Hill, Projectile, SHOT_COVER, SHOT_FLOOR, SHOT_WALL, hash64,
-    stance_speed, weapon_stats,
+    stance_speed, weapon_handling, weapon_stats,
 };
 use ember_engine::Rumble;
 use ember_engine::glam::{Quat, Vec2, Vec3};
@@ -61,8 +61,8 @@ pub struct WeaponFeel {
     pub full_auto: bool,
     /// Camera shake at the shot (the RPG only).
     pub launch_shake: f32,
-    /// The vertical field of view fully aimed down the sights, degrees.
-    pub ads_fov: f32,
+    /// True optical magnification, shared with the authoritative handling row.
+    pub optical_zoom: f32,
 }
 
 /// The hip-fire vertical field of view, degrees.
@@ -97,7 +97,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.45,
             full_auto: true,
             launch_shake: 0.0,
-            ads_fov: 52.0,
+            optical_zoom: weapon_handling(2).optical_zoom,
         },
         3 => WeaponFeel {
             kick_cam: 0.028,
@@ -117,7 +117,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.5,
             full_auto: true,
             launch_shake: 0.0,
-            ads_fov: 48.0,
+            optical_zoom: weapon_handling(3).optical_zoom,
         },
         4 => WeaponFeel {
             kick_cam: 0.014,
@@ -138,7 +138,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.45,
             full_auto: true,
             launch_shake: 0.0,
-            ads_fov: 46.0,
+            optical_zoom: weapon_handling(4).optical_zoom,
         },
         5 => WeaponFeel {
             kick_cam: 0.060,
@@ -158,7 +158,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.55,
             full_auto: false,
             launch_shake: 0.0,
-            ads_fov: 50.0,
+            optical_zoom: weapon_handling(5).optical_zoom,
         },
         6 => WeaponFeel {
             kick_cam: 0.070,
@@ -178,9 +178,8 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.6,
             full_auto: false,
             launch_shake: 0.0,
-            // A 20x scope: the hip field over twenty. The view through it
-            // is drawn by `scope_mask`, not by the viewmodel.
-            ads_fov: 3.5,
+            // The actual 6x optic uses tangent-half-FOV magnification.
+            optical_zoom: weapon_handling(6).optical_zoom,
         },
         7 => WeaponFeel {
             kick_cam: 0.05,
@@ -201,7 +200,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.55,
             full_auto: false,
             launch_shake: 0.5,
-            ads_fov: 55.0,
+            optical_zoom: weapon_handling(7).optical_zoom,
         },
         _ => WeaponFeel {
             kick_cam: 0.012,
@@ -222,7 +221,7 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.5,
             full_auto: false,
             launch_shake: 0.0,
-            ads_fov: 44.0,
+            optical_zoom: weapon_handling(1).optical_zoom,
         },
     }
 }
@@ -245,7 +244,8 @@ impl WeaponFeel {
     /// The vertical field of view at `zoom` (0 hip, 1 fully aimed).
     #[must_use]
     pub fn fov(&self, zoom: f32) -> f32 {
-        HIP_FOV + (self.ads_fov - HIP_FOV) * zoom.clamp(0.0, 1.0)
+        let magnification = 1.0 + (self.optical_zoom - 1.0) * crate::ads::blend(zoom);
+        (2.0 * ((HIP_FOV * 0.5).to_radians().tan() / magnification).atan()).to_degrees()
     }
 }
 
@@ -256,11 +256,15 @@ pub const LOOK_SCALE_FLOOR: f32 = 0.03;
 /// How much slower the look turns at a vertical field of view, as a
 /// fraction of the hip sensitivity. The look slows in the same ratio the
 /// view narrows, so a target crossing the screen costs the same mouse
-/// travel at every zoom and a 20x scope turns twenty times slower. The pad's
+/// travel at every zoom and a 6x scope turns six times slower. The pad's
 /// right stick reads the same scale.
 #[must_use]
 pub fn look_scale(fov_deg: f32) -> f32 {
-    (fov_deg / HIP_FOV).max(LOOK_SCALE_FLOOR)
+    if !fov_deg.is_finite() {
+        return 1.0;
+    }
+    ((fov_deg.clamp(0.0, 179.0) * 0.5).to_radians().tan() / (HIP_FOV * 0.5).to_radians().tan())
+        .max(LOOK_SCALE_FLOOR)
 }
 
 /// The weapon that is looked through rather than along: the sniper.
@@ -2508,9 +2512,9 @@ mod feel_tests {
                 "id {id}: no tracer"
             );
             assert!(
-                f.ads_fov > 0.0 && f.ads_fov < HIP_FOV,
+                f.fov(1.0) > 0.0 && f.fov(1.0) < HIP_FOV,
                 "id {id}: fov {}",
-                f.ads_fov
+                f.fov(1.0)
             );
             assert!(
                 f.volume > 0.0 && f.volume <= 1.0,
@@ -2676,20 +2680,25 @@ mod feel_tests {
         let sniper = weapon_feel(SCOPED_WEAPON);
         let scoped = look_scale(sniper.fov(1.0));
         assert!(
-            (scoped - 1.0 / 20.0).abs() < 1e-3,
-            "a 20x scope turns 20x slower: {scoped}"
+            (scoped - 1.0 / 6.0).abs() < 1e-3,
+            "a 6x scope turns 6x slower: {scoped}"
         );
         // Every other gun slows by exactly its own narrowing, and none
         // reaches the floor.
         for id in 1..=WEAPON_COUNT {
             let f = weapon_feel(id);
             let s = look_scale(f.fov(1.0));
-            assert!((s - f.ads_fov / HIP_FOV).abs() < 1e-6, "id {id}: {s}");
+            assert!(
+                (s - 1.0 / weapon_handling(id).optical_zoom).abs() < 1e-6,
+                "id {id}: {s}"
+            );
             assert!(s >= LOOK_SCALE_FLOOR, "id {id} froze the look");
         }
-        // Half way in, half way slowed, for a linear FOV blend.
+        // Halfway through the raise is halfway in optical magnification,
+        // not an arithmetic blend of angles.
         let mid = weapon_feel(3).fov(0.5);
-        assert!((look_scale(mid) - (mid / HIP_FOV)).abs() < 1e-6);
+        let magnification = 1.0 + (weapon_handling(3).optical_zoom - 1.0) * 0.5;
+        assert!((look_scale(mid) - 1.0 / magnification).abs() < 1e-6);
         // The floor holds a degenerate field.
         assert_eq!(look_scale(0.0), LOOK_SCALE_FLOOR);
         assert_eq!(look_scale(-5.0), LOOK_SCALE_FLOOR);
@@ -2707,7 +2716,11 @@ mod feel_tests {
         // The scope's own field of view is the one below the threshold's
         // narrowing, so the mask always opens on a world already zooming.
         assert!(weapon_feel(SCOPED_WEAPON).fov(SCOPE_ZOOM) < HIP_FOV * 0.5);
-        assert!((weapon_feel(SCOPED_WEAPON).fov(1.0) - 3.5).abs() < 1e-6);
+        let hip = (HIP_FOV * 0.5).to_radians().tan();
+        let aimed = (weapon_feel(SCOPED_WEAPON).fov(1.0) * 0.5)
+            .to_radians()
+            .tan();
+        assert!((hip / aimed - 6.0).abs() < 1e-5);
     }
 
     #[test]

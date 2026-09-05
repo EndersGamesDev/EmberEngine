@@ -224,7 +224,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - The v19 page is verified by reading and by `games.json` parsing: the embedded browser pane has no WebGL2, so nobody has yet created a team or hill lobby from the page in a real browser and seen the pill on the row.
 - `PState` carries only `score`, so the Tab scoreboard in king of the hill shows hill points instead of frags; a `PState.frags` (`serde(default)`) would let it show both, additively and without a bump.
 - The Tdm status line names my team first but cannot colour it: `#status` is plain text by design (no innerHTML); a page-side team element is the fix.
-- arena-core's `free_for_all_is_bit_identical_to_v18_until_the_limit` pins a fingerprint computed on this Windows workstation (x86_64 MSVC libm); the launch goes through cos/sin/tan, so another libm could differ in the last bit and the pin would need regenerating from the v18 code the same way (the constant's comment says how).
+- arena-core's `free_for_all_handling_fingerprint_and_mode_equivalence` pins a fingerprint computed on this Windows workstation (x86_64 MSVC libm), regenerated for protocol-19 handling; the launch goes through cos/sin/tan, so another libm could differ in the last bit and needs a platform-aware comparison against the current code, not a silent repin (the constant's comment says how).
 
 ## From arena v20 (realism)
 
@@ -379,6 +379,8 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Arena viewmodels after v23: add a wall-contact/retraction or separate viewmodel pass; the current one-camera geometry can still clip into nearby walls, irrespective of correctly attached hands.
 - Arena character art after v23: upgrade the low-detail operator sleeve/body assets and add normal/roughness material support as a separate measured graphics project; the grip correction alone does not establish modern AAA fidelity.
 - Arena asset provenance: record the original SWAT operator author's source URL and applicable license/attribution alongside its existing GLB and v23 derivatives; the local artist archive contains no verifiable license record.
+- Arena v24 handling: playtest the shared per-gun cone, recovery and zoom table with real players on both maps; deterministic tests and screenshots establish mechanics and placement, not competitive balance or controller comfort.
+- Arena release coordination: main pushes do not build Pages automatically; the missed Julibrot/diagnostic and ground-speed publication showed that each integrated release needs a named publisher, matched five-bundle rebuild, and server-first protocol rollout (see `docs/weapon-handling.md`).
 
 ## From the authority-and-time law (`docs/authority-and-time`)
 
