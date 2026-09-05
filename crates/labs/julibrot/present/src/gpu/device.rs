@@ -213,15 +213,23 @@ impl WarpSourceSlot {
         self.relief_redraw = plan.kind == WarpKind::ReliefRedraw;
         self.hold_on_redraw_refusal = hold_on_redraw_refusal;
     }
-    fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
-        select_warp_source(self.planned, retained)
+    fn frame<'a>(
+        &self,
+        retained: Option<&'a crate::SceneFrame>,
+        held: Option<&'a crate::state::HeldScene>,
+    ) -> Option<&'a crate::SceneFrame> {
+        select_warp_source(
+            self.planned,
+            retained.or_else(|| held.map(|held| &held.frame)),
+        )
     }
     fn relief_frame<'a>(
         &self,
         retained: Option<&'a crate::SceneFrame>,
+        held: Option<&'a crate::state::HeldScene>,
     ) -> Option<&'a crate::SceneFrame> {
         if self.relief_redraw {
-            self.frame(retained)
+            self.frame(retained, held)
         } else {
             None
         }
@@ -229,11 +237,12 @@ impl WarpSourceSlot {
     fn accepted_frame<'a>(
         &self,
         retained: Option<&'a crate::SceneFrame>,
+        held: Option<&'a crate::state::HeldScene>,
     ) -> Option<&'a crate::SceneFrame> {
         if self.held_stale {
             None
         } else {
-            self.frame(retained)
+            self.frame(retained, held)
         }
     }
 }
@@ -273,6 +282,7 @@ struct GpuState {
     backdrop_pipeline: wgpu::RenderPipeline,
     glitch_count_pipeline: wgpu::RenderPipeline,
     relief_redraw_pipeline: wgpu::RenderPipeline,
+    relief_redraw_backdrop_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
@@ -362,6 +372,15 @@ impl Presenter {
                 || previous.grid != main.grid
                 || previous.backdrop != main.backdrop
         });
+        if selection_replaced {
+            self.ledger.mark_replaced();
+        }
+        let retained_became_held = self.ledger.invalidate_incompatible(
+            main.state.delivered_iter_cap,
+            main.state.plane_origin_f64,
+            main.plane,
+            precision_mode_name,
+        );
         if revision_advanced {
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
@@ -372,19 +391,9 @@ impl Presenter {
                 self.facts.source_generation = Some(frame.pose.orbit_generation);
             }
         }
-        if selection_replaced {
-            self.ledger.mark_replaced();
-        }
-        if self.ledger.invalidate_incompatible(
-            main.state.delivered_iter_cap,
-            main.state.plane_origin_f64,
-            main.plane,
-            precision_mode_name,
-        ) || incompatible
-            || precision_mode.is_none()
-        {
+        if retained_became_held || incompatible || precision_mode.is_none() {
             self.facts.status = PresentStatus::ClearForIncompatibleMain;
-            self.clear_retained_facts();
+            self.publish_held_facts();
         }
         self.facts.reference_shift_px = main.state.reference_shift_px;
         self.facts.precision_mode = precision_mode_name;
@@ -411,6 +420,8 @@ impl Presenter {
     const fn clear_retained_facts(&mut self) {
         self.facts.completed_scene_id = None;
         self.facts.source_generation = None;
+        self.facts.held_frame_partition = None;
+        self.facts.held_since_scene_id = None;
         self.facts.delivered_width = 0;
         self.facts.delivered_height = 0;
         self.facts.delivered_level = None;
@@ -418,6 +429,22 @@ impl Presenter {
         self.facts.glitch_pixel_count = None;
         self.active_warp_scene = None;
         self.active_warp_count = 0;
+    }
+
+    fn publish_held_facts(&mut self) {
+        let Some(held) = self.ledger.held() else {
+            self.clear_retained_facts();
+            return;
+        };
+        self.facts.completed_scene_id = Some(held.frame.scene_id);
+        self.facts.source_generation = Some(held.frame.pose.orbit_generation);
+        self.facts.held_frame_partition = Some(held.partition);
+        self.facts.held_since_scene_id = Some(held.held_since_scene_id);
+        self.facts.delivered_width = held.frame.extent[0];
+        self.facts.delivered_height = held.frame.extent[1];
+        self.facts.delivered_level = Some(held.frame.level);
+        self.facts.iteration_cap = Some(held.frame.iteration_cap);
+        self.active_warp_scene = Some(held.frame.scene_id);
     }
 }
 
@@ -613,6 +640,17 @@ fn create_gpu_state(
         config.surface_format,
         Some(SceneLayer::Main),
     );
+    let relief_redraw_backdrop_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot relief redraw backdrop pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
+        &heap_layout,
+        &scene_layout,
+        config.surface_format,
+        Some(SceneLayer::Backdrop),
+    );
     let warp_pipeline = create_warp_pipeline(
         device,
         config.surface_format,
@@ -637,6 +675,7 @@ fn create_gpu_state(
         backdrop_pipeline,
         glitch_count_pipeline,
         relief_redraw_pipeline,
+        relief_redraw_backdrop_pipeline,
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),

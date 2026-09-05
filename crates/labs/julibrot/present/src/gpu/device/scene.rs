@@ -298,9 +298,9 @@ pub(super) fn encode_scene_mesh(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
     color_view: &wgpu::TextureView,
-    pipeline: &wgpu::RenderPipeline,
     hot_offset: u32,
     load_color: wgpu::Color,
+    has_backdrop: bool,
     label: &'static str,
 ) {
     let depth_attachment = Some(scene_depth_attachment(&gpu.depth.view));
@@ -319,14 +319,23 @@ pub(super) fn encode_scene_mesh(
         timestamp_writes: None,
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_pipeline(pipeline);
-    pass.set_stencil_reference(stencil_reference(SceneLayer::Main));
-    draw_scene_mesh(
-        &mut pass,
-        &gpu.scene_groups[0],
-        gpu.indices.as_ref(),
-        hot_offset,
-    );
+    for layer in scene_draw_order(has_backdrop) {
+        let (pipeline, group, indices) = match layer {
+            SceneLayer::Main => (
+                &gpu.relief_redraw_pipeline,
+                &gpu.scene_groups[0],
+                gpu.indices.as_ref(),
+            ),
+            SceneLayer::Backdrop => (
+                &gpu.relief_redraw_backdrop_pipeline,
+                &gpu.scene_groups[1],
+                gpu.backdrop_indices.as_ref(),
+            ),
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_stencil_reference(stencil_reference(*layer));
+        draw_scene_mesh(&mut pass, group, indices, hot_offset);
+    }
 }
 
 pub(super) fn draw_scene_mesh<'pass>(

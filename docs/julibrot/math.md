@@ -148,6 +148,12 @@ The centre is a bignum interpolation, `C(t)=C_a+t(C_b−C_a)`, evaluated at `max
 
 The oracle is exactness at the ends and the declared midpoint between them: `t=0` reproduces `a` and `t=1` reproduces `b` in every field including the centre's full precision, and `t=0.5` is the midpoint of every scalar to `1e-15` relative and of the centre to its working precision. `t` outside `[0,1]` is rejected rather than extrapolated, because a control that reads `A ↔ B` is not a promise about what lies beyond either end.
 
+### 2.7 Stage-0 source reconstruction and target projection
+
+The binary64 stage-0 oracle implements [the rendered-view coordinate model](tiled-reprojection.md#rendered-view-coordinate-model) without changing kernels or presentation. `SourceDepthRecord` is the CPU authority for `S1=(a_F,b_F,zeta_F,validity)`: `(a_F,b_F)` locate the retained visible point in the source-local plane, `zeta_F` is positive linear observer distance after the two perspective divides, and validity distinguishes a selected surface from a source hole. `source_depth_record` constructs the receipt for a visible source sample, `reconstruct_source_sample` evaluates `U_F` and refuses unless source pixel and depth reproduce within `1e-9`, and `project_reconstructed_sample` evaluates the requested `Pi_T` chain through `Q_T`, translation, the guarded five-to-four and four-to-three perspectives, observer yaw and pitch, viewport, linear depth, and pre-quantized raster depth.
+
+The canonical four-point keeps the source plane origin and is made target-local by subtracting the requested origin before projection, so plane-preserving parameterizations share a point while an out-of-plane move remains an invalidation question. Native oracles pin self reprojection, invalid source validity, edge-on and pole refusal, and a synthetic one-pixel cell whose interpolated target position stays below the 1.0 px admission ceiling. These are stage-0 policy and math foundations only; the shipped retained image remains LDR and depth-free until tiled-reprojection stage 1.
+
 ## 3. INTERFACES
 
 All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 binary32 and binary64, byte offsets start at the named record, coordinate arrays use `(z.re,z.im,c.re,c.im)`, reserved words are zero, orbit-pool bytes outside the declared record prefix and fixed fact tail are producer-owned and unread, and CPU-only records marked “no byte ABI” are not serialized by native layout.

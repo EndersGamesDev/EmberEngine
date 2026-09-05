@@ -1,5 +1,5 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
-use ember_julibrot_math::{PrecisionMode, ViewControls};
+use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_plane};
 use ember_julibrot_worker::MainState;
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
@@ -290,10 +290,77 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&held, false);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(37)
     );
-    assert_eq!(hot.accepted_frame(ledger.retained()), None);
+    assert_eq!(hot.accepted_frame(ledger.retained(), ledger.held()), None);
+}
+
+#[test]
+fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
+    let mut ledger = SceneLedger::default();
+    let sampled = promote_binding_scene(&mut ledger, 38);
+    let tilted = construct_plane(ObjectAngles {
+        rho_13: ObjectAngles::JULIA.rho_13 + 0.25,
+        ..ObjectAngles::JULIA
+    })
+    .expect("tilted slice constructs");
+    assert!(ledger.invalidate_incompatible(
+        sampled.iteration_cap,
+        sampled.plane_origin_f64,
+        tilted,
+        sampled.precision_mode,
+    ));
+    assert!(ledger.retained().is_none());
+    let held = ledger.held().expect("the incompatible transition keeps one image");
+    assert_eq!(held.frame.scene_id, sampled.scene_id);
+    assert_eq!(held.partition.plane, sampled.pose.plane);
+
+    let refused = clear_warp_plan(false, true);
+    assert_eq!(
+        apply_hold_policy(refused, Some(&held.frame), false).kind,
+        WarpKind::ClearOnly
+    );
+    let plan = apply_hold_policy(refused, Some(&held.frame), true);
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    assert_eq!(plan.rows, identity_rows());
+    assert!(!plan.exposed);
+
+    let mut source = WarpSourceSlot::default();
+    source.write_hot(&plan, false);
+    assert_eq!(
+        source
+            .frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
+        Some(sampled.scene_id)
+    );
+    assert!(
+        source
+            .accepted_frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a held partition is not an accepted geometric warp source"
+    );
+    assert!(
+        source
+            .relief_frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a held partition is not a relief-redraw source"
+    );
+
+    let clear_only_frames = [plan]
+        .into_iter()
+        .filter(|candidate| candidate.kind == WarpKind::ClearOnly)
+        .count();
+    assert_eq!(
+        clear_only_frames, 0,
+        "the CPU coverage mirror must not expose a clear-only frame across the slice change"
+    );
+
+    let replacement = promote_binding_scene(&mut ledger, 39);
+    assert_ne!(replacement.texture_index, sampled.texture_index);
+    assert!(ledger.held().is_none());
+    assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(39));
 }
 
 #[test]
@@ -340,14 +407,16 @@ fn browser_order_clears_a_hot_plan_after_scene_promotion() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&plan, false);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(41)
     );
 
     let promoted = promote_binding_scene(&mut ledger, 42);
     assert_eq!(promoted.scene_id, 42);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         None
     );
     assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
@@ -367,7 +436,8 @@ fn accepted_exposed_plan_remains_a_source_and_reports_its_clear_share() {
     hot.write_hot(&plan, false);
 
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(51),
         "exposure does not invalidate the accepted source"
     );
@@ -388,7 +458,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&plan, false);
     assert_eq!(
-        hot.relief_frame(ledger.retained())
+        hot.relief_frame(ledger.retained(), ledger.held())
             .map(|frame| frame.scene_id),
         Some(61)
     );

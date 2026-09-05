@@ -49,7 +49,8 @@ impl Presenter {
                     .latest_hot_slot
                     .and_then(|slot| {
                         let index = slot.index() as usize;
-                        self.hot_warp_source[index].frame(self.ledger.retained())
+                        self.hot_warp_source[index]
+                            .frame(self.ledger.retained(), self.ledger.held())
                     })
                     .is_some();
                 match self
@@ -169,6 +170,8 @@ impl Presenter {
         self.active_warp_count = 0;
         self.facts.completed_scene_id = Some(frame.scene_id);
         self.facts.source_generation = Some(frame.pose.orbit_generation);
+        self.facts.held_frame_partition = None;
+        self.facts.held_since_scene_id = None;
         self.facts.precision_mode = frame.precision_mode;
         self.facts.delivered_width = frame.extent[0];
         self.facts.delivered_height = frame.extent[1];

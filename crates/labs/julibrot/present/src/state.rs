@@ -2,7 +2,8 @@ use ember_julibrot_kernels::EscapeGrid;
 use ember_julibrot_math::{Plane, Pose, plane_chart_relation};
 
 use crate::{
-    DropReason, PaletteId, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
+    DropReason, FramePartition, PaletteId, PresentError, RefinementLevel, SceneFrame,
+    SubmissionMeasurement,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -33,6 +34,13 @@ pub enum SceneCompletion {
     },
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HeldScene {
+    pub(crate) frame: SceneFrame,
+    pub(crate) partition: FramePartition,
+    pub(crate) held_since_scene_id: u64,
+}
+
 /// Pure refresh-loop exposure state: only a completed scene may clear it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExposureLatch {
@@ -58,6 +66,7 @@ impl ExposureLatch {
 pub struct SceneLedger {
     retained: Option<SceneFrame>,
     retained_grid: Option<EscapeGrid>,
+    held: Option<HeldScene>,
     pending: Option<PendingScene>,
 }
 
@@ -71,6 +80,7 @@ impl SceneLedger {
         Ok(self
             .retained
             .as_ref()
+            .or_else(|| self.held.as_ref().map(|held| &held.frame))
             .map_or(0, |frame| 1 - frame.texture_index))
     }
 
@@ -130,6 +140,7 @@ impl SceneLedger {
         }
         self.retained_grid = Some(pending.grid);
         self.retained = Some(frame.clone());
+        self.held = None;
         Some(SceneCompletion::Promoted(frame))
     }
 
@@ -151,7 +162,13 @@ impl SceneLedger {
                 || frame.precision_mode != precision_mode
         });
         if retained_invalid {
-            self.retained = None;
+            if let Some(frame) = self.retained.take() {
+                self.held = Some(HeldScene {
+                    partition: FramePartition::from_frame(&frame),
+                    held_since_scene_id: frame.scene_id,
+                    frame,
+                });
+            }
             self.retained_grid = None;
         }
         if let Some(pending) = &mut self.pending
@@ -197,6 +214,10 @@ impl SceneLedger {
 
     pub const fn retained(&self) -> Option<&SceneFrame> {
         self.retained.as_ref()
+    }
+
+    pub const fn held(&self) -> Option<&HeldScene> {
+        self.held.as_ref()
     }
 
     pub const fn retained_grid(&self) -> Option<&EscapeGrid> {
@@ -557,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_alone_survives_but_cap_origin_or_mode_drops() {
+    fn generation_alone_rebases_while_incompatible_main_holds_until_replacement() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
         ledger.apply_reference_shift(2, 2, [0.0; 2]);
@@ -568,6 +589,13 @@ mod tests {
         let plane = pose(2).plane;
         assert!(!ledger.invalidate_incompatible(64, ORIGIN, plane, MODE));
         assert!(ledger.invalidate_incompatible(128, ORIGIN, plane, MODE));
+        assert!(ledger.retained().is_none());
+        let held = ledger.held().expect("cap change holds the completed image");
+        assert_eq!(held.frame.scene_id, 1);
+        assert_eq!(held.partition.iteration_cap, 64);
+        assert_eq!(held.partition.main_generation, 2);
+        assert_eq!(held.held_since_scene_id, 1);
+        assert_eq!(ledger.available_texture_index(), Ok(1));
 
         begin(&mut ledger, 2, 2);
         ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], plane, MODE);
@@ -578,15 +606,22 @@ mod tests {
                 ..
             })
         ));
+        assert_eq!(ledger.held().map(|held| held.frame.scene_id), Some(1));
 
         begin(&mut ledger, 3, 3);
         ledger.complete(measurement(3));
+        assert!(ledger.held().is_none());
         assert!(ledger.invalidate_incompatible(
             64,
             ORIGIN,
             plane,
             PrecisionMode::PictureFast.as_str()
         ));
+        let held = ledger
+            .held()
+            .expect("precision change holds the replacement image");
+        assert_eq!(held.frame.scene_id, 3);
+        assert_eq!(held.partition.precision_mode, MODE);
     }
 
     #[test]

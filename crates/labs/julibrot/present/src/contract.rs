@@ -185,6 +185,38 @@ pub struct SceneFrame {
     pub measurement: SubmissionMeasurement,
 }
 
+/// Semantic partition under which a held completed image was produced.
+///
+/// The plane and origin identify the sampled slice. Iteration cap, precision policy, and MAIN
+/// generation identify the value contract inside that slice. A frame from this partition may be
+/// held unchanged while another partition renders, but it may not be geometrically reprojected
+/// into the new partition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FramePartition {
+    /// Once-rounded sampled plane basis.
+    pub plane: Plane,
+    /// Defining plane origin, including Julia's constant.
+    pub plane_origin_f64: [f64; 4],
+    /// Delivered iteration cap used by the held pixels.
+    pub iteration_cap: u32,
+    /// Precision policy used by the held pixels.
+    pub precision_mode: &'static str,
+    /// MAIN generation accepted when the held pixels completed.
+    pub main_generation: u32,
+}
+
+impl FramePartition {
+    pub(crate) const fn from_frame(frame: &SceneFrame) -> Self {
+        Self {
+            plane: frame.pose.plane,
+            plane_origin_f64: frame.plane_origin_f64,
+            iteration_cap: frame.iteration_cap,
+            precision_mode: frame.precision_mode,
+            main_generation: frame.pose.orbit_generation,
+        }
+    }
+}
+
 /// CPU-only result of the f64 reprojection planner.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WarpPlan {
@@ -354,6 +386,10 @@ pub struct PresentFacts {
     pub in_flight_scene_id: Option<u64>,
     /// Orbit generation carried by the retained source.
     pub source_generation: Option<u32>,
+    /// Partition stamp of the completed image held across an incompatible MAIN transition.
+    pub held_frame_partition: Option<FramePartition>,
+    /// Scene identity at which the completed image entered the held-only state.
+    pub held_since_scene_id: Option<u64>,
     /// Precision policy of the current MAIN selection and retained image.
     pub precision_mode: &'static str,
     /// Delivered width in pixels.
@@ -390,7 +426,7 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
-    /// Share of the destination exposure lattice that the warp paints clear.
+    /// Share of the destination coverage mirror that the warp or redraw leaves clear.
     pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,
@@ -442,6 +478,8 @@ impl Default for PresentFacts {
             completed_scene_id: None,
             in_flight_scene_id: None,
             source_generation: None,
+            held_frame_partition: None,
+            held_since_scene_id: None,
             precision_mode: PrecisionMode::default().as_str(),
             delivered_width: 0,
             delivered_height: 0,
