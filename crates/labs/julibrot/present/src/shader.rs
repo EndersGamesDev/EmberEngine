@@ -59,7 +59,7 @@ fn record_height(record: vec4<f32>) -> f32 {
 }
 ";
 const SCENE_BODY: &str = r"
-struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, @location(3) clamped: f32, }
+struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
 struct Ambient5 { low: vec4<f32>, fifth: f32, }
 // A grid of width samples covers width pixels, so the mesh spanning their centres stops half a
 // pixel short of the frame on every side. The rasterizer's fill rule hides that on the left and
@@ -112,9 +112,19 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
     output.valid = 1.0;
-    output.clamped = 0.0;
     output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
-    if (scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0) { return output; }
+    // With no lift every sample stays in the plane, and the projection restricted to the plane is
+    // the screen-to-plane map's own inverse: direct_ndc IS that projection, not a stand-in for it.
+    // The same holds for an edge-on map, which has no plane point anywhere to project.
+    if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }
+    output.valid = 0.0;
+    output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    // A horizon record is a pixel whose screen-to-plane denominator was not positive: the plane
+    // reaches no point there, so the scene has no vertex there either. Placing it at direct_ndc
+    // once the camera turns would draw a flat slab at the near depth over relief that is really in
+    // front of it. The pass clears to the same exterior colour these cells carry, so dropping the
+    // vertex leaves the picture unchanged wherever the projection is the identity.
+    if (record.w == 2.0) { return output; }
     let screen = vec3<f32>(screen_x, screen_y, 1.0);
     let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));
     if (!all(vec3<bool>(finite(plane_homogeneous.x), finite(plane_homogeneous.y), finite(plane_homogeneous.z))) || plane_homogeneous.z <= 0.0) { return output; }
@@ -124,13 +134,15 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
     let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;
     let ambient = ambient_camera(Ambient5(display, height));
-    output.valid = 0.0;
-    output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);
-    output.clamped = select(0.0, 1.0, distance_five - ambient.fifth < 0.05 * distance_five);
-    if (denominator_five <= 1.0e-4) { return output; }
+    // A lifted sample past the five-dimensional near limit is behind that camera. The projective
+    // algebra still returns a point for it, mirrored through the pole, and the former clamp drew
+    // that mirror image; the four-dimensional and observer poles below already refuse instead. A
+    // refused vertex takes its whole primitive with it, so the frame shows sky rather than a
+    // surface the object does not have there.
+    let denominator_five = distance_five - ambient.fifth;
+    if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
     let projected_four = ambient.low * scale_five;
     let denominator_four = distance_four - projected_four.w;
@@ -156,7 +168,6 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
 }
 @fragment fn scene_fragment(input: SceneVertex) -> @location(0) vec4<f32> {
     if (input.valid < 0.999999) { discard; }
-    if (input.clamped >= 0.999999) { discard; }
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
@@ -414,7 +425,14 @@ mod tests {
             "let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);",
             "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
             "let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;",
-            "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",
+            // The flat placement belongs to the two whole-frame cases where it IS the projection:
+            // an edge-on map has no plane point to project, and with no lift the projection
+            // restricted to the plane is the screen-to-plane map's own inverse. A horizon record is
+            // neither. It is one sample whose map denominator was not positive, so the plane
+            // reaches no point for it, and placing it at direct_ndc under a turned camera drew a
+            // flat slab at the near depth over relief that is really in front of it.
+            "if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }",
+            "if (record.w == 2.0) { return output; }",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
             "rotate_45(value, hot.camera_rotation_pairs_4.zw)",
             "rotate_13(rotated, hot.camera_rotation_pairs_0.zw)",
@@ -423,19 +441,15 @@ mod tests {
             "rotated.fifth += hot.camera_translation_1.x;",
             "let distance_five = hot.view_scale.y;",
             "let distance_four = hot.view_scale.z;",
-            "let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);",
-            // The near clamp keeps a lifted vertex in front of the eye and bounds its perspective
-            // magnification at twenty times, but it also fabricates geometry: a triangle whose
-            // three vertices are ALL held at the limit is entirely invented and used to be drawn
-            // across the frame. The vertex flags the clamp and the fragment discards where the
-            // interpolated flag is one, which is the whole primitive exactly when all three
-            // vertices are clamped, and nowhere but a degenerate edge otherwise. A triangle with at
-            // least one honest vertex is still drawn, so the surface stays closed at the limit.
-            "output.clamped = select(0.0, 1.0, distance_five - ambient.fifth < 0.05 * distance_five);",
-            "if (input.clamped >= 0.999999) { discard; }",
-            "@location(3) clamped: f32,",
+            // The former near clamp bounded the perspective magnification at twenty times, but it
+            // fabricated geometry to do it: a vertex past the limit is behind the five-dimensional
+            // camera, and the point the projective algebra returns for it is its mirror image,
+            // measured at one saved row up to 148.8 px from anywhere the surface reaches. Refusing
+            // the vertex refuses its whole primitive, which is what the four-dimensional and
+            // observer poles two lines below have always done.
+            "let denominator_five = distance_five - ambient.fifth;",
+            "if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }",
             "let denominator_four = distance_four - projected_four.w;",
-            "if (denominator_five <= 1.0e-4) { return output; }",
             "if (denominator_four <= 1.0e-4) { return output; }",
             "let camera_yaw_cosine = hot.observer_rotation.x;",
             "let camera_pitch_cosine = hot.observer_rotation.z;",

@@ -2675,12 +2675,12 @@ fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_rou
         HeightDragRow {
             name: "gentle-d5-8",
             distance_five: 8.0,
-            expected_clear_only: 24,
+            expected_clear_only: 0,
         },
         HeightDragRow {
             name: "close-d5-2",
             distance_five: 2.0,
-            expected_clear_only: 81,
+            expected_clear_only: 0,
         },
     ] {
         let stats = drive_height_drag(row);

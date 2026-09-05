@@ -323,7 +323,11 @@ fn displayed_height(height_scale: f64, record_height: f64) -> f64 {
     height_scale * (record_height + 2.0) * 0.5
 }
 
-/// The scene shader's primitive rule: every vertex must project, and not every one may be clamped.
+/// The scene shader's primitive rule: every vertex must project, and none may be past the pole.
+///
+/// A vertex past the five-dimensional near limit is behind that camera, and the point the
+/// projective algebra returns for it is its mirror image. The shader refuses such a vertex, so a
+/// primitive holding one is not drawn and covers nothing.
 fn drawn_triangle(triangle: [Option<([f64; 2], bool)>; 3]) -> Option<[[f64; 2]; 3]> {
     let mut points = [[0.0_f64; 2]; 3];
     let mut clamped = 0_u8;
@@ -332,7 +336,7 @@ fn drawn_triangle(triangle: [Option<([f64; 2], bool)>; 3]) -> Option<[[f64; 2]; 
         points[slot] = point;
         clamped += u8::from(is_clamped);
     }
-    (clamped < 3).then_some(points)
+    (clamped == 0).then_some(points)
 }
 
 /// Marks every lattice sample inside one device-space triangle.
