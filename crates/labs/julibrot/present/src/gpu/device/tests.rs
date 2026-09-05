@@ -616,7 +616,10 @@ fn the_backdrop_is_ordered_against_itself_by_depth() {
 
 #[test]
 fn backdrop_then_main_uses_disjoint_depth_ranges() {
-    assert_eq!(scene_draw_order(true), [SceneLayer::Backdrop, SceneLayer::Main]);
+    assert_eq!(
+        scene_draw_order(true),
+        [SceneLayer::Backdrop, SceneLayer::Main]
+    );
     assert_eq!(scene_depth_range(SceneLayer::Backdrop, true), [0.5, 1.0]);
     assert_eq!(scene_depth_range(SceneLayer::Main, true), [0.0, 0.5]);
     assert_eq!(scene_depth_range(SceneLayer::Main, false), [0.0, 1.0]);
