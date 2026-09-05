@@ -20,6 +20,10 @@ The heap dependency remains the shipped `ember-lab-heap` implementation: `DataSp
 
 No kernel result authors simulation, collision, protocol, reconciliation, or gameplay truth; a result is presentation data and a stale or failed dispatch produces a typed refusal or stale visual, never a truth-state change.
 
+### Stage-0 tile-job decisions — 2026-09-05
+
+This lane records the stage-0 tile-job model as wire-free kernels policy with no dispatch or delivered-value change: source-screen geometry, content/MAIN/reference identity, paired value-and-reconstruction publication, reference leases, demand ordering, and resident-budget arithmetic follow “Where rendered tiles live and how the chart indexes them”, “Per-tile refinement, backdrop, and scheduling”, “Device-floor resource model”, “Cost model and eviction”, and migration stage 0 in [the tiled-reprojection design](tiled-reprojection.md). The implementation remains self-contained so later app and presentation work can adopt it additively.
+
 ## 2. Design and arithmetic
 
 ### 2.1 Coordinates, planes, and pixels
