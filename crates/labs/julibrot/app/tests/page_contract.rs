@@ -608,6 +608,17 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
 }
 
 #[test]
+fn boot_draws_the_default_seahorse_valley_target() {
+    assert!(STATE.contains("pub const SEAHORSE_VALLEY_TARGET: [f64; 4] = [0.0, 0.0, -0.75, 0.1];"));
+    assert!(STATE.contains("crosshair: Some(target),"));
+    assert!(MAIN.contains("const drawCrosshair = () => {"));
+    assert!(MAIN.contains(
+        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+    ));
+    assert!(MAIN.contains("TARGET.hidden = !crosshair.crosshair_on_surface;"));
+}
+
+#[test]
 fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     for element in [
         "id=\"save-a\"",

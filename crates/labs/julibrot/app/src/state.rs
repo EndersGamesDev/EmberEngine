@@ -23,6 +23,9 @@ pub const INITIAL_ITERATION_CAP: u32 = 512;
 
 pub const NAVIGATION_PRECISION_BITS: u32 = 1_024;
 
+/// The boundary point a fresh whole-set view marks as its zoom target.
+pub const SEAHORSE_VALLEY_TARGET: [f64; 4] = [0.0, 0.0, -0.75, 0.1];
+
 /// The `scale` control's ends, in base-two zoom exponent.
 ///
 /// The lower end is a step out from the whole chart rather than zero, so the picture can be
@@ -460,6 +463,8 @@ impl ViewerController {
         let origin = requested.plane_origin;
         let plane = construct_plane(requested.object_angles).map_err(math_error)?;
         let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
+        let target = BigCentre::from_f64(SEAHORSE_VALLEY_TARGET, NAVIGATION_PRECISION_BITS)
+            .map_err(math_error)?;
         let initial = ViewerState {
             epoch: 0,
             hot: HotState {
@@ -514,7 +519,7 @@ impl ViewerController {
             pending_reason: Some(OrbitReason::INITIAL),
             pending_reference_centre: None,
             grid_width,
-            crosshair: None,
+            crosshair: Some(target),
             grid_extent,
         })
     }
@@ -682,6 +687,10 @@ impl ViewerController {
         self.crosshair
             .as_ref()
             .map(ember_julibrot_math::BigCentre::to_f64_mirror)
+    }
+
+    pub(crate) const fn crosshair(&self) -> Option<&BigCentre> {
+        self.crosshair.as_ref()
     }
 
     /// Translates the picture by a DOM drag displacement, leaving the stored point where it is.
@@ -867,8 +876,8 @@ impl ViewerController {
         })
     }
 
-    /// Moves the absolute plane origin, resetting the centre to it and preserving cap, palette,
-    /// and every VIEW control.
+    /// Moves the absolute plane origin, resetting the centre and target while preserving cap,
+    /// palette, and every VIEW control.
     ///
     /// This is MAIN work: a new origin selects different samples and needs a new reference orbit,
     /// which is exactly the publication the retired preset selection performed.
@@ -931,6 +940,7 @@ impl ViewerController {
         self.pending_reason = Some(OrbitReason::INITIAL);
         self.pending_reference_centre = None;
         self.navigation_centre_f64 = origin;
+        self.clear_crosshair();
         self.note_requested_change();
         Ok(())
     }
@@ -990,6 +1000,7 @@ impl ViewerController {
         let view = row.view();
         let zoom_log2 = row.zoom_log2;
         let centre = row.centre()?;
+        let target = row.target()?;
         let centre_f64 = centre.to_f64_mirror();
         if !object.is_valid() {
             return Err(AppError::Math(
@@ -1022,7 +1033,14 @@ impl ViewerController {
         let zoom_changed = zoom_log2.to_bits() != self.requested.zoom_log2.to_bits();
         let centre_changed = self.owner.navigation_centre().as_ref() != Some(&centre)
             || self.owner.reference_centre().as_ref() != Some(&centre);
-        if !object_changed && !origin_changed && !view_changed && !zoom_changed && !centre_changed {
+        let target_changed = self.crosshair.as_ref() != target.as_ref();
+        if !object_changed
+            && !origin_changed
+            && !view_changed
+            && !zoom_changed
+            && !centre_changed
+            && !target_changed
+        {
             return Ok(());
         }
 
@@ -1073,10 +1091,6 @@ impl ViewerController {
         if zoom_changed {
             self.requested.zoom_log2 = zoom_log2;
         }
-        if slice_changed {
-            self.clear_crosshair();
-        }
-
         if object_changed || zoom_changed || reoriented_displacement.is_some() {
             let mut hot = self.staged_hot;
             if zoom_changed {
@@ -1134,7 +1148,10 @@ impl ViewerController {
                 OrbitReason::ZOOM_THRESHOLD
             });
         }
-        self.note_requested_change();
+        self.crosshair = target;
+        if object_changed || origin_changed || view_changed || navigation_changed {
+            self.note_requested_change();
+        }
         Ok(())
     }
 
@@ -1607,9 +1624,9 @@ mod tests {
     use ember_julibrot_worker::OrbitReason;
 
     use super::{
-        BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2, ViewerController,
-        anchor_px_up, box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down,
-        is_box_selection, preset_row,
+        BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2,
+        SEAHORSE_VALLEY_TARGET, ViewerController, anchor_px_up, box_zoom_delta_log2,
+        css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
     };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
@@ -1737,7 +1754,13 @@ mod tests {
             .navigation_centre()
             .expect("configured navigation")
             .to_f64_mirror();
-        assert_eq!(viewer.crosshair_plane_px(), None);
+        assert_eq!(
+            viewer
+                .crosshair_centre_f64()
+                .map(|point| point.map(f64::to_bits)),
+            Some(SEAHORSE_VALLEY_TARGET.map(f64::to_bits))
+        );
+        assert!(viewer.crosshair_plane_px().is_some());
         viewer.set_crosshair([120.0, -45.0]).expect("finite click");
         let after_centre = viewer
             .owner()
@@ -1755,6 +1778,12 @@ mod tests {
         assert!((drawn[0] - 120.0).abs() < 1.0e-6);
         assert!((drawn[1] + 45.0).abs() < 1.0e-6);
         assert!(viewer.crosshair_precision_bits().is_some());
+        assert_ne!(
+            viewer
+                .crosshair_centre_f64()
+                .map(|point| point.map(f64::to_bits)),
+            Some(SEAHORSE_VALLEY_TARGET.map(f64::to_bits))
+        );
         viewer.clear_crosshair();
         assert_eq!(viewer.crosshair_plane_px(), None);
     }
@@ -1776,6 +1805,7 @@ mod tests {
         }
         // With no point stored the anchor is the screen centre, which is the old behaviour.
         let mut plain = ViewerController::new(960).expect("canonical viewer");
+        plain.clear_crosshair();
         let before = plain
             .owner()
             .navigation_centre()
@@ -1928,10 +1958,13 @@ mod tests {
         assert_eq!(viewer.crosshair_centre_f64(), Some(feature));
     }
 
-    /// The scale control is absolute, refuses its own ends, and zooms about the screen centre.
+    /// The scale control is absolute, refuses its own ends, and zooms about the stored target.
     #[test]
     fn the_scale_control_is_absolute_and_bounded() {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        let target = viewer
+            .crosshair_plane_px()
+            .expect("the fresh viewer has its target");
         viewer
             .set_zoom_log2(12.5)
             .expect("a scale inside the range");
@@ -1940,10 +1973,15 @@ mod tests {
             (reached - 12.5).abs() <= f64::EPSILON * 12.5,
             "scale reached {reached} rather than 12.5"
         );
-        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+        let anchored = viewer
+            .crosshair_plane_px()
+            .expect("the target remains projected");
         assert!(
-            displacement.iter().all(|value| value.abs() < 1.0e-9),
-            "a centred zoom moved the centre"
+            anchored
+                .iter()
+                .zip(target)
+                .all(|(after, before)| (*after - before).abs() < 1.0e-6),
+            "the scale moved its target from {target:?} to {anchored:?}"
         );
         assert!(viewer.set_zoom_log2(SCALE_RANGE_LOG2[0] - 0.001).is_err());
         assert!(viewer.set_zoom_log2(SCALE_RANGE_LOG2[1] + 0.001).is_err());

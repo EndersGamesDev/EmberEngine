@@ -49,7 +49,7 @@ impl SavedCentre {
     }
 }
 
-/// Everything that determines the picture except iteration cap and palette.
+/// Everything a view box holds except iteration cap and palette.
 ///
 /// The field names are the preset row's names plus the two a preset has no opinion about, so the
 /// page writes a preset and a saved view into its controls through one function.
@@ -78,6 +78,9 @@ pub struct SavedView {
     pub zoom_log2: f64,
     /// The authoritative centre in its canonical encoding.
     pub centre: SavedCentre,
+    /// The zoom target in its canonical encoding, or no target for centre-anchored zoom.
+    #[serde(default)]
+    pub target: Option<SavedCentre>,
     /// Finite mirror of the centre, for the readout only.
     ///
     /// It is never read back: loading and morphing both decode `centre`. It exists so that a box
@@ -139,6 +142,7 @@ impl SavedView {
             distance_five: row.view.distance_five,
             distance_four: row.view.distance_four,
             zoom_log2: 0.0,
+            target: None,
             centre_f64: centre.to_f64_mirror(),
             centre: encode_centre(&centre)?,
         })
@@ -166,6 +170,7 @@ impl SavedView {
             distance_five: requested.view.distance_five,
             distance_four: requested.view.distance_four,
             zoom_log2: requested.zoom_log2,
+            target: viewer.crosshair().map(encode_centre).transpose()?,
             centre_f64: centre.to_f64_mirror(),
             centre: encode_centre(&centre)?,
         })
@@ -207,6 +212,15 @@ impl SavedView {
         decode_centre(&self.centre)
     }
 
+    /// Decodes the stored zoom target back into the authoritative bignum.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure for a malformed encoded target.
+    pub fn target(&self) -> Result<Option<BigCentre>, AppError> {
+        self.target.as_ref().map(decode_centre).transpose()
+    }
+
     /// Interpolates one saved row into another, composing math's interpolators only.
     ///
     /// No arithmetic happens here: every scalar and the centre are math's to move, and this
@@ -223,17 +237,18 @@ impl SavedView {
         let zoom_log2 = lerp_f64(from.zoom_log2, to.zoom_log2, t).map_err(|error| math(&error))?;
         let first = from.centre()?;
         let second = to.centre()?;
-        let working_bits = morph_precision_bits(&first, &second).map_err(|error| math(&error))?;
-        // The extra bits are the arithmetic's, not the row's. A row is installed as the viewer's
-        // own centre and its reference, and displacement against a reference is refused when the
-        // two precisions differ, so a row handed back at working precision stops the loop on the
-        // first step of the slider. Rounding back to the deeper endpoint is exact for both ends.
-        let precision_bits = first.precision_bits.max(second.precision_bits);
-        let centre = round_centre(
-            &lerp_centre(&first, &second, t, working_bits).map_err(|error| math(&error))?,
-            precision_bits,
-        )
-        .map_err(|error| math(&error))?;
+        let centre = interpolate_centre(&first, &second, t)?;
+        let first_target = from.target()?;
+        let second_target = to.target()?;
+        let target = if t.to_bits() == 0.0_f64.to_bits() {
+            from.target.clone()
+        } else if t.to_bits() == 1.0_f64.to_bits() {
+            to.target.clone()
+        } else if let (Some(first), Some(second)) = (first_target, second_target) {
+            Some(encode_centre(&interpolate_centre(&first, &second, t)?)?)
+        } else {
+            None
+        };
         Ok(Self {
             object: object.as_array(),
             origin,
@@ -245,10 +260,29 @@ impl SavedView {
             distance_five: view.distance_five,
             distance_four: view.distance_four,
             zoom_log2,
+            target,
             centre_f64: centre.to_f64_mirror(),
             centre: encode_centre(&centre)?,
         })
     }
+}
+
+fn interpolate_centre(
+    first: &BigCentre,
+    second: &BigCentre,
+    t: f64,
+) -> Result<BigCentre, AppError> {
+    let working_bits = morph_precision_bits(first, second).map_err(|error| math(&error))?;
+    // The extra bits are the arithmetic's, not the row's. A row is installed as the viewer's own
+    // centre and its reference, and displacement against a reference is refused when the two
+    // precisions differ, so a row handed back at working precision stops the loop on the first
+    // step of the slider. Rounding back to the deeper endpoint is exact for both ends.
+    let precision_bits = first.precision_bits.max(second.precision_bits);
+    round_centre(
+        &lerp_centre(first, second, t, working_bits).map_err(|error| math(&error))?,
+        precision_bits,
+    )
+    .map_err(|error| math(&error))
 }
 
 fn flatten_page_array(
@@ -384,6 +418,24 @@ mod tests {
             ..restored
         };
         assert_eq!(again, saved);
+    }
+
+    #[test]
+    fn a_saved_rows_target_replaces_the_current_target_when_loaded() {
+        let mut source = ViewerController::new([960, 540]).expect("source viewer");
+        source.set_crosshair([137.0, -64.0]).expect("source target");
+        let saved = SavedView::capture(&source).expect("row with target");
+        let saved_target = saved.target().expect("valid saved target").expect("target");
+
+        let mut loaded = ViewerController::new([960, 540]).expect("loaded viewer");
+        loaded
+            .set_crosshair([-91.0, 48.0])
+            .expect("replacement target");
+        assert_ne!(loaded.crosshair(), Some(&saved_target));
+
+        loaded.apply_saved_view(&saved).expect("load saved row");
+
+        assert_eq!(loaded.crosshair(), Some(&saved_target));
     }
 
     /// A deep centre must survive the encoding exactly, which is the whole reason it is stored.

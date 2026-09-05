@@ -14,7 +14,7 @@ The Julibrot is the set of pairs `(z, c)` in ℂ², which is ℝ⁴, whose orbit
 
 The lab renders a 2D slice of the 4D Julibrot, chosen and positioned by an affine object pose in ℝ⁴; the escape value lifts that plane by height into ℝ⁵, and an independent affine 5D camera pose sees the lifted slice through the double perspective `d₅` and `d₄` and the 3D observer.
 
-Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom is a slider, and a preset is a named row of slider values. Two boxes hold saved rows and one slider morphs between them; navigation uses a target click, plain-drag pan, Shift-drag box zoom, and a `scale` slider, never the wheel.
+Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom is a slider, and a preset is a named row of slider values. Two boxes hold saved rows and one slider morphs between them; navigation uses a target click, plain-drag pan, Shift-drag box zoom, and a `scale` slider, never the wheel, while a fresh whole-set view visibly targets Seahorse Valley at the slice point `(0,0,−0.75,0.1)` so its first scale move enters boundary structure.
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 
