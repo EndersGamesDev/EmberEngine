@@ -29,7 +29,8 @@ pub use homography::{
 };
 pub use mesh::{
     HeightSample, MeshError, camera_rotation, camera_rotation_pairs, camera_translation,
-    display_coordinate, height_for_record, scene_index_count, scene_indices, view_scale,
+    display_coordinate, grid_screen, height_for_record, scene_index_count, scene_indices,
+    view_scale,
 };
 pub use palette::{
     CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, GLITCH_DIAGNOSTIC, ICE_PALETTE, PaletteId,
