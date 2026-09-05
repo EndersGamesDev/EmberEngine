@@ -1,5 +1,7 @@
 //! Native source-contract checks for browser facts that need visible replay to observe.
 
+use ember_lab_julibrot::{SavedView, preset_row};
+
 const INDEX: &str = include_str!("../../../../../web/labs/julibrot/index.html");
 const MAIN: &str = include_str!("../../../../../web/labs/julibrot/main.js");
 const STYLE: &str = include_str!("../../../../../web/labs/julibrot/style.css");
@@ -381,17 +383,29 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
+    let preset =
+        SavedView::from_preset(preset_row(0).expect("first preset")).expect("serializable preset");
+    let preset_text = preset.to_page_json().expect("flat page JSON");
+    let preset_json: serde_json::Value = serde_json::from_str(&preset_text).expect("JSON object");
     for field in [
         "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24", "q34", "q15",
         "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
     ] {
         assert!(
-            LIB.contains(&format!(r#""{field}""#)),
+            preset_json.get(field).is_some(),
             "row JSON omits affine field {field}"
         );
     }
-    assert!(LIB.contains("flatten_array(row, \"object\", &OBJECT_FIELDS)?;"));
-    assert!(LIB.contains("expand_array(row, \"object\", &OBJECT_FIELDS)?;"));
+    for aggregate in ["object", "camera", "camera_translation"] {
+        assert!(
+            preset_json.get(aggregate).is_none(),
+            "page JSON retained aggregate field {aggregate}"
+        );
+    }
+    assert_eq!(
+        SavedView::from_page_json(&preset_text).expect("page JSON round trip"),
+        preset
+    );
     assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
@@ -750,15 +764,15 @@ fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands()
 }
 
 #[test]
-fn pending_partition_hold_and_presented_tier_hooks_are_explicitly_gated() {
-    assert!(FRAME.contains("pub const PREVIOUS_PARTITION_HOLD_ENABLED: bool = false;"));
-    assert!(FRAME.contains("hold_refused_warp_with_partition_capability("));
-    assert!(FRAME.contains("holding_previous_partition_with_capability("));
+fn pending_promotion_and_retained_hold_facts_are_explicit() {
+    assert!(!FRAME.contains("PREVIOUS_PARTITION_HOLD_ENABLED"));
+    assert!(!FRAME.contains("hold_refused_warp_with_partition_capability("));
     assert!(FRAME.contains("pub const SETTLED_DETERMINISTIC_PROMOTION_ENABLED: bool = false;"));
     assert!(FRAME.contains("pub struct SettledPromotion"));
     assert!(FRAME.contains("pub const fn presented_tier(&self) -> PresentedTier"));
-    assert!(MAIN.contains("if (facts.held_previous_partition)"));
-    assert!(MAIN.contains("from the previous partition while the replacement renders"));
+    assert!(MAIN.contains("facts.held_since_scene_id !== null"));
+    assert!(MAIN.contains("`held_frame_partition` will remain visible in the generic overlay"));
+    assert!(MAIN.contains("held from previous partition while the replacement renders"));
 }
 
 #[test]

@@ -15,8 +15,7 @@ use ember_julibrot_math::{
 
 use super::super::schedule::{
     PresentedTier, PromotionAction, SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
-    STATIC_SETTLE_WINDOW_MS, SettledPromotion, hold_refused_warp_with_partition_capability,
-    holding_previous_partition_with_capability,
+    STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
 use super::{
     BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
@@ -828,6 +827,7 @@ impl FakeClock {
     }
 }
 
+/// Characterizes the capability-gated promotion state machine before browser-loop activation.
 #[test]
 fn settled_picture_fast_promotes_once_and_swaps_only_after_presentation() {
     let mut promotion = SettledPromotion::default();
@@ -903,6 +903,7 @@ fn settled_picture_fast_promotes_once_and_swaps_only_after_presentation() {
     );
 }
 
+/// Characterizes revision cancellation in the not-yet-wired promotion state machine.
 #[test]
 fn requested_change_cancels_promotion_and_rearms_the_fast_tier() {
     let mut promotion = SettledPromotion::default();
@@ -941,6 +942,7 @@ fn requested_change_cancels_promotion_and_rearms_the_fast_tier() {
     );
 }
 
+/// Characterizes explicit mode and proves the disabled flag has no scheduling effect.
 #[test]
 fn explicit_deterministic_mode_and_the_disabled_hook_do_not_promote() {
     let mut promotion = SettledPromotion::default();
@@ -1693,36 +1695,6 @@ fn automatic_stale_hold_tracks_pending_replacement_work() {
 
     frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
     assert!(frame_loop.hold_refused_warp(true));
-}
-
-#[test]
-fn previous_partition_hold_spans_auto_and_manual_replacement_work() {
-    let mut automatic = FrameLoop::default();
-    automatic.accept_request(43, true);
-    assert!(hold_refused_warp_with_partition_capability(
-        &automatic, false, true
-    ));
-    assert!(holding_previous_partition_with_capability(
-        &automatic, false, true
-    ));
-    assert!(!holding_previous_partition_with_capability(
-        &automatic, true, true
-    ));
-
-    let mut manual = FrameLoop::default();
-    manual.set_scene_mode(SceneMode::Manual, 43, true);
-    manual.accept_request(44, true);
-    assert!(hold_refused_warp_with_partition_capability(
-        &manual, false, true
-    ));
-    assert!(holding_previous_partition_with_capability(
-        &manual, false, true
-    ));
-
-    automatic.schedule.pause();
-    assert!(!holding_previous_partition_with_capability(
-        &automatic, false, true
-    ));
 }
 
 #[test]

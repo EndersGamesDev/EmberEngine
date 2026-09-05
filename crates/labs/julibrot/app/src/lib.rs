@@ -246,72 +246,6 @@ mod wasm_entry {
         static APP: RefCell<Option<App>> = const { RefCell::new(None) };
     }
 
-    const OBJECT_FIELDS: [&str; 6] = ["o12", "o13", "o14", "o23", "o24", "o34"];
-    const CAMERA_FIELDS: [&str; 10] = [
-        "q12", "q13", "q14", "q23", "q24", "q34", "q15", "q25", "q35", "q45",
-    ];
-    const TRANSLATION_FIELDS: [&str; 5] = ["t1", "t2", "t3", "t4", "t5"];
-
-    fn flatten_array(
-        row: &mut serde_json::Map<String, serde_json::Value>,
-        source: &str,
-        fields: &[&str],
-    ) -> Result<(), JsValue> {
-        let Some(serde_json::Value::Array(values)) = row.remove(source) else {
-            return Err(JsValue::from_str("saved row has no affine control array"));
-        };
-        if values.len() != fields.len() {
-            return Err(JsValue::from_str("saved row affine control count differs"));
-        }
-        for (field, value) in fields.iter().zip(values) {
-            row.insert((*field).to_string(), value);
-        }
-        Ok(())
-    }
-
-    fn expand_array(
-        row: &mut serde_json::Map<String, serde_json::Value>,
-        target: &str,
-        fields: &[&str],
-    ) -> Result<(), JsValue> {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(fields.len())
-            .map_err(|_| JsValue::from_str("saved row affine controls do not fit"))?;
-        for field in fields {
-            values.push(
-                row.remove(*field)
-                    .ok_or_else(|| JsValue::from_str("saved row affine control is missing"))?,
-            );
-        }
-        row.insert(target.to_string(), serde_json::Value::Array(values));
-        Ok(())
-    }
-
-    fn page_saved_view_json(saved: &SavedView) -> Result<String, JsValue> {
-        let mut value =
-            serde_json::to_value(saved).map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let row = value
-            .as_object_mut()
-            .ok_or_else(|| JsValue::from_str("saved row is not a JSON object"))?;
-        flatten_array(row, "object", &OBJECT_FIELDS)?;
-        flatten_array(row, "camera", &CAMERA_FIELDS)?;
-        flatten_array(row, "camera_translation", &TRANSLATION_FIELDS)?;
-        serde_json::to_string(&value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    fn page_saved_view(json: &str) -> Result<SavedView, JsValue> {
-        let mut value: serde_json::Value =
-            serde_json::from_str(json).map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let row = value
-            .as_object_mut()
-            .ok_or_else(|| JsValue::from_str("saved row is not a JSON object"))?;
-        expand_array(row, "object", &OBJECT_FIELDS)?;
-        expand_array(row, "camera", &CAMERA_FIELDS)?;
-        expand_array(row, "camera_translation", &TRANSLATION_FIELDS)?;
-        serde_json::from_value(value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
     /// Returns the module ABI for loader and worker handshakes.
     #[wasm_bindgen]
     pub fn julibrot_abi_version() -> u32 {
@@ -623,8 +557,9 @@ mod wasm_entry {
         let row = preset_row(id)
             .ok_or_else(|| JsValue::from_str("preset identifier is outside its range"))?;
         let saved = SavedView::from_preset(row).map_err(app_js_error)?;
-        let mut value: serde_json::Value = serde_json::from_str(&page_saved_view_json(&saved)?)
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&saved.to_page_json().map_err(app_js_error)?)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
         value
             .as_object_mut()
             .ok_or_else(|| JsValue::from_str("preset row is not a JSON object"))?
@@ -640,14 +575,14 @@ mod wasm_entry {
     pub fn app_saved_view_json() -> Result<String, JsValue> {
         with_app(|app| {
             let saved = SavedView::capture(app.viewer()).map_err(app_js_error)?;
-            page_saved_view_json(&saved)
+            saved.to_page_json().map_err(app_js_error)
         })
     }
 
     /// Applies every field of one saved or morphed row through one navigation transaction.
     #[wasm_bindgen]
     pub fn app_apply_saved_view(row_json: String) -> Result<(), JsValue> {
-        let row = page_saved_view(&row_json)?;
+        let row = SavedView::from_page_json(&row_json).map_err(app_js_error)?;
         with_app_mut(|app| {
             app.viewer_mut()
                 .apply_saved_view(&row)
@@ -671,10 +606,10 @@ mod wasm_entry {
     /// Returns the row `t` of the way from one stored row to another.
     #[wasm_bindgen]
     pub fn app_morph_view(from_json: String, to_json: String, t: f64) -> Result<String, JsValue> {
-        let from = page_saved_view(&from_json)?;
-        let to = page_saved_view(&to_json)?;
+        let from = SavedView::from_page_json(&from_json).map_err(app_js_error)?;
+        let to = SavedView::from_page_json(&to_json).map_err(app_js_error)?;
         let morphed = SavedView::lerp(&from, &to, t).map_err(app_js_error)?;
-        page_saved_view_json(&morphed)
+        morphed.to_page_json().map_err(app_js_error)
     }
 
     fn with_view(edit: impl FnOnce(&mut ViewControls)) -> Result<(), JsValue> {

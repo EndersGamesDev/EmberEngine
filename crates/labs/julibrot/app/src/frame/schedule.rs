@@ -63,11 +63,6 @@ pub const STATIC_SETTLE_WINDOW_MS: f64 = 400.0;
 #[allow(dead_code, reason = "capability-gated additive browser-loop hook")]
 pub const SETTLED_DETERMINISTIC_PROMOTION_ENABLED: bool = false;
 
-/// Cross-partition holding stays disabled until present retains the invalidated source frame and
-/// reports that source separately from the current partition.
-#[allow(dead_code, reason = "capability-gated additive presentation hook")]
-pub const PREVIOUS_PARTITION_HOLD_ENABLED: bool = false;
-
 /// Precision tier of the scene actually presented for the requested `PictureFast` view.
 #[allow(dead_code, reason = "capability-gated additive facts hook")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -455,37 +450,6 @@ const fn level_rank(level: RefinementLevel) -> u32 {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-pub(super) const fn hold_refused_warp_with_partition_capability(
-    frame_loop: &FrameLoop,
-    has_current_partition_scene: bool,
-    previous_partition_available: bool,
-) -> bool {
-    if matches!(frame_loop.scene_mode, SceneMode::Manual) {
-        return true;
-    }
-    frame_loop.refinement_pending() && (has_current_partition_scene || previous_partition_available)
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-#[allow(
-    dead_code,
-    reason = "capability-gated additive presentation facts hook"
-)]
-pub(super) const fn holding_previous_partition_with_capability(
-    frame_loop: &FrameLoop,
-    has_current_partition_scene: bool,
-    previous_partition_available: bool,
-) -> bool {
-    if has_current_partition_scene || !previous_partition_available {
-        return false;
-    }
-    match frame_loop.scene_mode {
-        SceneMode::Auto => frame_loop.refinement_pending(),
-        SceneMode::Manual => frame_loop.scene_update_pending,
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
 impl FrameLoop {
     pub(super) fn refresh<P: PresenterPoll>(presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
         presenter.poll_once(now_ms)
@@ -710,11 +674,10 @@ impl FrameLoop {
     }
 
     pub(super) const fn hold_refused_warp(&self, has_retained_scene: bool) -> bool {
-        hold_refused_warp_with_partition_capability(
-            self,
-            has_retained_scene,
-            PREVIOUS_PARTITION_HOLD_ENABLED,
-        )
+        if matches!(self.scene_mode, SceneMode::Manual) {
+            return true;
+        }
+        has_retained_scene && self.refinement_pending()
     }
 
     #[cfg(target_arch = "wasm32")]

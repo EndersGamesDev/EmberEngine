@@ -806,27 +806,18 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure when an angle is non-finite or outside its range.
-    #[allow(
-        clippy::float_cmp,
-        reason = "finite slider values are an exact cache key and signed zero constructs the same plane"
-    )]
     pub fn set_object_angles(&mut self, angles: ObjectAngles) -> Result<(), AppError> {
         if !angles.is_valid() {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
-        let angles_changed =
-            !f64_bits_eq(angles.as_array(), self.requested.object_angles.as_array());
-        if !angles_changed {
+        // Requested controls are bit keys, so signed zero remains a distinct requested edit.
+        if f64_bits_eq(angles.as_array(), self.requested.object_angles.as_array()) {
             return Ok(());
         }
         self.synchronize_shadow()?;
-        let checked_plane = if angles_changed {
-            construct_plane(angles).map_err(math_error)?
-        } else {
-            self.checked_plane
-        };
+        let checked_plane = construct_plane(angles).map_err(math_error)?;
         let plane_preserving = plane_chart_relation(self.checked_plane, checked_plane).is_some();
-        let rotated_displacement = if angles_changed && plane_preserving {
+        let rotated_displacement = if plane_preserving {
             Some(
                 self.owner
                     .reorient_navigation_plane(checked_plane)
@@ -835,13 +826,13 @@ impl ViewerController {
         } else {
             None
         };
-        if angles_changed && !plane_preserving {
+        if !plane_preserving {
             self.clear_crosshair();
         }
         self.requested.object_angles = angles;
         self.checked_plane = checked_plane;
         #[cfg(test)]
-        if angles_changed {
+        {
             self.plane_constructions = self.plane_constructions.saturating_add(1);
         }
         let mut hot = self.staged_hot;
@@ -852,7 +843,7 @@ impl ViewerController {
         }
         self.staged_hot = hot;
         self.owner.stage_hot(hot);
-        if angles_changed && !plane_preserving {
+        if !plane_preserving {
             self.owner.navigate(NavigationDelta::default());
             if let Some(error) = self.owner.take_navigation_error() {
                 return Err(owner_error(error));
@@ -954,7 +945,9 @@ impl ViewerController {
     ///
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
-        if self.owner.navigation_centre().as_ref() == Some(&centre) {
+        if self.owner.navigation_centre().as_ref() == Some(&centre)
+            && self.owner.reference_centre().as_ref() == Some(&centre)
+        {
             return Ok(());
         }
         self.synchronize_shadow()?;
@@ -1027,7 +1020,8 @@ impl ViewerController {
         let origin_changed = !f64_bits_eq(origin, self.requested.plane_origin);
         let view_changed = !f64_bits_eq(view.as_array(), self.requested.view.as_array());
         let zoom_changed = zoom_log2.to_bits() != self.requested.zoom_log2.to_bits();
-        let centre_changed = self.owner.navigation_centre().as_ref() != Some(&centre);
+        let centre_changed = self.owner.navigation_centre().as_ref() != Some(&centre)
+            || self.owner.reference_centre().as_ref() != Some(&centre);
         if !object_changed && !origin_changed && !view_changed && !zoom_changed && !centre_changed {
             return Ok(());
         }
