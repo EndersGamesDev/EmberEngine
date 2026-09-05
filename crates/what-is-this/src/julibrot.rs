@@ -3,7 +3,7 @@
 use ember_game_what_is_this_v1::{KernelMeasurement, KernelStatus, SummaryStats};
 use serde::{Deserialize, Serialize};
 
-pub(crate) const STAGE_ID: &str = "stage.julibrot-slide.v1";
+const STAGE_ID: &str = "stage.julibrot-slide.v1";
 /// Maximum compact JSON bytes reserved for all Julibrot scenario measurements.
 pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 10 * 1_024;
 const FACT_SAMPLE_CAP: usize = 12;
@@ -114,6 +114,10 @@ struct FrameObservation {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "the unit suffix keeps the compact JSON timing fields unambiguous"
+)]
 struct WallObservation {
     worker_reference_us: Option<Vec<u64>>,
     credit_wait_us: Option<Vec<u64>>,
@@ -154,10 +158,8 @@ fn finite_nonnegative(values: &[f64]) -> bool {
         .all(|value| value.is_finite() && *value >= 0.0)
 }
 
-fn validate_optional_samples(values: &Option<Vec<u64>>) -> bool {
-    values
-        .as_ref()
-        .is_none_or(|samples| samples.len() <= FACT_SAMPLE_CAP)
+fn validate_optional_samples(values: Option<&[u64]>) -> bool {
+    values.is_none_or(|samples| samples.len() <= FACT_SAMPLE_CAP)
 }
 
 fn validate_observation(
@@ -213,18 +215,19 @@ fn validate_observation(
             .is_some_and(|samples| {
                 samples.len() > usize::from(spec.step_count) || !finite_nonnegative(samples)
             })
-        || !validate_optional_samples(&observation.walls_us.worker_reference_us)
-        || !validate_optional_samples(&observation.walls_us.credit_wait_us)
-        || !validate_optional_samples(&observation.walls_us.transfer_us)
-        || !validate_optional_samples(&observation.walls_us.packing_us)
-        || !validate_optional_samples(&observation.walls_us.upload_us)
-        || !validate_optional_samples(&observation.walls_us.dispatch_us)
-        || !validate_optional_samples(&observation.walls_us.fence_us)
-        || match (spec.scenario_id, observation.scripted_hold_wall_ms) {
-            ("hold-exact-2000ms", Some(wall)) => !wall.is_finite() || wall < 2_000.0,
-            ("hold-exact-2000ms", None) => true,
-            (_, Some(_)) => true,
-            (_, None) => false,
+        || !validate_optional_samples(observation.walls_us.worker_reference_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.credit_wait_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.transfer_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.packing_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.upload_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.dispatch_us.as_deref())
+        || !validate_optional_samples(observation.walls_us.fence_us.as_deref())
+        || if spec.scenario_id == "hold-exact-2000ms" {
+            observation
+                .scripted_hold_wall_ms
+                .is_none_or(|wall| !wall.is_finite() || wall < 2_000.0)
+        } else {
+            observation.scripted_hold_wall_ms.is_some()
         }
     {
         return Err(format!(
@@ -242,8 +245,8 @@ fn summarize(samples: &[f64]) -> Option<SummaryStats> {
     let mut ordered = samples.to_vec();
     ordered.sort_by(f64::total_cmp);
     let middle = ordered.len() / 2;
-    let median = if ordered.len() % 2 == 0 {
-        (ordered[middle - 1] + ordered[middle]) / 2.0
+    let median = if ordered.len().is_multiple_of(2) {
+        f64::midpoint(ordered[middle - 1], ordered[middle])
     } else {
         ordered[middle]
     };
@@ -329,7 +332,7 @@ fn unavailable_stage(reason: &str, duration_ms: f64) -> ember_game_what_is_this_
     }
 }
 
-pub(crate) fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
+pub(super) fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
     let stage = report
         .stages
         .iter()
