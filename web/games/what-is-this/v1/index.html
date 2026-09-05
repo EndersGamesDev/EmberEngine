@@ -1461,15 +1461,51 @@
       return current >= previous ? current - previous : current;
     }
 
-    function appendedJulibrotTimings(baselineKeys, finalTimings) {
-      const finalKeys = finalTimings.map(record => JSON.stringify(record));
-      if (!baselineKeys.length) return finalTimings;
-      if (finalKeys.length >= baselineKeys.length && baselineKeys.every((key, index) => finalKeys[index] === key)) {
-        return finalTimings.slice(baselineKeys.length);
+    function julibrotTimingOverlap(previous, current, identity) {
+      for (let count = Math.min(previous.length, current.length); count > 0; count -= 1) {
+        const previousStart = previous.length - count;
+        if (current.slice(0, count).every((record, index) => identity(record) === identity(previous[previousStart + index]))) return count;
       }
-      const baselineTail = baselineKeys[baselineKeys.length - 1];
-      const tailIndex = finalKeys.lastIndexOf(baselineTail);
-      return tailIndex < 0 ? finalTimings : finalTimings.slice(tailIndex + 1);
+      return 0;
+    }
+
+    function julibrotTimingTracker(baselineFacts) {
+      let previous = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings : [];
+      let previousIndexes = previous.map(() => null);
+      const records = [];
+      let overflowed = false;
+      const exactIdentity = record => JSON.stringify(record);
+      const stableIdentity = record => JSON.stringify([record?.edit ?? null, record?.level ?? null]);
+      return {
+        observe(facts) {
+          const current = Array.isArray(facts.level_timings) ? facts.level_timings : [];
+          if (!current.length) return;
+          let overlap = julibrotTimingOverlap(previous, current, exactIdentity);
+          if (!overlap) overlap = julibrotTimingOverlap(previous, current, stableIdentity);
+          if (previous.length && !overlap) {
+            overflowed = true;
+            previous = current;
+            previousIndexes = current.map(() => null);
+            return;
+          }
+          const currentIndexes = [];
+          const previousStart = previous.length - overlap;
+          for (let index = 0; index < overlap; index += 1) {
+            const recordIndex = previousIndexes[previousStart + index];
+            currentIndexes.push(recordIndex);
+            if (recordIndex !== null) records[recordIndex] = current[index];
+          }
+          for (let index = overlap; index < current.length; index += 1) {
+            currentIndexes.push(records.length);
+            records.push(current[index]);
+          }
+          previous = current;
+          previousIndexes = currentIndexes;
+        },
+        finish() {
+          return { records, overflowed };
+        },
+      };
     }
 
     function julibrotTimingFieldSample(records, field, legacyFields = []) {
@@ -1488,7 +1524,7 @@
       let lastCompleted = baselineFacts.completed_scene_id;
       let lastReferenceRequests = Number.isInteger(baselineFacts.sampled_reference_requests) ? baselineFacts.sampled_reference_requests : null;
       let referenceRequestsIssued = 0;
-      const baselineTimingKeys = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings.map(record => JSON.stringify(record)) : [];
+      const timingTracker = julibrotTimingTracker(baselineFacts);
       let lastFrameCounters = julibrotFrameCounters(baselineFacts);
       let finalFacts = baselineFacts;
       return {
@@ -1497,6 +1533,7 @@
         },
         observe(facts) {
           finalFacts = facts;
+          timingTracker.observe(facts);
           frames.sample_count += 1;
           const counters = julibrotFrameCounters(facts);
           if (!counters || !lastFrameCounters) {
@@ -1525,8 +1562,7 @@
           }
         },
         finish(scriptedHoldWallMs = null) {
-          const finalTimings = Array.isArray(finalFacts.level_timings) ? finalFacts.level_timings : [];
-          const levelTimings = appendedJulibrotTimings(baselineTimingKeys, finalTimings);
+          const { records: levelTimings, overflowed: recordsOverflowed } = timingTracker.finish();
           const wallMeasurements = {
             worker_generation_us: julibrotTimingFieldSample(levelTimings, 'worker_generation_us', ['worker_reference_us']),
             credit_wait_us: julibrotTimingFieldSample(levelTimings, 'credit_wait_us'),
@@ -1562,6 +1598,7 @@
             reference_requests_issued: null,
             sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
             timing_records_observed: levelTimings.length,
+            records_overflowed: recordsOverflowed,
             walls_us: walls,
             wall_sources: wallSources,
             scripted_hold_wall_ms: Number.isFinite(scriptedHoldWallMs) ? roundJulibrot(scriptedHoldWallMs, 2) : null,
