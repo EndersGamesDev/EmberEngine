@@ -833,3 +833,113 @@ fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     assert_eq!(source.matches(&accessor).count(), 7);
     assert!(!source.contains(&bypass));
 }
+
+/// One completed picture at `extent`, shaped as the ledger promotes it.
+fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
+    let mut pose = binding_pose();
+    pose.grid_width = extent[0];
+    pose.grid_height = extent[1];
+    crate::SceneFrame {
+        scene_id,
+        pose,
+        palette: PaletteId::Classic,
+        iteration_cap: 64,
+        level: RefinementLevel::Preview,
+        extent,
+        texture_index: 0,
+        centre_revision: 1,
+        plane_origin_f64: [0.0; 4],
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        measurement: binding_measurement(scene_id),
+    }
+}
+
+/// CPU mirror of the warp fragment's source lookup.
+///
+/// The fragment builds its destination point from the chart corner and the scene grid, applies
+/// the plan rows, and normalises the mapped source pixel by the source texture's own dimensions
+/// (`warp_shader.rs` lines 20 and 25 to 27). The source texture is allocated at exactly the
+/// delivered extent of the scene drawn into it, so the frame's extent is that divisor. A point
+/// outside the unit square is painted clear rather than sampled.
+fn warp_source_uv(
+    rows: [[f32; 4]; 3],
+    destination_extent: [u32; 2],
+    source_extent: [u32; 2],
+    chart: [f64; 2],
+) -> Option<[f64; 2]> {
+    let destination = [
+        chart[0] * f64::from(destination_extent[0]) * 0.5,
+        chart[1] * f64::from(destination_extent[1]) * 0.5,
+        1.0,
+    ];
+    let mapped = rows.map(|row| {
+        f64::from(row[0]).mul_add(
+            destination[0],
+            f64::from(row[1]).mul_add(destination[1], f64::from(row[2]) * destination[2]),
+        )
+    });
+    if !mapped.iter().all(|value| value.is_finite()) || mapped[2] <= 0.0 {
+        return None;
+    }
+    let source_pixel = [mapped[0] / mapped[2], mapped[1] / mapped[2]];
+    Some([
+        source_pixel[0] / f64::from(source_extent[0]) + 0.5,
+        0.5 - source_pixel[1] / f64::from(source_extent[1]),
+    ])
+}
+
+/// A held picture drawn at a reduced extent must fill the destination, not sit in its centre.
+///
+/// A morph across slices sends the completed picture to the held slot and the app asks for a hold
+/// while the next scene is in flight. The held picture was drawn at the PictureFast Preview
+/// extent (a 960 by 540 surface at divisor 8), and the destination lattice is the full surface.
+/// The fragment normalises the mapped source pixel by the source texture's dimensions, so rows
+/// that carry no extent ratio place the whole picture inside the central 120 by 68 pixels and
+/// paint the rest clear: a thumbnail at a scale the geometry does not have. Under the rendering
+/// rule a moving frame may be very inaccurate but never wrong, and a picture at the wrong scale
+/// in the wrong place asserts geometry that does not exist.
+#[test]
+fn a_held_reduced_extent_picture_fills_the_destination_rather_than_a_centred_thumbnail() {
+    let source_extent = [120, 68];
+    let destination_extent = [960, 540];
+    let held = frame_at_extent(57, source_extent);
+    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    assert!(plan.source_valid);
+    for chart in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [0.0, 0.0]] {
+        let uv = warp_source_uv(plan.rows, destination_extent, source_extent, chart)
+            .expect("a hold keeps every destination point in front of the source");
+        assert!(
+            uv.iter().all(|value| (-1.0e-4..=1.000_1).contains(value)),
+            "chart {chart:?} samples {uv:?}, outside the held picture: the picture is shown at \
+             its own texel size in the centre of the destination"
+        );
+    }
+}
+
+/// The reverse mismatch magnifies a centre crop, which is the same wrongness the other way.
+#[test]
+fn a_held_full_extent_picture_is_not_magnified_into_a_centre_crop() {
+    let source_extent = [960, 540];
+    let destination_extent = [120, 68];
+    let held = frame_at_extent(58, source_extent);
+    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    let corner = warp_source_uv(plan.rows, destination_extent, source_extent, [1.0, 1.0])
+        .expect("a hold keeps the destination corner in front of the source");
+    assert!(
+        corner[0] > 0.999 && corner[1] < 0.001,
+        "the destination corner samples {corner:?} rather than the source corner: the hold shows \
+         a magnified centre crop instead of the whole picture"
+    );
+}
+
+/// Equal extents keep the hold exactly identity, which is what every earlier hold measured.
+#[test]
+fn a_held_picture_at_the_destination_extent_holds_by_identity() {
+    let extent = [960, 540];
+    let held = frame_at_extent(59, extent);
+    let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true);
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    assert_eq!(plan.rows, identity_rows());
+}
