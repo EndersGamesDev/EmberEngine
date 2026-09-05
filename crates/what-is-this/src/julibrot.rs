@@ -332,7 +332,8 @@ fn unavailable_stage(reason: &str, duration_ms: f64) -> ember_game_what_is_this_
     }
 }
 
-pub(super) fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
+/// Derives the report-backed Julibrot verdict sentence when the stage was present.
+pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
     let stage = report
         .stages
         .iter()
