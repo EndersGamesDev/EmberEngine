@@ -2812,3 +2812,29 @@ fn accepted_reference_facts_name_deferred_stable_and_escalated_receipts() {
     assert_eq!(escalated.consumed_word_error_ulps, Some(1));
     assert_eq!(escalated.precision_escalations, 3);
 }
+
+#[test]
+fn facts_snapshot_wires_the_reference_receipt_and_observation_walls() {
+    let source = include_str!("../../facts.rs");
+    for wiring in [
+        "reference_verification: loop_facts.accepted_reference_verification()",
+        "consumed_word_error_ulps: loop_facts.accepted_reference_consumed_word_error_ulps()",
+        "reference_precision_escalations: loop_facts.accepted_reference_precision_escalations()",
+        "presented_scene_precision_policy: present",
+        "scene_callback_observation_wall_ms: present.last_scene.map(|sample| sample.wall_ms)",
+        "warp_callback_observation_wall_ms: present.last_warp.map(|sample| sample.wall_ms)",
+    ] {
+        assert!(source.contains(wiring), "missing facts snapshot wiring: {wiring}");
+    }
+    for unavailable_gpu_name in [
+        "scene_wall_ms: None",
+        "scene_fence_wait_ms: None",
+        "warp_wall_ms: None",
+        "warp_fence_wait_ms: None",
+    ] {
+        assert!(
+            source.contains(unavailable_gpu_name),
+            "callback observation leaked through legacy GPU name: {unavailable_gpu_name}"
+        );
+    }
+}
