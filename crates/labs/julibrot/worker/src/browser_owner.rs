@@ -259,6 +259,10 @@ impl OwnerPort for BrowserPort {
         installed
     }
 
+    fn terminate_producer(&mut self) {
+        self.worker.terminate();
+    }
+
     fn now_us(&self) -> Result<u64, ChannelError> {
         browser_now_us()
     }

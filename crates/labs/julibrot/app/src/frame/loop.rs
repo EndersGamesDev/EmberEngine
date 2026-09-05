@@ -15,7 +15,7 @@ use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::{KernelError, RefinementLevel, RefinementPlan};
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_math::PoseMap;
+use ember_julibrot_math::{Plane, PoseMap};
 #[cfg(test)]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
@@ -43,6 +43,8 @@ const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_TEXEL_BYTES: usize = 16;
+#[cfg(target_arch = "wasm32")]
+const PAGE_MAX_ITERATION_CAP: u32 = 4_096;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -342,19 +344,91 @@ const fn arrival_is_current(
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-/// Tests whether the accepted perturbation reference belongs to the requested scene.
-///
-/// `ViewerController` writes requested zoom and owner HOT zoom from the same edit result, and its
-/// HOT drain refuses any divergence. Their bit equality is therefore an identity invariant rather
-/// than an approximate comparison between independently rounded coordinates.
-fn perturbation_reference_is_current(
-    requested_zoom_log2: f64,
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ReferenceLeaseIdentity {
     main_generation: u32,
-    reference: Option<(u32, f64)>,
+    source_generation: u32,
+    centre_revision: u32,
+    plane: Plane,
+    precision_mode: u32,
+    precision_bits: u32,
+    orbit_length: u32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AcceptedReferenceFacts {
+    reference_verification: &'static str,
+    consumed_word_error_ulps: Option<u32>,
+    precision_escalations: u32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+const fn accepted_reference_facts(
+    verification: ember_julibrot_worker::ReferenceVerification,
+    consumed_word_error_ulps: Option<u32>,
+    precision_escalations: u32,
+) -> AcceptedReferenceFacts {
+    let reference_verification = if precision_escalations != 0 {
+        "Escalated"
+    } else {
+        match verification {
+            ember_julibrot_worker::ReferenceVerification::Deferred => "Deferred",
+            ember_julibrot_worker::ReferenceVerification::Stable => "Stable",
+        }
+    };
+    AcceptedReferenceFacts {
+        reference_verification,
+        consumed_word_error_ulps,
+        precision_escalations,
+    }
+}
+
+/// Tests whether the accepted perturbation reference lease belongs to the requested scene.
+///
+/// A freshly accepted short orbit may render once in its source generation so the existing census
+/// can choose a better reference. Renewing that orbit into a later MAIN generation requires the
+/// conservative full-cap length; zoom itself is dispatch scale and is deliberately absent.
+#[cfg(any(target_arch = "wasm32", test))]
+fn perturbation_reference_is_current(
+    main_generation: u32,
+    centre_revision: u32,
+    plane: Plane,
+    precision_mode: u32,
+    requested_precision_bits: u32,
+    requested_iteration_cap: u32,
+    reference: Option<ReferenceLeaseIdentity>,
 ) -> bool {
-    reference.is_some_and(|(generation, zoom_log2)| {
-        generation == main_generation && zoom_log2.to_bits() == requested_zoom_log2.to_bits()
+    reference.is_some_and(|lease| {
+        let orbit_is_sufficient = lease.orbit_length >= requested_iteration_cap
+            || lease.source_generation == main_generation;
+        lease.main_generation == main_generation
+            && lease.centre_revision == centre_revision
+            && lease.plane == plane
+            && lease.precision_mode == precision_mode
+            && lease.precision_bits >= requested_precision_bits
+            && orbit_is_sufficient
     })
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn reference_submission_requires_worker(
+    sampled: bool,
+    centre_unchanged: bool,
+    plane: Plane,
+    precision_mode: u32,
+    requested_precision_bits: u32,
+    requested_iteration_cap: u32,
+    reference: Option<ReferenceLeaseIdentity>,
+) -> bool {
+    sampled
+        || !centre_unchanged
+        || reference.is_none_or(|lease| {
+            lease.plane != plane
+                || lease.precision_mode != precision_mode
+                || lease.precision_bits < requested_precision_bits
+                || lease.orbit_length < requested_iteration_cap
+        })
 }
 
 /// Returns the iteration cap MAIN publishes to present for the current selection.
@@ -409,6 +483,7 @@ mod browser {
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
         RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
     };
+    use crate::timing::ReferenceTimingSample;
 
     mod backdrop;
     mod facts;
@@ -441,6 +516,18 @@ mod browser {
         zoom_log2: f64,
         plane: Plane,
         precision_mode: &'static str,
+        request_transfer_us: Option<u64>,
+        transferred_at_us: Option<u64>,
+    }
+
+    #[derive(Debug)]
+    struct AcceptedReferenceReceipt {
+        lease: super::ReferenceLeaseIdentity,
+        view_centre: BigCentre,
+        source_zoom_log2: f64,
+        verification: ember_julibrot_worker::ReferenceVerification,
+        max_consumed_word_error_ulps: Option<u32>,
+        precision_escalations: u32,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -529,6 +616,7 @@ mod browser {
         accepted_reference: Option<BigCentre>,
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
+        accepted_reference_receipt: Option<AcceptedReferenceReceipt>,
         /// Centre-minus-reference displacement of the latest HOT drain, in requested-extent pixels.
         centre_from_reference_px: [f64; 2],
         sampled_references: u32,
@@ -675,7 +763,7 @@ mod browser {
             });
             let (owner_endpoint, producer_endpoint) = WorkerChannel::new(
                 WorkerConfig {
-                    max_iter: requested.iteration_cap,
+                    max_iter: PAGE_MAX_ITERATION_CAP,
                 },
                 WorkerMode::WebWorker,
             )
@@ -695,6 +783,7 @@ mod browser {
                 accepted_reference: Some(accepted_reference),
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
+                accepted_reference_receipt: None,
                 centre_from_reference_px: [0.0; 2],
                 sampled_references: 0,
                 sampled_request_at_length: None,

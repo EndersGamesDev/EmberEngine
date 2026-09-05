@@ -38,15 +38,33 @@ pub struct LevelTimingRecord {
     /// Progressive-refinement level.
     pub level: TimingLevel,
     /// Kernel-only GPU wall, unavailable without another fence.
+    #[serde(skip_serializing)]
     pub dispatch_us: Option<u64>,
-    /// Existing scene-fence wall.
+    /// Legacy alias for the scene callback-observation wall.
+    #[serde(skip_serializing)]
     pub scene_us: Option<u64>,
-    /// First existing warp-fence wall that sampled this scene.
+    /// Legacy alias for the warp callback-observation wall.
+    #[serde(skip_serializing)]
     pub warp_us: Option<u64>,
-    /// Worker-measured reference computation wall for this edit.
+    /// Submission-to-scene-completion callback observation, not a GPU wall.
+    pub scene_callback_observation_us: Option<u64>,
+    /// Submission-to-warp-completion callback observation, not a GPU wall.
+    pub warp_callback_observation_us: Option<u64>,
+    /// Legacy alias for worker generation wall.
+    #[serde(skip_serializing)]
     pub worker_reference_us: Option<u64>,
-    /// Credit-shaper wait wall, unavailable in the current worker response.
+    /// Worker-measured reference-orbit generation wall.
+    pub worker_generation_us: Option<u64>,
+    /// Credit-shaper wait wall; absent until the frozen wire exposes that mark.
     pub credit_wait_us: Option<u64>,
+    /// Main-side synchronous request encode and ownership-transfer wall.
+    pub request_transfer_us: Option<u64>,
+    /// Request-transfer to response callback observation, including worker and browser delay.
+    pub worker_round_trip_callback_observation_us: Option<u64>,
+    /// Response callback observation to accepted MAIN publication, including local processing.
+    pub acceptance_us: Option<u64>,
+    /// Reference expansion, span allocation, and regional upload wall inside acceptance.
+    pub reference_upload_us: Option<u64>,
     /// True when the submitted scene was dropped or refused before promotion.
     pub discarded: bool,
 }
@@ -60,8 +78,18 @@ struct TrackedLevel {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WorkerTiming {
     edit: u32,
-    reference_us: u64,
-    credit_wait_us: Option<u64>,
+    sample: ReferenceTimingSample,
+}
+
+/// Monotonic reference handoff measurements available without changing the frozen wire.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReferenceTimingSample {
+    pub worker_generation_us: Option<u64>,
+    pub credit_wait_us: Option<u64>,
+    pub request_transfer_us: Option<u64>,
+    pub worker_round_trip_callback_observation_us: Option<u64>,
+    pub acceptance_us: Option<u64>,
+    pub reference_upload_us: Option<u64>,
 }
 
 /// Bounded application ledger populated only from measured completion records.
@@ -74,9 +102,20 @@ pub struct LevelTimingLedger {
 impl LevelTimingLedger {
     /// Records the accepted worker measurement for one edit.
     pub fn record_worker(&mut self, edit: u32, reference_us: u32, credit_wait_us: Option<u64>) {
+        self.record_reference(
+            edit,
+            ReferenceTimingSample {
+                worker_generation_us: Some(u64::from(reference_us)),
+                credit_wait_us,
+                ..ReferenceTimingSample::default()
+            },
+        );
+    }
+
+    /// Records every reference handoff the app can observe without inventing wire timings.
+    pub(crate) fn record_reference(&mut self, edit: u32, sample: ReferenceTimingSample) {
         if let Some(previous) = self.workers.iter_mut().find(|item| item.edit == edit) {
-            previous.reference_us = u64::from(reference_us);
-            previous.credit_wait_us = credit_wait_us;
+            previous.sample = sample;
             return;
         }
         if self.workers.len() == LEVEL_TIMING_CAPACITY {
@@ -84,8 +123,7 @@ impl LevelTimingLedger {
         }
         self.workers.push_back(WorkerTiming {
             edit,
-            reference_us: u64::from(reference_us),
-            credit_wait_us,
+            sample,
         });
     }
 
@@ -103,8 +141,16 @@ impl LevelTimingLedger {
                 dispatch_us: None,
                 scene_us: None,
                 warp_us: None,
-                worker_reference_us: worker.map(|item| item.reference_us),
-                credit_wait_us: worker.and_then(|item| item.credit_wait_us),
+                scene_callback_observation_us: None,
+                warp_callback_observation_us: None,
+                worker_reference_us: worker.and_then(|item| item.sample.worker_generation_us),
+                worker_generation_us: worker.and_then(|item| item.sample.worker_generation_us),
+                credit_wait_us: worker.and_then(|item| item.sample.credit_wait_us),
+                request_transfer_us: worker.and_then(|item| item.sample.request_transfer_us),
+                worker_round_trip_callback_observation_us: worker
+                    .and_then(|item| item.sample.worker_round_trip_callback_observation_us),
+                acceptance_us: worker.and_then(|item| item.sample.acceptance_us),
+                reference_upload_us: worker.and_then(|item| item.sample.reference_upload_us),
                 discarded: false,
             },
         });
@@ -113,7 +159,9 @@ impl LevelTimingLedger {
     /// Attaches the existing scene-fence wall to its submitted level.
     pub fn complete_scene(&mut self, scene_id: u64, measurement: SubmissionMeasurement) {
         if let Some(level) = self.level_mut(scene_id) {
-            level.record.scene_us = milliseconds_to_microseconds(measurement.wall_ms);
+            let observed = milliseconds_to_microseconds(measurement.wall_ms);
+            level.record.scene_us = observed;
+            level.record.scene_callback_observation_us = observed;
         }
     }
 
@@ -121,8 +169,9 @@ impl LevelTimingLedger {
     pub fn drop_scene(&mut self, scene_id: u64, measurement: Option<SubmissionMeasurement>) {
         if let Some(level) = self.level_mut(scene_id) {
             level.record.discarded = true;
-            level.record.scene_us =
-                measurement.and_then(|value| milliseconds_to_microseconds(value.wall_ms));
+            let observed = measurement.and_then(|value| milliseconds_to_microseconds(value.wall_ms));
+            level.record.scene_us = observed;
+            level.record.scene_callback_observation_us = observed;
         }
     }
 
@@ -132,9 +181,11 @@ impl LevelTimingLedger {
             return;
         };
         if let Some(level) = self.level_mut(scene_id)
-            && level.record.warp_us.is_none()
+            && level.record.warp_callback_observation_us.is_none()
         {
-            level.record.warp_us = milliseconds_to_microseconds(measurement.wall_ms);
+            let observed = milliseconds_to_microseconds(measurement.wall_ms);
+            level.record.warp_us = observed;
+            level.record.warp_callback_observation_us = observed;
         }
     }
 
@@ -202,7 +253,17 @@ mod tests {
         let capacity = u32::try_from(LEVEL_TIMING_CAPACITY).expect("capacity fits u32");
         for edit in 0..=capacity {
             let scene_id = u64::from(edit) + 1;
-            ledger.record_worker(edit, edit + 10, None);
+            ledger.record_reference(
+                edit,
+                ReferenceTimingSample {
+                    worker_generation_us: Some(u64::from(edit + 10)),
+                    credit_wait_us: None,
+                    request_transfer_us: Some(5),
+                    worker_round_trip_callback_observation_us: Some(20),
+                    acceptance_us: Some(7),
+                    reference_upload_us: Some(3),
+                },
+            );
             ledger.begin_scene(edit, scene_id, RefinementLevel::Final);
             ledger.complete_scene(
                 scene_id,
@@ -220,7 +281,43 @@ mod tests {
         assert_eq!(records[0].edit, 1);
         assert_eq!(records.last().map(|item| item.scene_us), Some(Some(2_250)));
         assert_eq!(records.last().map(|item| item.warp_us), Some(Some(750)));
+        assert_eq!(
+            records
+                .last()
+                .map(|item| item.scene_callback_observation_us),
+            Some(Some(2_250))
+        );
+        assert_eq!(
+            records
+                .last()
+                .map(|item| item.warp_callback_observation_us),
+            Some(Some(750))
+        );
         assert_eq!(records.last().map(|item| item.dispatch_us), Some(None));
         assert_eq!(records.last().map(|item| item.credit_wait_us), Some(None));
+        assert_eq!(records.last().map(|item| item.request_transfer_us), Some(Some(5)));
+        assert_eq!(records.last().map(|item| item.reference_upload_us), Some(Some(3)));
+
+        let json = serde_json::to_value(&ledger).expect("timing ledger serializes");
+        let newest = json
+            .as_array()
+            .and_then(|records| records.last())
+            .and_then(serde_json::Value::as_object)
+            .expect("newest timing record");
+        for field in [
+            "scene_callback_observation_us",
+            "warp_callback_observation_us",
+            "worker_generation_us",
+            "credit_wait_us",
+            "request_transfer_us",
+            "worker_round_trip_callback_observation_us",
+            "acceptance_us",
+            "reference_upload_us",
+        ] {
+            assert!(newest.contains_key(field), "missing honest timing field {field}");
+        }
+        for legacy in ["dispatch_us", "scene_us", "warp_us", "worker_reference_us"] {
+            assert!(!newest.contains_key(legacy), "legacy field {legacy} leaked into JSON");
+        }
     }
 }
