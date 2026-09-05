@@ -9,6 +9,7 @@
     clippy::too_many_lines
 )]
 
+use std::cell::RefCell;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
@@ -17,8 +18,8 @@ use wgpu::util::DeviceExt as _;
 
 use crate::span::SpanIdentity;
 use crate::{
-    DataSpan, DialectLimits, DispatchError, DispatchPlan, RegisteredKernel, SpanArena, SpanError,
-    SpanPlan, StaticHeaders,
+    DataSpan, DialectLimits, DispatchError, DispatchPlan, PackedDescriptor, RegisteredKernel,
+    SpanArena, SpanError, SpanPlan, StaticHeaders,
 };
 
 const RESOURCE_SLOTS: usize = 8;
@@ -46,6 +47,12 @@ pub enum SpanUploadMode {
     PaddedPages,
     /// Upload only complete logical rows plus an optional exact-width tail row.
     ValidRows,
+}
+
+#[derive(Debug)]
+struct MetadataPackingScratch {
+    descriptors: Vec<PackedDescriptor>,
+    directory_words: Vec<u32>,
 }
 
 /// Created capacity and byte facts; none are inferred measurements.
@@ -424,6 +431,7 @@ pub struct GpuKernelExecutor {
     header_reservations: HeaderReservations,
     compatibility_header: Option<(StaticHeaders, HeaderSetHandle)>,
     span_upload_mode: SpanUploadMode,
+    metadata_packing: RefCell<MetadataPackingScratch>,
     next_kernel_id: u64,
 }
 
@@ -474,17 +482,21 @@ impl GpuKernelExecutor {
             wgpu::TextureFormat::Rgba32Float,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
+        let mut packed_descriptors = Vec::with_capacity(config.descriptor_capacity as usize);
+        arena.heap().pack_table_into(&mut packed_descriptors);
+        let mut packed_directory = Vec::with_capacity(config.directory_binding_bytes as usize / 4);
+        arena.directory().pack_words_into(&mut packed_directory);
         let descriptor_buffer = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("heap executor descriptor UBO"),
-                contents: bytemuck::cast_slice(&arena.heap().packed_table()),
+                contents: bytemuck::cast_slice(&packed_descriptors),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         ));
         let directory_buffer = Arc::new(device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("heap executor span directory UBO"),
-                contents: bytemuck::cast_slice(&arena.directory().packed_words()),
+                contents: bytemuck::cast_slice(&packed_directory),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         ));
@@ -579,6 +591,10 @@ impl GpuKernelExecutor {
             ),
             compatibility_header: None,
             span_upload_mode: SpanUploadMode::PaddedPages,
+            metadata_packing: RefCell::new(MetadataPackingScratch {
+                descriptors: packed_descriptors,
+                directory_words: packed_directory,
+            }),
             next_kernel_id: 1,
         })
     }
@@ -944,7 +960,6 @@ impl GpuKernelExecutor {
 
     /// Publishes allocator metadata and resource-directory words without touching resident headers.
     pub fn sync_dispatch_resources(&self, dispatch: &ExecutorDispatch) {
-        self.sync_heap_metadata();
         self.queue.write_buffer(
             &self.resources_buffer,
             0,
@@ -1095,15 +1110,22 @@ impl GpuKernelExecutor {
     }
 
     pub(super) fn sync_heap_metadata(&self) {
+        let mut scratch = self.metadata_packing.borrow_mut();
+        let MetadataPackingScratch {
+            descriptors,
+            directory_words,
+        } = &mut *scratch;
+        self.arena.heap().pack_table_into(descriptors);
+        self.arena.directory().pack_words_into(directory_words);
         self.queue.write_buffer(
             &self.descriptor_buffer,
             0,
-            bytemuck::cast_slice(&self.arena.heap().packed_table()),
+            bytemuck::cast_slice(descriptors),
         );
         self.queue.write_buffer(
             &self.directory_buffer,
             0,
-            bytemuck::cast_slice(&self.arena.directory().packed_words()),
+            bytemuck::cast_slice(directory_words),
         );
     }
 

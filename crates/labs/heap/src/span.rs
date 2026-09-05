@@ -288,6 +288,13 @@ impl SpanDirectory {
     #[must_use]
     pub fn packed_words(&self) -> Vec<u32> {
         let mut words = Vec::with_capacity(self.records.len() * RECORD_WORDS + self.handles.len());
+        self.pack_words_into(&mut words);
+        words
+    }
+
+    /// Replaces caller-owned packing scratch with the complete span-and-handle binding.
+    pub fn pack_words_into(&self, words: &mut Vec<u32>) {
+        words.clear();
         for record in &self.records {
             words.extend(record.unwrap_or_else(PackedSpan::zeroed).words());
         }
@@ -296,7 +303,6 @@ impl SpanDirectory {
                 .iter()
                 .map(|handle| handle.map_or(0, Handle::raw)),
         );
-        words
     }
 }
 
@@ -687,6 +693,21 @@ mod tests {
         );
         arena.free(first).expect("first span reclaims pages");
         arena.free(second).expect("second span reclaims pages");
+    }
+
+    #[test]
+    fn caller_owned_directory_packing_reuses_its_allocation() {
+        let mut arena =
+            SpanArena::new(8, 1, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
+        let mut words = Vec::new();
+        arena.directory().pack_words_into(&mut words);
+        let pointer = words.as_ptr();
+        let capacity = words.capacity();
+        let _span = arena.allocate_span(8, 4).expect("fixture span fits");
+        arena.directory().pack_words_into(&mut words);
+        assert_eq!(words.as_ptr(), pointer);
+        assert_eq!(words.capacity(), capacity);
+        assert_eq!(words, arena.directory().packed_words());
     }
 
     #[test]

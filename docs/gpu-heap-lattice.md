@@ -353,6 +353,8 @@ Executor decision — 2026-09-05: `write_span` retains the established square-pa
 
 Executor decision — 2026-09-05: a selected resident header set is now resolved and compared with its `ExecutorDispatch` once, after which every page uses the already-validated offset slice. The one-page compatibility entry point remains additive, while Julibrot's multi-page path uses `encode_dispatch_selected_set`; the eight-page native fixture pins one admitted comparison exposing all eight aligned offsets.
 
+Executor decision — 2026-09-05: descriptor and span-directory snapshots now pack into executor-owned scratch allocated at construction, and native pointer/capacity tests prove repeated packing after allocator mutation reuses both allocations. Resource-word publication no longer calls metadata synchronization: allocation and free remain the operations that repack and upload the complete metadata tables, while a changed Julibrot reference updates only the resource-word buffer.
+
 The indexed box relies on the driver's post-transform cache to approach the `8E` ideal; the submitted work is always `36E` indices, and absent pipeline statistics the measured wall cannot prove an exact physical vertex-invocation count.
 
 Mode B's two-record validity layout deliberately spends 12 padding bytes per vertex; packing four flags would require an extra output or pass and is deferred because Mode C supplies the uncontaminated capacity comparison.
