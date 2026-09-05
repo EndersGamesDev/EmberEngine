@@ -384,6 +384,18 @@ const fn accepted_reference_facts(
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+const fn renew_reference_lease_identity(
+    lease: &mut ReferenceLeaseIdentity,
+    main_generation: u32,
+    centre_revision: u32,
+    precision_mode: u32,
+) {
+    lease.main_generation = main_generation;
+    lease.centre_revision = centre_revision;
+    lease.precision_mode = precision_mode;
+}
+
 /// Tests whether the accepted perturbation reference lease belongs to the requested scene.
 ///
 /// A freshly accepted short orbit may render once in its source generation so the existing census
@@ -515,7 +527,7 @@ mod browser {
         sampled: bool,
         zoom_log2: f64,
         plane: Plane,
-        precision_mode: &'static str,
+        precision_mode: u32,
         request_transfer_us: Option<u64>,
         transferred_at_us: Option<u64>,
     }
@@ -616,6 +628,7 @@ mod browser {
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
         accepted_reference_receipt: Option<AcceptedReferenceReceipt>,
+        requested_plane: Plane,
         /// Centre-minus-reference displacement of the latest HOT drain, in requested-extent pixels.
         centre_from_reference_px: [f64; 2],
         sampled_references: u32,
@@ -783,6 +796,7 @@ mod browser {
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
                 accepted_reference_receipt: None,
+                requested_plane: plane,
                 centre_from_reference_px: [0.0; 2],
                 sampled_references: 0,
                 sampled_request_at_length: None,
@@ -879,6 +893,7 @@ mod browser {
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let observed = self.handle_events(runtime, viewer, events)?;
             self.synchronize_precision_mode(viewer)?;
+            self.requested_plane = viewer.checked_plane();
             let presented = observed.presented;
             if requests.frame {
                 let restart_scene = self.scene_ready(viewer.requested().zoom_log2)

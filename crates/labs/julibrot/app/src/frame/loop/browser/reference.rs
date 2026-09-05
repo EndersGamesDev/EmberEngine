@@ -148,7 +148,7 @@ impl BrowserFrameLoop {
     ) -> Result<(OrbitDisposition, bool), AppError> {
         let response_observed_us = monotonic_now_us();
         let Some(submitted) = submitted.filter(|submitted| {
-            submitted.precision_mode == viewer.requested().precision_mode.as_str()
+            submitted.precision_mode == viewer.requested().precision_mode as u32
                 && super::super::arrival_is_current(
                     response.cancelled(),
                     response.generation(),
@@ -186,7 +186,7 @@ impl BrowserFrameLoop {
             span: span.clone(),
             length: response.length(),
             precision_bits: response.precision_bits(),
-            precision_mode: submitted.precision_mode,
+            precision_mode: viewer_precision_mode(submitted.precision_mode),
         };
         let handle = match self.orbits.insert(response.generation(), registered) {
             Ok(handle) => handle,
@@ -237,7 +237,7 @@ impl BrowserFrameLoop {
                 source_generation: response.generation(),
                 centre_revision: response.centre_revision(),
                 plane: submitted.plane,
-                precision_mode: viewer.requested().precision_mode as u32,
+                precision_mode: submitted.precision_mode,
                 precision_bits: response.precision_bits(),
                 orbit_length: response.length(),
             },
@@ -371,8 +371,12 @@ impl BrowserFrameLoop {
             let receipt = self.accepted_reference_receipt.as_mut().ok_or_else(|| {
                 AppError::Worker("compatible lease receipt is missing".to_string())
             })?;
-            receipt.lease.main_generation = navigation.generation;
-            receipt.lease.centre_revision = navigation.centre_revision;
+            super::super::renew_reference_lease_identity(
+                &mut receipt.lease,
+                navigation.generation,
+                navigation.centre_revision,
+                navigation.precision_mode,
+            );
             receipt.view_centre = navigation.centre;
             self.main = viewer.drain_main()?.main;
             self.rebuild_grid_if_needed(requested.iteration_cap)?;
@@ -426,7 +430,7 @@ impl BrowserFrameLoop {
             sampled,
             zoom_log2: navigation.zoom_log2,
             plane,
-            precision_mode: viewer_precision_mode(navigation.precision_mode),
+            precision_mode: navigation.precision_mode,
             request_transfer_us,
             transferred_at_us,
         });
@@ -450,7 +454,7 @@ impl BrowserFrameLoop {
                     && super::super::perturbation_reference_is_current(
                         self.main.generation_applied,
                         self.main.centre_revision,
-                        receipt.lease.plane,
+                        self.requested_plane,
                         self.main.precision_mode,
                         requested_precision_bits,
                         self.main.requested_iter_cap,
