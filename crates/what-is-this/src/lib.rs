@@ -611,7 +611,11 @@ mod tests {
         }
     }
 
-    fn add_julibrot_stage(report: &mut DiagnosticReport, status: StageStatus, reason: Option<&str>) {
+    fn add_julibrot_stage(
+        report: &mut DiagnosticReport,
+        status: StageStatus,
+        reason: Option<&str>,
+    ) {
         report.stages.push(StageReport {
             stage_id: "stage.julibrot-slide.v1".to_string(),
             name: "Julibrot fast-slide".to_string(),

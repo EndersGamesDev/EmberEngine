@@ -211,10 +211,7 @@ mod tests {
         body
     }
 
-    fn adversarial_record(
-        spec: JulibrotScenarioSpec,
-        final_record: bool,
-    ) -> KernelMeasurement {
+    fn adversarial_record(spec: JulibrotScenarioSpec, final_record: bool) -> KernelMeasurement {
         let game_wall_ms = round_fixture(ADVERSARIAL_GAME_WALL_INPUT, 2);
         let low_fraction = round_fixture(ADVERSARIAL_FRACTION_INPUT, 4);
         let median_fraction = round_fixture(ADVERSARIAL_MEDIAN_FRACTION_INPUT, 4);
