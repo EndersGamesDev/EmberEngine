@@ -235,7 +235,7 @@ impl WarpSourceSlot {
         held: Option<&'a crate::state::HeldScene>,
     ) -> Option<&'a crate::SceneFrame> {
         let source = if self.held_stale {
-            held.map(|held| &held.frame)
+            retained.or_else(|| held.map(|held| &held.frame))
         } else {
             retained
         };
