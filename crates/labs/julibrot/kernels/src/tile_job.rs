@@ -13,15 +13,16 @@ pub const DEFAULT_TILE_SIDE: u32 = 256;
 /// The initial retained apron on every physical tile edge.
 pub const DEFAULT_TILE_APRON: u32 = 1;
 /// The initial drawn core side after removing both aprons.
-pub const DEFAULT_TILE_CORE_SIDE: u32 = 254;
+pub const DEFAULT_TILE_CORE_SIDE: u32 = DEFAULT_TILE_SIDE - 2 * DEFAULT_TILE_APRON;
 /// Bytes in one RGBA32F value or reconstruction sample.
 pub const TILE_SAMPLE_RECORD_BYTES: u64 = 16;
 /// Bytes in one tile's descriptor header slot.
 pub const TILE_HEADER_BYTES: u64 = 512;
 /// Logical bytes in the paired sample columns of one default tile.
-pub const DEFAULT_TILE_SAMPLE_BYTES: u64 = 2_097_152;
+pub const DEFAULT_TILE_SAMPLE_BYTES: u64 =
+    DEFAULT_TILE_SIDE as u64 * DEFAULT_TILE_SIDE as u64 * 2 * TILE_SAMPLE_RECORD_BYTES;
 /// Logical bytes in one default resident tile, including its header slot.
-pub const DEFAULT_TILE_LOGICAL_BYTES: u64 = 2_097_664;
+pub const DEFAULT_TILE_LOGICAL_BYTES: u64 = DEFAULT_TILE_SAMPLE_BYTES + TILE_HEADER_BYTES;
 
 /// Typed refusal from stage-0 tile policy arithmetic or lifetime validation.
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
@@ -356,27 +357,19 @@ pub struct TileQuality {
 
 impl TileQuality {
     #[must_use]
-    const fn refinement_rank(self) -> u8 {
-        match self.refinement {
-            RefinementLevel::Preview => 0,
-            RefinementLevel::Interactive => 1,
-            RefinementLevel::Final => 2,
+    const fn effective_rung(self) -> u8 {
+        match (self.residency, self.refinement) {
+            (TileResidency::Backdrop, _) => 0,
+            (TileResidency::Detail, RefinementLevel::Preview) => 1,
+            (TileResidency::Detail, RefinementLevel::Interactive) => 2,
+            (TileResidency::Detail, RefinementLevel::Final) => 3,
         }
     }
 
-    /// A candidate replaces an incumbent only when its monotonic quality tuple is greater.
+    /// A candidate replaces an incumbent only when its effective rung is greater.
     #[must_use]
     pub const fn should_replace(self, incumbent: Self) -> bool {
-        let candidate = (self.residency as u8, self.refinement_rank(), self.density);
-        let current = (
-            incumbent.residency as u8,
-            incumbent.refinement_rank(),
-            incumbent.density,
-        );
-        candidate.0 > current.0
-            || (candidate.0 == current.0
-                && (candidate.1 > current.1
-                    || (candidate.1 == current.1 && candidate.2 > current.2)))
+        self.effective_rung() > incumbent.effective_rung()
     }
 }
 
@@ -596,14 +589,21 @@ pub struct ResidentTileCost {
     pub logical_bytes: u64,
 }
 
-/// Computes the exact logical cost-table row for `tile_count` default tiles.
+/// Computes the exact logical cost-table row for `tile_count` tiles of `geometry`.
 ///
 /// # Errors
 ///
 /// Refuses byte arithmetic overflow.
-pub fn resident_tile_cost(tile_count: u32) -> Result<ResidentTileCost, TileJobError> {
+pub fn tile_cost(
+    geometry: TileGeometry,
+    tile_count: u32,
+) -> Result<ResidentTileCost, TileJobError> {
+    let sample_bytes_per_tile = u64::from(geometry.sample_count())
+        .checked_mul(2)
+        .and_then(|records| records.checked_mul(TILE_SAMPLE_RECORD_BYTES))
+        .ok_or(TileJobError::ArithmeticOverflow)?;
     let sample_bytes = u64::from(tile_count)
-        .checked_mul(DEFAULT_TILE_SAMPLE_BYTES)
+        .checked_mul(sample_bytes_per_tile)
         .ok_or(TileJobError::ArithmeticOverflow)?;
     let header_bytes = u64::from(tile_count)
         .checked_mul(TILE_HEADER_BYTES)
@@ -617,6 +617,15 @@ pub fn resident_tile_cost(tile_count: u32) -> Result<ResidentTileCost, TileJobEr
         header_bytes,
         logical_bytes,
     })
+}
+
+/// Computes the exact logical cost-table row for `tile_count` default tiles.
+///
+/// # Errors
+///
+/// Refuses byte arithmetic overflow.
+pub fn resident_tile_cost(tile_count: u32) -> Result<ResidentTileCost, TileJobError> {
+    tile_cost(TileGeometry::DEFAULT, tile_count)
 }
 
 /// Derived capacity facts for a protected-backdrop resident profile.
@@ -816,6 +825,20 @@ mod tests {
         };
         assert!(!preview.should_replace(final_quality));
         assert!(final_quality.should_replace(preview));
+        let dense_preview = TileQuality {
+            residency: TileResidency::Detail,
+            refinement: RefinementLevel::Preview,
+            density: 4_096,
+        };
+        assert!(!dense_preview.should_replace(preview));
+        assert!(!preview.should_replace(dense_preview));
+        let backdrop_with_unused_final_label = TileQuality {
+            residency: TileResidency::Backdrop,
+            refinement: RefinementLevel::Final,
+            density: 4_096,
+        };
+        assert!(preview.should_replace(backdrop_with_unused_final_label));
+        assert!(!backdrop_with_unused_final_label.should_replace(preview));
         assert_eq!(
             job(1, CoverageClass::ClosesHole, 1, RefinementLevel::Preview)
                 .demand
@@ -886,6 +909,9 @@ mod tests {
 
     #[test]
     fn cost_table_and_both_profiles_are_exact() {
+        assert_eq!(DEFAULT_TILE_CORE_SIDE, 254);
+        assert_eq!(DEFAULT_TILE_SAMPLE_BYTES, 2_097_152);
+        assert_eq!(DEFAULT_TILE_LOGICAL_BYTES, 2_097_664);
         let expected = [
             (1, 2_097_152, 512, 2_097_664),
             (9, 18_874_368, 4_608, 18_878_976),
@@ -906,6 +932,24 @@ mod tests {
                 }
             );
         }
+        assert_eq!(
+            tile_cost(TileGeometry::new(128, 128, 1).expect("128 tile"), 1).expect("cost fits"),
+            ResidentTileCost {
+                tile_count: 1,
+                sample_bytes: 524_288,
+                header_bytes: 512,
+                logical_bytes: 524_800,
+            }
+        );
+        assert_eq!(
+            tile_cost(TileGeometry::new(512, 512, 1).expect("512 tile"), 1).expect("cost fits"),
+            ResidentTileCost {
+                tile_count: 1,
+                sample_bytes: 8_388_608,
+                header_bytes: 512,
+                logical_bytes: 8_389_120,
+            }
+        );
         let constrained = ResidentTileProfile::constrained().expect("profile fits");
         assert_eq!(
             (

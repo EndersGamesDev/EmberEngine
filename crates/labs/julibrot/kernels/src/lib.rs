@@ -41,5 +41,5 @@ pub use tile_job::{
     ReferenceIdentity, ReferenceLease, ReferenceLeaseSet, ResidentTileCost, ResidentTileProfile,
     SourceScreenRect, StableJobId, TILE_HEADER_BYTES, TILE_SAMPLE_RECORD_BYTES, TileDemandQueue,
     TileGeometry, TileJob, TileJobError, TileOutput, TileQuality, TileResidency,
-    resident_tile_cost,
+    resident_tile_cost, tile_cost,
 };
