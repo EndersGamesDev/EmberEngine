@@ -4,8 +4,8 @@ use ember_julibrot_math::{
     CentreSplit, EscapeParams, Homography, Plane, PrecisionMode, ScaleSplit,
 };
 use ember_lab_heap::{
-    DataSpan, DispatchSelector, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle,
-    RegisteredKernel, SpanPlan,
+    DataSpan, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle, RegisteredKernel,
+    SpanPlan,
 };
 
 use crate::{
@@ -690,23 +690,9 @@ fn encode_pages(
     executor
         .write_kernel_uniform(kernel, uniform)
         .map_err(|_| KernelError::Dispatch)?;
-    let page_count =
-        u32::try_from(dispatch.plan().passes.len()).map_err(|_| KernelError::ArithmeticOverflow)?;
-    for page in 0..page_count {
-        executor
-            .encode_dispatch_selected(
-                encoder,
-                kernel,
-                dispatch,
-                headers,
-                DispatchSelector {
-                    set: level_set(level),
-                    page,
-                },
-            )
-            .map_err(|_| KernelError::Dispatch)?;
-    }
-    Ok(())
+    executor
+        .encode_dispatch_selected_set(encoder, kernel, dispatch, headers, level_set(level))
+        .map_err(|_| KernelError::Dispatch)
 }
 
 const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: RefinementLevel) {

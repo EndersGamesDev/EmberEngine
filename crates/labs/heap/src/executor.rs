@@ -216,11 +216,11 @@ impl HeaderReservations {
         })
     }
 
-    fn resolve<'a>(
+    fn resolve_set<'a>(
         &'a self,
         executor: &Arc<()>,
         handle: &HeaderSetHandle,
-        selector: DispatchSelector,
+        set: u32,
     ) -> Result<(&'a StaticHeaders, u32), DispatchError> {
         if !Arc::ptr_eq(executor, &handle.owner) {
             return Err(DispatchError::ForeignHeaderSet);
@@ -234,13 +234,30 @@ impl HeaderReservations {
             .as_ref()
             .filter(|_| entry.generation == handle.generation)
             .ok_or(DispatchError::StaleHeaderSet)?;
-        if selector.set >= reservation.headers.len() as u32 {
+        if set >= reservation.headers.len() as u32 {
             return Err(DispatchError::HeaderSetSelection {
-                set: selector.set,
+                set,
                 set_count: reservation.headers.len() as u32,
             });
         }
-        let headers = &reservation.headers[selector.set as usize];
+        let headers = &reservation.headers[set as usize];
+        if handle.set_count != reservation.headers.len() as u32
+            || handle.base_offset != reservation.first_set * self.max_header_pages * self.stride
+            || handle.stride != self.stride
+        {
+            return Err(DispatchError::StaleHeaderSet);
+        }
+        let absolute_offset = (reservation.first_set + set) * self.max_header_pages * self.stride;
+        Ok((headers, absolute_offset))
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        executor: &Arc<()>,
+        handle: &HeaderSetHandle,
+        selector: DispatchSelector,
+    ) -> Result<(&'a StaticHeaders, u32), DispatchError> {
+        let (headers, set_offset) = self.resolve_set(executor, handle, selector.set)?;
         if selector.page >= headers.offsets.len() as u32 {
             return Err(DispatchError::HeaderPageSelection {
                 set: selector.set,
@@ -248,15 +265,7 @@ impl HeaderReservations {
                 page_count: headers.offsets.len() as u32,
             });
         }
-        if handle.set_count != reservation.headers.len() as u32
-            || handle.base_offset != reservation.first_set * self.max_header_pages * self.stride
-            || handle.stride != self.stride
-        {
-            return Err(DispatchError::StaleHeaderSet);
-        }
-        let absolute_offset =
-            (reservation.first_set + selector.set) * self.max_header_pages * self.stride
-                + headers.offsets[selector.page as usize];
+        let absolute_offset = set_offset + headers.offsets[selector.page as usize];
         Ok((headers, absolute_offset))
     }
 
@@ -984,13 +993,40 @@ impl GpuKernelExecutor {
             .as_ref()
             .filter(|(headers, _)| headers == &dispatch.headers)
             .ok_or(DispatchError::HeaderMismatch)?;
-        for page in 0..dispatch.plan.passes.len() as u32 {
-            self.encode_dispatch_selected(
+        self.encode_dispatch_selected_set(encoder, kernel, dispatch, handle, 0)
+    }
+
+    /// Encodes every page of one selected immutable header set after one complete-set comparison.
+    ///
+    /// The selected resident headers are resolved and compared with the dispatch once. Each page
+    /// then uses the already-validated offset range without repeating that comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed kernel, foreign/stale handle, set selection, header mismatch, output, or
+    /// destination failures.
+    pub fn encode_dispatch_selected_set(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        kernel: &GpuKernel,
+        dispatch: &ExecutorDispatch,
+        header_sets: &HeaderSetHandle,
+        set: u32,
+    ) -> Result<(), ExecutorError> {
+        if kernel.id != dispatch.kernel_id {
+            return Err(ExecutorError::Contract("dispatch kernel mismatch"));
+        }
+        let (headers, set_offset) =
+            self.header_reservations
+                .resolve_set(&self.header_owner, header_sets, set)?;
+        let offsets = selected_header_offsets(headers, &dispatch.headers)?;
+        for (page, header_offset) in dispatch.plan.passes.iter().zip(offsets.iter().copied()) {
+            self.encode_page(
                 encoder,
                 kernel,
-                dispatch,
-                handle,
-                DispatchSelector { set: 0, page },
+                dispatch.page_side,
+                page,
+                set_offset + header_offset,
             )?;
         }
         Ok(())
@@ -1242,6 +1278,16 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
         .sum()
 }
 
+fn selected_header_offsets<'a>(
+    resident: &'a StaticHeaders,
+    dispatch: &StaticHeaders,
+) -> Result<&'a [u32], DispatchError> {
+    if resident != dispatch {
+        return Err(DispatchError::HeaderMismatch);
+    }
+    Ok(&resident.offsets)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UploadRegion {
     source_offset_bytes: usize,
@@ -1419,8 +1465,25 @@ mod tests {
 
     use super::{
         DispatchSelector, HeaderReservations, SpanUploadMode, UploadRegion, copy_command_count,
-        planned_upload_bytes, valid_row_regions,
+        planned_upload_bytes, selected_header_offsets, valid_row_regions,
     };
+
+    #[test]
+    fn one_selected_header_comparison_exposes_the_whole_page_range() {
+        let mut arena = SpanArena::new(64, 1, 16, 1_024, 8).expect("arena");
+        let span = arena.allocate_span(2_048, 16).expect("eight-page span");
+        let dispatch = StaticHeaders::for_span(&span, 256).expect("dispatch headers");
+        let resident = dispatch.clone();
+        let selected = selected_header_offsets(&resident, &dispatch)
+            .expect("one comparison admits the selected set");
+        assert_eq!(selected, &[0, 256, 512, 768, 1_024, 1_280, 1_536, 1_792]);
+        let mut mismatch = dispatch.clone();
+        mismatch.bytes[0] ^= 1;
+        assert_eq!(
+            selected_header_offsets(&resident, &mismatch),
+            Err(DispatchError::HeaderMismatch)
+        );
+    }
 
     #[test]
     fn row_exact_reference_layout_removes_sixteen_fold_upload_amplification() {

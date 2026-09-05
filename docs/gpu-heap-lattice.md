@@ -351,6 +351,8 @@ The span-directory UBO introduces a second finite metadata WALL and uniform dyna
 
 Executor decision — 2026-09-05: `write_span` retains the established square-padded upload as `SpanUploadMode::PaddedPages`, and a caller may explicitly select `ValidRows` to upload only complete logical rows plus one optional exact-width tail. The native layout oracle pins a 4,096-record orbit at 65,536 uploaded bytes instead of the padded 1,048,576 bytes and pins both copy layouts, but WebGPU/WebGL2 validation and readback remain NEEDS BROWSER PROOF before enabling the capability in the app.
 
+Executor decision — 2026-09-05: a selected resident header set is now resolved and compared with its `ExecutorDispatch` once, after which every page uses the already-validated offset slice. The one-page compatibility entry point remains additive, while Julibrot's multi-page path uses `encode_dispatch_selected_set`; the eight-page native fixture pins one admitted comparison exposing all eight aligned offsets.
+
 The indexed box relies on the driver's post-transform cache to approach the `8E` ideal; the submitted work is always `36E` indices, and absent pipeline statistics the measured wall cannot prove an exact physical vertex-invocation count.
 
 Mode B's two-record validity layout deliberately spends 12 padding bytes per vertex; packing four flags would require an extra output or pass and is deferred because Mode C supplies the uncontaminated capacity comparison.
