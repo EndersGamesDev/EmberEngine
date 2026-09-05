@@ -226,7 +226,12 @@ use crate::shooter::HILL_FREE;
 /// scope precision and the old zero-spread weapons. It plays a different game,
 /// so the exact join gate requires a rebuild. The earlier ground-speed v18
 /// change remains intact, including the old horizontal jump reach.
-pub const PROTO_VERSION: u16 = 19;
+///
+/// v20 (Arena v25): ground walking is 4 m/s, and the authored harbor carries
+/// its own 48 m half-extent through movement, prediction and bullet collision.
+/// A v19 client would hit invisible 24 m walls and predict the wrong speed.
+/// Eight-player team spawn allocation also no longer aliases teammate slots.
+pub const PROTO_VERSION: u16 = 20;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -515,8 +520,8 @@ pub enum S2C {
         seed: u64,
         arena_half: f32,
         players: Vec<PlayerMeta>,
-        /// Which `Level` this lobby runs - `MAP_TRENCH_CITY`, or anything
-        /// else for the seeded arena. Defaulted so the frame decodes from a
+        /// Which authored `Level` this lobby runs: Trench City, Freight Yard
+        /// or Harbor. Unknown legacy values name the seeded arena. Defaulted so the frame decodes from a
         /// pre-v13 server; the version gate is what stops that being
         /// played, for the reasons at `PROTO_VERSION`.
         #[serde(default)]
@@ -988,8 +993,8 @@ mod tests {
         assert_eq!(p.spread, 0.0, "old frames have no reported cone");
         assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
         assert_eq!(
-            PROTO_VERSION, 19,
-            "timed handling requires the matching peer"
+            PROTO_VERSION, 20,
+            "handling, movement and map bounds require the matching peer"
         );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();

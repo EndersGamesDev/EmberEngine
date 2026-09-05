@@ -1548,17 +1548,20 @@ pub fn gait(speed: f32) -> Option<Gait> {
 ///
 /// The legs are not a metronome: `puppet::advance_anim` advances the walk
 /// phase by 6 radians per metre and a plant falls every PI of them, so at
-/// this arena's 2 m/s walk the animation plants about 4 times a second and
-/// at a 3.2 m/s sprint about 6. The ear gets a floor instead: a step sounds
+/// this arena's 4 m/s walk the animation plants about 8 times a second and
+/// at a 6.4 m/s sprint about 12. The ear gets a floor instead: a step sounds
 /// only if this body has been quiet for at least this long, and it still lands
 /// ON a plant, so the sound is on a foot that is going down. 0.34 s is about
 /// three steps a second, a brisk walk.
 pub const WALK_GAP: f32 = 0.34;
 
-/// The same for a sprint: about four steps a second, and a fifth quicker
-/// than the walk so a runner is heard to be running before the cue itself
-/// is recognised.
-pub const RUN_GAP: f32 = 0.26;
+/// Sprint's minimum gap, leaving room for each third animated foot plant.
+///
+/// At 6.4 m/s three plants take about 0.245 s. The old 0.26 s gate skipped
+/// that plant and waited for a fourth, making sprint and walk both sound
+/// three times in a second. 0.22 admits the third across frame quantization:
+/// about four audible sprint steps per second, still synchronized to a boot.
+pub const RUN_GAP: f32 = 0.22;
 
 /// The floor for a gait.
 #[must_use]
@@ -1890,8 +1893,8 @@ mod feel_tests {
     /// spin.
     ///
     /// `puppet::advance_anim` adds 6 radians of walk phase per metre and a
-    /// foot plants every PI of them, so this arena's 2 m/s walk plants
-    /// about 4 times a second and its 3.2 m/s sprint about 6. One second of
+    /// foot plants every PI of them, so this arena's 4 m/s walk plants
+    /// about 8 times a second and its 6.4 m/s sprint about 12. One second of
     /// each gait is walked here through the same phase arithmetic the
     /// animation uses, and what comes out is a step rate a boot could make,
     /// with the sprint quicker than the walk.
@@ -1921,7 +1924,10 @@ mod feel_tests {
             steps
         };
         let plants = plants_crossed(0.0, walk * 6.0);
-        assert!(plants >= 4, "the legs really do plant four times: {plants}");
+        assert!(
+            plants >= 7,
+            "the legs really do plant at least seven times: {plants}"
+        );
         let heard_walking = sound(walk);
         let heard_running = sound(run);
         assert!(
@@ -1936,6 +1942,51 @@ mod feel_tests {
             heard_running > heard_walking,
             "and a runner is heard to be running: {heard_running} against {heard_walking}"
         );
+    }
+
+    #[test]
+    fn sprint_cadence_stays_faster_across_frame_rates_and_initial_phases() {
+        for hz in [30.0, 60.0, 120.0, 144.0] {
+            let dt = 1.0 / hz;
+            for phase in [0.0, 0.4, std::f32::consts::FRAC_PI_2, 3.1] {
+                let sound = |speed: f32| {
+                    let mut b = body();
+                    b.speed = speed;
+                    let mut slot = (0.0, phase, 0.0);
+                    let mut last: Option<f32> = None;
+                    let mut count = 0;
+                    let mut t = 0.0;
+                    while t < 5.0 {
+                        b.prev_phase = slot.1;
+                        ember_engine::puppet::advance_anim(&mut slot, Vec2::new(speed, 0.0), dt);
+                        b.phase = slot.1;
+                        b.since_last = last.map_or(f32::INFINITY, |at| t - at);
+                        if footstep(&b, 1.0, false).is_some() {
+                            assert!(plants_crossed(b.prev_phase, b.phase) > 0);
+                            assert!(b.since_last >= step_gap(gait(speed).unwrap()));
+                            count += 1;
+                            last = Some(t);
+                        }
+                        t += dt;
+                    }
+                    count
+                };
+                let walk = sound(walk_speed());
+                let run = sound(run_speed());
+                assert!(
+                    (11..=16).contains(&walk),
+                    "{hz} Hz, phase {phase}: walk {walk}/5s"
+                );
+                assert!(
+                    (17..=23).contains(&run),
+                    "{hz} Hz, phase {phase}: sprint {run}/5s"
+                );
+                assert!(
+                    run > walk,
+                    "{hz} Hz, phase {phase}: sprint {run}, walk {walk}"
+                );
+            }
+        }
     }
 
     /// A step falls off with distance and stops entirely at earshot.

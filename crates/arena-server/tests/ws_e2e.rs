@@ -5,11 +5,92 @@ use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 use arena_core::proto::{C2S, PROTO_VERSION, S2C};
-use arena_core::shooter::{GameMode, HILL_FREE, MAP_FREIGHT_YARD, MAP_TRENCH_CITY};
+use arena_core::shooter::{GameMode, HILL_FREE, MAP_FREIGHT_YARD, MAP_HARBOR, MAP_TRENCH_CITY};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 type Ws = WebSocket<MaybeTlsStream<TcpStream>>;
+
+#[test]
+fn harbor_advertises_real_bounds_and_eight_distinct_team_starts() {
+    let port = start_server();
+    let mut clients = Vec::new();
+    for slot in 0..8 {
+        let mut ws = connect(port, &format!("harbor-{slot}"));
+        let request = if slot == 0 {
+            C2S::CreateLobby {
+                name: "harbor-eight".into(),
+                password: Some("fixture".into()),
+                map: MAP_HARBOR.into(),
+                mode: "tdm".into(),
+            }
+        } else {
+            C2S::JoinLobby {
+                name: "harbor-eight".into(),
+                password: Some("fixture".into()),
+            }
+        };
+        send(&mut ws, &request);
+        recv_until(&mut ws, 5, |m| match m {
+            S2C::GameJoined {
+                arena_half,
+                map,
+                mode,
+                players,
+                ..
+            } => {
+                assert_eq!(
+                    arena_half, 48.0,
+                    "creator and joiners get the simulation bounds"
+                );
+                assert_eq!(map, MAP_HARBOR);
+                assert_eq!(mode, "tdm");
+                assert_eq!(players.len(), slot + 1);
+                Some(())
+            }
+            _ => None,
+        });
+        clients.push(ws);
+    }
+    recv_until(clients.last_mut().unwrap(), 5, |m| match m {
+        S2C::State { players, .. } if players.len() == 8 => {
+            for team in [0, 1] {
+                assert_eq!(players.iter().filter(|p| p.team == team).count(), 4);
+            }
+            for (i, a) in players.iter().enumerate() {
+                assert!(
+                    a.z.abs() > 24.0,
+                    "real starts are beyond the old arena boundary"
+                );
+                assert!(arena_core::harbor::SPAWNS.contains(&[a.x, a.z]));
+                assert_eq!(a.z > 0.0, a.team == 0);
+                for b in &players[i + 1..] {
+                    assert!(
+                        (a.x - b.x).hypot(a.z - b.z) > 1.2,
+                        "overlapping starts: {a:?} / {b:?}"
+                    );
+                }
+            }
+            Some(())
+        }
+        _ => None,
+    });
+    let mut ninth = connect(port, "ninth");
+    send(
+        &mut ninth,
+        &C2S::JoinLobby {
+            name: "harbor-eight".into(),
+            password: Some("fixture".into()),
+        },
+    );
+    recv_until(&mut ninth, 5, |m| match m {
+        S2C::Error { message } => {
+            assert!(message.contains("full"), "{message}");
+            Some(())
+        }
+        _ => None,
+    });
+}
 
 fn start_server() -> u16 {
     start_named_server(String::new())

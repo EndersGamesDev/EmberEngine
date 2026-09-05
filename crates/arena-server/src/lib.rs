@@ -33,7 +33,7 @@ use arena_core::proto::{
     PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
 use arena_core::shooter::{
-    ARENA_HALF, FIXED_DT, GameMode, Level, MAP_FREIGHT_YARD, MAP_TRENCH_CITY, MAX_PLAYERS,
+    FIXED_DT, GameMode, Level, MAP_FREIGHT_YARD, MAP_HARBOR, MAP_TRENCH_CITY, MAX_PLAYERS,
     PlayerIn, Sim,
 };
 use tungstenite::Message;
@@ -914,7 +914,7 @@ fn handle_event(
                     } else {
                         map
                     };
-                    if map != MAP_FREIGHT_YARD && map != MAP_TRENCH_CITY {
+                    if ![MAP_FREIGHT_YARD, MAP_TRENCH_CITY, MAP_HARBOR].contains(&map.as_str()) {
                         let _ = send_to(
                             conns,
                             id,
@@ -979,7 +979,7 @@ fn handle_event(
                     let joined = S2C::GameJoined {
                         id: pid,
                         seed,
-                        arena_half: ARENA_HALF,
+                        arena_half: lobby.sim.arena_half,
                         players: roster(&lobby, conns),
                         map: lobby.map.clone(),
                         mode: lobby.mode.name().to_string(),
@@ -1066,7 +1066,7 @@ fn handle_event(
                     let joined = S2C::GameJoined {
                         id: pid,
                         seed: lobby.seed,
-                        arena_half: ARENA_HALF,
+                        arena_half: lobby.sim.arena_half,
                         players: roster(lobby, conns),
                         map: lobby.map.clone(),
                         mode: lobby.mode.name().to_string(),

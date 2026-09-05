@@ -6,7 +6,16 @@
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const ARENA_HALF: f32 = 24.0;
-pub const MOVE_SPEED: f32 = 2.0;
+/// Invalid custom-level extents fall back to the original arena boundary.
+#[must_use]
+pub fn valid_arena_half(value: f32) -> f32 {
+    if value.is_finite() && (4.0..=256.0).contains(&value) {
+        value
+    } else {
+        ARENA_HALF
+    }
+}
+pub const MOVE_SPEED: f32 = 4.0;
 /// Base horizontal speed while airborne. Kept separate from `MOVE_SPEED` so
 /// grounded movement can be tuned without changing the authored jump routes.
 pub const AIR_MOVE_SPEED: f32 = 9.0;
@@ -1020,6 +1029,40 @@ fn spawn_from(spawns: &[[f32; 2]], slot: u32) -> [f32; 2] {
     spawns[slot as usize % spawns.len()]
 }
 
+/// Prefer the requested slot, then a free pocket in stable cyclic order.
+/// Custom levels with too few pockets fall back to the greatest clearance.
+fn available_spawn(
+    spawns: &[[f32; 2]],
+    slot: u32,
+    players: &[PlayerSt],
+    exclude: Option<u8>,
+) -> [f32; 2] {
+    let count = if spawns.is_empty() {
+        MAX_PLAYERS
+    } else {
+        spawns.len()
+    };
+    let mut best = spawn_from(spawns, slot);
+    let mut clearance = -1.0_f32;
+    for offset in 0..count {
+        #[allow(clippy::cast_possible_truncation)]
+        let candidate = spawn_from(spawns, slot.wrapping_add(offset as u32));
+        let nearest = players
+            .iter()
+            .filter(|p| p.alive && Some(p.id) != exclude && p.y < BODY_H_STAND)
+            .map(|p| (p.pos[0] - candidate[0]).powi(2) + (p.pos[1] - candidate[1]).powi(2))
+            .fold(f32::INFINITY, f32::min);
+        if nearest >= (2.0 * PLAYER_R + 0.1).powi(2) {
+            return candidate;
+        }
+        if nearest > clearance {
+            best = candidate;
+            clearance = nearest;
+        }
+    }
+    best
+}
+
 /// A client-only prop the level lists so every client draws the same city.
 ///
 /// Nothing in the sim reads these; they are here because the level is the
@@ -1061,6 +1104,8 @@ pub const MAP_TRENCH_CITY: &str = "trench-city";
 /// The name of the authored v18 arena, `Level::freight_yard()` in
 /// `freight_yard.rs`, and what an empty `CreateLobby.map` resolves to.
 pub const MAP_FREIGHT_YARD: &str = "freight-yard";
+/// Breakwater Harbor: the hand-authored 96 m port arena.
+pub const MAP_HARBOR: &str = "harbor";
 
 /// The rules a lobby plays by: who a round may hit, how a point is earned
 /// and when the round ends (`docs/plans/arena-v19-modes.md`).
@@ -1362,6 +1407,8 @@ impl Level {
             Self::trench_city()
         } else if map == MAP_FREIGHT_YARD {
             Self::freight_yard()
+        } else if map == MAP_HARBOR {
+            Self::harbor()
         } else {
             Self::from_seed(seed)
         }
@@ -1530,16 +1577,29 @@ const fn reset_handling(p: &mut PlayerSt) {
     p.spread = weapon_stats(p.weapon).spread;
 }
 
-/// Is this spot blocked for a player whose feet are at `y`? The arena wall
-/// always blocks; a box only blocks while the player's feet are below its
+/// Is this spot blocked for a player whose feet are at `y`?
+///
+/// The legacy arena wall always blocks; a box only blocks while the player's feet are below its
 /// top (by more than a step), so you can walk across boxes you have jumped
 /// onto - AND while their head is above its bottom, so you can walk under a
 /// box that starts above you. The head is always the standing one: crouch
 /// is cosmetic to movement here as everywhere, and a rule that let a
 /// crouched player under a lower roof would need `move_circle` to know the
 /// stance on both peers. For `base == 0` the head clause is always true.
-fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
-    if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
+#[must_use]
+pub fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
+    blocked_in(pos, y, r, obstacles, ARENA_HALF)
+}
+
+/// The same body/cover rule inside the supplied level boundary.
+#[must_use]
+pub fn blocked_in(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle], arena_half: f32) -> bool {
+    let arena_half = valid_arena_half(arena_half);
+    if !pos[0].is_finite()
+        || !pos[1].is_finite()
+        || pos[0].abs() > arena_half - r
+        || pos[1].abs() > arena_half - r
+    {
         return true;
     }
     obstacles.iter().any(|o| {
@@ -1615,6 +1675,20 @@ pub fn move_circle(
     dt: f32,
     obstacles: &[Obstacle],
 ) -> [f32; 2] {
+    move_circle_in(pos, y, mv, speed, dt, obstacles, ARENA_HALF)
+}
+
+/// Body movement inside a level's walls, shared by prediction and authority.
+#[must_use]
+pub fn move_circle_in(
+    pos: [f32; 2],
+    y: f32,
+    mv: [f32; 2],
+    speed: f32,
+    dt: f32,
+    obstacles: &[Obstacle],
+    arena_half: f32,
+) -> [f32; 2] {
     let mut mv = mv;
     if !mv[0].is_finite() || !mv[1].is_finite() {
         mv = [0.0, 0.0];
@@ -1625,13 +1699,13 @@ pub fn move_circle(
         mv = [mv[0] / len, mv[1] / len];
     }
     let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-    let pos = if blocked(try_x, y, PLAYER_R, obstacles) {
+    let pos = if blocked_in(try_x, y, PLAYER_R, obstacles, arena_half) {
         pos
     } else {
         try_x
     };
     let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
-    if blocked(try_z, y, PLAYER_R, obstacles) {
+    if blocked_in(try_z, y, PLAYER_R, obstacles, arena_half) {
         pos
     } else {
         try_z
@@ -1918,7 +1992,7 @@ struct WorldEnd {
 ///
 /// The round is a point against the world: a box is met where the segment
 /// enters it, the floor where the height crosses zero, and the wall where
-/// the position crosses `ARENA_HALF - radius` on either axis (the radius
+/// the position crosses `arena_half - radius` on either axis (the radius
 /// keeps a rocket's blast drawn inside the wall, as it always was). The
 /// smallest parameter wins; a tie keeps the earlier of floor, wall, boxes
 /// in list order, so the answer is the same on every peer. The wall
@@ -1932,6 +2006,7 @@ fn world_end(
     y1: f32,
     radius: f32,
     obstacles: &[Obstacle],
+    arena_half: f32,
 ) -> Option<WorldEnd> {
     let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
     let at = |t: f32| [p0[0] + sx * t, y0 + (y1 - y0) * t, p0[1] + sz * t];
@@ -1954,7 +2029,7 @@ fn world_end(
         let p = at(t);
         consider(t, [p[0], 0.0, p[2]], SHOT_FLOOR, SHOT_NONE, [0, 1, 0]);
     }
-    let lim = ARENA_HALF - radius;
+    let lim = arena_half - radius;
     for axis in 0..2 {
         let (a, b) = (p0[axis], p1[axis]);
         let wall = if b > lim {
@@ -2078,6 +2153,8 @@ pub struct LootBlock {
 }
 
 pub struct Sim {
+    /// Authoritative half-width of this level, shared by body and bullet walls.
+    pub arena_half: f32,
     /// The rules this sim plays by, resolved once from the lobby's mode
     /// name in `from_level`.
     pub mode: GameMode,
@@ -2163,12 +2240,9 @@ fn spawns_of<'a>(
 /// respawn path, shared by the death timer and the round restart so the
 /// two cannot drift. The spawn slot advances every time so consecutive
 /// spawns walk the list.
-fn respawn(p: &mut PlayerSt, spawns: &[[f32; 2]]) {
+const fn respawn(p: &mut PlayerSt, position: [f32; 2]) {
     p.deaths = p.deaths.wrapping_add(1);
-    p.pos = spawn_from(
-        spawns,
-        p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)),
-    );
+    p.pos = position;
     p.y = 0.0;
     p.vy = 0.0;
     p.hp = MAX_HP;
@@ -2184,6 +2258,22 @@ fn respawn(p: &mut PlayerSt, spawns: &[[f32; 2]]) {
 }
 
 impl Sim {
+    fn respawn_player(&mut self, index: usize) {
+        let p = &self.players[index];
+        let preferred = p
+            .deaths
+            .wrapping_add(1)
+            .wrapping_mul(3)
+            .wrapping_add(u32::from(p.id));
+        let position = available_spawn(
+            spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
+            preferred,
+            &self.players,
+            Some(p.id),
+        );
+        respawn(&mut self.players[index], position);
+    }
+
     /// The seeded arena in free for all: exactly
     /// `from_level(&Level::from_seed(seed), seed, GameMode::Ffa)`, kept as
     /// the short spelling every existing test uses.
@@ -2193,10 +2283,8 @@ impl Sim {
     }
 
     /// A sim on an authored level: its obstacles, its pads (all active), its
-    /// loot blocks (all armed), its spawns, its hill. `arena_half` is NOT
-    /// read - the wall is `ARENA_HALF` in the shared `blocked`, and making
-    /// it per-level is a `move_circle` signature change on both peers that
-    /// eight players did not need. `seed` is the lobby's, which the server
+    /// loot blocks (all armed), its spawns, its hill and its boundary.
+    /// `seed` is the lobby's, which the server
     /// already mints and sends in `GameJoined`; every spread and loot roll
     /// hashes it. `mode` is the lobby's rules; king of the hill on a level
     /// with no hill plays as free for all, which the server refuses to
@@ -2210,6 +2298,7 @@ impl Sim {
             mode
         };
         Self {
+            arena_half: valid_arena_half(level.arena_half),
             mode,
             team_score: [0; 2],
             hill_holder: HILL_FREE,
@@ -2259,7 +2348,7 @@ impl Sim {
     pub fn add_player(&mut self, id: u8) {
         // Player count is capped at eight by the public protocol.
         #[allow(clippy::cast_possible_truncation)]
-        let slot = self.players.len() as u32;
+        let mut slot = self.players.len() as u32;
         let team = if self.mode == GameMode::Tdm {
             let count = |t: u8| self.players.iter().filter(|p| p.team == t).count();
             match count(0).cmp(&count(1)) {
@@ -2270,12 +2359,21 @@ impl Sim {
         } else {
             0
         };
+        if self.mode == GameMode::Tdm {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                slot = self.players.iter().filter(|p| p.team == team).count() as u32;
+            }
+        }
+        let position = available_spawn(
+            spawns_of(self.mode, &self.spawns, &self.team_spawns, team),
+            slot,
+            &self.players,
+            None,
+        );
         self.players.push(PlayerSt {
             id,
-            pos: spawn_from(
-                spawns_of(self.mode, &self.spawns, &self.team_spawns, team),
-                slot,
-            ),
+            pos: position,
             y: 0.0,
             vy: 0.0,
             aim: [1.0, 0.0],
@@ -2346,17 +2444,20 @@ impl Sim {
         for pad in &mut self.pads {
             pad.respawn_t = 0.0;
         }
+        // Reserve the new placements in player order, not against old-round
+        // bodies. This keeps all eight pockets distinct on team restarts.
         for p in &mut self.players {
+            p.alive = false;
+        }
+        for index in 0..self.players.len() {
+            let p = &mut self.players[index];
             p.score = 0;
             p.frags = 0;
             p.death_count = 0;
             p.respawn_in = 0.0;
             p.melee_cd = 0.0;
             p.shield = false;
-            respawn(
-                p,
-                spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
-            );
+            self.respawn_player(index);
         }
     }
 
@@ -2492,10 +2593,7 @@ impl Sim {
                 reset_handling(p);
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
-                    respawn(
-                        p,
-                        spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
-                    );
+                    self.respawn_player(i);
                 }
                 continue;
             }
@@ -2515,7 +2613,15 @@ impl Sim {
                 input.shield,
                 &self.obstacles,
             );
-            let pos = move_circle(old_pos, feet_height, input.mv, speed, dt, &self.obstacles);
+            let pos = move_circle_in(
+                old_pos,
+                feet_height,
+                input.mv,
+                speed,
+                dt,
+                &self.obstacles,
+                self.arena_half,
+            );
             let v = step_vertical(
                 pos,
                 feet_height,
@@ -2917,7 +3023,7 @@ impl Sim {
             // simulated server-side exclusively, and if client-side shot
             // prediction is ever added, every f32 transcendental on the
             // shot's path (the tan() at launch) becomes a desync source.
-            let world = world_end(p0, p1, y0, y1, radius, &obstacles);
+            let world = world_end(p0, p1, y0, y1, radius, &obstacles, self.arena_half);
             let t_world = world.map_or(f32::INFINITY, |w| w.t);
 
             // ---- the bodies ----
@@ -8542,12 +8648,12 @@ mod tests {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
     /// `fold_tick` of the driver after ticks 99, 199, ... 599, computed
-    /// from the protocol-19 handling tree on the Windows workstation,
+    /// from the protocol-20 four-metre walking tree on the Windows workstation,
     /// after independently replaying two simulations and checking every
     /// player's ADS fraction, recoverable bloom and effective cone as well
-    /// as movement, bullets and events. The historical v18/v20 pin changed
-    /// deliberately: timed ADS, stance penalties, recovering bloom and the
-    /// weaker starter alter shot directions and ammunition timing. This is
+    /// as movement, bullets and events. The protocol-19 handling pin changed
+    /// deliberately because the requested walking speed is now 4 m/s;
+    /// the jump speed and handling rules remain unchanged. This is
     /// a regression fingerprint, not identity with old gameplay.
     /// The script and the launch go through `cos`, `sin` and
     /// `tan`, which are the platform's, so a toolchain on another libm
@@ -8555,12 +8661,12 @@ mod tests {
     /// run here, and if that changes the pin is regenerated the same way,
     /// from the tree that is being pinned.
     const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
-        0xddae_9c1e_479f_db0a,
-        0x5b72_0116_144c_0248,
-        0xca6f_18f9_a49f_3da5,
-        0x6b96_9be4_6231_eda2,
-        0x95dc_43cd_1485_83d5,
-        0xd094_c261_aaaa_38a8,
+        0x55b7_e8cb_e70f_813b,
+        0xdbe5_d977_bf15_e020,
+        0xab42_b94a_f87c_740a,
+        0xde2d_5013_d138_b096,
+        0x13d4_88f8_da66_bdbd,
+        0x9be6_5b95_a1b8_b22d,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a
@@ -9173,6 +9279,110 @@ mod tests {
         ffa.add_player(1);
         assert_eq!(ffa.players[0].pos, level.spawn(0));
         assert_eq!(ffa.players[1].pos, level.spawn(1));
+    }
+
+    #[test]
+    fn eight_players_get_distinct_spawns_on_join_respawn_rejoin_and_round_reset() {
+        let unique = |sim: &Sim| {
+            assert_eq!(sim.players.len(), 8);
+            for (i, a) in sim.players.iter().enumerate() {
+                assert!(a.alive);
+                if sim.mode == GameMode::Tdm {
+                    assert_eq!(a.pos[1] > 0.0, a.team == 0);
+                }
+                for b in &sim.players[i + 1..] {
+                    let distance2 = (a.pos[0] - b.pos[0]).powi(2) + (a.pos[1] - b.pos[1]).powi(2);
+                    assert!(
+                        distance2 > (2.0 * PLAYER_R).powi(2),
+                        "players {} and {} share {:?}",
+                        a.id,
+                        b.id,
+                        a.pos
+                    );
+                }
+            }
+        };
+        for level in [Level::freight_yard(), Level::trench_city(), Level::harbor()] {
+            for mode in [GameMode::Ffa, GameMode::Tdm, GameMode::Hill] {
+                let mut sim = Sim::from_level(&level, 22, mode);
+                for id in 0..8 {
+                    sim.add_player(id);
+                }
+                unique(&sim);
+                sim.remove_player(2);
+                sim.add_player(2);
+                unique(&sim);
+                // All dying together reserves each new spot before the next
+                // body respawns, even when global ids alias a team's four slots.
+                for _ in 0..4 {
+                    for p in &mut sim.players {
+                        p.alive = false;
+                        p.respawn_in = 0.0;
+                    }
+                    sim.step(&|_| PlayerIn::default());
+                    unique(&sim);
+                }
+                for _ in 0..4 {
+                    sim.restart_round();
+                    unique(&sim);
+                }
+                // A single respawn while seven living players occupy pockets.
+                sim.players[0].alive = false;
+                sim.players[0].respawn_in = 0.0;
+                sim.step(&|_| PlayerIn::default());
+                unique(&sim);
+            }
+        }
+    }
+
+    #[test]
+    fn level_bounds_are_finite_and_legacy_movement_is_the_24_metre_wrapper() {
+        for bad in [f32::NAN, f32::INFINITY, -1.0, 0.0, 512.0] {
+            let mut level = Level::from_seed(0);
+            level.arena_half = bad;
+            assert_eq!(
+                Sim::from_level(&level, 0, GameMode::Ffa).arena_half,
+                ARENA_HALF
+            );
+            assert!(blocked_in([25.0, 0.0], 0.0, PLAYER_R, &[], bad));
+        }
+        for pos in [[0.0, 0.0], [23.0, 1.0], [-23.0, -5.0]] {
+            for mv in [[0.0, 1.0], [1.0, 1.0], [-1.0, 0.0]] {
+                assert_eq!(
+                    move_circle(pos, 0.0, mv, 4.0, FIXED_DT, &[]),
+                    move_circle_in(pos, 0.0, mv, 4.0, FIXED_DT, &[], ARENA_HALF)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn harbor_eight_player_replay_matches_every_tick() {
+        let level = Level::harbor();
+        let mut a = Sim::from_level(&level, 27, GameMode::Ffa);
+        let mut b = Sim::from_level(&level, 27, GameMode::Ffa);
+        for id in 0..8 {
+            a.add_player(id);
+            b.add_player(id);
+        }
+        let (mut ah, mut bh) = (FNV_OFFSET, FNV_OFFSET);
+        for tick in 0..900 {
+            v18_grants(&mut a, tick);
+            v18_grants(&mut b, tick);
+            a.step(&|id| v18_script(tick, id));
+            b.step(&|id| v18_script(tick, id));
+            fold_tick(&mut ah, &a);
+            fold_tick(&mut bh, &b);
+            assert_eq!(ah, bh, "tick {tick}");
+            assert_eq!(a.arena_half, 48.0);
+            for p in &a.players {
+                assert!(
+                    p.pos
+                        .iter()
+                        .all(|v| v.abs() <= a.arena_half - PLAYER_R + 1e-4)
+                );
+            }
+        }
     }
 
     #[test]
