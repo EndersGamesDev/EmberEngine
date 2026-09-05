@@ -3,6 +3,7 @@ use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_p
 use ember_julibrot_worker::MainState;
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
+use super::ledger::LatticeRefusal;
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
@@ -288,7 +289,7 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     assert_eq!(held.source_texture_index, Some(sampled.texture_index));
     assert!(held.source_valid);
     assert!(!held.exposed);
-    assert_eq!(held.rows, identity_rows());
+    assert_eq!(held.rows, crate::identity_warp_rows());
 
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(&held, Some(0.0));
@@ -334,7 +335,7 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
     );
     let plan = apply_hold_policy(refused, Some(&held.frame), true, BINDING_EXTENT);
     assert_eq!(plan.kind, WarpKind::HoldStale);
-    assert_eq!(plan.rows, identity_rows());
+    assert_eq!(plan.rows, crate::identity_warp_rows());
     assert!(!plan.exposed);
 
     let mut geometric = plan;
@@ -877,38 +878,14 @@ fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
     }
 }
 
-/// CPU mirror of the warp fragment's source lookup.
-///
-/// The fragment builds its destination point from the chart corner and the scene grid, applies
-/// the plan rows, and normalises the mapped source pixel by the source texture's own dimensions
-/// (`warp_shader.rs` lines 20 and 25 to 27). The source texture is allocated at exactly the
-/// delivered extent of the scene drawn into it, so the frame's extent is that divisor. A point
-/// outside the unit square is painted clear rather than sampled.
+/// The seam's mirror of the warp fragment's source lookup, named the way these tests read.
 fn warp_source_uv(
     rows: [[f32; 4]; 3],
     destination_extent: [u32; 2],
     source_extent: [u32; 2],
     chart: [f64; 2],
 ) -> Option<[f64; 2]> {
-    let destination = [
-        chart[0] * f64::from(destination_extent[0]) * 0.5,
-        chart[1] * f64::from(destination_extent[1]) * 0.5,
-        1.0,
-    ];
-    let mapped = rows.map(|row| {
-        f64::from(row[0]).mul_add(
-            destination[0],
-            f64::from(row[1]).mul_add(destination[1], f64::from(row[2]) * destination[2]),
-        )
-    });
-    if !mapped.iter().all(|value| value.is_finite()) || mapped[2] <= 0.0 {
-        return None;
-    }
-    let source_pixel = [mapped[0] / mapped[2], mapped[1] / mapped[2]];
-    Some([
-        source_pixel[0] / f64::from(source_extent[0]) + 0.5,
-        0.5 - source_pixel[1] / f64::from(source_extent[1]),
-    ])
+    crate::LatticePair::new(source_extent, destination_extent)?.source_uv(rows, chart)
 }
 
 /// A held picture drawn at a reduced extent must fill the destination, not sit in its centre.
@@ -980,15 +957,18 @@ fn a_held_picture_at_the_destination_extent_holds_by_identity() {
     let held = frame_at_extent(59, extent);
     let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true, extent);
     assert_eq!(plan.kind, WarpKind::HoldStale);
-    assert_eq!(plan.rows, identity_rows());
+    assert_eq!(plan.rows, crate::identity_warp_rows());
 }
 
 /// A hold whose scale cannot be stated is refused rather than placed somewhere.
 #[test]
 fn a_hold_with_an_unusable_extent_stays_a_clear_plan() {
-    assert_eq!(hold_rows([0, 68], [960, 540]), None);
-    assert_eq!(hold_rows([120, 68], [960, 0]), None);
-    assert_eq!(hold_rows([960, 540], [960, 540]), Some(identity_rows()));
+    assert_eq!(crate::LatticePair::new([0, 68], [960, 540]), None);
+    assert_eq!(crate::LatticePair::new([120, 68], [960, 0]), None);
+    assert_eq!(
+        crate::LatticePair::new([960, 540], [960, 540]).and_then(crate::LatticePair::covering_rows),
+        Some(crate::identity_warp_rows())
+    );
 
     let mut degenerate = frame_at_extent(60, [120, 68]);
     degenerate.extent = [120, 0];
@@ -1041,4 +1021,461 @@ fn the_image_warp_states_the_destination_lattice_it_planned_against() {
         BINDING_EXTENT
     );
     assert_eq!(destination_extent(None, None), [0, 0]);
+}
+
+/// The lattice pair a plan maps between is a property of every plan kind, not of the hold alone.
+///
+/// A plan's rows are read by the warp fragment as destination pixels in, source pixels out, and
+/// the fragment then normalises the source pixel by the source texture's own dimensions. Two
+/// extents therefore decide where a plan puts the picture: the destination lattice written to
+/// `scene.grid.xy`, and the source texture's extent, which is the delivered extent of the scene
+/// drawn into it. A plan built from one extent, or from identity by default, asserts that the two
+/// are equal; nothing in the presenter makes them equal.
+///
+/// A scene is submitted at `main.grid`'s extent while its pose carries the surface lattice, and no
+/// check relates the two. So a completed picture can be retained at the `PictureFast` divisor
+/// extent with a pose whose grid is the full surface, and `renders_same_picture` — which compares
+/// the two poses' grids and nothing else — then admits the identity `exact_self` plan. Identity on
+/// that pair is the morph thumbnail again, reached through the planner rather than through the
+/// hold: the whole picture inside the central 120 by 68 pixels of a 960 by 540 destination, clear
+/// around it. Under the rendering rule a moving frame may be very inaccurate but never wrong, and
+/// a frame at the wrong scale is wrong.
+#[test]
+fn a_plan_states_the_lattice_pair_it_maps_between_whatever_its_kind() {
+    let destination_extent = [960, 540];
+    let source_extent = [120, 68];
+    let mut pose = binding_pose();
+    pose.grid_width = destination_extent[0];
+    pose.grid_height = destination_extent[1];
+    let mut frame = frame_at_extent(61, source_extent);
+    frame.pose = pose;
+    let plan = crate::Warp::reproject(
+        &frame,
+        &pose,
+        &pose,
+        PrecisionMode::PictureFast,
+        crate::WarpValidation::Ordinary,
+    );
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.source_valid);
+    for chart in [
+        [-1.0, -1.0],
+        [1.0, -1.0],
+        [-1.0, 1.0],
+        [1.0, 1.0],
+        [0.0, 0.0],
+    ] {
+        let uv = warp_source_uv(plan.rows, destination_extent, source_extent, chart)
+            .expect("a plan keeps every destination point in front of the source");
+        assert!(
+            uv.iter().all(|value| (-1.0e-4..=1.000_1).contains(value)),
+            "chart {chart:?} samples {uv:?}, outside the source picture: the plan was built from \
+             the pose lattice alone and ignores the extent the picture was delivered at"
+        );
+    }
+}
+
+/// The extent pairings the refinement ladder and the surface actually produce.
+///
+/// `960x540` is the surface, and the `PictureFast` divisors take it down the ladder: 2 gives
+/// 480x270, 4 gives 240x135, 8 gives 120x68. `1920x1080` is a device-pixel-ratio-2 surface, and
+/// `121x68` is there because a reduced extent rounds up per axis and an odd width is what the
+/// rounding produces; every pairing is checked in both directions because a hold from a coarse
+/// picture onto a fine lattice and a hold from a fine picture onto a coarse one are different
+/// arithmetic with the same wrongness available at each end.
+const LADDER_EXTENTS: [[u32; 2]; 6] = [
+    [960, 540],
+    [480, 270],
+    [240, 135],
+    [120, 68],
+    [1_920, 1_080],
+    [121, 68],
+];
+
+/// Every ordered pair of ladder extents, the equal ones included.
+fn ladder_pairs() -> impl Iterator<Item = ([u32; 2], [u32; 2])> {
+    LADDER_EXTENTS
+        .into_iter()
+        .flat_map(|source| LADDER_EXTENTS.map(move |destination| (source, destination)))
+}
+
+/// A pose on a named lattice, otherwise the binding fixture.
+fn pose_on(extent: [u32; 2]) -> Pose {
+    let mut pose = binding_pose();
+    pose.grid_width = extent[0];
+    pose.grid_height = extent[1];
+    pose
+}
+
+/// A completed picture delivered at `source_extent` whose pose sits on `pose_extent`.
+fn frame_on(scene_id: u64, source_extent: [u32; 2], pose_extent: [u32; 2]) -> crate::SceneFrame {
+    let mut frame = frame_at_extent(scene_id, source_extent);
+    frame.pose = pose_on(pose_extent);
+    frame
+}
+
+/// Reprojects `frame` onto `to_pose` the way the presenter does, with no validation demand.
+fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan {
+    crate::Warp::reproject(
+        frame,
+        &frame.pose,
+        to_pose,
+        PrecisionMode::PictureFast,
+        crate::WarpValidation::Ordinary,
+    )
+}
+
+/// Asserts a plan names exactly this pairing and returns the pair it named.
+fn named_pair(
+    plan: &crate::WarpPlan,
+    source_extent: [u32; 2],
+    destination_extent: [u32; 2],
+    route: &str,
+) -> crate::LatticePair {
+    let lattice = plan
+        .lattice
+        .unwrap_or_else(|| panic!("the {route} plan names no lattice pair"));
+    assert_eq!(
+        [lattice.source(), lattice.destination()],
+        [source_extent, destination_extent],
+        "the {route} plan on {source_extent:?} to {destination_extent:?} names another pairing"
+    );
+    lattice
+}
+
+/// The retained scene at its own pose: identity in the picture, not in pixels.
+fn self_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let plan = reproject_onto(&frame, &pose_on(destination_extent));
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.source_valid);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "self");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the self plan on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    plan
+}
+
+/// A pan moves ground off the source on purpose, so it declares exposure instead of coverage.
+///
+/// What must hold either way is that the centre of the destination, moved by three pixels of a
+/// lattice hundreds wide, still reads near the centre of the source picture rather than at some
+/// multiple of the extent ratio away from it.
+fn pan_plan_declares_exposure(
+    source_extent: [u32; 2],
+    destination_extent: [u32; 2],
+) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let mut moved = pose_on(destination_extent);
+    moved.centre_from_reference_px = [3.0, -2.0];
+    let plan = reproject_onto(&frame, &moved);
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.exposed);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "pan");
+    let centre = lattice
+        .source_uv(plan.rows, [0.0, 0.0])
+        .expect("the destination centre is in front of the source");
+    assert!(
+        centre.iter().all(|value| (0.4..=0.6).contains(value)),
+        "a three-pixel pan on {source_extent:?} to {destination_extent:?} reads {centre:?}"
+    );
+    plan
+}
+
+/// One zoom step in shows half the chart, whose corners land a quarter in from the source corners.
+///
+/// This is the reprojection the delivery composition exists for, and the one that asks the
+/// coverage question of a solved map rather than of a covering one: nothing is exposed, so the
+/// corner position is checkable. Without the composition the solved map's output stays in the
+/// source pose's pixels while the fragment divides by the source texture's extent, and on the
+/// 120x68-into-960x540 pairing the corner that should read a quarter out reads twice the picture
+/// out instead.
+fn zoom_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let mut closer = pose_on(destination_extent);
+    closer.zoom_log2 = 1.0;
+    let plan = reproject_onto(&frame, &closer);
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(
+        !plan.exposed,
+        "a zoom into the middle of the source exposes nothing on {source_extent:?} to \
+         {destination_extent:?}"
+    );
+    let lattice = named_pair(&plan, source_extent, destination_extent, "zoom");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the zoom plan on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    let corner = lattice
+        .source_uv(plan.rows, [1.0, 1.0])
+        .expect("the destination corner is in front of the source");
+    assert!(
+        (corner[0] - 0.75).abs() < 1.0e-3 && (corner[1] - 0.25).abs() < 1.0e-3,
+        "one zoom step on {source_extent:?} to {destination_extent:?} reads {corner:?} rather \
+         than a quarter in from the source corner"
+    );
+    plan
+}
+
+/// The hold shows the last completed picture unchanged on the lattice it is presented on.
+fn hold_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "hold");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the hold on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    plan
+}
+
+/// Every plan kind that samples a source covers its destination, on every ladder pairing.
+///
+/// The four sampling routes reach the fragment differently — the planner's self-identity, its
+/// solved reprojection under a pan and under a zoom, and the hold policy — and before the seam
+/// only the last of them knew that two extents exist. The table is the check that the seam is the
+/// one place the question is answered: for each pairing the plan's own lattice is asked whether
+/// the four destination corners and the centre land inside the source picture, which is the same
+/// arithmetic the fragment does before it decides to sample or to paint clear.
+#[test]
+fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
+    for (source_extent, destination_extent) in ladder_pairs() {
+        let plans = [
+            self_plan_covers(source_extent, destination_extent),
+            pan_plan_declares_exposure(source_extent, destination_extent),
+            zoom_plan_covers(source_extent, destination_extent),
+            hold_plan_covers(source_extent, destination_extent),
+        ];
+        for plan in plans {
+            assert_eq!(
+                enforce_lattice(plan, destination_extent).1,
+                None,
+                "a plan that states its pair is refused on {source_extent:?} to \
+                 {destination_extent:?}"
+            );
+        }
+    }
+}
+
+/// A clear plan samples nothing, so it names no pair and the invariant has nothing to ask it.
+#[test]
+fn a_clear_plan_names_no_lattice_pair_and_is_never_refused_for_one() {
+    for (_, destination_extent) in ladder_pairs() {
+        let plan = clear_warp_plan(false, true);
+        assert_eq!(plan.lattice, None);
+        assert_eq!(enforce_lattice(plan, destination_extent).1, None);
+        let edge_on = clear_warp_plan(true, false);
+        assert_eq!(edge_on.lattice, None);
+        assert_eq!(enforce_lattice(edge_on, destination_extent).1, None);
+    }
+}
+
+/// The three refusals: an unstated pair, a pair naming another destination, corners off the source.
+///
+/// Each becomes an honest clear with a published reason. Clearing restarts the refinement ladder,
+/// which is a real cost, but it asserts nothing about geometry; a picture at a scale the geometry
+/// does not have asserts geometry that does not exist, and under the rendering rule a moving frame
+/// may be very inaccurate but never wrong.
+#[test]
+fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() {
+    let destination_extent = [960, 540];
+    let source_extent = [120, 68];
+    let frame = frame_on(72, source_extent, destination_extent);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+
+    let unstated = crate::WarpPlan {
+        lattice: None,
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(unstated, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert!(!refused.source_valid);
+    assert!(
+        refused.exposed,
+        "a refusal is ground the next scene must fill"
+    );
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan named no lattice pair")
+    );
+
+    let elsewhere = crate::WarpPlan {
+        lattice: crate::LatticePair::new(source_extent, [480, 270]),
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(elsewhere, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan named another destination lattice")
+    );
+
+    // The morph thumbnail itself, constructed as a plan rather than reached through a path: the
+    // pair is named and correct, and the rows are the identity that ignores it.
+    let thumbnail = crate::WarpPlan {
+        rows: crate::identity_warp_rows(),
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(thumbnail, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan maps the destination outside the source")
+    );
+
+    // The same rows with exposure declared are a different claim and are not refused: the plan is
+    // telling the exposure machinery that part of the destination has no source.
+    let declared = crate::WarpPlan {
+        rows: crate::identity_warp_rows(),
+        exposed: true,
+        ..held
+    };
+    assert_eq!(enforce_lattice(declared, destination_extent).1, None);
+}
+
+/// A hold whose scale cannot be stated stays a clear plan rather than placing the picture.
+#[test]
+fn a_zero_source_extent_refuses_the_hold_before_any_rows_exist() {
+    let mut degenerate = frame_on(73, [120, 68], [960, 540]);
+    degenerate.extent = [120, 0];
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&degenerate),
+        true,
+        [960, 540],
+    );
+    assert_eq!(plan.kind, WarpKind::ClearOnly);
+    assert_eq!(plan.lattice, None);
+    assert!(!plan.source_valid);
+}
+
+/// Every other path that draws against an extent either agrees by construction or is checked.
+///
+/// The warp fragment is not the only pass whose destination lattice can disagree with what it
+/// draws, so the same question is put to the three remaining ones. The answers differ in kind, and
+/// that difference is the point: two of them are structural, one is an explicit refusal, and none
+/// of them needs the plan seam.
+///
+/// The relief redraw draws the retained records as a mesh rather than sampling a texture, so it
+/// has no source uv and no scale to get wrong. What it can get wrong is the grid it indexes, and
+/// `relief_scene_uniform` refuses outright when the retained grid's dimensions are not the source
+/// frame's extent. The redraw writes that grid into the scene uniform itself, which is exactly why
+/// `write_warp_destination_extent` runs on the image-warp branch alone: writing the pose's grid
+/// over the redraw's would leave the mesh indexing a lattice it was not built for. The
+/// backdrop-first composition is the same shape, with `backdrop_scene_uniform` and
+/// `ensure_backdrop_indices` taking the extent from the one backdrop grid.
+///
+/// The edge-on plan's identity rows are the screen-to-plane map, not plan rows, and the fragment
+/// returns exterior sky on the edge-on flag before it reads either map. There is no lattice
+/// question because there is no sample.
+///
+/// The ledger's two-index rotation hands out the index the retained frame is not on, and the
+/// scene texture at that index is reallocated to the submitted extent before anything is drawn
+/// into it. A frame's recorded extent is therefore the extent of its own texture by construction:
+/// the index holding the retained picture is never passed to `ensure_scene_texture`.
+#[test]
+fn the_remaining_extent_paths_agree_by_construction_or_refuse() {
+    let redraw = include_str!("redraw.rs");
+    assert!(
+        redraw.contains("if [grid.width, grid.height] != source.extent {"),
+        "the relief redraw refuses a retained grid that is not the source frame's extent"
+    );
+    let warp = include_str!("warp.rs");
+    let relief_branch = warp
+        .find("if relief_redraw {")
+        .expect("the warp submission branches on the relief redraw");
+    let destination_write = warp
+        .find("self.write_warp_destination_extent(warp_destination_extent);")
+        .expect("the image warp states its destination lattice");
+    let image_branch = warp
+        .find("encode_image_warp(")
+        .expect("the warp submission encodes an image warp");
+    assert!(
+        relief_branch < destination_write && destination_write < image_branch,
+        "the destination lattice is written on the image-warp branch alone, so a relief redraw \
+         keeps the record grid it indexes its mesh from"
+    );
+
+    let shader = crate::warp_shader();
+    let edge_on = shader
+        .find("if (hot.flags.w != 0u)")
+        .expect("the fragment tests the edge-on flag");
+    let screen_map = shader
+        .find("hot.screen_to_plane_row_0.xyz")
+        .expect("the fragment reads the screen map");
+    let plan_rows = shader
+        .find("hot.homography_row_0.xyz")
+        .expect("the fragment reads the plan rows");
+    assert!(
+        edge_on < screen_map && edge_on < plan_rows,
+        "an edge-on payload returns sky before either map is read, so its identity screen rows \
+         are never a lattice claim"
+    );
+
+    let submit = include_str!("scene/submit.rs");
+    assert!(
+        submit.contains("self.ledger.begin(|texture_index| {")
+            && submit
+                .contains("ensure_scene_texture(device, gpu, texture_index as usize, extent)?"),
+        "only the index the ledger hands out is reallocated, so the retained frame's recorded \
+         extent stays the extent of its own texture"
+    );
+
+    let mut ledger = SceneLedger::default();
+    let first = promote_binding_scene(&mut ledger, 81);
+    let second = promote_binding_scene(&mut ledger, 82);
+    assert_ne!(
+        first.texture_index, second.texture_index,
+        "consecutive scenes take different texture indices"
+    );
+    assert_eq!(
+        ledger
+            .available_texture_index()
+            .expect("no pending scene occupies the ledger"),
+        first.texture_index,
+        "the index handed out next is the one the retained picture is not on"
+    );
+}
+
+/// A captured frame's facts row says what scale the picture was presented at.
+#[test]
+fn the_facts_publish_both_lattices_of_the_plan_they_recorded() {
+    let mut facts = PresentFacts::default();
+    assert_eq!([facts.destination_width, facts.destination_height], [0, 0]);
+    assert_eq!([facts.warp_source_width, facts.warp_source_height], [0, 0]);
+    assert_eq!(facts.warp_lattice_refusal, None);
+
+    let destination_extent = [960, 540];
+    let frame = frame_on(83, [120, 68], destination_extent);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+    facts.record_warp_plan(&held, Some(0.0));
+    assert_eq!(
+        [facts.warp_source_width, facts.warp_source_height],
+        [120, 68]
+    );
+    assert_eq!(facts.warp_kind, WarpKind::HoldStale);
+
+    facts.record_warp_plan(&clear_warp_plan(false, true), None);
+    assert_eq!(
+        [facts.warp_source_width, facts.warp_source_height],
+        [0, 0],
+        "a plan that samples nothing publishes no source extent"
+    );
 }

@@ -5,7 +5,8 @@ use ember_julibrot_math::{
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    SceneFrame, WarpKind, WarpPlan, WarpValidation, apply_homography, pack_homography_rows,
+    LatticePair, SceneFrame, WarpKind, WarpPlan, WarpValidation, apply_homography,
+    compose_homography, identity_warp_rows, pack_homography_rows,
 };
 
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
@@ -52,7 +53,7 @@ impl Warp {
             return clear_only(true);
         }
         if renders_same_picture(from_pose, to_pose) {
-            return exact_self(last_frame);
+            return exact_self(last_frame, to_pose).unwrap_or_else(|| clear_only(true));
         }
         if !object_samples_match(from_pose, to_pose) {
             return clear_only(true);
@@ -103,6 +104,8 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
     plan.source_scene_id = None;
     plan.source_texture_index = None;
     plan.source_valid = false;
+    plan.lattice = None;
+    plan.rows = identity_warp_rows();
     plan.exposed = true;
     plan.kind = WarpKind::ClearOnly;
     plan
@@ -165,11 +168,10 @@ fn object_samples_match(from: &Pose, to: &Pose) -> bool {
 
 const fn clear_only(exposed: bool) -> WarpPlan {
     WarpPlan {
-        rows: [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
+        rows: identity_warp_rows(),
+        // A clear plan samples nothing, so it maps between no lattices. The rows are the neutral
+        // upload that keeps the lane from carrying a stale map, not a claim about geometry.
+        lattice: None,
         source_scene_id: None,
         source_texture_index: None,
         source_valid: false,
@@ -218,13 +220,16 @@ pub fn renders_same_picture(first: &Pose, second: &Pose) -> bool {
 /// exposure, exposure restarts the refinement ladder, and the ladder can only deliver the same
 /// scene at the same pose to be refused again. That loop is what a held relief pose with a horizon
 /// inside its frame used to sit in, showing the clear colour with a completed Final in hand.
-const fn exact_self(last_frame: &SceneFrame) -> WarpPlan {
-    WarpPlan {
-        rows: [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
+fn exact_self(last_frame: &SceneFrame, to_pose: &Pose) -> Option<WarpPlan> {
+    let lattice = LatticePair::new(last_frame.extent, [to_pose.grid_width, to_pose.grid_height])?;
+    Some(WarpPlan {
+        // Identity in the picture, not in pixels. The scene was delivered at its own extent and
+        // the destination lattice is the pose's grid; the ladder makes those differ on purpose,
+        // and identity rows on unequal extents put the picture in the middle of the destination at
+        // its own texel size. The covering map is the identity expressed in the pixels the
+        // fragment actually works in, and it is identity rows exactly when the extents are equal.
+        rows: lattice.covering_rows()?,
+        lattice: Some(lattice),
         source_scene_id: Some(last_frame.scene_id),
         source_texture_index: Some(last_frame.texture_index),
         source_valid: true,
@@ -234,7 +239,7 @@ const fn exact_self(last_frame: &SceneFrame) -> WarpPlan {
         chart_residual: 0.0,
         approx_max_error_px: Some(0.0),
         approx_p95_error_px: Some(0.0),
-    }
+    })
 }
 
 const fn edge_on() -> WarpPlan {
@@ -255,12 +260,33 @@ fn anchor_plan(
     let source = screen_corners(from_pose).map(|[x, y]| [x, y, 1.0]);
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
-    let rows = pack_homography_rows(inverse_sampling)?;
-    let displayed_sampling = core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]));
+    let lattice = LatticePair::new(last_frame.extent, [to_pose.grid_width, to_pose.grid_height])?;
+    // The solve's domain is already the destination pose's pixels — its anchors are the source
+    // pose's screen corners carried through the flat forward map — and only its codomain needs
+    // moving: it lands in the source pose's own pixel lattice, because the anchors it maps back to
+    // are that pose's uncarried corners. The fragment divides by the source texture's extent
+    // instead, and the delivered extent of a scene is not its pose's grid: the refinement ladder
+    // reduces one and not the other. Composing the solved map with the delivery pair's covering
+    // map carries the codomain into the pixels the fragment reads, and leaves the map untouched
+    // when the two extents already agree.
+    let delivery = LatticePair::new(
+        last_frame.extent,
+        [from_pose.grid_width, from_pose.grid_height],
+    )?;
+    let rows = pack_homography_rows(compose_homography(
+        delivery.covering_map(),
+        inverse_sampling,
+    ))?;
+    // The error corpus measures a displacement in the source pose's pixels against the exact
+    // reprojection solved in those same pixels, so it reads the map before the delivery scaling.
+    // Rounding to f32 is what the corpus is there to catch, so it reads the rounded rows.
+    let displayed_sampling = pack_homography_rows(inverse_sampling)
+        .map(|solved| core::array::from_fn(|index| f64::from(solved[index / 3][index % 3])))?;
     let metrics = sampled_errors(from_pose, to_pose, displayed_sampling)
         .and_then(ErrorSamples::maximum_and_p95);
     Some(WarpPlan {
         rows,
+        lattice: Some(lattice),
         source_scene_id: Some(last_frame.scene_id),
         source_texture_index: Some(last_frame.texture_index),
         source_valid: true,

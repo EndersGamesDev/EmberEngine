@@ -1,4 +1,5 @@
 use super::{EXPOSURE_FACT_STEPS, Pose, PoseMap, WarpKind};
+use crate::{LatticePair, identity_warp_rows};
 
 pub(super) fn pose_is_finite(pose: &Pose) -> bool {
     pose.grid_width > 0
@@ -113,62 +114,10 @@ pub(super) const fn select_warp_source_identity(
     }
 }
 
-pub(super) const fn identity_rows() -> [[f32; 4]; 3] {
-    [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-    ]
-}
-
-/// Rows that hold a completed picture of `source_extent` on a destination lattice of another size.
-///
-/// A hold shows the last completed picture unchanged while the next scene renders, and the two
-/// lattices cover the same field of view whatever their pixel counts: the chart span a pose
-/// covers across its width is `4 / 2^zoom` however many pixels sample it. The warp fragment
-/// normalises the mapped source pixel by the source texture's own dimensions, and a scene texture
-/// is allocated at exactly the delivered extent of the scene drawn into it, so the ratio between
-/// the two extents is the whole of the mapping. Equal extents give identity.
-///
-/// These are independent per-axis ratios, where a reprojection scales by the uniform width ratio
-/// on both axes (`math/src/warp.rs` lines 15 to 16). The difference is not cosmetic, because the
-/// two lattices are not proportional: a reduced extent rounds up per axis, so a 960 by 540
-/// surface at the `PictureFast` divisor 8 delivers 120 by 68 rather than 120 by 67.5. Its 68 rows
-/// carry 544 destination pixels of ground onto a 540-pixel destination. The per-axis ratio
-/// therefore lands the frame edge on the frame edge and absorbs the difference as a stretch of up
-/// to `(k-1)/2` destination pixels for divisor `k` — 3.5 px at the top of the `PictureFast`
-/// ladder, 2 px at this pairing — while the uniform width ratio would keep the picture
-/// unstretched and, in the opposite rounding case, put its edge past the source and expose
-/// up to `(k-1)/2`
-/// pixels of clear at the frame edge. A hold takes the bounded stretch: it is there precisely to
-/// avoid replacing the picture with clear, and a few pixels of stretch is inaccurate where a band
-/// of clear at the edge reads as a disocclusion that no scene is coming to fill.
-///
-/// An unusable extent returns `None` so the caller refuses the hold rather than placing the
-/// picture somewhere the geometry does not put it.
-pub(super) fn hold_rows(
-    source_extent: [u32; 2],
-    destination_extent: [u32; 2],
-) -> Option<[[f32; 4]; 3]> {
-    if source_extent
-        .into_iter()
-        .chain(destination_extent)
-        .any(|extent| extent == 0)
-    {
-        return None;
-    }
-    let scale = [
-        f64::from(source_extent[0]) / f64::from(destination_extent[0]),
-        f64::from(source_extent[1]) / f64::from(destination_extent[1]),
-    ];
-    let rows =
-        crate::pack_homography_rows([scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0])?;
-    (rows[0][0] > 0.0 && rows[1][1] > 0.0).then_some(rows)
-}
-
 pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
     crate::WarpPlan {
-        rows: identity_rows(),
+        rows: identity_warp_rows(),
+        lattice: None,
         source_scene_id: None,
         source_texture_index: None,
         source_valid: false,
@@ -193,16 +142,88 @@ pub(super) fn apply_hold_policy(
     let Some(frame) = retained else {
         return plan;
     };
-    // A hold whose scale cannot be stated is refused: the clear plan asserts no geometry, while a
-    // picture placed at the wrong scale asserts geometry that does not exist.
-    let Some(rows) = hold_rows(frame.extent, destination_extent) else {
+    // A hold shows the last completed picture unchanged while the next scene renders, which is the
+    // covering map of the pair between the picture's delivered extent and the lattice it is
+    // presented on. A hold whose pair cannot be named is refused: the clear plan asserts no
+    // geometry, while a picture placed at the wrong scale asserts geometry that does not exist.
+    let Some(lattice) = LatticePair::new(frame.extent, destination_extent) else {
+        return plan;
+    };
+    let Some(rows) = lattice.covering_rows() else {
         return plan;
     };
     plan.rows = rows;
+    plan.lattice = Some(lattice);
     plan.source_scene_id = Some(frame.scene_id);
     plan.source_texture_index = Some(frame.texture_index);
     plan.source_valid = true;
     plan.exposed = false;
     plan.kind = WarpKind::HoldStale;
     plan
+}
+
+/// Why a plan was refused for the lattice pair it named.
+///
+/// Published so a captured frame's facts row says which of the three ways a plan can fail to
+/// state its geometry actually happened, rather than only that the surface went clear.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LatticeRefusal {
+    /// A plan claiming a source that named no lattice pair at all.
+    Unstated,
+    /// A plan whose named destination is not the lattice this payload publishes.
+    WrongDestination,
+    /// A plan claiming full coverage whose destination leaves the source picture.
+    OutsideSource,
+}
+
+impl LatticeRefusal {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unstated => "plan named no lattice pair",
+            Self::WrongDestination => "plan named another destination lattice",
+            Self::OutsideSource => "plan maps the destination outside the source",
+        }
+    }
+}
+
+/// Refuses a plan that does not state where it puts the picture on this destination lattice.
+///
+/// Three claims are checked, and each of them is a way a frame can reach the surface at a scale
+/// the geometry does not have. A plan that samples a source names both extents, or it is asserting
+/// that they are equal. The destination it names is the lattice this HOT payload publishes, or the
+/// rows are read against a lattice they were not written for. And a plan that does not declare
+/// exposure claims its source covers the destination, which is a question the pair can answer on
+/// the CPU: the four destination corners and the centre map inside the source picture, or they do
+/// not.
+///
+/// A refused plan becomes an honest clear. Clearing is a loss — it restarts the refinement ladder
+/// — but it is the loss the exposure machinery is built to recover from, and it asserts nothing
+/// about geometry. A picture at the wrong scale asserts geometry that does not exist, and under
+/// the rendering rule a moving frame may be very inaccurate but never wrong.
+///
+/// Exposure is the declared exception and not a hole: a plan that declares it is telling the
+/// exposure machinery that part of the destination has no source, which is measured separately in
+/// pixels by `warp_exposed_fraction` and answered by a completed scene. A relief redraw declares
+/// exposure and does not sample the source texture at all; it draws the retained records as a
+/// mesh, so its rows are not read by the warp fragment.
+pub(super) fn enforce_lattice(
+    plan: crate::WarpPlan,
+    destination_extent: [u32; 2],
+) -> (crate::WarpPlan, Option<LatticeRefusal>) {
+    if !plan.source_valid {
+        return (plan, None);
+    }
+    let refusal = match plan.lattice {
+        None => Some(LatticeRefusal::Unstated),
+        Some(lattice) if lattice.destination() != destination_extent => {
+            Some(LatticeRefusal::WrongDestination)
+        }
+        Some(lattice) if !plan.exposed && !lattice.covers_destination(plan.rows) => {
+            Some(LatticeRefusal::OutsideSource)
+        }
+        Some(_) => None,
+    };
+    refusal.map_or((plan, None), |refusal| {
+        (clear_warp_plan(plan.edge_on, true), Some(refusal))
+    })
 }

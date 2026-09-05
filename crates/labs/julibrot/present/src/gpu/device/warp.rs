@@ -3,14 +3,15 @@ use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
     PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
     WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
-    exterior_zero, pack_homography_rows, palette, view_scale, warp_shader,
+    exterior_zero, identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
 };
 use ember_julibrot_math::scene_uncovered_fraction;
 
+use super::ledger::LatticeRefusal;
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
-    identity_rows, pose_is_finite, warp_exposed_fraction,
+    enforce_lattice, pose_is_finite, warp_exposed_fraction,
 };
 
 impl Presenter {
@@ -32,7 +33,7 @@ impl Presenter {
     ) {
         let screen_rows = match hot.map {
             PoseMap::Mapped(map) => pack_homography_rows(map.rows),
-            PoseMap::EdgeOn => Some(identity_rows()),
+            PoseMap::EdgeOn => Some(identity_warp_rows()),
         };
         let pose = self.main.as_ref().and_then(|main| {
             let pose = Pose {
@@ -81,12 +82,17 @@ impl Presenter {
         // The lattice the plan rows are expressed against: the pose this HOT payload publishes,
         // whose grid is the current MAIN grid. A hold from a picture drawn at another extent is
         // scaled onto this lattice rather than laid on it pixel for pixel.
+        let warp_destination_extent = destination_extent(pose.as_ref(), self.main.as_ref());
         let plan = apply_hold_policy(
             plan,
             hold_source,
             hold_refused_warp,
-            destination_extent(pose.as_ref(), self.main.as_ref()),
+            warp_destination_extent,
         );
+        // Every plan that samples a source states the two lattices it maps between, and a plan
+        // whose destination corners leave that source is refused here rather than presented at a
+        // scale the geometry does not have.
+        let (plan, lattice_refusal) = enforce_lattice(plan, warp_destination_extent);
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -100,7 +106,7 @@ impl Presenter {
             hot.view.distance_four,
         )
         .unwrap_or([0.0, 8.0, 8.0, 0.0]);
-        let screen_rows = screen_rows.unwrap_or_else(identity_rows);
+        let screen_rows = screen_rows.unwrap_or_else(identity_warp_rows);
         let epoch = hot.epoch.to_le_bytes();
         let epoch_low = u32::from_le_bytes([epoch[0], epoch[1], epoch[2], epoch[3]]);
         let epoch_high = u32::from_le_bytes([epoch[4], epoch[5], epoch[6], epoch[7]]);
@@ -158,6 +164,9 @@ impl Presenter {
                 .or_else(|| self.ledger.held().map(|held| &held.frame)),
         );
         self.facts.record_warp_plan(&plan, exposed_fraction);
+        self.facts.destination_width = warp_destination_extent[0];
+        self.facts.destination_height = warp_destination_extent[1];
+        self.facts.warp_lattice_refusal = lattice_refusal.map(LatticeRefusal::as_str);
         self.facts.warp_exposed = exposed;
         self.facts.scene_fill_due = self.exposure.due();
         if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw)
@@ -274,12 +283,16 @@ impl Presenter {
         let relief_redraw = relief_redraw_backdrop.is_some();
         let mut held_stale = source_slot.held_stale;
         if planned_relief_redraw && !relief_redraw {
-            let fallback = apply_hold_policy(
-                clear_warp_plan(false, true),
-                source.as_ref(),
-                source_slot.hold_on_redraw_refusal,
+            let (fallback, refusal) = enforce_lattice(
+                apply_hold_policy(
+                    clear_warp_plan(false, true),
+                    source.as_ref(),
+                    source_slot.hold_on_redraw_refusal,
+                    warp_destination_extent,
+                ),
                 warp_destination_extent,
             );
+            self.facts.warp_lattice_refusal = refusal.map(LatticeRefusal::as_str);
             self.rewrite_hot_warp(hot_slot, &fallback);
             self.hot_exposed[hot_slot.index() as usize] = fallback.exposed;
             self.facts.record_warp_plan(&fallback, None);

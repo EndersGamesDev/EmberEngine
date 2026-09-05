@@ -222,6 +222,14 @@ impl FramePartition {
 pub struct WarpPlan {
     /// Three padded inverse-sampling homography rows.
     pub rows: [[f32; 4]; 3],
+    /// The two pixel lattices those rows map between, absent only for a plan that samples nothing.
+    ///
+    /// Rows alone do not say where a picture lands: the fragment builds its destination point from
+    /// the destination lattice and divides the mapped source pixel by the source texture's own
+    /// extent. A plan that names only one of the two, or none, is asserting that they are equal,
+    /// and nothing in the presenter makes them equal. A plan that claims a source and does not
+    /// name both is refused before it reaches the surface.
+    pub lattice: Option<crate::LatticePair>,
     /// Retained scene identity against which the plan was solved.
     pub source_scene_id: Option<u64>,
     /// Retained texture identity against which the plan was solved.
@@ -437,6 +445,21 @@ pub struct PresentFacts {
     pub delivered_width: u32,
     /// Delivered height in pixels.
     pub delivered_height: u32,
+    /// Width of the pixel lattice the latest warp was expressed against.
+    ///
+    /// The fragment builds its destination point from this lattice, and it is written to the
+    /// scene uniform immediately before the warp pass. A captured frame plus this row therefore
+    /// says what scale the picture was presented at, which is what no fact could say while a
+    /// wrong-scale frame was unobservable to every test.
+    pub destination_width: u32,
+    /// Height of the pixel lattice the latest warp was expressed against.
+    pub destination_height: u32,
+    /// Width of the source texture the latest warp plan sampled, zero when it sampled nothing.
+    pub warp_source_width: u32,
+    /// Height of the source texture the latest warp plan sampled, zero when it sampled nothing.
+    pub warp_source_height: u32,
+    /// Why the latest plan was refused for the lattice pair it named, absent when none was.
+    pub warp_lattice_refusal: Option<&'static str>,
     /// Delivered refinement level.
     pub delivered_level: Option<RefinementLevel>,
     /// Delivered iteration cap.
@@ -511,6 +534,10 @@ impl PresentFacts {
         self.warp_p95_error_px = plan.approx_p95_error_px;
         self.warp_kind = plan.kind;
         self.warp_exposed = plan.exposed;
+        [self.warp_source_width, self.warp_source_height] = match plan.lattice {
+            Some(lattice) => lattice.source(),
+            None => [0, 0],
+        };
         self.warp_exposed_fraction = exposed_fraction;
         if plan.exposed {
             self.scene_fill_due = true;
@@ -529,6 +556,11 @@ impl Default for PresentFacts {
             precision_mode: PrecisionMode::default().as_str(),
             delivered_width: 0,
             delivered_height: 0,
+            destination_width: 0,
+            destination_height: 0,
+            warp_source_width: 0,
+            warp_source_height: 0,
+            warp_lattice_refusal: None,
             delivered_level: None,
             iteration_cap: None,
             glitch_pixel_count: None,
@@ -669,6 +701,7 @@ mod tests {
         assert_eq!(facts.relief_redraw_count, 1);
         let anchored = WarpPlan {
             rows: [[0.0; 4]; 3],
+            lattice: crate::LatticePair::new([120, 68], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
             source_valid: true,
@@ -680,6 +713,10 @@ mod tests {
             approx_p95_error_px: Some(0.5),
         };
         facts.record_warp_plan(&anchored, Some(0.0));
+        assert_eq!(
+            [facts.warp_source_width, facts.warp_source_height],
+            [120, 68]
+        );
         assert_eq!(facts.chart_residual, Some(0.25));
         assert_eq!(facts.warp_max_error_px, Some(1.75));
         assert_eq!(facts.warp_p95_error_px, Some(0.5));
@@ -690,9 +727,11 @@ mod tests {
             kind: WarpKind::ClearOnly,
             approx_max_error_px: None,
             approx_p95_error_px: None,
+            lattice: None,
             ..anchored
         };
         facts.record_warp_plan(&cleared, None);
+        assert_eq!([facts.warp_source_width, facts.warp_source_height], [0, 0]);
         assert_eq!(facts.chart_residual, None);
         assert_eq!(facts.warp_max_error_px, None);
         assert_eq!(facts.warp_p95_error_px, None);
@@ -707,6 +746,7 @@ mod tests {
         };
         let relief = WarpPlan {
             rows: [[0.0; 4]; 3],
+            lattice: crate::LatticePair::new([960, 540], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
             source_valid: true,
