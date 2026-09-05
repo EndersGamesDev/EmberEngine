@@ -22,6 +22,7 @@ use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use crate::OcclusionField;
 use crate::environment::{Environment, Particle};
 
 /// A vertex of a registered mesh (matches the built-in cube's layout).
@@ -278,6 +279,8 @@ pub struct Frame {
     pub fog: Fog,
     /// Opt-in outdoor sky, directional light, shadows and wet reflections.
     pub environment: Environment,
+    /// Immutable static indirect-light visibility. Bake once, then share each frame.
+    pub occlusion: Option<Arc<OcclusionField>>,
     /// Camera-facing alpha particles drawn after opaque geometry.
     pub particles: Vec<Particle>,
 }
@@ -301,6 +304,8 @@ struct SceneUniform {
     wind_time: [f32; 4],
     camera_right: [f32; 4],
     camera_up: [f32; 4],
+    occlusion_min_strength: [f32; 4],
+    occlusion_cell: [f32; 4],
 }
 
 impl SceneUniform {
@@ -387,6 +392,14 @@ impl SceneUniform {
             ],
             camera_right: right.extend(0.0).to_array(),
             camera_up: camera_up.extend(0.0).to_array(),
+            occlusion_min_strength: frame
+                .occlusion
+                .as_ref()
+                .map_or([0.0; 4], |field| field.min().extend(0.65).to_array()),
+            occlusion_cell: frame
+                .occlusion
+                .as_ref()
+                .map_or([1.0; 4], |field| field.cell_size().extend(0.0).to_array()),
         }
     }
 }
@@ -505,6 +518,9 @@ pub struct Renderer {
     shadow_pipeline: wgpu::RenderPipeline,
     particle_pipeline: wgpu::RenderPipeline,
     shadow: ShadowTargets,
+    occlusion_layout: wgpu::BindGroupLayout,
+    occlusion_bind: wgpu::BindGroup,
+    occlusion_field: Option<Arc<OcclusionField>>,
     particle_buf: wgpu::Buffer,
     scene_uniform_buf: wgpu::Buffer,
     scene_uniform_bind: wgpu::BindGroup,
@@ -808,10 +824,17 @@ impl Renderer {
 
         let shadow_layout = create_shadow_layout(&device);
         let shadow = create_shadow_targets(&device, &shadow_layout);
+        let occlusion_layout = create_occlusion_layout(&device);
+        let occlusion_bind = create_occlusion_bind(&device, &queue, &occlusion_layout, None);
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
-                bind_group_layouts: &[&scene_uniform_layout, &mesh_tex_layout, &shadow_layout],
+                bind_group_layouts: &[
+                    &scene_uniform_layout,
+                    &mesh_tex_layout,
+                    &shadow_layout,
+                    &occlusion_layout,
+                ],
                 push_constant_ranges: &[],
             });
         let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
@@ -909,6 +932,9 @@ impl Renderer {
             shadow_pipeline,
             particle_pipeline,
             shadow,
+            occlusion_layout,
+            occlusion_bind,
+            occlusion_field: None,
             particle_buf,
             scene_uniform_buf,
             scene_uniform_bind,
@@ -1012,6 +1038,23 @@ impl Renderer {
             || self.last_scene_at.elapsed().as_secs_f32() >= 1.0 / self.scene_hz_cap;
         #[cfg(target_arch = "wasm32")]
         let scene_pass_due = true;
+
+        // The immutable Arc identity is the upload key; normal frames never rebake
+        // or upload. Reset to a tiny neutral texture when leaving the map.
+        let same_occlusion = match (&self.occlusion_field, &frame.occlusion) {
+            (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if scene_pass_due && !same_occlusion {
+            self.occlusion_bind = create_occlusion_bind(
+                &self.device,
+                &self.queue,
+                &self.occlusion_layout,
+                frame.occlusion.as_deref(),
+            );
+            self.occlusion_field.clone_from(&frame.occlusion);
+        }
 
         let surface_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
@@ -1175,6 +1218,7 @@ impl Renderer {
                     pass.set_pipeline(&self.scene_pipeline);
                     pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
                     pass.set_bind_group(2, &self.shadow.bind, &[]);
+                    pass.set_bind_group(3, &self.occlusion_bind, &[]);
                     pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                     for (mi, range) in &ranges {
                         let mesh = &self.meshes[*mi];
@@ -1396,6 +1440,100 @@ fn particle_instances(frame: &Frame, uniform: &SceneUniform) -> Vec<ParticleRaw>
             opacity: particle.opacity.clamp(0.0, 1.0),
         })
         .collect()
+}
+
+fn create_occlusion_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let volume = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+        count: None,
+    };
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("static indirect visibility layout"),
+        entries: &[
+            volume(0),
+            volume(1),
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+// Two core-WebGL2 RGBA8 volumes; no float filtering, mip chain or extra pass.
+fn create_occlusion_bind(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    field: Option<&OcclusionField>,
+) -> wgpu::BindGroup {
+    let [width, height, depth_or_array_layers] = field.map_or([1; 3], OcclusionField::dimensions);
+    let make = |label, data: &[u8]| {
+        device
+            .create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D3,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                data,
+            )
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    };
+    let a = make(
+        "indirect visibility XY",
+        field.map_or(&[255; 4], OcclusionField::texture_a),
+    );
+    let b = make(
+        "indirect visibility Z",
+        field.map_or(&[255; 4], OcclusionField::texture_b),
+    );
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("indirect visibility trilinear sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("static indirect visibility"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&a),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&b),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    })
 }
 
 fn create_shadow_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -2168,7 +2306,7 @@ mod tests {
 
     #[test]
     fn scene_uniform_keeps_fog_offsets_and_packs_environment_in_vec4s() {
-        assert_eq!(SceneUniform::SIZE, 336, "three mat4 + nine vec4");
+        assert_eq!(SceneUniform::SIZE, 368, "three mat4 + eleven vec4");
         let frame = Frame {
             fog: Fog {
                 color: [0.1, 0.2, 0.3],
@@ -2179,9 +2317,11 @@ mod tests {
         let u = SceneUniform::new(&frame, 1.0);
         assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
         let bytes = bytemuck::bytes_of(&u);
-        assert_eq!(bytes.len(), 336);
+        assert_eq!(bytes.len(), 368);
         assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
         assert_eq!(&bytes[76..80], &0.4f32.to_le_bytes());
+        assert_eq!(&bytes[336..352], bytemuck::bytes_of(&[0.0_f32; 4]));
+        assert_eq!(&bytes[352..368], bytemuck::bytes_of(&[1.0_f32; 4]));
     }
 
     #[test]

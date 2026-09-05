@@ -12,12 +12,17 @@ struct SceneUniform {
     wind_time: vec4<f32>,     // xy wind, z visual time, w shadow extent
     camera_right: vec4<f32>,
     camera_up: vec4<f32>,
+    occlusion_min_strength: vec4<f32>,
+    occlusion_cell: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> scene: SceneUniform;
 @group(1) @binding(0) var mesh_tex: texture_2d<f32>;
 @group(1) @binding(1) var mesh_samp: sampler;
 // textureLoad avoids optional float filtering and depth-sampler differences.
 @group(2) @binding(0) var shadow_tex: texture_2d<f32>;
+@group(3) @binding(0) var occlusion_xy: texture_3d<f32>;
+@group(3) @binding(1) var occlusion_z: texture_3d<f32>;
+@group(3) @binding(2) var occlusion_sampler: sampler;
 
 struct VsIn {
     @location(0) pos: vec3<f32>,
@@ -192,6 +197,30 @@ fn surface_sky(albedo: vec3<f32>, n: vec3<f32>, view: vec3<f32>,
     return blurred * fresnel;
 }
 
+// Directional accessibility baked from nearby static cover, not a replacement
+// for direct-sun shadows. Shift one projected cell outside the receiver so
+// interpolation cannot blend its own occupied lattice nodes onto a flat face.
+fn indirect_visibility(world: vec3<f32>, n: vec3<f32>) -> f32 {
+    let cell = scene.occlusion_cell.xyz;
+    let dimensions = vec3<f32>(textureDimensions(occlusion_xy));
+    let minimum = scene.occlusion_min_strength.xyz;
+    let maximum = minimum + cell * (dimensions - vec3<f32>(1.0));
+    let position = world + n * (dot(abs(n), cell) + 0.06);
+    if any(position < minimum) || any(position > maximum) {
+        return 1.0;
+    }
+    let uv = ((position - minimum) / cell + vec3<f32>(0.5)) / dimensions;
+    let xy = textureSampleLevel(occlusion_xy, occlusion_sampler, uv, 0.0);
+    let z = textureSampleLevel(occlusion_z, occlusion_sampler, uv, 0.0);
+    let axes = vec3<f32>(select(xy.y, xy.x, n.x >= 0.0),
+        select(xy.w, xy.z, n.y >= 0.0), select(z.y, z.x, n.z >= 0.0));
+    let accessibility = dot(axes, n * n);
+    // Fade all volume boundaries to neutral instead of drawing a visible box.
+    let edge = min(position - minimum, maximum - position) / cell;
+    let fade = smoothstep(0.0, 2.0, min(edge.x, min(edge.y, edge.z)));
+    return mix(1.0, accessibility, scene.occlusion_min_strength.w * fade);
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let outdoors = scene.sun_direction.w > 0.5;
@@ -207,6 +236,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let fill_col = vec3<f32>(0.42, 0.50, 0.68);
     let albedo = textureSample(mesh_tex, mesh_samp, in.uv).rgb * in.color;
     let n = safe_normalize(in.normal);
+    var indirect = 1.0;
+    if outdoors && in.material.y > 0.5 && scene.occlusion_min_strength.w > 0.0 {
+        indirect = indirect_visibility(in.world, n);
+    }
     let ndotl = max(dot(n, sun_dir), 0.0);
     var hemi = mix(vec3<f32>(0.060, 0.055, 0.048), vec3<f32>(0.115, 0.135, 0.180), n.y * 0.5 + 0.5);
     var visibility = 1.0;
@@ -219,16 +252,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let half_vec = safe_normalize(sun_dir + vec3<f32>(0.0, 1.0, 0.0));
     let sheen = 0.18 * pow(max(dot(n, half_vec), 0.0), 8.0);
     let fill = fill_col * (0.55 * max(dot(n, fill_dir), 0.0));
-    var radiance = albedo * (hemi + fill + sun_col * (sun_intensity * ndotl + sheen) * visibility);
+    var radiance = albedo * ((hemi + fill) * indirect + sun_col * (sun_intensity * ndotl + sheen) * visibility);
     if outdoors && in.material.z >= 0.0 {
         let roughness = in.material.z;
         let metallic = in.material.w;
         let view = safe_normalize(scene.eye.xyz - in.world);
         let bounded_albedo = clamp(albedo, vec3<f32>(0.0), vec3<f32>(1.0));
-        radiance = bounded_albedo * (1.0 - metallic) * 0.96 * (hemi + fill)
+        radiance = bounded_albedo * (1.0 - metallic) * 0.96 * (hemi + fill) * indirect
             + surface_sun(bounded_albedo, n, view, sun_dir, roughness, metallic)
                 * sun_col * sun_intensity * visibility
-            + surface_sky(bounded_albedo, n, view, roughness, metallic);
+            + surface_sky(bounded_albedo, n, view, roughness, metallic) * indirect;
     }
     if outdoors && in.material.x > 0.5 && scene.sky_horizon.w > 0.001 {
         let view = safe_normalize(scene.eye.xyz - in.world);
@@ -240,7 +273,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let fresnel = 0.04 + 0.70 * pow(1.0 - max(dot(wet_normal, view), 0.0), 5.0);
         let reflectance = wetness * fresnel * smoothstep(-0.1, 0.12, reflected.y);
         radiance *= 1.0 - wetness * 0.20;
-        radiance = mix(radiance, sky_radiance(reflected), reflectance);
+        radiance = mix(radiance, sky_radiance(reflected) * indirect, reflectance);
         let specular_half = safe_normalize(sun_dir + view);
         radiance += sun_col * sun_intensity * wetness * visibility
             * pow(max(dot(wet_normal, specular_half), 0.0), 96.0) * 0.65;
