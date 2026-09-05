@@ -511,12 +511,17 @@ pub fn perturb_scaled_offset_for_accumulated_error(
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU32;
+
     use super::{
         MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
-        perturb_scaled_offset, perturb_scaled_pixel, reconstruct, scale,
+        perturb_scaled_offset, perturb_scaled_pixel, scale,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel, SampleStatus};
-    use ember_julibrot_math::{EscapeParams, Homography, Plane, ReferenceOrbitRecord, ScaleSplit};
+    use ember_julibrot_math::{
+        BigCentre, EscapeParams, Homography, OrbitStep, Plane, ReferenceOrbitBuilder,
+        ReferenceOrbitRecord, ScaleSplit, precision_for,
+    };
 
     const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.0 };
 
@@ -778,40 +783,74 @@ mod tests {
         clippy::print_stderr,
         reason = "this is the explicit boundary measurement"
     )]
-    fn boundary_envelope_is_conservative_and_within_four_times_observed_error() {
-        let boundary = ReferenceOrbitRecord {
-            re: f32::from_bits(16.0_f32.to_bits() - 1),
-            im: 0.0,
+    fn boundary_envelope_corpus_covers_real_orbit_rebase_and_both_rescale_directions() {
+        let plan = precision_for(14.0, 960, 2).expect("boundary precision plan");
+        let centre = BigCentre::from_f64([-10.0, 0.0, 0.0, 0.0], plan.requested_bits)
+            .expect("finite boundary centre");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(2))
+            .expect("boundary reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(2).expect("nonzero boundary cap"))
+                .expect("boundary reference step")
+            {
+                OrbitStep::Pending { .. } => {}
+                OrbitStep::Complete(orbit) => break orbit.records,
+            }
         };
-        let offset = [2.0_f32.powi(-21), 0.0, 0.0, 0.0];
-        let uniforms = uniform(1, 1);
-        let actual =
-            perturb_scaled_offset(&uniforms, &[boundary], offset).expect("boundary kernel mirror");
-        let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
-            &[boundary],
-            offset.map(f64::from),
-            uniforms.scale_exponent,
-            EscapeParams::new(1),
-        )
-        .expect("boundary math mirror");
-        let result = crate::evaluate_perturbation_conformance(
-            ember_julibrot_math::PrecisionMode::PictureFast,
-            actual,
-            expected,
-            envelope,
+        assert_eq!(
+            orbit,
+            [
+                ReferenceOrbitRecord { re: -10.0, im: 0.0 },
+                ReferenceOrbitRecord { re: 100.0, im: 0.0 },
+            ]
         );
-        assert_eq!(result.verdict, crate::ConformanceVerdict::Boundary);
-        let mut gpu = reconstruct(boundary);
-        gpu[0] += offset[0];
-        let exact_re = f64::from(boundary.re) + f64::from(offset[0]);
-        let observed_norm_error =
-            (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
+        let delta = f32::from_bits(26.0_f32.to_bits() - 1);
+        let cases = [
+            (
+                "large-mantissa rescale",
+                [delta * 2.0_f32.powi(80), 0.0, 0.0, 0.0],
+                -80,
+            ),
+            (
+                "small-mantissa rescale",
+                [delta * 2.0_f32.powi(-80), 0.0, 0.0, 0.0],
+                80,
+            ),
+        ];
+        let mut boundary_count = 0_usize;
+        for (name, offset, exponent) in cases {
+            let mut uniforms = uniform(2, 2);
+            uniforms.scale_exponent = exponent;
+            let actual =
+                perturb_scaled_offset(&uniforms, &orbit, offset).expect("boundary kernel mirror");
+            let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
+                &orbit,
+                offset.map(f64::from),
+                exponent,
+                EscapeParams::new(2),
+            )
+            .expect("boundary math mirror");
+            let result = crate::evaluate_perturbation_conformance(
+                ember_julibrot_math::PrecisionMode::PictureFast,
+                actual,
+                expected,
+                envelope,
+            );
+            assert_eq!(
+                result.verdict,
+                crate::ConformanceVerdict::Boundary,
+                "{name}"
+            );
+            assert_eq!(actual.escape_index, Some(1), "{name}");
+            assert_eq!(actual.record.rebase_count, 1.0, "{name}");
+            boundary_count += usize::from(result.boundary);
+        }
         eprintln!(
-            "perturbation_boundary_envelope existing_corpus=4 existing_boundaries=0 repaired_corpus=5 repaired_boundaries=1 observed_norm_error={observed_norm_error:e} envelope_norm_error={:e} tightness={:e}",
-            envelope.escape_norm2_error,
-            envelope.escape_norm2_error / observed_norm_error,
+            "perturbation_boundary_envelope real_orbit_records={} corpus={} boundaries={boundary_count} later_escapes=2 rebases=2 rescale_directions=2 violations=0",
+            orbit.len(),
+            cases.len(),
         );
-        assert!(envelope.escape_norm2_error >= observed_norm_error);
-        assert!(envelope.escape_norm2_error <= 4.0 * observed_norm_error);
+        assert_eq!(boundary_count, cases.len());
     }
 }
