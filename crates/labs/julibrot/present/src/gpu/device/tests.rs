@@ -6,6 +6,7 @@ use super::census::{census_if_ready, observe_fence, take_glitch_readback_result}
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
+use super::ledger::LatticeRefusal;
 use crate::{PresentFacts, SubmissionKind, SubmissionMeasurement};
 
 #[test]
@@ -1072,4 +1073,228 @@ fn a_plan_states_the_lattice_pair_it_maps_between_whatever_its_kind() {
              the pose lattice alone and ignores the extent the picture was delivered at"
         );
     }
+}
+
+/// The extent pairings the refinement ladder and the surface actually produce.
+///
+/// `960x540` is the surface, and the `PictureFast` divisors take it down the ladder: 2 gives
+/// 480x270, 4 gives 240x135, 8 gives 120x68. `1920x1080` is a device-pixel-ratio-2 surface, and
+/// `121x68` is there because a reduced extent rounds up per axis and an odd width is what the
+/// rounding produces; every pairing is checked in both directions because a hold from a coarse
+/// picture onto a fine lattice and a hold from a fine picture onto a coarse one are different
+/// arithmetic with the same wrongness available at each end.
+const LADDER_EXTENTS: [[u32; 2]; 6] = [
+    [960, 540],
+    [480, 270],
+    [240, 135],
+    [120, 68],
+    [1_920, 1_080],
+    [121, 68],
+];
+
+/// Every ordered pair of ladder extents, the equal ones included.
+fn ladder_pairs() -> impl Iterator<Item = ([u32; 2], [u32; 2])> {
+    LADDER_EXTENTS
+        .into_iter()
+        .flat_map(|source| LADDER_EXTENTS.map(move |destination| (source, destination)))
+}
+
+/// A pose on a named lattice, otherwise the binding fixture.
+fn pose_on(extent: [u32; 2]) -> Pose {
+    let mut pose = binding_pose();
+    pose.grid_width = extent[0];
+    pose.grid_height = extent[1];
+    pose
+}
+
+/// A completed picture delivered at `source_extent` whose pose sits on `pose_extent`.
+fn frame_on(scene_id: u64, source_extent: [u32; 2], pose_extent: [u32; 2]) -> crate::SceneFrame {
+    let mut frame = frame_at_extent(scene_id, source_extent);
+    frame.pose = pose_on(pose_extent);
+    frame
+}
+
+/// Every plan kind that samples a source covers its destination, on every ladder pairing.
+///
+/// The four kinds reach the fragment by four different routes — the planner's self-identity, the
+/// planner's solved reprojection, the hold policy, and the redraw refusal's fallback hold — and
+/// before the seam only the third of them knew that two extents exist. The table is the check
+/// that the seam is the one place the question is answered: for each pairing the plan's own
+/// lattice is asked whether the four destination corners and the centre land inside the source
+/// picture, which is the same arithmetic the fragment does before it decides to sample or to
+/// paint clear.
+#[test]
+fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
+    for (source_extent, destination_extent) in ladder_pairs() {
+        let to_pose = pose_on(destination_extent);
+        let frame = frame_on(71, source_extent, destination_extent);
+
+        let exact = crate::Warp::reproject(
+            &frame,
+            &frame.pose,
+            &to_pose,
+            PrecisionMode::PictureFast,
+            crate::WarpValidation::Ordinary,
+        );
+        assert_eq!(
+            exact.kind,
+            WarpKind::AnchorHomography,
+            "the self plan on {source_extent:?} to {destination_extent:?} is not the identity kind"
+        );
+        let lattice = exact.lattice.expect("a sampling plan names its lattice pair");
+        assert_eq!(lattice.source(), source_extent);
+        assert_eq!(lattice.destination(), destination_extent);
+        assert!(
+            lattice.covers_destination(exact.rows),
+            "the self plan on {source_extent:?} to {destination_extent:?} leaves the source"
+        );
+
+        let mut moved = to_pose;
+        moved.centre_from_reference_px = [3.0, -2.0];
+        let reprojected = crate::Warp::reproject(
+            &frame,
+            &frame.pose,
+            &moved,
+            PrecisionMode::PictureFast,
+            crate::WarpValidation::Ordinary,
+        );
+        assert_eq!(
+            reprojected.kind,
+            WarpKind::AnchorHomography,
+            "the pan plan on {source_extent:?} to {destination_extent:?} is not an anchor plan"
+        );
+        let panned = reprojected
+            .lattice
+            .expect("a sampling plan names its lattice pair");
+        assert_eq!(panned.source(), source_extent);
+        assert_eq!(panned.destination(), destination_extent);
+        // A pan moves ground off the source on purpose, so the plan declares exposure and the
+        // coverage question is not asked of it. What must hold either way is that the centre of
+        // the destination, which the pan moved by three pixels of a lattice hundreds wide, still
+        // reads near the centre of the source picture rather than at some multiple of the extent
+        // ratio away from it.
+        assert!(reprojected.exposed);
+        let centre = panned
+            .source_uv(reprojected.rows, [0.0, 0.0])
+            .expect("the destination centre is in front of the source");
+        assert!(
+            centre.iter().all(|value| (0.4..=0.6).contains(value)),
+            "a three-pixel pan on {source_extent:?} to {destination_extent:?} reads {centre:?}"
+        );
+
+        let held = apply_hold_policy(
+            clear_warp_plan(false, true),
+            Some(&frame),
+            true,
+            destination_extent,
+        );
+        assert_eq!(held.kind, WarpKind::HoldStale);
+        let hold_lattice = held.lattice.expect("a hold names its lattice pair");
+        assert_eq!(hold_lattice.source(), source_extent);
+        assert_eq!(hold_lattice.destination(), destination_extent);
+        assert!(
+            hold_lattice.covers_destination(held.rows),
+            "the hold on {source_extent:?} to {destination_extent:?} leaves the source"
+        );
+
+        for plan in [exact, reprojected, held] {
+            assert_eq!(
+                enforce_lattice(plan, destination_extent).1,
+                None,
+                "a plan that states its pair is refused on {source_extent:?} to \
+                 {destination_extent:?}"
+            );
+        }
+    }
+}
+
+/// A clear plan samples nothing, so it names no pair and the invariant has nothing to ask it.
+#[test]
+fn a_clear_plan_names_no_lattice_pair_and_is_never_refused_for_one() {
+    for (_, destination_extent) in ladder_pairs() {
+        let plan = clear_warp_plan(false, true);
+        assert_eq!(plan.lattice, None);
+        assert_eq!(enforce_lattice(plan, destination_extent).1, None);
+        let edge_on = clear_warp_plan(true, false);
+        assert_eq!(edge_on.lattice, None);
+        assert_eq!(enforce_lattice(edge_on, destination_extent).1, None);
+    }
+}
+
+/// The three refusals: an unstated pair, a pair naming another destination, corners off the source.
+///
+/// Each becomes an honest clear with a published reason. Clearing restarts the refinement ladder,
+/// which is a real cost, but it asserts nothing about geometry; a picture at a scale the geometry
+/// does not have asserts geometry that does not exist, and under the rendering rule a moving frame
+/// may be very inaccurate but never wrong.
+#[test]
+fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() {
+    let destination_extent = [960, 540];
+    let source_extent = [120, 68];
+    let frame = frame_on(72, source_extent, destination_extent);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+
+    let unstated = crate::WarpPlan {
+        lattice: None,
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(unstated, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert!(!refused.source_valid);
+    assert!(refused.exposed, "a refusal is ground the next scene must fill");
+    assert_eq!(reason.map(LatticeRefusal::as_str), Some("plan named no lattice pair"));
+
+    let elsewhere = crate::WarpPlan {
+        lattice: crate::LatticePair::new(source_extent, [480, 270]),
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(elsewhere, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan named another destination lattice")
+    );
+
+    // The morph thumbnail itself, constructed as a plan rather than reached through a path: the
+    // pair is named and correct, and the rows are the identity that ignores it.
+    let thumbnail = crate::WarpPlan {
+        rows: crate::identity_warp_rows(),
+        ..held
+    };
+    let (refused, reason) = enforce_lattice(thumbnail, destination_extent);
+    assert_eq!(refused.kind, WarpKind::ClearOnly);
+    assert_eq!(
+        reason.map(LatticeRefusal::as_str),
+        Some("plan maps the destination outside the source")
+    );
+
+    // The same rows with exposure declared are a different claim and are not refused: the plan is
+    // telling the exposure machinery that part of the destination has no source.
+    let declared = crate::WarpPlan {
+        rows: crate::identity_warp_rows(),
+        exposed: true,
+        ..held
+    };
+    assert_eq!(enforce_lattice(declared, destination_extent).1, None);
+}
+
+/// A hold whose scale cannot be stated stays a clear plan rather than placing the picture.
+#[test]
+fn a_zero_source_extent_refuses_the_hold_before_any_rows_exist() {
+    let mut degenerate = frame_on(73, [120, 68], [960, 540]);
+    degenerate.extent = [120, 0];
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&degenerate),
+        true,
+        [960, 540],
+    );
+    assert_eq!(plan.kind, WarpKind::ClearOnly);
+    assert_eq!(plan.lattice, None);
+    assert!(!plan.source_valid);
 }
