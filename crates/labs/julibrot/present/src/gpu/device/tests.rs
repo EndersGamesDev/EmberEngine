@@ -404,7 +404,12 @@ fn auto_refusal_still_clears_and_manual_bounded_warp_stays_accepted() {
 
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(
-        &apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true, BINDING_EXTENT),
+        &apply_hold_policy(
+            clear_warp_plan(false, true),
+            ledger.retained(),
+            true,
+            BINDING_EXTENT,
+        ),
         Some(0.0),
     );
     assert_eq!(facts.warp_kind, WarpKind::HoldStale);
@@ -929,7 +934,13 @@ fn a_held_reduced_extent_picture_fills_the_destination_rather_than_a_centred_thu
     );
     assert_eq!(plan.kind, WarpKind::HoldStale);
     assert!(plan.source_valid);
-    for chart in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0], [0.0, 0.0]] {
+    for chart in [
+        [-1.0, -1.0],
+        [1.0, -1.0],
+        [-1.0, 1.0],
+        [1.0, 1.0],
+        [0.0, 0.0],
+    ] {
         let uv = warp_source_uv(plan.rows, destination_extent, source_extent, chart)
             .expect("a hold keeps every destination point in front of the source");
         assert!(

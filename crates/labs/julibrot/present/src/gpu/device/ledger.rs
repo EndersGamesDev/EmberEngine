@@ -148,9 +148,8 @@ pub(super) fn hold_rows(
         f64::from(source_extent[0]) / f64::from(destination_extent[0]),
         f64::from(source_extent[1]) / f64::from(destination_extent[1]),
     ];
-    let rows = crate::pack_homography_rows([
-        scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0,
-    ])?;
+    let rows =
+        crate::pack_homography_rows([scale[0], 0.0, 0.0, 0.0, scale[1], 0.0, 0.0, 0.0, 1.0])?;
     (rows[0][0] > 0.0 && rows[1][1] > 0.0).then_some(rows)
 }
 
