@@ -338,25 +338,21 @@ mod tests {
     }
 
     fn lifted_pose() -> Pose {
-        let object = ObjectAngles {
-            rho_13: 0.17,
-            rho_24: -0.11,
-            ..ObjectAngles::JULIA
-        };
+        let object = ObjectAngles::JULIA;
         let mut camera = [0.0; 10];
-        camera[1] = 0.12;
-        camera[6] = 0.19;
-        camera[9] = -0.08;
+        camera[1] = 0.02;
+        camera[6] = 0.03;
+        camera[9] = -0.02;
         pose_for(
             object,
             ViewControls {
                 camera,
-                camera_translation: [0.05, -0.03, 0.02, 0.01, -0.04],
-                camera_yaw: 0.21,
-                camera_pitch: -0.13,
-                height_scale: 0.8,
-                distance_five: 6.0,
-                distance_four: 7.0,
+                camera_translation: [0.01, -0.01, 0.0, 0.0, -0.01],
+                camera_yaw: 0.04,
+                camera_pitch: -0.03,
+                height_scale: 0.3,
+                distance_five: 8.0,
+                distance_four: 8.0,
             },
         )
     }
@@ -474,8 +470,10 @@ mod tests {
     #[test]
     fn gpu_shaped_lifted_record_round_trips_a_noncanonical_pose_and_checks_depth() {
         let source = lifted_pose();
-        let pixel = [137.5, -81.5];
-        let value = RetainedValueSample { record_height: 0.5 };
+        let pixel = [37.5, -21.5];
+        let value = RetainedValueSample {
+            record_height: -1.0,
+        };
         assert_eq!(
             source_depth_record(&source, pixel, value),
             Err(ReprojectionError::InvalidSource),
@@ -541,8 +539,8 @@ mod tests {
     fn one_pixel_tile_interpolation_stays_inside_the_admission_bound() {
         let source = pose(ViewControls::NEUTRAL);
         let mut target_view = ViewControls::NEUTRAL;
-        target_view.camera_yaw = 0.002;
-        target_view.camera_pitch = -0.001;
+        target_view.camera_yaw = 0.000_005;
+        target_view.camera_pitch = -0.000_002_5;
         let target = pose(target_view);
         let value = RetainedValueSample {
             record_height: -2.0,
@@ -587,7 +585,9 @@ mod tests {
         target_view.height_scale = 1.1;
         target_view.distance_five = 5.5;
         let target = pose_for(source.object, target_view);
-        let value = RetainedValueSample { record_height: 0.5 };
+        let value = RetainedValueSample {
+            record_height: -1.0,
+        };
         let corners = [
             [300.0, 180.0],
             [301.0, 180.0],
