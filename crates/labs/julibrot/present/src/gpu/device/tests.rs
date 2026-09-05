@@ -1114,92 +1114,146 @@ fn frame_on(scene_id: u64, source_extent: [u32; 2], pose_extent: [u32; 2]) -> cr
     frame
 }
 
+/// Reprojects `frame` onto `to_pose` the way the presenter does, with no validation demand.
+fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan {
+    crate::Warp::reproject(
+        frame,
+        &frame.pose,
+        to_pose,
+        PrecisionMode::PictureFast,
+        crate::WarpValidation::Ordinary,
+    )
+}
+
+/// Asserts a plan names exactly this pairing and returns the pair it named.
+fn named_pair(
+    plan: &crate::WarpPlan,
+    source_extent: [u32; 2],
+    destination_extent: [u32; 2],
+    route: &str,
+) -> crate::LatticePair {
+    let lattice = plan
+        .lattice
+        .unwrap_or_else(|| panic!("the {route} plan names no lattice pair"));
+    assert_eq!(
+        [lattice.source(), lattice.destination()],
+        [source_extent, destination_extent],
+        "the {route} plan on {source_extent:?} to {destination_extent:?} names another pairing"
+    );
+    lattice
+}
+
+/// The retained scene at its own pose: identity in the picture, not in pixels.
+fn self_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let plan = reproject_onto(&frame, &pose_on(destination_extent));
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.source_valid);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "self");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the self plan on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    plan
+}
+
+/// A pan moves ground off the source on purpose, so it declares exposure instead of coverage.
+///
+/// What must hold either way is that the centre of the destination, moved by three pixels of a
+/// lattice hundreds wide, still reads near the centre of the source picture rather than at some
+/// multiple of the extent ratio away from it.
+fn pan_plan_declares_exposure(
+    source_extent: [u32; 2],
+    destination_extent: [u32; 2],
+) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let mut moved = pose_on(destination_extent);
+    moved.centre_from_reference_px = [3.0, -2.0];
+    let plan = reproject_onto(&frame, &moved);
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.exposed);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "pan");
+    let centre = lattice
+        .source_uv(plan.rows, [0.0, 0.0])
+        .expect("the destination centre is in front of the source");
+    assert!(
+        centre.iter().all(|value| (0.4..=0.6).contains(value)),
+        "a three-pixel pan on {source_extent:?} to {destination_extent:?} reads {centre:?}"
+    );
+    plan
+}
+
+/// One zoom step in shows half the chart, whose corners land a quarter in from the source corners.
+///
+/// This is the reprojection the delivery composition exists for, and the one that asks the
+/// coverage question of a solved map rather than of a covering one: nothing is exposed, so the
+/// corner position is checkable. Without the composition the solved map's output stays in the
+/// source pose's pixels while the fragment divides by the source texture's extent, and on the
+/// 120x68-into-960x540 pairing the corner that should read a quarter out reads twice the picture
+/// out instead.
+fn zoom_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let mut closer = pose_on(destination_extent);
+    closer.zoom_log2 = 1.0;
+    let plan = reproject_onto(&frame, &closer);
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(
+        !plan.exposed,
+        "a zoom into the middle of the source exposes nothing on {source_extent:?} to \
+         {destination_extent:?}"
+    );
+    let lattice = named_pair(&plan, source_extent, destination_extent, "zoom");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the zoom plan on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    let corner = lattice
+        .source_uv(plan.rows, [1.0, 1.0])
+        .expect("the destination corner is in front of the source");
+    assert!(
+        (corner[0] - 0.75).abs() < 1.0e-3 && (corner[1] - 0.25).abs() < 1.0e-3,
+        "one zoom step on {source_extent:?} to {destination_extent:?} reads {corner:?} rather \
+         than a quarter in from the source corner"
+    );
+    plan
+}
+
+/// The hold shows the last completed picture unchanged on the lattice it is presented on.
+fn hold_plan_covers(source_extent: [u32; 2], destination_extent: [u32; 2]) -> crate::WarpPlan {
+    let frame = frame_on(71, source_extent, destination_extent);
+    let plan = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    let lattice = named_pair(&plan, source_extent, destination_extent, "hold");
+    assert!(
+        lattice.covers_destination(plan.rows),
+        "the hold on {source_extent:?} to {destination_extent:?} leaves the source"
+    );
+    plan
+}
+
 /// Every plan kind that samples a source covers its destination, on every ladder pairing.
 ///
-/// The four kinds reach the fragment by four different routes — the planner's self-identity, the
-/// planner's solved reprojection, the hold policy, and the redraw refusal's fallback hold — and
-/// before the seam only the third of them knew that two extents exist. The table is the check
-/// that the seam is the one place the question is answered: for each pairing the plan's own
-/// lattice is asked whether the four destination corners and the centre land inside the source
-/// picture, which is the same arithmetic the fragment does before it decides to sample or to
-/// paint clear.
+/// The four sampling routes reach the fragment differently — the planner's self-identity, its
+/// solved reprojection under a pan and under a zoom, and the hold policy — and before the seam
+/// only the last of them knew that two extents exist. The table is the check that the seam is the
+/// one place the question is answered: for each pairing the plan's own lattice is asked whether
+/// the four destination corners and the centre land inside the source picture, which is the same
+/// arithmetic the fragment does before it decides to sample or to paint clear.
 #[test]
 fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
     for (source_extent, destination_extent) in ladder_pairs() {
-        let to_pose = pose_on(destination_extent);
-        let frame = frame_on(71, source_extent, destination_extent);
-
-        let exact = crate::Warp::reproject(
-            &frame,
-            &frame.pose,
-            &to_pose,
-            PrecisionMode::PictureFast,
-            crate::WarpValidation::Ordinary,
-        );
-        assert_eq!(
-            exact.kind,
-            WarpKind::AnchorHomography,
-            "the self plan on {source_extent:?} to {destination_extent:?} is not the identity kind"
-        );
-        let lattice = exact
-            .lattice
-            .expect("a sampling plan names its lattice pair");
-        assert_eq!(lattice.source(), source_extent);
-        assert_eq!(lattice.destination(), destination_extent);
-        assert!(
-            lattice.covers_destination(exact.rows),
-            "the self plan on {source_extent:?} to {destination_extent:?} leaves the source"
-        );
-
-        let mut moved = to_pose;
-        moved.centre_from_reference_px = [3.0, -2.0];
-        let reprojected = crate::Warp::reproject(
-            &frame,
-            &frame.pose,
-            &moved,
-            PrecisionMode::PictureFast,
-            crate::WarpValidation::Ordinary,
-        );
-        assert_eq!(
-            reprojected.kind,
-            WarpKind::AnchorHomography,
-            "the pan plan on {source_extent:?} to {destination_extent:?} is not an anchor plan"
-        );
-        let panned = reprojected
-            .lattice
-            .expect("a sampling plan names its lattice pair");
-        assert_eq!(panned.source(), source_extent);
-        assert_eq!(panned.destination(), destination_extent);
-        // A pan moves ground off the source on purpose, so the plan declares exposure and the
-        // coverage question is not asked of it. What must hold either way is that the centre of
-        // the destination, which the pan moved by three pixels of a lattice hundreds wide, still
-        // reads near the centre of the source picture rather than at some multiple of the extent
-        // ratio away from it.
-        assert!(reprojected.exposed);
-        let centre = panned
-            .source_uv(reprojected.rows, [0.0, 0.0])
-            .expect("the destination centre is in front of the source");
-        assert!(
-            centre.iter().all(|value| (0.4..=0.6).contains(value)),
-            "a three-pixel pan on {source_extent:?} to {destination_extent:?} reads {centre:?}"
-        );
-
-        let held = apply_hold_policy(
-            clear_warp_plan(false, true),
-            Some(&frame),
-            true,
-            destination_extent,
-        );
-        assert_eq!(held.kind, WarpKind::HoldStale);
-        let hold_lattice = held.lattice.expect("a hold names its lattice pair");
-        assert_eq!(hold_lattice.source(), source_extent);
-        assert_eq!(hold_lattice.destination(), destination_extent);
-        assert!(
-            hold_lattice.covers_destination(held.rows),
-            "the hold on {source_extent:?} to {destination_extent:?} leaves the source"
-        );
-
-        for plan in [exact, reprojected, held] {
+        let plans = [
+            self_plan_covers(source_extent, destination_extent),
+            pan_plan_declares_exposure(source_extent, destination_extent),
+            zoom_plan_covers(source_extent, destination_extent),
+            hold_plan_covers(source_extent, destination_extent),
+        ];
+        for plan in plans {
             assert_eq!(
                 enforce_lattice(plan, destination_extent).1,
                 None,
