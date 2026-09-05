@@ -283,33 +283,69 @@ mod tests {
         assert_eq!(compose_homography(identity, solved), solved);
     }
 
-    /// A bounded pan that lands the frame edge exactly on the source edge still covers.
+    /// A pan inside the half source texel covers; one past it does not, on unequal pairings too.
     ///
     /// This is the pairing between the coverage check and the exposure test. The planner calls a
     /// warp unexposed while every destination sample stays inside the source's half-extent plus
     /// half a texel; a coverage check with a tighter slack would send exactly those plans to
     /// clear, which is the disocclusion the reach exists to prevent, read off the other side.
+    ///
+    /// The reach is half a texel of the *source*, because the fragment divides the mapped source
+    /// pixel by the source texture's extent and nothing else. On an equal pairing that is
+    /// indistinguishable from half a texel of the destination, so the equal rows alone pin the
+    /// number and not its units. The two unequal rows separate them by the ladder's factor of
+    /// eight: a quarter-pixel pan on the 120-wide source overshoots by 1/480 of the picture, which
+    /// is inside its own half texel of 1/240 and outside the destination's 1/1920; a two-pixel pan
+    /// on the 960-wide source overshoots by 1/480 again, which is outside its own half texel of
+    /// 1/1920 and inside the destination's 1/240. Normalising by the destination therefore turns
+    /// the first into a refusal and the second into a covering plan, and each row says so.
+    ///
+    /// The pans are a quarter texel and two texels rather than exactly a half, because a half is
+    /// the boundary itself and a boundary case pins the rounding of the comparison rather than the
+    /// rule.
     #[test]
     fn the_half_texel_reach_is_covered_rather_than_refused() {
-        for extent in [SURFACE, PICTURE_FAST] {
-            let pair = LatticePair::new(extent, extent).expect("a real lattice pair");
-            let mut rows = identity_warp_rows();
-            rows[0][2] = 0.5;
+        for (source, destination, pan_px, covers, note) in [
+            (SURFACE, SURFACE, 0.25, true, "inside its own half texel"),
+            (
+                SURFACE,
+                SURFACE,
+                2.0,
+                false,
+                "two texels past the source edge",
+            ),
+            (
+                PICTURE_FAST,
+                SURFACE,
+                0.25,
+                true,
+                "inside the coarse source's half texel, outside the fine destination's",
+            ),
+            (PICTURE_FAST, SURFACE, 2.0, false, "past both"),
+            (SURFACE, PICTURE_FAST, 0.25, true, "inside both"),
+            (
+                SURFACE,
+                PICTURE_FAST,
+                2.0,
+                false,
+                "outside the fine source's half texel, inside the coarse destination's",
+            ),
+        ] {
+            let pair = LatticePair::new(source, destination).expect("a real lattice pair");
+            let mut rows = pair.covering_rows().expect("a usable covering map");
+            rows[0][2] = pan_px;
             let corner = pair
                 .source_uv(rows, [1.0, 1.0])
                 .expect("the destination corner is in front of the source");
             assert!(
                 corner[0] > 1.0,
-                "the pan puts the corner past the source edge"
+                "the pan on {source:?} to {destination:?} does not reach past the source edge"
             );
-            assert!(
+            assert_eq!(
                 pair.covers_destination(rows),
-                "a half-texel pan on {extent:?} is refused where the exposure test calls it covering"
-            );
-            rows[0][2] = 2.0;
-            assert!(
-                !pair.covers_destination(rows),
-                "a two-pixel pan on {extent:?} reaches past the half texel and is not covering"
+                covers,
+                "a {pan_px}-pixel pan on {source:?} to {destination:?} is {note}, and the coverage \
+                 check disagrees"
             );
         }
     }

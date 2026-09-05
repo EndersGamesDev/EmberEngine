@@ -261,11 +261,14 @@ fn anchor_plan(
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let lattice = LatticePair::new(last_frame.extent, [to_pose.grid_width, to_pose.grid_height])?;
-    // The solve works in the source pose's own pixel lattice: its anchors are that pose's screen
-    // corners. The fragment divides by the source texture's extent instead, and the delivered
-    // extent of a scene is not its pose's grid — the refinement ladder reduces one and not the
-    // other. Composing the solved map with the delivery pair's covering map carries it into the
-    // pixels the fragment reads, and leaves it untouched when the two extents already agree.
+    // The solve's domain is already the destination pose's pixels — its anchors are the source
+    // pose's screen corners carried through the flat forward map — and only its codomain needs
+    // moving: it lands in the source pose's own pixel lattice, because the anchors it maps back to
+    // are that pose's uncarried corners. The fragment divides by the source texture's extent
+    // instead, and the delivered extent of a scene is not its pose's grid: the refinement ladder
+    // reduces one and not the other. Composing the solved map with the delivery pair's covering
+    // map carries the codomain into the pixels the fragment reads, and leaves the map untouched
+    // when the two extents already agree.
     let delivery = LatticePair::new(
         last_frame.extent,
         [from_pose.grid_width, from_pose.grid_height],
