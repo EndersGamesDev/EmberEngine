@@ -1298,3 +1298,118 @@ fn a_zero_source_extent_refuses_the_hold_before_any_rows_exist() {
     assert_eq!(plan.lattice, None);
     assert!(!plan.source_valid);
 }
+
+/// Every other path that draws against an extent either agrees by construction or is checked.
+///
+/// The warp fragment is not the only pass whose destination lattice can disagree with what it
+/// draws, so the same question is put to the three remaining ones. The answers differ in kind, and
+/// that difference is the point: two of them are structural, one is an explicit refusal, and none
+/// of them needs the plan seam.
+///
+/// The relief redraw draws the retained records as a mesh rather than sampling a texture, so it
+/// has no source uv and no scale to get wrong. What it can get wrong is the grid it indexes, and
+/// `relief_scene_uniform` refuses outright when the retained grid's dimensions are not the source
+/// frame's extent. The redraw writes that grid into the scene uniform itself, which is exactly why
+/// `write_warp_destination_extent` runs on the image-warp branch alone: writing the pose's grid
+/// over the redraw's would leave the mesh indexing a lattice it was not built for. The
+/// backdrop-first composition is the same shape, with `backdrop_scene_uniform` and
+/// `ensure_backdrop_indices` taking the extent from the one backdrop grid.
+///
+/// The edge-on plan's identity rows are the screen-to-plane map, not plan rows, and the fragment
+/// returns exterior sky on the edge-on flag before it reads either map. There is no lattice
+/// question because there is no sample.
+///
+/// The ledger's two-index rotation hands out the index the retained frame is not on, and the
+/// scene texture at that index is reallocated to the submitted extent before anything is drawn
+/// into it. A frame's recorded extent is therefore the extent of its own texture by construction:
+/// the index holding the retained picture is never passed to `ensure_scene_texture`.
+#[test]
+fn the_remaining_extent_paths_agree_by_construction_or_refuse() {
+    let redraw = include_str!("redraw.rs");
+    assert!(
+        redraw.contains("if [grid.width, grid.height] != source.extent {"),
+        "the relief redraw refuses a retained grid that is not the source frame's extent"
+    );
+    let warp = include_str!("warp.rs");
+    let relief_branch = warp
+        .find("if relief_redraw {")
+        .expect("the warp submission branches on the relief redraw");
+    let destination_write = warp
+        .find("self.write_warp_destination_extent(warp_destination_extent);")
+        .expect("the image warp states its destination lattice");
+    let image_branch = warp
+        .find("encode_image_warp(")
+        .expect("the warp submission encodes an image warp");
+    assert!(
+        relief_branch < destination_write && destination_write < image_branch,
+        "the destination lattice is written on the image-warp branch alone, so a relief redraw \
+         keeps the record grid it indexes its mesh from"
+    );
+
+    let shader = crate::warp_shader();
+    let edge_on = shader
+        .find("if (hot.flags.w != 0u)")
+        .expect("the fragment tests the edge-on flag");
+    let screen_map = shader
+        .find("hot.screen_to_plane_row_0.xyz")
+        .expect("the fragment reads the screen map");
+    let plan_rows = shader
+        .find("hot.homography_row_0.xyz")
+        .expect("the fragment reads the plan rows");
+    assert!(
+        edge_on < screen_map && edge_on < plan_rows,
+        "an edge-on payload returns sky before either map is read, so its identity screen rows \
+         are never a lattice claim"
+    );
+
+    let submit = include_str!("scene/submit.rs");
+    assert!(
+        submit.contains("self.ledger.begin(|texture_index| {")
+            && submit.contains("ensure_scene_texture(device, gpu, texture_index as usize, extent)?"),
+        "only the index the ledger hands out is reallocated, so the retained frame's recorded \
+         extent stays the extent of its own texture"
+    );
+
+    let mut ledger = SceneLedger::default();
+    let first = promote_binding_scene(&mut ledger, 81);
+    let second = promote_binding_scene(&mut ledger, 82);
+    assert_ne!(
+        first.texture_index, second.texture_index,
+        "consecutive scenes take different texture indices"
+    );
+    assert_eq!(
+        ledger
+            .available_texture_index()
+            .expect("no pending scene occupies the ledger"),
+        first.texture_index,
+        "the index handed out next is the one the retained picture is not on"
+    );
+}
+
+/// A captured frame's facts row says what scale the picture was presented at.
+#[test]
+fn the_facts_publish_both_lattices_of_the_plan_they_recorded() {
+    let mut facts = PresentFacts::default();
+    assert_eq!([facts.destination_width, facts.destination_height], [0, 0]);
+    assert_eq!([facts.warp_source_width, facts.warp_source_height], [0, 0]);
+    assert_eq!(facts.warp_lattice_refusal, None);
+
+    let destination_extent = [960, 540];
+    let frame = frame_on(83, [120, 68], destination_extent);
+    let held = apply_hold_policy(
+        clear_warp_plan(false, true),
+        Some(&frame),
+        true,
+        destination_extent,
+    );
+    facts.record_warp_plan(&held, Some(0.0));
+    assert_eq!([facts.warp_source_width, facts.warp_source_height], [120, 68]);
+    assert_eq!(facts.warp_kind, WarpKind::HoldStale);
+
+    facts.record_warp_plan(&clear_warp_plan(false, true), None);
+    assert_eq!(
+        [facts.warp_source_width, facts.warp_source_height],
+        [0, 0],
+        "a plan that samples nothing publishes no source extent"
+    );
+}
