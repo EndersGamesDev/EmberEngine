@@ -246,72 +246,6 @@ mod wasm_entry {
         static APP: RefCell<Option<App>> = const { RefCell::new(None) };
     }
 
-    const OBJECT_FIELDS: [&str; 6] = ["o12", "o13", "o14", "o23", "o24", "o34"];
-    const CAMERA_FIELDS: [&str; 10] = [
-        "q12", "q13", "q14", "q23", "q24", "q34", "q15", "q25", "q35", "q45",
-    ];
-    const TRANSLATION_FIELDS: [&str; 5] = ["t1", "t2", "t3", "t4", "t5"];
-
-    fn flatten_array(
-        row: &mut serde_json::Map<String, serde_json::Value>,
-        source: &str,
-        fields: &[&str],
-    ) -> Result<(), JsValue> {
-        let Some(serde_json::Value::Array(values)) = row.remove(source) else {
-            return Err(JsValue::from_str("saved row has no affine control array"));
-        };
-        if values.len() != fields.len() {
-            return Err(JsValue::from_str("saved row affine control count differs"));
-        }
-        for (field, value) in fields.iter().zip(values) {
-            row.insert((*field).to_string(), value);
-        }
-        Ok(())
-    }
-
-    fn expand_array(
-        row: &mut serde_json::Map<String, serde_json::Value>,
-        target: &str,
-        fields: &[&str],
-    ) -> Result<(), JsValue> {
-        let mut values = Vec::new();
-        values
-            .try_reserve_exact(fields.len())
-            .map_err(|_| JsValue::from_str("saved row affine controls do not fit"))?;
-        for field in fields {
-            values.push(
-                row.remove(*field)
-                    .ok_or_else(|| JsValue::from_str("saved row affine control is missing"))?,
-            );
-        }
-        row.insert(target.to_string(), serde_json::Value::Array(values));
-        Ok(())
-    }
-
-    fn page_saved_view_json(saved: &SavedView) -> Result<String, JsValue> {
-        let mut value =
-            serde_json::to_value(saved).map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let row = value
-            .as_object_mut()
-            .ok_or_else(|| JsValue::from_str("saved row is not a JSON object"))?;
-        flatten_array(row, "object", &OBJECT_FIELDS)?;
-        flatten_array(row, "camera", &CAMERA_FIELDS)?;
-        flatten_array(row, "camera_translation", &TRANSLATION_FIELDS)?;
-        serde_json::to_string(&value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    fn page_saved_view(json: &str) -> Result<SavedView, JsValue> {
-        let mut value: serde_json::Value =
-            serde_json::from_str(json).map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let row = value
-            .as_object_mut()
-            .ok_or_else(|| JsValue::from_str("saved row is not a JSON object"))?;
-        expand_array(row, "object", &OBJECT_FIELDS)?;
-        expand_array(row, "camera", &CAMERA_FIELDS)?;
-        expand_array(row, "camera_translation", &TRANSLATION_FIELDS)?;
-        serde_json::from_value(value).map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
     /// Returns the module ABI for loader and worker handshakes.
     #[wasm_bindgen]
     pub fn julibrot_abi_version() -> u32 {
@@ -622,37 +556,18 @@ mod wasm_entry {
     pub fn app_preset(id: u32) -> Result<String, JsValue> {
         let row = preset_row(id)
             .ok_or_else(|| JsValue::from_str("preset identifier is outside its range"))?;
-        Ok(serde_json::json!({
-            "name": row.name,
-            "o12": row.object_angles.rho_12,
-            "o13": row.object_angles.rho_13,
-            "o14": row.object_angles.rho_14,
-            "o23": row.object_angles.rho_23,
-            "o24": row.object_angles.rho_24,
-            "o34": row.object_angles.rho_34,
-            "origin": row.plane_origin,
-            "q12": row.view.camera[0],
-            "q13": row.view.camera[1],
-            "q14": row.view.camera[2],
-            "q23": row.view.camera[3],
-            "q24": row.view.camera[4],
-            "q34": row.view.camera[5],
-            "q15": row.view.camera[6],
-            "q25": row.view.camera[7],
-            "q35": row.view.camera[8],
-            "q45": row.view.camera[9],
-            "t1": row.view.camera_translation[0],
-            "t2": row.view.camera_translation[1],
-            "t3": row.view.camera_translation[2],
-            "t4": row.view.camera_translation[3],
-            "t5": row.view.camera_translation[4],
-            "camera_yaw": row.view.camera_yaw,
-            "camera_pitch": row.view.camera_pitch,
-            "height_scale": row.view.height_scale,
-            "distance_five": row.view.distance_five,
-            "distance_four": row.view.distance_four,
-        })
-        .to_string())
+        let saved = SavedView::from_preset(row).map_err(app_js_error)?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&saved.to_page_json().map_err(app_js_error)?)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        value
+            .as_object_mut()
+            .ok_or_else(|| JsValue::from_str("preset row is not a JSON object"))?
+            .insert(
+                "name".to_string(),
+                serde_json::Value::String(row.name.to_string()),
+            );
+        serde_json::to_string(&value).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     /// Returns the row the viewer is showing, in the form a view box stores.
@@ -660,7 +575,18 @@ mod wasm_entry {
     pub fn app_saved_view_json() -> Result<String, JsValue> {
         with_app(|app| {
             let saved = SavedView::capture(app.viewer()).map_err(app_js_error)?;
-            page_saved_view_json(&saved)
+            saved.to_page_json().map_err(app_js_error)
+        })
+    }
+
+    /// Applies every field of one saved or morphed row through one navigation transaction.
+    #[wasm_bindgen]
+    pub fn app_apply_saved_view(row_json: String) -> Result<(), JsValue> {
+        let row = SavedView::from_page_json(&row_json).map_err(app_js_error)?;
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .apply_saved_view(&row)
+                .map_err(app_js_error)
         })
     }
 
@@ -680,10 +606,10 @@ mod wasm_entry {
     /// Returns the row `t` of the way from one stored row to another.
     #[wasm_bindgen]
     pub fn app_morph_view(from_json: String, to_json: String, t: f64) -> Result<String, JsValue> {
-        let from = page_saved_view(&from_json)?;
-        let to = page_saved_view(&to_json)?;
+        let from = SavedView::from_page_json(&from_json).map_err(app_js_error)?;
+        let to = SavedView::from_page_json(&to_json).map_err(app_js_error)?;
         let morphed = SavedView::lerp(&from, &to, t).map_err(app_js_error)?;
-        page_saved_view_json(&morphed)
+        morphed.to_page_json().map_err(app_js_error)
     }
 
     fn with_view(edit: impl FnOnce(&mut ViewControls)) -> Result<(), JsValue> {
@@ -822,11 +748,12 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_clear_crosshair, app_crosshair_json, app_facts_json, app_morph_view, app_needs_refresh,
-    app_pan_px, app_preset, app_refresh, app_request_frame, app_request_measurement,
-    app_saved_view_json, app_set_camera, app_set_camera_angles, app_set_camera_translation,
-    app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap,
-    app_set_object_angles, app_set_palette, app_set_plane_angles, app_set_plane_origin,
-    app_set_precision_mode, app_set_scale, app_set_scene_mode, app_set_target, app_set_view_angles,
-    app_update_scene, app_zoom_box, julibrot_abi_version, start_julibrot,
+    app_apply_saved_view, app_clear_crosshair, app_crosshair_json, app_facts_json, app_morph_view,
+    app_needs_refresh, app_pan_px, app_preset, app_refresh, app_request_frame,
+    app_request_measurement, app_saved_view_json, app_set_camera, app_set_camera_angles,
+    app_set_camera_translation, app_set_centre, app_set_distances, app_set_height,
+    app_set_iteration_cap, app_set_object_angles, app_set_palette, app_set_plane_angles,
+    app_set_plane_origin, app_set_precision_mode, app_set_scale, app_set_scene_mode,
+    app_set_target, app_set_view_angles, app_update_scene, app_zoom_box, julibrot_abi_version,
+    start_julibrot,
 };

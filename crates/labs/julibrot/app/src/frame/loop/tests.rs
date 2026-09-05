@@ -13,6 +13,10 @@ use ember_julibrot_math::{
     precision_for, scale_split, screen_to_plane,
 };
 
+use super::super::schedule::{
+    PresentedTier, PromotionAction, SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
+    STATIC_SETTLE_WINDOW_MS, SettledPromotion,
+};
 use super::{
     BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
     REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
@@ -840,6 +844,148 @@ impl FakeClock {
     fn advance(&mut self, elapsed_ms: f64) {
         self.now_ms += elapsed_ms;
     }
+}
+
+/// Characterizes the capability-gated promotion state machine before browser-loop activation.
+#[test]
+fn settled_picture_fast_promotes_once_and_swaps_only_after_presentation() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    let revision = 7;
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    clock.advance(STATIC_SETTLE_WINDOW_MS - 1.0);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None
+    );
+    clock.advance(1.0);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        Some(PromotionAction::StartDeterministic {
+            requested_revision: revision
+        })
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::PictureFast),
+        PrecisionMode::Deterministic
+    );
+    assert!(promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(promotion.deterministic_submitted(41));
+    assert!(promotion.deterministic_completed(41));
+    assert!(promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(promotion.deterministic_presented(41));
+    assert!(!promotion.holds_fast_final());
+    assert_eq!(promotion.presented_tier(), PresentedTier::Deterministic);
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            revision,
+            PrecisionMode::PictureFast,
+            true,
+            true
+        ),
+        None,
+        "one unchanged view promotes only once"
+    );
+}
+
+/// Characterizes revision cancellation in the not-yet-wired promotion state machine.
+#[test]
+fn requested_change_cancels_promotion_and_rearms_the_fast_tier() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    assert_eq!(
+        promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true),
+        None
+    );
+    let _ = promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true);
+    clock.advance(STATIC_SETTLE_WINDOW_MS);
+    assert!(matches!(
+        promotion.observe(clock.now_ms, 11, PrecisionMode::PictureFast, true, true),
+        Some(PromotionAction::StartDeterministic { .. })
+    ));
+    assert!(promotion.deterministic_submitted(73));
+
+    clock.advance(1.0);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, false, true),
+        Some(PromotionAction::CancelDeterministic)
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::PictureFast),
+        PrecisionMode::PictureFast
+    );
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
+    assert!(!promotion.deterministic_completed(73));
+
+    let _ = promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, true, true);
+    clock.advance(STATIC_SETTLE_WINDOW_MS);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 12, PrecisionMode::PictureFast, true, true),
+        Some(PromotionAction::StartDeterministic {
+            requested_revision: 12
+        })
+    );
+}
+
+/// Characterizes explicit mode and proves the disabled flag has no scheduling effect.
+#[test]
+fn explicit_deterministic_mode_and_the_disabled_hook_do_not_promote() {
+    let mut promotion = SettledPromotion::default();
+    let mut clock = FakeClock::default();
+    clock.advance(STATIC_SETTLE_WINDOW_MS * 2.0);
+    assert_eq!(
+        promotion.observe(clock.now_ms, 1, PrecisionMode::Deterministic, true, true),
+        None
+    );
+    assert_eq!(
+        promotion.effective_precision_mode(PrecisionMode::Deterministic),
+        PrecisionMode::Deterministic
+    );
+    assert_eq!(
+        promotion.observe(
+            clock.now_ms,
+            2,
+            PrecisionMode::PictureFast,
+            true,
+            SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
+        ),
+        None
+    );
+    assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

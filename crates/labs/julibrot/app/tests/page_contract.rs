@@ -1,5 +1,7 @@
 //! Native source-contract checks for browser facts that need visible replay to observe.
 
+use ember_lab_julibrot::{SavedView, preset_row};
+
 const INDEX: &str = include_str!("../../../../../web/labs/julibrot/index.html");
 const MAIN: &str = include_str!("../../../../../web/labs/julibrot/main.js");
 const STYLE: &str = include_str!("../../../../../web/labs/julibrot/style.css");
@@ -368,10 +370,10 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "unpaired number box"
     );
     assert!(MAIN.contains("SET(id, NUMBER(`"), "unpaired origin slider");
-    // A row writes the elements and then takes the same handlers a user's movement takes. The
-    // built-in rows are read from the app until it runs out of them, so the page never names one.
+    // A row writes the elements and crosses the app boundary as one transaction. The built-in
+    // rows are read from the app until it runs out of them, so the page never names one.
     assert!(MAIN.contains("row = JSON.parse(api.app_preset(id));"));
-    assert!(MAIN.contains("for (const apply of Object.values(APPLY)) apply();"));
+    assert!(MAIN.contains("api.app_apply_saved_view(JSON.stringify(row));"));
     // Every field of a row reaches its control by name, so a row that grows a field reaches a
     // slider named after it with no edit to the loader. This is the whole of the mapping.
     assert!(
@@ -381,15 +383,29 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
+    let preset =
+        SavedView::from_preset(preset_row(0).expect("first preset")).expect("serializable preset");
+    let preset_text = preset.to_page_json().expect("flat page JSON");
+    let preset_json: serde_json::Value = serde_json::from_str(&preset_text).expect("JSON object");
     for field in [
         "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24", "q34", "q15",
         "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
     ] {
         assert!(
-            LIB.contains(&format!(r#""{field}":"#)),
+            preset_json.get(field).is_some(),
             "row JSON omits affine field {field}"
         );
     }
+    for aggregate in ["object", "camera", "camera_translation"] {
+        assert!(
+            preset_json.get(aggregate).is_none(),
+            "page JSON retained aggregate field {aggregate}"
+        );
+    }
+    assert_eq!(
+        SavedView::from_page_json(&preset_text).expect("page JSON round trip"),
+        preset
+    );
     assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
@@ -472,6 +488,7 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
         "pub fn app_zoom_box(",
         "pub fn app_clear_crosshair(",
         "pub fn app_saved_view_json(",
+        "pub fn app_apply_saved_view(",
         "pub fn app_set_centre(",
         "pub fn app_morph_view(",
         "pub fn app_set_precision_mode(",
@@ -618,7 +635,7 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(INDEX.contains(
         "id=\"morph\" type=\"range\" min=\"0\" max=\"1\" value=\"0\" step=\"any\" disabled"
     ));
-    // Loading and morphing both go through one row applier, which ends on the shared handlers.
+    // Loading and morphing both go through one row applier and one atomic app boundary.
     assert_eq!(MAIN.matches("const applyRow = row => {").count(), 1);
     // A morphed row carries the endpoints' precision: the working precision the arithmetic needs
     // is refused downstream, where a centre and its reference must agree bit for bit.
@@ -626,12 +643,14 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(
         SAVED.contains("let precision_bits = first.precision_bits.max(second.precision_bits);")
     );
-    // One applier, reached by a preset row, a saved row, a load and a morph alike.
+    // One applier, reached by a preset row, a saved row, a load and a morph alike. The page no
+    // longer replays nine independent setters and then the centre.
     assert_eq!(
-        MAIN.matches("for (const apply of Object.values(APPLY)) apply();")
+        MAIN.matches("api.app_apply_saved_view(JSON.stringify(row));")
             .count(),
         1
     );
+    assert!(!MAIN.contains("for (const apply of Object.values(APPLY)) apply();"));
     // Both sides list the same rows, a save needs a name, a taken name is refused, and only a
     // saved row can be deleted — the built-in rows come from the app and are never removable.
     assert!(MAIN.contains("const rowEntries = () => BUILT_IN.concat("));
@@ -640,7 +659,7 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(MAIN.contains(r#"say(box, "a built-in row cannot be deleted");"#));
     assert!(MAIN.contains(r#"const ROWS_KEY = "julibrot.rows";"#));
     assert!(MAIN.contains("ROWS.named.filter(entry => entry.name !== name)"));
-    assert_eq!(MAIN.matches("api.app_set_centre(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_centre(").count(), 0);
     assert_eq!(MAIN.matches("api.app_morph_view(").count(), 1);
     assert_eq!(MAIN.matches("api.app_saved_view_json()").count(), 1);
     // Every storage access is wrapped, and the page states what it could not reach.
@@ -692,7 +711,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(INDEX.contains("approximately 4.5 MB"));
     assert!(MAIN.contains("wasm_bundle_bytes"));
     assert!(MAIN.contains("javascript_bundle_bytes"));
-    assert!(MAIN.contains("wasm_instance_count = 2"));
+    assert!(MAIN.contains("wasm_instance_count: 2"));
     assert!(FACTS.contains("precision_mode: requested.precision_mode.as_str()"));
     assert!(
         FACTS.contains(
@@ -716,6 +735,24 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
 }
 
 #[test]
+fn immutable_boot_facts_are_merged_into_every_refresh() {
+    assert!(MAIN.contains("let BOOT_FACTS = Object.freeze({});"));
+    assert!(MAIN.contains("BOOT_FACTS = Object.freeze({"));
+    assert!(MAIN.contains(
+        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+    ));
+    for field in [
+        "wasm_bundle_bytes:",
+        "javascript_bundle_bytes:",
+        "wasm_instance_count: 2",
+        "timer_quantum_ms:",
+        "timer_probe:",
+    ] {
+        assert!(MAIN.contains(field), "missing immutable boot fact {field}");
+    }
+}
+
+#[test]
 fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands() {
     assert!(INDEX.contains(r#"<input id="auto-scene" type="checkbox" checked>"#));
     assert!(INDEX.contains(r#"<button id="update-scene" type="button">Update scene</button>"#));
@@ -724,6 +761,18 @@ fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands()
     assert!(MAIN.contains("facts.scene_mode === \"manual\" && facts.scene_update_pending"));
     assert!(MAIN.contains("facts.warp_kind === \"HoldStale\""));
     assert!(MAIN.contains("warp refused, showing scene ${facts.completed_scene_id} unmoved"));
+}
+
+#[test]
+fn pending_promotion_and_retained_hold_facts_are_explicit() {
+    assert!(!FRAME.contains("PREVIOUS_PARTITION_HOLD_ENABLED"));
+    assert!(!FRAME.contains("hold_refused_warp_with_partition_capability("));
+    assert!(FRAME.contains("pub const SETTLED_DETERMINISTIC_PROMOTION_ENABLED: bool = false;"));
+    assert!(FRAME.contains("pub struct SettledPromotion"));
+    assert!(FRAME.contains("pub const fn presented_tier(&self) -> PresentedTier"));
+    assert!(MAIN.contains("facts.held_since_scene_id !== null"));
+    assert!(MAIN.contains("`held_frame_partition` will remain visible in the generic overlay"));
+    assert!(MAIN.contains("held from previous partition while the replacement renders"));
 }
 
 #[test]

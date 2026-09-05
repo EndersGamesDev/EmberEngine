@@ -13,6 +13,7 @@ const TRANSLATION_IDS = ["t1", "t2", "t3", "t4", "t5"];
 // The named rows every side can choose from, and which row each side last chose. Built-in rows are
 // not in here: they come from the app, they are never deletable, and they never need storing.
 const ROWS = { named: [], selection: { a: "", b: "" } };
+let BOOT_FACTS = Object.freeze({});
 // The page's own pan-versus-click threshold, which mirrors the boundary's box-versus-click one: a
 // gesture too short to be a translation is the click it looked like, and the app decides the rest.
 const CLICK_THRESHOLD_PX = 4;
@@ -156,6 +157,11 @@ function surviving(facts) {
 }
 
 function liveStatus(facts) {
+  // `held_frame_partition` will remain visible in the generic overlay once app facts forward it;
+  // `held_since_scene_id` is the held frame's own scene id, so its presence makes this status honest.
+  if (facts.held_since_scene_id !== null && facts.held_since_scene_id !== undefined) {
+    return `showing scene ${facts.held_since_scene_id} held from previous partition while the replacement renders${surviving(facts)}`;
+  }
   if (facts.completed_scene_id === null || facts.completed_scene_id === undefined) {
     return `waiting for first completed scene${surviving(facts)}`;
   }
@@ -235,7 +241,7 @@ function bindControls(api) {
     return crosshair;
   };
   const refreshFacts = () => {
-    const facts = Object.assign(JSON.parse(api.app_facts_json()), pageFacts(), drawCrosshair());
+    const facts = Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair());
     renderFacts(facts);
     return facts;
   };
@@ -424,9 +430,8 @@ function bindControls(api) {
   CANVAS.addEventListener("pointercancel", () => { drag = null; RUBBER.hidden = true; });
 
   // One row, one path, and no list of field names: every numeric field is written into the control
-  // named after it, and then the same handlers a user's own movement reaches apply them. The centre
-  // is the one field with no widget, so it is one explicit call after the row rather than a second
-  // way for the values that do have widgets to arrive. A built-in row has no centre and no depth.
+  // named after it, then the complete row crosses one app boundary. The app compares all fields,
+  // stages only differences, and releases at most one navigation decision after the row is whole.
   const applyRow = row => {
     if (Array.isArray(row.origin)) {
       for (const [index, [id]] of ORIGIN.entries()) {
@@ -439,11 +444,7 @@ function bindControls(api) {
       const element = controlFor(field);
       if (element) element.value = String(value);
     }
-    // A row that names no depth starts at the top: the origin it carries resets the zoom anyway, so
-    // the row that reaches the worker is the whole chart rather than the depth the user was at.
-    if (typeof row.zoom_log2 !== "number") SET("scale", 0);
-    for (const apply of Object.values(APPLY)) apply();
-    if (row.centre) api.app_set_centre(JSON.stringify(row.centre));
+    api.app_apply_saved_view(JSON.stringify(row));
   };
   const loadRow = row => {
     api.app_clear_crosshair();
@@ -670,14 +671,16 @@ async function boot() {
     const mainVersion = api.julibrot_abi_version();
     if (mainVersion !== ABI) throw new Error(`VersionSkew: main wasm ${mainVersion}, loader ${ABI}`);
     await api.start_julibrot("julibrot", "status");
-    const facts = JSON.parse(api.app_facts_json());
     const timer = timerProbe();
-    facts.timer_quantum_ms = timer.quantum_ms;
-    facts.timing_status = timer.quantum_ms === null ? "unavailable: timer exposed no positive transition" : "requires visible replay";
-    facts.timer_probe = timer;
-    facts.wasm_bundle_bytes = await artifactBytes("./pkg/ember_lab_julibrot_bg.wasm?v=1");
-    facts.javascript_bundle_bytes = await artifactBytes("./pkg/ember_lab_julibrot.js?v=1");
-    facts.wasm_instance_count = 2;
+    BOOT_FACTS = Object.freeze({
+      timer_quantum_ms: timer.quantum_ms,
+      timing_status: timer.quantum_ms === null ? "unavailable: timer exposed no positive transition" : "requires visible replay",
+      timer_probe: timer,
+      wasm_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot_bg.wasm?v=1"),
+      javascript_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot.js?v=1"),
+      wasm_instance_count: 2,
+    });
+    const facts = Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS);
     renderFacts(facts);
     showStatus("waiting for first completed scene");
     bindControls(api);

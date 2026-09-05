@@ -6,7 +6,13 @@ use ember_julibrot_math::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{AppError, ViewerController};
+use crate::{AppError, PresetRow, ViewerController, state::NAVIGATION_PRECISION_BITS};
+
+const PAGE_OBJECT_FIELDS: [&str; 6] = ["o12", "o13", "o14", "o23", "o24", "o34"];
+const PAGE_CAMERA_FIELDS: [&str; 10] = [
+    "q12", "q13", "q14", "q23", "q24", "q34", "q15", "q25", "q35", "q45",
+];
+const PAGE_TRANSLATION_FIELDS: [&str; 5] = ["t1", "t2", "t3", "t4", "t5"];
 
 /// One coordinate of the authoritative centre in the form a view box stores.
 ///
@@ -81,6 +87,63 @@ pub struct SavedView {
 }
 
 impl SavedView {
+    /// Serializes this row with each affine control as a page-addressable JSON key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization failure if the row cannot become the required object shape.
+    pub fn to_page_json(&self) -> Result<String, AppError> {
+        let mut value = serde_json::to_value(self).map_err(|error| serialization(&error))?;
+        let row = value
+            .as_object_mut()
+            .ok_or_else(|| AppError::Serialization("saved row is not a JSON object".to_string()))?;
+        flatten_page_array(row, "object", &PAGE_OBJECT_FIELDS)?;
+        flatten_page_array(row, "camera", &PAGE_CAMERA_FIELDS)?;
+        flatten_page_array(row, "camera_translation", &PAGE_TRANSLATION_FIELDS)?;
+        serde_json::to_string(&value).map_err(|error| serialization(&error))
+    }
+
+    /// Decodes the page's flat affine-control JSON into the stored row shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns a serialization failure for malformed JSON or a missing affine control.
+    pub fn from_page_json(json: &str) -> Result<Self, AppError> {
+        let mut value: serde_json::Value =
+            serde_json::from_str(json).map_err(|error| serialization(&error))?;
+        let row = value
+            .as_object_mut()
+            .ok_or_else(|| AppError::Serialization("saved row is not a JSON object".to_string()))?;
+        expand_page_array(row, "object", &PAGE_OBJECT_FIELDS)?;
+        expand_page_array(row, "camera", &PAGE_CAMERA_FIELDS)?;
+        expand_page_array(row, "camera_translation", &PAGE_TRANSLATION_FIELDS)?;
+        serde_json::from_value(value).map_err(|error| serialization(&error))
+    }
+
+    /// Expands a built-in row into the complete stored-row shape used by the atomic boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure if the preset origin cannot form the canonical exact centre.
+    pub fn from_preset(row: PresetRow) -> Result<Self, AppError> {
+        let centre = BigCentre::from_f64(row.plane_origin, NAVIGATION_PRECISION_BITS)
+            .map_err(|error| math(&error))?;
+        Ok(Self {
+            object: row.object_angles.as_array(),
+            origin: row.plane_origin,
+            camera: row.view.camera,
+            camera_translation: row.view.camera_translation,
+            camera_yaw: row.view.camera_yaw,
+            camera_pitch: row.view.camera_pitch,
+            height_scale: row.view.height_scale,
+            distance_five: row.view.distance_five,
+            distance_four: row.view.distance_four,
+            zoom_log2: 0.0,
+            centre_f64: centre.to_f64_mirror(),
+            centre: encode_centre(&centre)?,
+        })
+    }
+
     /// Captures the row the viewer is currently showing.
     ///
     /// # Errors
@@ -188,6 +251,49 @@ impl SavedView {
     }
 }
 
+fn flatten_page_array(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    source: &str,
+    fields: &[&str],
+) -> Result<(), AppError> {
+    let Some(serde_json::Value::Array(values)) = row.remove(source) else {
+        return Err(AppError::Serialization(
+            "saved row has no affine control array".to_string(),
+        ));
+    };
+    if values.len() != fields.len() {
+        return Err(AppError::Serialization(
+            "saved row affine control count differs".to_string(),
+        ));
+    }
+    for (field, value) in fields.iter().zip(values) {
+        row.insert((*field).to_string(), value);
+    }
+    Ok(())
+}
+
+fn expand_page_array(
+    row: &mut serde_json::Map<String, serde_json::Value>,
+    target: &str,
+    fields: &[&str],
+) -> Result<(), AppError> {
+    let mut values = Vec::new();
+    values
+        .try_reserve_exact(fields.len())
+        .map_err(|_| AppError::Serialization("saved row affine controls do not fit".to_string()))?;
+    for field in fields {
+        values.push(row.remove(*field).ok_or_else(|| {
+            AppError::Serialization("saved row affine control is missing".to_string())
+        })?);
+    }
+    row.insert(target.to_string(), serde_json::Value::Array(values));
+    Ok(())
+}
+
+fn serialization(error: &serde_json::Error) -> AppError {
+    AppError::Serialization(error.to_string())
+}
+
 fn encode_centre(centre: &BigCentre) -> Result<SavedCentre, AppError> {
     let mut coords = Vec::new();
     coords
@@ -254,6 +360,14 @@ mod tests {
             .set_crosshair([137.0, -64.0])
             .expect("a finite target");
         viewer
+    }
+
+    fn finish_initial_reference(viewer: &mut ViewerController) {
+        let initial = viewer
+            .take_reference_submission()
+            .expect("the canonical view requests one initial reference");
+        assert!(viewer.finish_reference_submission(initial.navigation.generation));
+        assert!(viewer.take_reference_submission().is_none());
     }
 
     /// A captured row must come back through its own JSON without moving a bit.
@@ -339,5 +453,98 @@ mod tests {
         broken.centre.coords.pop();
         assert!(broken.centre().is_err());
         assert!(SavedView::lerp(&row, &broken, 0.5).is_err());
+    }
+
+    /// Characterizes the new atomic path: pose-only morphing touches neither MAIN nor reference.
+    #[test]
+    fn a_same_origin_pose_morph_is_one_reference_free_transaction() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        finish_initial_reference(&mut viewer);
+        let first = SavedView::capture(&viewer).expect("first row");
+        let mut second = first.clone();
+        second.camera[0] = 0.35;
+        second.camera_translation[4] = -0.2;
+        second.camera_yaw = 0.125;
+        second.height_scale = 0.75;
+        let row = SavedView::lerp(&first, &second, 0.5).expect("pose morph");
+        let rebuilds = viewer.main_state_rebuild_count();
+        let revision = viewer.requested_revision();
+
+        viewer.apply_saved_view(&row).expect("atomic row");
+
+        assert_eq!(viewer.main_state_rebuild_count(), rebuilds);
+        assert_eq!(viewer.requested_revision(), revision + 1);
+        assert!(viewer.take_reference_submission().is_none());
+        assert_eq!(viewer.requested().view, row.view());
+    }
+
+    /// Characterizes the new atomic path: a slice crossing releases one coalesced request.
+    #[test]
+    fn a_cross_slice_morph_rebuilds_and_requests_exactly_once() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        finish_initial_reference(&mut viewer);
+        let first = SavedView::capture(&viewer).expect("first row");
+        let mut other = ViewerController::new([960, 540]).expect("other viewer");
+        other
+            .set_plane_origin([0.25, 0.0, 0.0, 0.0])
+            .expect("other slice");
+        let second = SavedView::capture(&other).expect("second row");
+        let row = SavedView::lerp(&first, &second, 0.5).expect("slice morph");
+
+        viewer.apply_saved_view(&row).expect("atomic row");
+
+        assert_eq!(viewer.main_state_rebuild_count(), 1);
+        assert_eq!(viewer.requested_revision(), 1);
+        let request = viewer
+            .take_reference_submission()
+            .expect("one cross-slice request");
+        assert!(viewer.finish_reference_submission(request.navigation.generation));
+        assert!(viewer.take_reference_submission().is_none());
+        assert_eq!(request.reason, ember_julibrot_worker::OrbitReason::INITIAL);
+    }
+
+    /// The public origin and centre setters are no-ops for bit-identical requested values.
+    #[test]
+    fn equal_origin_and_centre_setters_do_not_rebuild_or_request() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        finish_initial_reference(&mut viewer);
+        let centre = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured centre");
+
+        viewer
+            .set_plane_origin(viewer.requested().plane_origin)
+            .expect("equal origin");
+        viewer.set_centre(centre).expect("equal centre");
+
+        assert_eq!(viewer.main_state_rebuild_count(), 0);
+        assert_eq!(viewer.requested_revision(), 0);
+        assert!(viewer.take_reference_submission().is_none());
+    }
+
+    /// A centre guard repairs a mismatched reference even when the navigation centre is equal.
+    #[test]
+    fn centre_setter_reinstalls_an_equal_navigation_centre_as_its_reference() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        finish_initial_reference(&mut viewer);
+        viewer.pan_px([24.0, 0.0]).expect("finite pan");
+        let centre = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured centre");
+        assert_ne!(viewer.owner().reference_centre(), Some(centre.clone()));
+
+        viewer.set_centre(centre.clone()).expect("centre repair");
+
+        assert_eq!(viewer.owner().navigation_centre(), Some(centre.clone()));
+        assert_eq!(viewer.owner().reference_centre(), Some(centre));
+        assert_eq!(
+            viewer
+                .take_reference_submission()
+                .expect("one repaired-centre request")
+                .reason,
+            ember_julibrot_worker::OrbitReason::CENTRE_THRESHOLD
+        );
     }
 }
