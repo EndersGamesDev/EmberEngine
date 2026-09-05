@@ -1337,10 +1337,8 @@
     function julibrotCollector(spec, baselineFacts) {
       const frames = { observed: 0, clear_only: 0, held: 0, warp_refused: 0, uncovered_fraction_samples: [] };
       const completedSceneIds = [];
-      const presentedSceneIds = [];
       const gameSideWallMs = [];
       let lastCompleted = baselineFacts.completed_scene_id;
-      let lastPresented = baselineFacts.presented_scene_id;
       let lastReferenceRequests = Number.isInteger(baselineFacts.sampled_reference_requests) ? baselineFacts.sampled_reference_requests : null;
       let referenceRequestsIssued = 0;
       const baselineEdits = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings.map(record => record.edit).filter(Number.isInteger) : [];
@@ -1365,10 +1363,6 @@
             completedSceneIds.push(facts.completed_scene_id);
             lastCompleted = facts.completed_scene_id;
           }
-          if (Number.isInteger(facts.presented_scene_id) && facts.presented_scene_id !== lastPresented) {
-            presentedSceneIds.push(facts.presented_scene_id);
-            lastPresented = facts.presented_scene_id;
-          }
           if (Number.isInteger(facts.sampled_reference_requests)) {
             if (lastReferenceRequests !== null) referenceRequestsIssued += facts.sampled_reference_requests >= lastReferenceRequests ? facts.sampled_reference_requests - lastReferenceRequests : facts.sampled_reference_requests;
             lastReferenceRequests = facts.sampled_reference_requests;
@@ -1384,8 +1378,6 @@
             return values.length ? values : null;
           };
           const fence = cappedNumbers(levelTimings.flatMap(record => [record.scene_us, record.warp_us]));
-          const presented = presentedSceneIds.length ? cappedDistinct(presentedSceneIds) : null;
-          const settleToPaint = presented ? [] : null;
           const walls = {
             worker_reference_us: optional('worker_reference_us'),
             credit_wait_us: optional('credit_wait_us'),
@@ -1408,8 +1400,8 @@
             },
             completed_scene_ids: cappedDistinct(completedSceneIds),
             discarded_scene_ids: null,
-            presented_scene_ids: presented,
-            settle_to_paint_ms: settleToPaint,
+            presented_scene_ids: null,
+            settle_to_paint_ms: null,
             reference_requests_issued: null,
             sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
             walls_us: walls,
@@ -1450,8 +1442,8 @@
       for (let index = 0; index < spec.step_count; index += 1) {
         const started = performance.now();
         driveJulibrotStep(document, spec, index);
-        collector.step(performance.now() - started);
         const intervalWall = await observeJulibrotInterval(run, token, collector, spec.interval_ms);
+        collector.step(performance.now() - started);
         if (spec.scenario_id === 'hold-exact-2000ms') scriptedHoldWallMs = intervalWall;
       }
       await waitForJulibrotFinal(run, token, collector);
@@ -1491,7 +1483,7 @@
           if (noteBytes > JULIBROT_NOTE_BYTE_CAP) throw new Error(`Julibrot scenario ${spec.scenario_id} note used ${noteBytes} bytes; cap is ${JULIBROT_NOTE_BYTE_CAP}`);
           const record = {
             kernel_id: `julibrot-slide.${spec.scenario_id}.v1`,
-            workload: `${spec.name}; baseline ${spec.baseline_row}; steps=${spec.step_count}; interval_ms=${spec.interval_ms}; raw=game-side input-dispatch ms`,
+            workload: `${spec.name}; baseline ${spec.baseline_row}; steps=${spec.step_count}; interval_ms=${spec.interval_ms}; raw=game-side step wall ms`,
             unit: 'ms',
             warmup_runs: 0,
             status: 'complete',

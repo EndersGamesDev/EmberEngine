@@ -765,5 +765,8 @@ mod tests {
         assert!(page.contains("new URL('labs/julibrot/', ROOT)"));
         assert!(page.contains("const JULIBROT_NOTE_BYTE_CAP = 1_280"));
         assert!(page.contains("wasm.julibrot_report_byte_budget()"));
+        assert!(page.contains("raw=game-side step wall ms"));
+        assert!(page.contains("presented_scene_ids: null"));
+        assert!(!page.contains("facts.presented_scene_id"));
     }
 }
