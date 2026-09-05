@@ -1,499 +1,56 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember fire racer</title>
-  <style>
-    :root { color-scheme: dark; }
-    body {
-      margin: 0; min-height: 100vh;
-      display: flex; flex-direction: column; align-items: center; gap: 14px;
-      background: #0b0a12; color: #cfc9dc;
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      padding-bottom: 24px;
-    }
-    header {
-      width: min(1280px, 96vw);
-      display: flex; align-items: baseline; justify-content: space-between;
-      margin-top: 16px; flex-wrap: wrap; gap: 8px;
-    }
-    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
-    h1 span { color: #d4a13a; }
-    h1 a { color: #8f7fd4; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
-    .controls {
-      width: min(1280px, 96vw);
-      display: flex; gap: 22px; font-size: 0.9rem; flex-wrap: wrap; opacity: 0.85;
-    }
-    .controls b { color: #8f7fd4; }
-    kbd {
-      background: #1c1830; border: 1px solid #362f52; border-bottom-width: 3px;
-      border-radius: 5px; padding: 1px 7px; font-family: inherit; font-size: 0.85em;
-    }
-
-    /* ---- start screen ---- */
-    #start { width: min(1280px, 96vw); }
-    .panel-box {
-      background: #14112180; border: 1px solid #2e2748; border-radius: 12px; padding: 18px 20px;
-    }
-    .modes { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-    button {
-      font: inherit; color: #ece6ff; background: #241d3d; border: 1px solid #3d3363;
-      border-radius: 8px; padding: 8px 16px; cursor: pointer;
-    }
-    button:hover:not(:disabled) { background: #2f2650; border-color: #574a86; }
-    button:disabled { opacity: 0.45; cursor: default; }
-    button.primary { background: #4a3a1c; border-color: #7d6327; color: #ffdf9e; }
-    button.primary:hover:not(:disabled) { background: #5c4823; }
-    input {
-      font: inherit; color: #ece6ff; background: #100d1c; border: 1px solid #332c53;
-      border-radius: 7px; padding: 7px 10px; min-width: 0;
-    }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-    .row label { font-size: 0.8rem; letter-spacing: 0.14em; opacity: 0.6; min-width: 66px; }
-    #lobby-rows { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
-    .lobby {
-      display: flex; align-items: center; gap: 12px;
-      background: #191430; border: 1px solid #2c2549; border-radius: 8px; padding: 8px 12px;
-    }
-    .lobby .nm { font-weight: 600; color: #f0e6ff; }
-    .lobby .meta { font-size: 0.8rem; opacity: 0.6; margin-left: auto; }
-    .pill {
-      font-size: 0.72rem; background: #100d1c; border: 1px solid #332c53;
-      border-radius: 999px; padding: 2px 8px; opacity: 0.9;
-      font-family: ui-monospace, monospace; white-space: nowrap;
-    }
-    #host-chip {
-      font-size: 0.72rem; color: #9a8fbe; font-family: ui-monospace, monospace;
-      background: #14112180; border: 1px solid #2e2748; border-radius: 999px;
-      padding: 5px 10px; white-space: nowrap;
-    }
-    .note { font-size: 0.85rem; opacity: 0.7; }
-    .note.bad { color: #ff9c8f; opacity: 1; }
-    .hidden { display: none !important; }
-
-    /* ---- stage ---- */
-    #stage { position: relative; width: min(1280px, 96vw); }
-    #ember-root canvas {
-      width: 100% !important; aspect-ratio: 16 / 9; height: auto !important;
-      border-radius: 10px; display: block; background: #05040a;
-    }
-    #hud {
-      position: absolute; inset: 0; pointer-events: none;
-      font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.4s ease;
-    }
-    #hud.live { opacity: 1; }
-    .panel {
-      position: absolute; background: rgba(10, 8, 18, 0.62);
-      border: 1px solid rgba(143, 127, 212, 0.28); border-radius: 10px;
-      padding: 10px 14px; backdrop-filter: blur(3px);
-    }
-    #speed { left: 18px; bottom: 18px; text-align: center; min-width: 130px; }
-    #speed .n { font-size: 2.6rem; font-weight: 700; line-height: 1; color: #f0e6ff; }
-    #speed .u { font-size: 0.72rem; letter-spacing: 0.22em; opacity: 0.6; }
-    #lap { right: 18px; top: 18px; text-align: right; }
-    #lap .n { font-size: 1.5rem; font-weight: 700; color: #f0e6ff; }
-    #lap .l { font-size: 0.7rem; letter-spacing: 0.2em; opacity: 0.6; display: block; }
-    #boost { right: 18px; bottom: 18px; display: flex; gap: 7px; align-items: center; }
-    .pip { width: 15px; height: 26px; border-radius: 4px; background: #2a2340; border: 1px solid #443a68; }
-    .pip.on { background: linear-gradient(#ffd06a, #e08a1e); border-color: #ffd06a; }
-    #boost .cap { font-size: 0.7rem; letter-spacing: 0.2em; opacity: 0.6; margin-right: 4px; }
-    #state {
-      left: 50%; top: 42%; transform: translate(-50%, -50%);
-      font-size: 3.2rem; font-weight: 800; letter-spacing: 0.06em;
-      color: #f5ead4; text-shadow: 0 4px 24px rgba(0,0,0,0.8);
-      display: none; background: none; border: none;
-    }
-    #drift {
-      left: 50%; bottom: 20px; transform: translateX(-50%);
-      letter-spacing: 0.28em; font-size: 0.8rem; color: #ffb347;
-      display: none; border-color: rgba(255,179,71,0.4);
-    }
-    #loading { font-size: 0.9rem; opacity: 0.8; padding: 40px; display: block; }
-    footer { font-size: 0.78rem; opacity: 0.45; width: min(1280px, 96vw); }
-  </style>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d1114"><meta name="description" content="Fire Racer V2. Choose your machine, master the castle circuit, and turn the race with five tactical power-ups.">
+<title>Fire Racer V2 · GT Circuit</title><link rel="stylesheet" href="./style.css?v=86086a2">
 </head>
 <body>
-  <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire racer</span> <small style="opacity:.5">v2</small></h1>
-    <div id="host-chip" title="the host this page will race on">server …</div>
-  </header>
-  <div class="controls">
-    <div><b>Drive</b> <kbd>W</kbd> <kbd>S</kbd></div>
-    <div><b>Steer</b> <kbd>A</kbd> <kbd>D</kbd></div>
-    <div><b>Drift</b> <kbd>Space</kbd> — handbrake, breaks traction</div>
-    <div><b>Boost</b> <kbd>Shift</kbd> — three charges a race</div>
-    <div>3 laps of the castle bailey</div>
-  </div>
-
-  <div id="start">
-    <div class="panel-box">
-      <div class="modes">
-        <button id="btn-practice" class="primary">Practice alone</button>
-        <button id="btn-online">Race online</button>
-      </div>
-
-      <div id="online-panel" class="hidden">
-        <div class="row">
-          <label for="handle">NAME</label>
-          <input id="handle" maxlength="20" placeholder="driver" style="flex:1 1 180px">
-          <button id="btn-refresh">Refresh</button>
-        </div>
-        <div id="lobby-rows"><span class="note" id="list-note">looking for a server…</span></div>
-        <div class="row">
-          <label for="newlobby">NEW</label>
-          <input id="newlobby" maxlength="24" placeholder="lobby name" style="flex:1 1 180px">
-          <input id="newpass" maxlength="40" placeholder="password (optional)" type="password" style="flex:1 1 140px">
-          <button id="btn-create">Create</button>
-        </div>
-        <div class="note" id="online-note"></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="stage" class="hidden">
-    <div id="ember-root"><span id="loading">loading engine…</span></div>
-    <div id="hud">
-      <div class="panel" id="speed"><div class="n">0</div><div class="u">KM/H</div></div>
-      <div class="panel" id="lap"><span class="l">LAP</span><span class="n">1/3</span>
-        <span class="l" style="margin-top:6px">POSITION</span><span class="n" id="place">1/8</span></div>
-      <div class="panel" id="boost"><span class="cap">BOOST</span></div>
-      <div id="state" class="panel"></div>
-      <div class="panel" id="drift">DRIFT</div>
-    </div>
-  </div>
-
-  <footer>
-    Track, car physics and lap timing live in <code>fire-core</code> — the same simulation the
-    server runs, which is what lets the client predict its own car and reconcile against the
-    server thirty times a second. Castle props generated with Hunyuan3D-2mv; every texture is
-    procedural, so none of them cost a download byte.
-  </footer>
-
-  <script type="module">
-    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
-      from '../../../hosts.js';
-
-    const $ = (id) => document.getElementById(id);
-    const fail = (msg) => {
-      const el = $('loading');
-      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
-    };
-    window.addEventListener('error', (e) => fail(e.message));
-    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
-    // Stop the arrow keys and space scrolling the page out from under the race.
-    addEventListener('keydown', (e) => {
-      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-    }, { passive: false });
-    document.addEventListener('pointerdown', () => {
-      document.querySelector('#ember-root canvas')?.focus();
-    });
-
-    const ROOT = new URL('../../../', location);
-    // `v` is the deploy stamp and still lives in the book's legacy top-level
-    // key, which every publish keeps writing.
-    const { book } = await loadBook(ROOT.href);
-    const V = book.v || '0';
-
-    const wasm = await import(`./pkg/fire.js?v=${V}`);
-    await wasm.default({ module_or_path: `./pkg/fire_bg.wasm?v=${V}` });
-    const PROTO = wasm.proto_version();
-
-    // ---- host discovery ----------------------------------------------------
-    // Fire Racer has never had a manual URL override — the one in the hub's
-    // server settings is the arena's address and pointing this page at it
-    // would be a worse bug than having no override at all. The address book
-    // is the only source here.
-    let chosen = null;    // the host we will race on
-    let candidates = [];  // it, then the fallbacks, in order
-    let wrongProto = [];  // answered, but speaking another protocol
-    // Declared here rather than beside the launchers: `discover()` reads it to
-    // drop a probe that finished after a launch had already committed.
-    let launched = false;
-
-    // One address, probed once, dressed as a ranked candidate so everything
-    // downstream deals with exactly one shape.
-    async function onlyHost(url) {
-      const entry = { name: '', fire_ws: url, version: '', commit: '', updated: '' };
-      const probes = new Map([['', await probeHost(url, { proto: PROTO })]]);
-      return rankHosts([entry], { game: 'fire', probes });
-    }
-
-    async function discover() {
-      const r = await chooseHost(ROOT.href, { game: 'fire', proto: PROTO });
-      if (launched) return; // a race started while the probes were out
-      chosen = r.chosen;
-      candidates = r.candidates;
-      wrongProto = r.wrongProto || [];
-      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
-    }
-
-    // "Nothing answered" and "everything answered on another protocol" are
-    // different news: the second still has a playable build behind it, and it
-    // is exactly what a protocol bump looks like from the page that shipped
-    // first.
-    const offlineText = () => (wrongProto.length
-      ? `${wrongProto[0].name || 'the server'} is on protocol ${wrongProto[0].proto} and this build speaks ${PROTO}`
-        + ' — open the games page and pick the build that matches'
-      : 'no online server is published right now — practice mode still works');
-
-    // ---- lobby browser -----------------------------------------------------
-    // Its own short-lived socket, exactly like the arena's. The engine loop
-    // never sees a menu. The chosen host's lobbies come first and every other
-    // host on this protocol below, each row tagged: two people who landed on
-    // different machines still have to be able to find each other.
-    const showLobbies = async ({ quiet = false } = {}) => {
-      const rows = $('lobby-rows');
-      const note = (text, bad) => {
-        const s = document.createElement('span');
-        s.className = 'note' + (bad ? ' bad' : '');
-        s.textContent = text;
-        rows.replaceChildren(s);
-      };
-      // The placeholder belongs to the first look only. This function empties
-      // the list BEFORE it awaits the probes, so a polled call that showed it
-      // would blank a populated list every ten seconds — and take the Join
-      // button out from under the cursor with it.
-      if (!quiet) note('looking for lobbies…');
-      await discover();
-      if (!candidates.length) {
-        note(offlineText());
-        return;
-      }
-
-      const lists = await Promise.all(candidates.map((c) => listLobbies(c.url, { proto: PROTO })));
-      const all = [];
-      candidates.forEach((host, i) => {
-        for (const l of lists[i]) all.push({ host, lobby: l });
-      });
-      if (!all.length) { note('no lobbies yet — create one below'); return; }
-
-      rows.replaceChildren(...all.map(({ host, lobby: l }) => {
-        const row = document.createElement('div');
-        row.className = 'lobby';
-        const nm = document.createElement('span');
-        nm.className = 'nm';
-        nm.textContent = l.name + (l.has_password ? ' 🔒' : '');
-        const meta = document.createElement('span');
-        meta.className = 'meta';
-        meta.textContent = `${l.players}/${l.cap} · host ${l.host}${l.racing ? ' · racing' : ''}`;
-        const tag = document.createElement('span');
-        tag.className = 'pill';
-        tag.textContent = host.name || 'server';
-        tag.title = host.url;
-        const go = document.createElement('button');
-        go.textContent = 'Join';
-        go.onclick = () => {
-          const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
-          if (l.has_password && pass === null) return;
-          launchOnline(l.name, pass, false, host); // this row's host, not the chosen one
-        };
-        row.append(nm, meta, tag, go);
-        return row;
-      }));
-    };
-
-    // ---- the menu poll -----------------------------------------------------
-    // The arena's cadence, and the contract in docs/hosts.md §5: the menu
-    // re-ranks as it re-lists, so a host that dies while the player reads the
-    // panel leaves the chip and the fallback list instead of sitting there
-    // looking playable — and a lobby someone else opens ten seconds from now
-    // appears without anyone pressing Refresh. It stops the moment the page
-    // goes online.
-    let lobbyPoll = null;
-    let ticking = false;
-    async function tick() {
-      if (ticking) return;
-      ticking = true;
-      try { await showLobbies({ quiet: true }); } finally { ticking = false; }
-    }
-    const pollOn = () => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
-    const pollOff = () => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
-
-    // ---- launching ---------------------------------------------------------
-    const showStage = () => {
-      $('start').classList.add('hidden');
-      $('stage').classList.remove('hidden');
-    };
-
-    const launchLocal = () => {
-      if (launched) return;
-      launched = true;
-      pollOff(); // practice hides the panel; it must not keep opening sockets
-      showStage();
-      wasm.start_local();
-      pollHud();
-    };
-
-    const launchOnline = async (lobby, password, create, target) => {
-      if (launched) return;
-      const wanted = target || chosen;
-      const note = $('online-note');
-      if (!wanted) {
-        note.className = 'note bad';
-        note.textContent = offlineText();
-        pollOn(); // includes a handover whose host is already gone: keep looking
-        return;
-      }
-      launched = true;
-      pollOff();
-
-      // Probe again RIGHT before the engine takes the socket. The list can be
-      // seconds old and a quick tunnel dies without warning; once the wasm
-      // client owns the connection there is no failover left, so this is the
-      // last moment a dead host can still be turned into a live one.
-      note.className = 'note';
-      note.textContent = 'connecting…';
-
-      // A Create walks the fallbacks — one server is as good as another for a
-      // new lobby. A JOIN does not: that lobby lives on that machine and
-      // nowhere else, so walking on would put the player in a stranger's
-      // lobby of the same name, or in none, and tell them it "moved". The
-      // `wanted === chosen` arm keeps the failover for the address-less
-      // handover below, where the target came from the ranking, not a row.
-      const order = (create || wanted === chosen)
-        ? [wanted, ...candidates.filter((c) => c.url !== wanted.url)]
-        : [wanted];
-      let live = null;
-      for (const c of order) {
-        // Serial on purpose: the next host only matters once this one failed.
-        const p = await probeHost(c.url, { proto: PROTO, timeoutMs: 3000 });
-        if (p.ok) { live = c; break; }
-      }
-      if (!live) {
-        launched = false;
-        note.className = 'note bad';
-        note.textContent = order.length === 1
-          ? `${wanted.name || 'that lobby’s host'} stopped answering — the lobby may be gone`
-          : 'no server answered — try again in a moment';
-        pollOn();
-        tick();
-        return;
-      }
-      if (live.url !== wanted.url) {
-        note.textContent =
-          `${wanted.name || 'that server'} stopped answering — moved to ${live.name || 'another server'}`;
-      }
-      chosen = live;
-      renderChip($('host-chip'), live, { proto: PROTO });
-
-      showStage();
-      try {
-        wasm.start_online(JSON.stringify({
-          ws: live.url,
-          handle: ($('handle').value || 'driver').trim(),
-          lobby, password: password || '', create,
-        }));
-        pollHud();
-      } catch (e) {
-        launched = false;
-        $('stage').classList.add('hidden');
-        $('start').classList.remove('hidden');
-        note.className = 'note bad';
-        note.textContent = String(e);
-        pollOn();
-      }
-    };
-
-    $('btn-practice').onclick = launchLocal;
-    $('btn-online').onclick = () => {
-      $('online-panel').classList.toggle('hidden');
-      $('btn-online').classList.add('primary');
-      $('btn-practice').classList.remove('primary');
-      if (!$('online-panel').classList.contains('hidden')) { showLobbies(); pollOn(); }
-      else pollOff(); // a closed panel polls nothing
-    };
-    // Not `= showLobbies`: the handler would hand the click event in as the
-    // options object.
-    $('btn-refresh').onclick = () => showLobbies();
-    $('btn-create').onclick = () => {
-      const name = ($('newlobby').value || '').trim();
-      if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
-      launchOnline(name, ($('newpass').value || '').trim(), true, chosen);
-    };
-
-    // ---- a join handed over from the hub's live-lobby showcase
-    // The hub already picked the machine: this lobby lives on THAT host and
-    // nowhere else, so its address is used verbatim with no re-ranking. It is
-    // still probed once, so a dead handover says so instead of hanging.
-    let pending = null;
-    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
-    sessionStorage.removeItem('ember-pending');
-    if (pending && pending.lobby) {
-      $('online-panel').classList.remove('hidden');
-      $('btn-online').classList.add('primary');
-      $('btn-practice').classList.remove('primary');
-      if (pending.ws) {
-        const r = await onlyHost(pending.ws);
-        chosen = r.chosen;
-        candidates = r.candidates;
-        wrongProto = r.wrongProto || [];
-      } else {
-        // A handover from a page that predates the host list: no address came
-        // with it, so the normal pick applies.
-        await discover();
-      }
-      if (chosen && pending.host) chosen.name = chosen.name || pending.host;
-      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
-      // No poll here: this branch opens the panel only to race straight into
-      // the handed-over lobby. `launchOnline` starts one if that fails.
-      launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
-    } else {
-      // Rank once on load so the chip is honest before anyone opens the
-      // online panel; the panel's own refresh re-ranks from there.
-      discover();
-    }
-
-    // ---- HUD ---------------------------------------------------------------
-    // The renderer has one scene pass, no 2D layer and no text, so the HUD
-    // lives here and reads a snapshot the game publishes every frame.
-    const speedEl = document.querySelector('#speed .n');
-    const lapEl = document.querySelector('#lap .n');
-    const placeEl = $('place');
-    const boostEl = $('boost');
-    const stateEl = $('state');
-    const driftEl = $('drift');
-    const MAX_BOOST = 3;
-    let pips = [];
-
-    const setPips = (n) => {
-      if (pips.length !== MAX_BOOST) {
-        boostEl.querySelectorAll('.pip').forEach((p) => p.remove());
-        pips = Array.from({ length: MAX_BOOST }, () => {
-          const d = document.createElement('div');
-          d.className = 'pip';
-          boostEl.appendChild(d);
-          return d;
-        });
-      }
-      pips.forEach((p, i) => p.classList.toggle('on', i < n));
-    };
-
-    const pollHud = () => {
-      const hud = $('hud');
-      const tick = () => {
-        try {
-          const h = JSON.parse(wasm.hud_json());
-          hud.classList.add('live');
-          speedEl.textContent = Math.round(h.speed);
-          lapEl.textContent = `${Math.min(h.lap + 1, h.laps)}/${h.laps}`;
-          placeEl.textContent = `${h.place}/${h.racers}`;
-          setPips(h.boost);
-          driftEl.style.display = h.drifting ? 'block' : 'none';
-          if (h.countdown > 0.01) {
-            stateEl.style.display = 'block';
-            stateEl.textContent = Math.ceil(h.countdown);
-          } else if (h.finished) {
-            stateEl.style.display = 'block';
-            stateEl.textContent = `P${h.place}`;
-          } else {
-            stateEl.style.display = 'none';
-          }
-        } catch {}
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    };
-  </script>
+<header class="topbar"><a class="brand" href="./" aria-label="Fire Racer garage">FIRE<span>RACER</span><b class="version">V2</b></a><span class="eyebrow">GT CIRCUIT / COMBAT RACING</span><a href="../../../" class="back">↖ All games</a><div id="host-chip" title="Online race host">Finding race servers…</div></header>
+<main>
+<div id="start">
+<div class="garage-head"><h1>YOUR RACE STARTS HERE.</h1><div class="steps"><span>01 &nbsp; SELECT MACHINE</span><span>02 &nbsp; HIT THE GRID</span><span>03 &nbsp; OWN THE CIRCUIT</span></div></div>
+<section class="hero" aria-label="Selected vehicle">
+<div class="hero-number" aria-hidden="true">01</div>
+<div class="hero-copy"><div class="eyebrow orange">FIRE MOTORSPORT / GRAND TOURING</div><h2 id="hero-name">GT-01<br>PRECISION.</h2><p id="hero-desc">Balanced through the apex. Composed on the straight. Your introduction to a different kind of racing.</p></div>
+<div class="hero-car" id="hero-car" aria-hidden="true"></div><div class="hero-tag">THREE MACHINES. ONE FINISH LINE.</div>
+<div class="hero-footer"><div><strong id="hero-style">BALANCED</strong><span>DRIVING CHARACTER</span></div><div><strong>RWD</strong><span>DRIVE LAYOUT</span></div><div><strong id="hero-index">01 / 03</strong><span id="hero-class">GRAND TOURING</span></div></div>
+</section>
+<div class="garage-bottom">
+<section aria-labelledby="garage-title"><div class="section-label"><h3 id="garage-title">Choose your machine</h3><span>Different cars. Different instincts.</span></div><div class="cars" id="cars"></div></section>
+<aside class="event"><div class="eyebrow orange">FEATURED EVENT / 01</div><h3>CASTLE CIRCUIT</h3><p>Stone walls. Fast sweepers.<br>A fountain chicane that demands respect.</p>
+<svg class="track-svg" viewBox="0 0 250 95" aria-label="Castle circuit illustration"><path d="M24 56 Q10 17 55 18 L166 16 Q189 14 197 35 L218 63 Q223 79 203 80 L160 76 Q145 73 151 54 Q152 41 133 44 L100 72 Q83 90 55 76Z" fill="none" stroke="#34454d" stroke-width="12" stroke-linejoin="round"/><path d="M24 56 Q10 17 55 18 L166 16 Q189 14 197 35 L218 63 Q223 79 203 80 L160 76 Q145 73 151 54 Q152 41 133 44 L100 72 Q83 90 55 76Z" fill="none" stroke="#9bafb6" stroke-width="2"/><path d="M65 10V25" stroke="#ff652e" stroke-width="4"/><circle cx="65" cy="17" r="4" fill="#ff652e"/></svg>
+<div class="event-meta"><span>3 LAPS</span><span>8 DRIVERS</span><span>5 POWER-UPS</span></div>
+<button id="btn-practice" class="primary" disabled>Preparing engine…</button><button id="btn-online" disabled>Race online ↗</button></aside>
+</div>
+<section class="guide" aria-label="Power-up guide"><div><h3>A little chaos. A lot of control.</h3><p>Drive through a mystery box.<br>One item. Your moment to use it.</p></div><div class="items-guide">
+<div class="item-guide"><span class="item-icon" style="color:#ffbf65">ϟ</span><div><strong>NITRO</strong><small>Find another gear.</small></div></div>
+<div class="item-guide"><span class="item-icon">◇</span><div><strong>SHIELD</strong><small>Hold your position.</small></div></div>
+<div class="item-guide"><span class="item-icon" style="color:#ff8273">◎</span><div><strong>PULSE</strong><small>Close the gap.</small></div></div>
+<div class="item-guide"><span class="item-icon" style="color:#b7a7e9">≋</span><div><strong>OIL SLICK</strong><small>Leave a surprise.</small></div></div>
+<div class="item-guide"><span class="item-icon" style="color:#9ccfea">⌁</span><div><strong>GRIP</strong><small>Own the corner.</small></div></div>
+</div></section>
+<section id="online-panel" class="panel-box hidden" aria-label="Online race lobbies">
+<div class="row"><label for="handle">DRIVER</label><input id="handle" maxlength="20" placeholder="Your name" style="flex:1 1 180px"><button id="btn-refresh">Refresh lobbies</button></div>
+<div id="lobby-rows"><span class="note" id="list-note">Looking for a server…</span></div>
+<div class="row"><label for="newlobby">RACE</label><input id="newlobby" maxlength="24" placeholder="Lobby name" style="flex:1 1 180px"><input id="newpass" maxlength="40" placeholder="Password (optional)" type="password" style="flex:1 1 140px"><button id="btn-create" class="primary">Create race</button></div><div class="note" id="online-note"></div></section>
+<p id="engine-note" class="note" role="status">Preparing the circuit… First load may take a moment.</p>
+</div>
+<div id="session-toolbar" class="session-toolbar hidden"><a class="micro" href="./">↖ Back to garage</a><div><span class="micro">CASTLE CIRCUIT / 3 LAPS</span><button id="sound-toggle" aria-pressed="true">SOUND ON</button></div></div>
+<div id="stage" class="hidden">
+<div id="ember-root"><span id="loading">Preparing your race…</span></div>
+<div id="hud">
+<div class="panel" id="speed"><span id="gear">N</span><span class="n">0</span><div class="u">KM/H &nbsp; / &nbsp; <span id="hud-car">GT-01</span></div></div>
+<div class="panel" id="lap"><div><span class="hud-lbl">POSITION</span><span id="place">1/8</span></div><div><span class="hud-lbl">LAP</span><span class="n">1/3</span></div></div>
+<div class="panel" id="clock"><span class="hud-lbl">RACE TIME</span><span id="race-time">00:00.00</span></div>
+<div class="panel" id="item"><span id="item-symbol">?</span><div><span class="hud-lbl">POWER-UP</span><div id="item-name">EMPTY</div><div id="item-use">DRIVE THROUGH A BOX</div></div></div>
+<div class="panel" id="boost"><span class="cap">SHIFT / BOOST</span></div><div id="state"></div><div id="effect"></div><div id="drift"><span id="drift-label">DRIFT CHARGE</span><div id="drift-meter"><i></i></div></div>
+</div>
+<section id="results" class="hidden" aria-label="Race results"><div class="results-inner"><span class="eyebrow orange">CASTLE CIRCUIT / CLASSIFIED</span><h2 id="result-title">RACE COMPLETE.</h2><div class="result-stats"><div><strong id="result-place">P1</strong><span class="micro">FINISH POSITION</span></div><div><strong id="result-time">00:00.00</strong><span class="micro">RACE TIME</span></div></div><div class="actions"><button id="btn-rematch" class="primary">Race again ↗</button><button id="btn-garage">Back to garage</button></div><p id="session-note">Try a different line. Save an item for the final lap.</p></div></section>
+</div>
+<div class="controls"><span><kbd>W</kbd><kbd>S</kbd> Throttle / brake</span><span><kbd>A</kbd><kbd>D</kbd> Steer</span><span><kbd>SPACE</kbd> Drift</span><span><kbd>SHIFT</kbd> Boost</span><span><kbd>E</kbd> Use item</span><span><kbd>R</kbd> Recover</span></div>
+</main>
+<footer><span>EMBER MOTORSPORT &nbsp; / &nbsp; FIRE RACER V2</span><span>PRECISION MEETS POSSIBILITY.</span></footer>
+<script type="module" src="./race.js?v=86086a2"></script>
 </body>
 </html>
