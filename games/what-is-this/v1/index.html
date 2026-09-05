@@ -67,6 +67,11 @@
     #verdict-copy { color: var(--muted); line-height: 1.6; }
     #observations { display: grid; gap: 9px; margin: 18px 0; padding: 0; list-style: none; }
     #observations li { border-left: 2px solid var(--green); padding: 6px 0 6px 13px; color: #d5e4da; line-height: 1.5; }
+    #julibrot-window { margin: 22px 0; padding: 14px; }
+    #julibrot-window h2, #julibrot-result h3 { margin: 0 0 10px; }
+    #julibrot-frame { display: block; width: 100%; height: min(720px, 78vh); border: 1px solid var(--line); border-radius: 10px; background: #07100c; }
+    #julibrot-result { margin: 18px 0; }
+    #julibrot-result p { color: var(--muted); line-height: 1.55; }
     #badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; margin: 20px 0; }
     .badge { display: grid; grid-template-columns: 2.7rem 1fr; gap: 9px; align-items: center; padding: 11px; border: 1px solid #3c644b; border-radius: 10px; background: #0a1710; }
     .badge-mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border: 1px solid var(--green); border-radius: 50%; color: var(--green); font-size: 0.72rem; font-weight: 800; }
@@ -103,7 +108,7 @@
   <main>
     <div class="eyebrow">ember diagnostic game · report schema 1</div>
     <h1>what is this?</h1>
-    <p class="lede">Let’s find out what this browser is running on. Eight stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
+    <p class="lede">Let’s find out what this browser is running on. Nine stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
     <section id="guess-card" class="card">
       <div class="eyebrow">optional opening wager</div>
       <h2>How many logical threads does this machine claim?</h2>
@@ -135,16 +140,27 @@
       <li class="stage" data-stage="stage.timing.v1"><span class="mark">○</span><span>display + jank timing</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.gpu-render-bar.v1"><span class="mark">○</span><span>GPU render window</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.gpu.v1"><span class="mark">○</span><span>engine GPU calibration</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.julibrot-slide.v1"><span class="mark">○</span><span>Julibrot fast-slide</span><span class="detail">waiting</span></li>
     </ol>
+    <section id="julibrot-window" class="card" hidden>
+      <h2>Julibrot fast-slide laboratory</h2>
+      <p id="julibrot-window-status">loading the same-origin lab…</p>
+      <iframe id="julibrot-frame" title="Julibrot fast-slide measurement laboratory"></iframe>
+    </section>
     <noscript>This diagnostic needs JavaScript and WebAssembly. No report has been created.</noscript>
     <section id="verdict" class="card" aria-live="polite">
       <div class="eyebrow">verdict</div>
       <h2 id="verdict-title">this is…</h2>
       <p id="verdict-copy"></p>
       <ul id="observations"></ul>
+      <section id="julibrot-result" class="card" hidden>
+        <h3>Julibrot fast-slide</h3>
+        <p id="julibrot-result-copy"></p>
+        <div id="julibrot-facts" class="facts"></div>
+      </section>
       <div id="badges" aria-label="Earned measurement badges"></div>
       <div id="facts" class="facts"></div>
-      <p id="disclosure" class="disclosure">This report contains your browser user agent, logical processor count, device memory when exposed, screen size and pixel ratio, timer and visibility conditions, wasm feature results, capped benchmark samples and summaries, floating-point fingerprints, and GPU facts or unavailable reasons. It contains no cookies, local storage, account identifier, or data read from your files. Download stays on this device. Submit sends this JSON once to the Ember server, which writes the accepted report to its structured logs and returns a content-derived receipt.</p>
+      <p id="disclosure" class="disclosure">This report contains your browser user agent, logical processor count, device memory when exposed, screen size and pixel ratio, timer and visibility conditions, wasm feature results, capped benchmark samples and summaries, floating-point fingerprints, and GPU facts or unavailable reasons. The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input. It contains no cookies, local storage, account identifier, or data read from your files. Download stays on this device. Submit sends this JSON once to the Ember server, which writes the accepted report to its structured logs and returns a content-derived receipt.</p>
       <div class="actions">
         <button id="download" type="button" disabled>Download Report</button>
         <button id="submit" type="button" disabled>Submit to Server</button>
@@ -157,6 +173,13 @@
     const ROOT = new URL('../../../', location);
     const RAW_SAMPLE_CAP = 120;
     const REPORT_BYTE_CAP = 52 * 1024;
+    const JULIBROT_FACT_SAMPLE_CAP = 12;
+    const JULIBROT_FACT_FRAME_DEADLINE_MS = 1_000;
+    const JULIBROT_STAGE_DEADLINE_MS = 240_000;
+    const JULIBROT_SETTLE_DEADLINE_MS = 30_000;
+    const JULIBROT_URL = new URL('labs/julibrot/', ROOT);
+    const JULIBROT_STAGE_ONLY = new URLSearchParams(location.search).get('stage') === 'julibrot-slide';
+    const JULIBROT_HIDDEN_REASON = "the page was hidden during the Julibrot slide; the lab drops to its 250 ms fallback timer and the game's animation-frame sampling stops, so no fast-slide frame can be observed";
     const TIMER_TRANSITION_TARGET = 32;
     const TIMER_PROBE_MAX_READS = 4_000_000;
     const TIMER_PROBE_MAX_WALL_MS = 500;
@@ -188,6 +211,7 @@
       ['stage.timing.v1', 'display + jank timing', 15_000],
       ['stage.gpu-render-bar.v1', 'GPU render window', 12_000],
       ['stage.gpu.v1', 'engine GPU calibration', 3_000],
+      ['stage.julibrot-slide.v1', 'Julibrot fast-slide', JULIBROT_STAGE_DEADLINE_MS],
     ];
     const GPU_KERNEL_FALLBACK = [
       { kernel_id: 'gpu.compute-rank4-soa.n256.v1', workload: 'WebGPU f32 SoA 4xN projection; N=256; 64 dispatches per base invocation; same shape and batch count as cpu.rank4-soa.n256.v2 but different precision and execution substrate', unit: 'ms' },
@@ -218,6 +242,9 @@
     const guessButton = document.querySelector('#guess-and-run');
     const skipButton = document.querySelector('#skip-and-run');
     const guessNote = document.querySelector('#guess-note');
+    const julibrotWindow = document.querySelector('#julibrot-window');
+    let julibrotFrame = document.querySelector('#julibrot-frame');
+    const julibrotWindowStatus = document.querySelector('#julibrot-window-status');
     const guessReveal = document.querySelector('#guess-reveal');
     const telemetry = document.querySelector('#telemetry');
     const telemetryKernel = document.querySelector('#telemetry-kernel');
@@ -427,7 +454,37 @@
     }
 
     function requireActive(run, token) {
-      if (!tokenActive(run, token)) throw new Error('stage work cancelled after its deadline or run replacement');
+      if (!tokenActive(run, token)) throw new Error(token.cancelReason || 'stage work cancelled after its deadline or run replacement');
+    }
+
+    function cancelStageToken(token, cancelReason) {
+      if (token.cancelled) return;
+      token.cancelled = true;
+      token.cancelReason = cancelReason;
+      for (const listener of token.cancelListeners) listener(cancelReason);
+      token.cancelListeners.clear();
+    }
+
+    function onStageTokenCancel(token, listener) {
+      if (token.cancelled) {
+        listener(token.cancelReason);
+        return () => {};
+      }
+      token.cancelListeners.add(listener);
+      return () => token.cancelListeners.delete(listener);
+    }
+
+    function stageTokenDelay(token, milliseconds) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          unsubscribe();
+          resolve();
+        }, milliseconds);
+        const unsubscribe = onStageTokenCancel(token, cancelReason => {
+          clearTimeout(timer);
+          reject(new Error(cancelReason));
+        });
+      });
     }
 
     function timerDelay(milliseconds) {
@@ -445,7 +502,11 @@
       if (activeRun !== run || !run.running) return;
       const started = performance.now();
       const visibilityAtStart = document.visibilityState;
-      const token = { cancelled: false };
+      let hiddenDuringStage = document.hidden;
+      const observeStageVisibility = () => { hiddenDuringStage ||= document.hidden; };
+      const stageVisibilityDetail = () => `${visibilityAtStart}→${document.visibilityState}${hiddenDuringStage ? ', hidden for part of the stage' : ''}`;
+      document.addEventListener('visibilitychange', observeStageVisibility);
+      const token = { cancelled: false, cancelReason: null, cancelListeners: new Set() };
       const stageIndex = STAGES.findIndex(stage => stage[0] === stageId);
       run.currentStageIndex = Math.max(0, stageIndex);
       recordVisibility(run);
@@ -458,21 +519,28 @@
         .catch(error => ({ state: 'unavailable', unavailableReason: reason(error) }));
       let deadlineTimer = 0;
       const deadlineResult = new Promise(resolve => {
-        deadlineTimer = setTimeout(() => resolve({
-          state: 'unavailable',
-          unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline while the page was ${document.visibilityState}`,
-          timedOut: true,
-        }), deadlineMs);
+        deadlineTimer = setTimeout(() => {
+          resolve({
+            state: 'unavailable',
+            unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline; page visibility over the stage: ${stageVisibilityDetail()}`,
+            timedOut: true,
+          });
+        }, deadlineMs);
       });
-      const outcome = await Promise.race([workResult, deadlineResult]);
+      let outcome = await Promise.race([workResult, deadlineResult]);
       clearTimeout(deadlineTimer);
+      document.removeEventListener('visibilitychange', observeStageVisibility);
       if (outcome.timedOut) {
-        token.cancelled = true;
+        cancelStageToken(token, outcome.unavailableReason);
         if (stageId === 'stage.gpu-compute.v1' && wasm) {
           run.gpuComputeTimedOut = true;
           wasm.cancel_gpu_compute();
         }
         if (stageId === 'stage.gpu-render-bar.v1') resumeRenderBar(run);
+        if (stageId === 'stage.julibrot-slide.v1') {
+          const stoppedWork = await workResult;
+          if (stoppedWork.state === 'complete') outcome = stoppedWork;
+        }
       }
       if (activeRun !== run || !run.running) return;
       const duration = performance.now() - started;
@@ -483,7 +551,7 @@
         unavailable_reason: outcome.unavailableReason,
         duration_ms: duration,
       });
-      const visibilityDetail = visibilityAtStart === document.visibilityState ? document.visibilityState : `${visibilityAtStart}→${document.visibilityState}`;
+      const visibilityDetail = stageVisibilityDetail();
       showStage(stageId, outcome.state, outcome.state === 'complete' ? `${duration.toFixed(1)} ms · ${visibilityDetail}` : `unavailable · ${outcome.unavailableReason}`);
       progress.style.width = `${run.stageReports.length / STAGES.length * 100}%`;
       setRealProgress(run, run.stageReports.length);
@@ -1121,6 +1189,682 @@
       }
     }
 
+    function parseJulibrotFact(text) {
+      if (text === 'unavailable') return null;
+      if (text === 'true') return true;
+      if (text === 'false') return false;
+      if (/^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) return Number(text);
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          return JSON.parse(text);
+        } catch {
+          return text;
+        }
+      }
+      return text;
+    }
+
+    function readJulibrotFacts(document) {
+      const grid = document.querySelector('#facts-grid');
+      if (!grid) return null;
+      const facts = {};
+      for (const term of grid.querySelectorAll('dt')) {
+        const detail = term.nextElementSibling;
+        if (detail?.tagName === 'DD') facts[term.textContent] = parseJulibrotFact(detail.textContent);
+      }
+      return Object.keys(facts).length ? facts : null;
+    }
+
+    function ensureJulibrotFrame() {
+      if (julibrotFrame?.isConnected) return julibrotFrame;
+      const frame = document.createElement('iframe');
+      frame.id = 'julibrot-frame';
+      frame.title = 'Julibrot fast-slide measurement laboratory';
+      julibrotWindow.append(frame);
+      julibrotFrame = frame;
+      return frame;
+    }
+
+    function retireJulibrotFrame() {
+      const retired = julibrotFrame;
+      if (!retired) return { frame_removed: true, content_document_gone: true };
+      retired.src = 'about:blank';
+      retired.remove();
+      julibrotFrame = null;
+      return {
+        frame_removed: !retired.isConnected,
+        content_document_gone: retired.contentDocument === null,
+      };
+    }
+
+    function julibrotFrameFacts(run, token) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let animationFrame = 0;
+        let deadlineTimer = 0;
+        let unsubscribe = () => {};
+        const finish = (error, facts = null) => {
+          if (settled) return;
+          settled = true;
+          cancelAnimationFrame(animationFrame);
+          clearTimeout(deadlineTimer);
+          unsubscribe();
+          if (error) reject(error);
+          else resolve(facts);
+        };
+        animationFrame = requestAnimationFrame(() => {
+          try {
+            requireActive(run, token);
+            const document = julibrotFrame?.contentDocument;
+            const status = document?.querySelector('#status');
+            if (status?.classList.contains('failed')) throw new Error(status.textContent || 'Julibrot lab refused to start');
+            const facts = document ? readJulibrotFacts(document) : null;
+            if (!facts) throw new Error('Julibrot lab has not published its Facts display');
+            finish(null, facts);
+          } catch (error) {
+            finish(error);
+          }
+        });
+        deadlineTimer = setTimeout(() => finish(new Error(`the Julibrot lab produced no animation frame within ${JULIBROT_FACT_FRAME_DEADLINE_MS} ms`)), JULIBROT_FACT_FRAME_DEADLINE_MS);
+        unsubscribe = onStageTokenCancel(token, cancelReason => finish(new Error(cancelReason)));
+      });
+    }
+
+    function isSettledJulibrotFinal(facts) {
+      return facts.refinement_level === 'Final'
+        && facts.completed_scene_id != null
+        && facts.refinement_pending === false
+        && facts.scene_update_pending === false
+        && !facts.loop_stopped_reason;
+    }
+
+    async function waitForJulibrotFinal(run, token, collector = null) {
+      const started = performance.now();
+      while (performance.now() - started < JULIBROT_SETTLE_DEADLINE_MS) {
+        const facts = await julibrotFrameFacts(run, token);
+        if (collector) collector.observe(facts);
+        if (isSettledJulibrotFinal(facts)) return facts;
+      }
+      throw new Error(`Julibrot lab did not publish a settled Final scene within ${JULIBROT_SETTLE_DEADLINE_MS} ms`);
+    }
+
+    async function loadJulibrotLab(run, token) {
+      julibrotWindow.hidden = false;
+      julibrotWindowStatus.textContent = 'loading the same-origin lab…';
+      const frame = ensureJulibrotFrame();
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        let deadlineTimer = 0;
+        let unsubscribe = () => {};
+        const finish = error => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadlineTimer);
+          unsubscribe();
+          frame.removeEventListener('load', loaded);
+          frame.removeEventListener('error', failed);
+          if (error) reject(error);
+          else resolve();
+        };
+        const loaded = () => finish(null);
+        const failed = () => finish(new Error('Julibrot lab frame failed to load'));
+        frame.addEventListener('load', loaded);
+        frame.addEventListener('error', failed);
+        deadlineTimer = setTimeout(() => finish(new Error(`Julibrot lab frame did not load within ${JULIBROT_SETTLE_DEADLINE_MS} ms`)), JULIBROT_SETTLE_DEADLINE_MS);
+        unsubscribe = onStageTokenCancel(token, cancelReason => finish(new Error(cancelReason)));
+        frame.src = JULIBROT_URL.toString();
+      });
+      requireActive(run, token);
+      const started = performance.now();
+      while (performance.now() - started < JULIBROT_SETTLE_DEADLINE_MS) {
+        const document = frame.contentDocument;
+        const status = document?.querySelector('#status');
+        if (status?.classList.contains('failed')) throw new Error(status.textContent || 'Julibrot lab refused to start');
+        const facts = document ? readJulibrotFacts(document) : null;
+        if (facts && document.querySelector('#o13') && document.querySelector('#height')) {
+          julibrotWindowStatus.textContent = 'waiting for the baseline Final scene…';
+          return { document, facts };
+        }
+        await stageTokenDelay(token, 16);
+        requireActive(run, token);
+      }
+      throw new Error(`Julibrot lab did not expose its controls and Facts display within ${JULIBROT_SETTLE_DEADLINE_MS} ms`);
+    }
+
+    function snapshotJulibrotStorage(window) {
+      const keys = ['julibrot.view.a', 'julibrot.view.b', 'julibrot.rows'];
+      return keys.map(key => [key, window.localStorage.getItem(key)]);
+    }
+
+    function restoreJulibrotStorage(window, snapshot) {
+      for (const [key, value] of snapshot) {
+        if (value === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, value);
+      }
+    }
+
+    function setJulibrotControl(document, id, value, eventName = 'input') {
+      const control = document.getElementById(id);
+      if (!control) throw new Error(`Julibrot control ${id} is unavailable`);
+      control.value = String(value);
+      control.dispatchEvent(new document.defaultView.Event(eventName, { bubbles: true }));
+    }
+
+    function setJulibrotValues(document, values) {
+      for (const [id, value] of Object.entries(values)) {
+        const control = document.getElementById(id);
+        if (!control) throw new Error(`Julibrot control ${id} is unavailable`);
+        control.value = String(value);
+      }
+    }
+
+    async function chooseJulibrotRow(run, token, document, side, name) {
+      const select = document.getElementById(`rows-${side}`);
+      const option = [...select.options].find(candidate => candidate.textContent === name);
+      if (!option) throw new Error(`Julibrot named row ${name} is unavailable`);
+      setJulibrotControl(document, `rows-${side}`, option.value, 'change');
+      return waitForJulibrotFinal(run, token);
+    }
+
+    async function establishAuditHeightRow(run, token, document, distanceFive, deep = false) {
+      setJulibrotValues(document, {
+        o12: 0,
+        o13: -1.3166537201715494,
+        o14: 0,
+        o23: 0,
+        o24: -1.3166537201715494,
+        o34: 0,
+      });
+      setJulibrotControl(document, 'o13', -1.3166537201715494);
+      setJulibrotValues(document, {
+        q12: 0,
+        q13: -0.2541426066233471,
+        q14: 0,
+        q23: 0,
+        q24: -0.2541426066233471,
+        q34: 0,
+        q15: 0,
+        q25: 0,
+        q35: 0,
+        q45: 0,
+      });
+      setJulibrotControl(document, 'q13', -0.2541426066233471);
+      setJulibrotValues(document, { 'camera-yaw': 0.96, 'camera-pitch': Math.PI });
+      setJulibrotControl(document, 'camera-yaw', 0.96);
+      setJulibrotValues(document, { 'distance-five': distanceFive, 'distance-four': distanceFive, height: 0 });
+      setJulibrotControl(document, 'distance-five', distanceFive);
+      setJulibrotControl(document, 'height', 0);
+      setJulibrotValues(document, {
+        'origin-z-re': 0,
+        'origin-z-re-number': 0,
+        'origin-z-im': 0,
+        'origin-z-im-number': 0,
+        'origin-c-re': -0.671,
+        'origin-c-re-number': -0.671,
+        'origin-c-im': 0.131,
+        'origin-c-im-number': 0.131,
+      });
+      setJulibrotControl(document, 'origin-c-re', -0.671, 'change');
+      setJulibrotControl(document, 'scale', deep ? 14 : 3.92);
+      return waitForJulibrotFinal(run, token);
+    }
+
+    async function establishJulibrotBaseline(run, token, document, spec) {
+      julibrotWindowStatus.textContent = `${spec.name}: establishing ${spec.baseline_row}…`;
+      setJulibrotControl(document, 'iteration-cap', 512, 'change');
+      if (spec.baseline_row === 'gentle-d5-8') return establishAuditHeightRow(run, token, document, 8, false);
+      if (spec.baseline_row === 'close-d5-2') return establishAuditHeightRow(run, token, document, 2, false);
+      if (spec.baseline_row === 'deep-scale-14') return establishAuditHeightRow(run, token, document, 8, true);
+      if (spec.baseline_row === 'Mandelbrot relief to Julia relief') {
+        await chooseJulibrotRow(run, token, document, 'a', 'Mandelbrot relief');
+        await chooseJulibrotRow(run, token, document, 'b', 'Julia relief');
+        document.getElementById('load-a').click();
+        return waitForJulibrotFinal(run, token);
+      }
+      return chooseJulibrotRow(run, token, document, 'a', spec.baseline_row);
+    }
+
+    function cappedDistinct(values) {
+      return [...new Set(values)].slice(-JULIBROT_FACT_SAMPLE_CAP);
+    }
+
+    function cappedNumbers(values) {
+      return values.filter(Number.isFinite).slice(-JULIBROT_FACT_SAMPLE_CAP);
+    }
+
+    function roundJulibrot(value, decimalPlaces) {
+      return Number(value.toFixed(decimalPlaces));
+    }
+
+    function julibrotNumberSummary(values, decimalPlaces) {
+      if (!values.length) return null;
+      const sorted = values.slice().sort((left, right) => left - right);
+      const middle = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+      return {
+        min: roundJulibrot(sorted[0], decimalPlaces),
+        median: roundJulibrot(median, decimalPlaces),
+        max: roundJulibrot(sorted[sorted.length - 1], decimalPlaces),
+      };
+    }
+
+    function julibrotFrameCounters(facts) {
+      const counters = {
+        raf: facts.frames_from_raf,
+        fallback: facts.frames_from_fallback,
+        schedules: facts.frame_schedules,
+      };
+      return Object.values(counters).every(Number.isInteger) ? counters : null;
+    }
+
+    function counterAdvance(previous, current) {
+      return current >= previous ? current - previous : current;
+    }
+
+    function appendedJulibrotTimings(baselineKeys, finalTimings) {
+      const finalKeys = finalTimings.map(record => JSON.stringify(record));
+      if (!baselineKeys.length) return finalTimings;
+      if (finalKeys.length >= baselineKeys.length && baselineKeys.every((key, index) => finalKeys[index] === key)) {
+        return finalTimings.slice(baselineKeys.length);
+      }
+      const baselineTail = baselineKeys[baselineKeys.length - 1];
+      const tailIndex = finalKeys.lastIndexOf(baselineTail);
+      return tailIndex < 0 ? finalTimings : finalTimings.slice(tailIndex + 1);
+    }
+
+    function julibrotCollector(spec, baselineFacts) {
+      const frames = { sample_count: 0, observed: 0, frames_from_raf: 0, frames_from_fallback: 0, frame_schedules: 0, clear_only: 0, held: 0 };
+      const uncoveredFractions = [];
+      const completedSceneIds = [];
+      const gameSideWallMs = [];
+      let lastCompleted = baselineFacts.completed_scene_id;
+      let lastReferenceRequests = Number.isInteger(baselineFacts.sampled_reference_requests) ? baselineFacts.sampled_reference_requests : null;
+      let referenceRequestsIssued = 0;
+      const baselineTimingKeys = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings.map(record => JSON.stringify(record)) : [];
+      let lastFrameCounters = julibrotFrameCounters(baselineFacts);
+      let finalFacts = baselineFacts;
+      return {
+        step(wallMs) {
+          gameSideWallMs.push(roundJulibrot(wallMs, 2));
+        },
+        observe(facts) {
+          finalFacts = facts;
+          frames.sample_count += 1;
+          const counters = julibrotFrameCounters(facts);
+          if (!counters || !lastFrameCounters) {
+            lastFrameCounters = counters;
+            return;
+          }
+          if (counters.raf === lastFrameCounters.raf && counters.fallback === lastFrameCounters.fallback && counters.schedules === lastFrameCounters.schedules) return;
+          frames.observed += 1;
+          frames.frames_from_raf += counterAdvance(lastFrameCounters.raf, counters.raf);
+          frames.frames_from_fallback += counterAdvance(lastFrameCounters.fallback, counters.fallback);
+          frames.frame_schedules += counterAdvance(lastFrameCounters.schedules, counters.schedules);
+          lastFrameCounters = counters;
+          if (facts.warp_kind === 'ClearOnly') frames.clear_only += 1;
+          if (facts.warp_kind === 'HoldStale') frames.held += 1;
+          if (Number.isFinite(facts.surface_uncovered_fraction)) {
+            uncoveredFractions.push(facts.surface_uncovered_fraction);
+            if (uncoveredFractions.length > JULIBROT_FACT_SAMPLE_CAP) uncoveredFractions.shift();
+          }
+          if (Number.isInteger(facts.completed_scene_id) && facts.completed_scene_id !== lastCompleted) {
+            completedSceneIds.push(facts.completed_scene_id);
+            lastCompleted = facts.completed_scene_id;
+          }
+          if (Number.isInteger(facts.sampled_reference_requests)) {
+            if (lastReferenceRequests !== null) referenceRequestsIssued += facts.sampled_reference_requests >= lastReferenceRequests ? facts.sampled_reference_requests - lastReferenceRequests : facts.sampled_reference_requests;
+            lastReferenceRequests = facts.sampled_reference_requests;
+          }
+        },
+        finish(scriptedHoldWallMs = null) {
+          const finalTimings = Array.isArray(finalFacts.level_timings) ? finalFacts.level_timings : [];
+          const levelTimings = appendedJulibrotTimings(baselineTimingKeys, finalTimings);
+          const sample = field => cappedNumbers(levelTimings.map(record => record[field]));
+          const optional = field => {
+            const values = sample(field);
+            return values.length ? values : null;
+          };
+          const fence = cappedNumbers(levelTimings.flatMap(record => [record.scene_us, record.warp_us]));
+          const walls = {
+            worker_reference_us: optional('worker_reference_us'),
+            credit_wait_us: optional('credit_wait_us'),
+            transfer_us: null,
+            packing_us: null,
+            upload_us: null,
+            dispatch_us: optional('dispatch_us'),
+            fence_us: fence.length ? fence : null,
+          };
+          const denominator = frames.observed || 1;
+          return {
+            scenario_id: spec.scenario_id,
+            step_count: spec.step_count,
+            interval_ms: spec.interval_ms,
+            sample_window: `last ${JULIBROT_FACT_SAMPLE_CAP} distinct lab turns`,
+            live_iteration_cap: Number.isInteger(finalFacts.delivered_iteration_cap) ? finalFacts.delivered_iteration_cap : null,
+            frames: {
+              ...frames,
+              clear_only_fraction: roundJulibrot(frames.clear_only / denominator, 4),
+              held_fraction: roundJulibrot(frames.held / denominator, 4),
+              warp_refused: null,
+              warp_refused_fraction: null,
+              uncovered_fraction: julibrotNumberSummary(uncoveredFractions, 4),
+            },
+            completed_scene_ids: cappedDistinct(completedSceneIds),
+            discarded_scene_ids: null,
+            presented_scene_ids: null,
+            settle_to_paint_ms: null,
+            reference_requests_issued: null,
+            sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
+            timing_records_observed: levelTimings.length,
+            walls_us: walls,
+            scripted_hold_wall_ms: Number.isFinite(scriptedHoldWallMs) ? roundJulibrot(scriptedHoldWallMs, 2) : null,
+            game_side_wall_ms: gameSideWallMs,
+          };
+        },
+      };
+    }
+
+    async function observeJulibrotInterval(run, token, collector, intervalMs) {
+      const started = performance.now();
+      do {
+        collector.observe(await julibrotFrameFacts(run, token));
+      } while (performance.now() - started < intervalMs);
+      return performance.now() - started;
+    }
+
+    function driveJulibrotStep(document, spec, index) {
+      const fraction = spec.step_count === 1 ? 1 : index / (spec.step_count - 1);
+      if (spec.scenario_id === 'object-o13-range') setJulibrotControl(document, 'o13', -Math.PI + 2 * Math.PI * fraction);
+      else if (spec.scenario_id.startsWith('height-')) setJulibrotControl(document, 'height', 4 * (index + 1) / spec.step_count);
+      else if (spec.scenario_id === 'scale-deep-row') setJulibrotControl(document, 'scale', 14 + 4 * fraction);
+      else if (spec.scenario_id === 'rapid-a-to-b-morph') setJulibrotControl(document, 'morph', fraction);
+      else if (spec.scenario_id === 'iteration-cap-mid-view') setJulibrotControl(document, 'iteration-cap', index === 0 ? 512 : 1024, 'change');
+      else if (spec.scenario_id === 'hold-exact-2000ms') setJulibrotControl(document, 'o13', -0.9);
+      else if (spec.scenario_id === 'alternating-two-slider-burst') {
+        const id = index % 2 === 0 ? 'o13' : 'q13';
+        setJulibrotControl(document, id, index % 4 < 2 ? -0.35 : 0.35);
+      } else throw new Error(`Julibrot scenario action ${spec.scenario_id} is unavailable`);
+    }
+
+    async function runJulibrotScenario(run, token, document, spec) {
+      const baselineFacts = await establishJulibrotBaseline(run, token, document, spec);
+      const collector = julibrotCollector(spec, baselineFacts);
+      julibrotWindowStatus.textContent = `${spec.name}: ${spec.step_count} updates at ${spec.interval_ms} ms…`;
+      let scriptedHoldWallMs = null;
+      for (let index = 0; index < spec.step_count; index += 1) {
+        const started = performance.now();
+        driveJulibrotStep(document, spec, index);
+        const intervalWall = await observeJulibrotInterval(run, token, collector, spec.interval_ms);
+        collector.step(performance.now() - started);
+        if (spec.scenario_id === 'hold-exact-2000ms') scriptedHoldWallMs = intervalWall;
+      }
+      await waitForJulibrotFinal(run, token, collector);
+      return collector.finish(scriptedHoldWallMs);
+    }
+
+    function julibrotWallSummary(values) {
+      const summary = summarize(values);
+      if (!summary) return null;
+      return {
+        ...summary,
+        median: roundJulibrot(summary.median, 2),
+        p95: roundJulibrot(summary.p95, 2),
+        min: roundJulibrot(summary.min, 2),
+        max: roundJulibrot(summary.max, 2),
+      };
+    }
+
+    function encodedBytes(value) {
+      return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+    }
+
+    function parseJulibrotNote(record) {
+      try {
+        return JSON.parse(record.notes[0]);
+      } catch {
+        return null;
+      }
+    }
+
+    function writeJulibrotNote(record, note) {
+      record.notes[0] = JSON.stringify(note);
+    }
+
+    function markKernelTruncation(record, rawSamples = 0, noteDetails = 0) {
+      if (!Object.prototype.hasOwnProperty.call(record, '__reportTruncation')) {
+        Object.defineProperty(record, '__reportTruncation', {
+          configurable: true,
+          enumerable: false,
+          value: { rawSamples: 0, noteDetails: 0 },
+        });
+      }
+      record.__reportTruncation.rawSamples += rawSamples;
+      record.__reportTruncation.noteDetails += noteDetails;
+      const prefix = 'report cap truncation:';
+      const message = `${prefix} dropped ${record.__reportTruncation.rawSamples} raw samples and ${record.__reportTruncation.noteDetails} note-detail values; summary still describes the full measured sample set`;
+      const index = record.notes.findIndex(note => note.startsWith(prefix));
+      if (index < 0) record.notes.push(message);
+      else record.notes[index] = message;
+    }
+
+    function truncateJulibrotRawSample(records) {
+      const record = records.filter(candidate => candidate.raw_samples.length).sort((left, right) => right.raw_samples.length - left.raw_samples.length)[0];
+      if (!record) return false;
+      record.raw_samples.shift();
+      markKernelTruncation(record, 1, 0);
+      return true;
+    }
+
+    function truncateJulibrotNoteDetail(records) {
+      const wallFields = ['fence_us', 'worker_reference_us', 'credit_wait_us', 'dispatch_us'];
+      for (const record of records) {
+        const note = parseJulibrotNote(record);
+        if (!note) continue;
+        for (const field of wallFields) {
+          const samples = note.walls_us?.[field];
+          if (Array.isArray(samples) && samples.length) {
+            samples.shift();
+            if (!samples.length) note.walls_us[field] = null;
+            writeJulibrotNote(record, note);
+            markKernelTruncation(record, 0, 1);
+            return true;
+          }
+        }
+        if (Array.isArray(note.completed_scene_ids) && note.completed_scene_ids.length) {
+          note.completed_scene_ids.shift();
+          writeJulibrotNote(record, note);
+          markKernelTruncation(record, 0, 1);
+          return true;
+        }
+        if (note.frames?.uncovered_fraction) {
+          note.frames.uncovered_fraction = null;
+          writeJulibrotNote(record, note);
+          markKernelTruncation(record, 0, 3);
+          return true;
+        }
+        if (note.sampled_reference_requests_issued !== null) {
+          note.sampled_reference_requests_issued = null;
+          writeJulibrotNote(record, note);
+          markKernelTruncation(record, 0, 1);
+          return true;
+        }
+        if (!note.detail_truncated_for_report_cap) {
+          const headline = {
+            scenario_id: note.scenario_id,
+            live_iteration_cap: note.live_iteration_cap,
+            sample_window: note.sample_window,
+            frames: note.frames,
+            scripted_hold_wall_ms: note.scripted_hold_wall_ms,
+            stage_progress: note.stage_progress,
+            detail_truncated_for_report_cap: true,
+          };
+          writeJulibrotNote(record, headline);
+          markKernelTruncation(record, 0, 1);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function fitJulibrotRecordsToBudget(records, byteBudget) {
+      while (encodedBytes(records) > byteBudget && truncateJulibrotRawSample(records)) {}
+      while (encodedBytes(records) > byteBudget && truncateJulibrotNoteDetail(records)) {}
+      return encodedBytes(records);
+    }
+
+    function setJulibrotStageProgress(records, completedScenarios, totalScenarios, partialReason = null) {
+      const record = records[records.length - 1];
+      if (!record) return;
+      const note = parseJulibrotNote(record);
+      if (!note) return;
+      note.stage_progress = {
+        completed_scenarios: completedScenarios,
+        total_scenarios: totalScenarios,
+        partial_reason: partialReason,
+      };
+      writeJulibrotNote(record, note);
+    }
+
+    function julibrotUnavailableRecord(unavailableReason) {
+      return {
+        kernel_id: 'julibrot-slide.unavailable.v1',
+        workload: 'load the same-origin Julibrot lab and reach a settled Final scene',
+        unit: 'facts',
+        warmup_runs: 0,
+        status: 'unavailable',
+        unavailable_reason: unavailableReason,
+        raw_samples: [],
+        summary: null,
+        notes: ['the Julibrot refusal is stage unavailability, not a failure of the diagnostic game'],
+      };
+    }
+
+    async function measureJulibrotSlide(run, token) {
+      let storageSnapshot = null;
+      let specs = [];
+      const records = [];
+      let failure = null;
+      let retirement = { frame_removed: true, content_document_gone: true };
+      const abortWhenHidden = () => {
+        if (document.hidden) cancelStageToken(token, JULIBROT_HIDDEN_REASON);
+      };
+      document.addEventListener('visibilitychange', abortWhenHidden);
+      abortWhenHidden();
+      try {
+        requireActive(run, token);
+        if (!wasm) throw new Error(run.wasmFailure || 'diagnostic wasm did not provide the fixed Julibrot scenario table');
+        specs = JSON.parse(wasm.julibrot_scenario_inventory_json());
+        if (!Array.isArray(specs) || specs.length !== 8) throw new Error('diagnostic wasm returned an incomplete Julibrot scenario table');
+        const loaded = await loadJulibrotLab(run, token);
+        storageSnapshot = snapshotJulibrotStorage(julibrotFrame.contentWindow);
+        await waitForJulibrotFinal(run, token);
+        for (const spec of specs) {
+          requireActive(run, token);
+          const observation = await runJulibrotScenario(run, token, loaded.document, spec);
+          const { game_side_wall_ms: gameSideWallMs, ...note } = observation;
+          const noteText = JSON.stringify(note);
+          const record = {
+            kernel_id: `julibrot-slide.${spec.scenario_id}.v1`,
+            workload: `${spec.name}; baseline ${spec.baseline_row}; steps=${spec.step_count}; interval_ms=${spec.interval_ms}; raw=game-side step wall ms`,
+            unit: 'ms',
+            warmup_runs: 0,
+            status: 'complete',
+            unavailable_reason: null,
+            raw_samples: gameSideWallMs,
+            summary: julibrotWallSummary(gameSideWallMs),
+            notes: [noteText],
+          };
+          records.push(record);
+        }
+      } catch (error) {
+        failure = error;
+      } finally {
+        document.removeEventListener('visibilitychange', abortWhenHidden);
+        if (storageSnapshot) {
+          try {
+            restoreJulibrotStorage(julibrotFrame.contentWindow, storageSnapshot);
+          } catch (error) {
+            console.error(`Julibrot storage restoration failed: ${reason(error)}`);
+          }
+        }
+        retirement = retireJulibrotFrame();
+        julibrotWindow.hidden = true;
+      }
+      if (!records.length && failure) {
+        const unavailableReason = reason(failure);
+        run.kernels.push(julibrotUnavailableRecord(unavailableReason));
+        run.julibrotSummary = { available: false, unavailableReason, records: [], retirement };
+        throw failure;
+      }
+      const partialReason = failure ? reason(failure) : null;
+      setJulibrotStageProgress(records, records.length, specs.length, partialReason);
+      fitJulibrotRecordsToBudget(records, wasm.julibrot_report_byte_budget());
+      run.kernels.push(...records);
+      run.julibrotSummary = { available: true, partialReason, records, retirement };
+      const progress = partialReason ? `${records.length} of ${specs.length} scenarios completed before the stage stopped: ${partialReason}` : 'all fixed Julibrot scenarios completed';
+      julibrotWindowStatus.textContent = retirement.frame_removed && retirement.content_document_gone ? `${progress}; the lab is retired from this run.` : `${progress}; the iframe was removed but browsing-context retirement was not confirmed.`;
+    }
+
+    function julibrotReportSummary(currentReport) {
+      const stage = currentReport.stages.find(candidate => candidate.stage_id === 'stage.julibrot-slide.v1');
+      if (!stage) return null;
+      if (stage.status === 'unavailable') return { available: false, unavailableReason: stage.unavailable_reason };
+      const records = currentReport.kernels.filter(kernel => kernel.kernel_id.startsWith('julibrot-slide.') && kernel.status === 'complete');
+      let frames = 0;
+      let samples = 0;
+      let rafFrames = 0;
+      let fallbackFrames = 0;
+      let clearOnly = 0;
+      let held = 0;
+      let partialReason = null;
+      let totalScenarios = records.length;
+      for (const record of records) {
+        try {
+          const measured = JSON.parse(record.notes[0]);
+          frames += measured.frames.observed;
+          samples += measured.frames.sample_count;
+          rafFrames += measured.frames.frames_from_raf;
+          fallbackFrames += measured.frames.frames_from_fallback;
+          clearOnly += measured.frames.clear_only;
+          held += measured.frames.held;
+          if (measured.stage_progress) {
+            partialReason = measured.stage_progress.partial_reason;
+            totalScenarios = measured.stage_progress.total_scenarios;
+          }
+        } catch {
+          continue;
+        }
+      }
+      return { available: true, scenarios: records.length, totalScenarios, partialReason, frames, samples, rafFrames, fallbackFrames, clearOnly, held };
+    }
+
+    function fitReportToByteCap(currentReport) {
+      const julibrotRecords = currentReport.kernels.filter(kernel => kernel.kernel_id.startsWith('julibrot-slide.') && kernel.status === 'complete');
+      while (encodedBytes(currentReport) > REPORT_BYTE_CAP && truncateJulibrotRawSample(julibrotRecords)) {}
+      while (encodedBytes(currentReport) > REPORT_BYTE_CAP && truncateJulibrotNoteDetail(julibrotRecords)) {}
+      while (encodedBytes(currentReport) > REPORT_BYTE_CAP) {
+        const candidate = currentReport.kernels
+          .filter(kernel => !kernel.kernel_id.startsWith('julibrot-slide.') && kernel.raw_samples.length)
+          .sort((left, right) => right.raw_samples.length - left.raw_samples.length)[0];
+        if (!candidate) break;
+        candidate.raw_samples.shift();
+        markKernelTruncation(candidate, 1, 0);
+      }
+      while (encodedBytes(currentReport) > REPORT_BYTE_CAP) {
+        const candidates = currentReport.kernels
+          .filter(kernel => !kernel.kernel_id.startsWith('julibrot-slide.'))
+          .flatMap(kernel => kernel.notes
+          .map((note, index) => ({ kernel, note, index }))
+          .filter(candidate => !candidate.note.startsWith('report cap truncation:')))
+          .sort((left, right) => right.note.length - left.note.length);
+        const candidate = candidates[0];
+        if (!candidate) break;
+        candidate.kernel.notes.splice(candidate.index, 1);
+        markKernelTruncation(candidate.kernel, 0, 1);
+      }
+      return encodedBytes(currentReport);
+    }
+
     function fallbackPersonality(currentReport) {
       const timer = currentReport.environment.timer;
       const quantum = timer.resolution_ms;
@@ -1133,6 +1877,12 @@
       observations.push({ text: threads == null ? 'The browser did not expose a logical thread count.' : `The browser exposed ${threads} logical threads.` });
       const complete = currentReport.kernels.filter(kernel => kernel.status === 'complete').length;
       observations.push({ text: `${complete} kernels completed and ${currentReport.kernels.length - complete} reported unavailable.` });
+      const julibrot = julibrotReportSummary(currentReport);
+      if (julibrot?.available) {
+        const progress = julibrot.partialReason ? `${julibrot.scenarios} of ${julibrot.totalScenarios} fixed scenarios before stopping early: ${julibrot.partialReason}` : `${julibrot.scenarios} fixed scenarios`;
+        observations.push({ text: `The Julibrot slide completed ${progress} across ${julibrot.frames} distinct lab turns from ${julibrot.samples} parent Facts samples: ${julibrot.clearOnly} clear-only and ${julibrot.held} held.` });
+      }
+      else if (julibrot) observations.push({ text: `The Julibrot slide stage was unavailable: ${julibrot.unavailableReason}.` });
       return {
         observations,
         badges: [{
@@ -1188,6 +1938,37 @@
         fact.append(strong, span);
         return fact;
       }));
+      const julibrot = julibrotReportSummary(report);
+      const julibrotResult = document.querySelector('#julibrot-result');
+      const julibrotFacts = document.querySelector('#julibrot-facts');
+      if (!julibrot) {
+        julibrotResult.hidden = true;
+      } else if (!julibrot.available) {
+        julibrotResult.hidden = false;
+        document.querySelector('#julibrot-result-copy').textContent = `The lab could not run on this device: ${julibrot.unavailableReason}`;
+        julibrotFacts.replaceChildren();
+      } else {
+        julibrotResult.hidden = false;
+        const progress = julibrot.partialReason ? `${julibrot.scenarios} of ${julibrot.totalScenarios} scenarios completed before the stage stopped: ${julibrot.partialReason}.` : `${julibrot.scenarios} fixed scenarios completed.`;
+        document.querySelector('#julibrot-result-copy').textContent = `${progress} Distinct lab turns, not repeated parent samples, carry the clear-only and held counts. Warp refusal is unavailable because the lab publishes no refusal fact.`;
+        julibrotFacts.replaceChildren(...[
+          [julibrot.frames, 'distinct lab turns observed'],
+          [julibrot.samples, 'parent Facts samples'],
+          [`${julibrot.rafFrames}/${julibrot.fallbackFrames}`, 'lab rAF/fallback turns'],
+          [julibrot.clearOnly, 'clear-only lab turns'],
+          [julibrot.held, 'held lab turns'],
+          ['unavailable', 'warp-refused lab turns'],
+        ].map(([value, label]) => {
+          const fact = document.createElement('div');
+          fact.className = 'fact';
+          const strong = document.createElement('strong');
+          strong.textContent = String(value);
+          const span = document.createElement('span');
+          span.textContent = label;
+          fact.append(strong, span);
+          return fact;
+        }));
+      }
       verdict.classList.add('visible');
     }
 
@@ -1365,8 +2146,8 @@
         stages: run.stageReports,
         kernels: run.kernels,
       };
+      const reportBytes = fitReportToByteCap(report);
       compactReport = JSON.stringify(report);
-      const reportBytes = new TextEncoder().encode(compactReport).byteLength;
       let personality = fallbackPersonality(report);
       if (wasm) {
         try {
@@ -1402,6 +2183,10 @@
       try {
         await loadWasm(run);
         if (activeRun !== run || !run.running) return;
+        if (JULIBROT_STAGE_ONLY) {
+          await runStage(run, ...STAGES[8], measureJulibrotSlide);
+          return;
+        }
         await initializeRenderWindow(run);
         await runStage(run, ...STAGES[0], async (currentRun, token) => {
           const timer = timerFacts(currentRun, token);
@@ -1447,6 +2232,12 @@
           unavailableKernel(currentRun, token, 'gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
           throw new Error(GPU_UNAVAILABLE);
         });
+        pauseRenderBar('the Julibrot slide measurement has the laboratory');
+        try {
+          await runStage(run, ...STAGES[8], measureJulibrotSlide);
+        } finally {
+          resumeRenderBar(run);
+        }
       } catch (error) {
         fatalReason = reason(error);
       } finally {
@@ -1487,6 +2278,7 @@
         stages: run.stageReports,
         kernels: run.kernels,
       };
+      fitReportToByteCap(report);
       compactReport = JSON.stringify(report);
       stopRenderLoop();
       gpuWindowStatus.textContent = `frozen — suite recovery path: ${failure}`;
@@ -1525,6 +2317,7 @@
         renderUnavailable: null,
         renderFacts: null,
         gpuComputeTimedOut: false,
+        julibrotSummary: null,
         currentStageIndex: 0,
         guess,
       };
@@ -1532,6 +2325,7 @@
       recordVisibility(run);
       guessCard.hidden = true;
       verdict.classList.remove('visible');
+      document.querySelector('#julibrot-result').hidden = true;
       downloadButton.disabled = true;
       submitButton.disabled = true;
       actionStatus.className = '';
@@ -1545,12 +2339,15 @@
       submissionGeneration += 1;
       if (activeRun) activeRun.running = false;
       resetRenderWindow('The 3D bar is waiting to find out whether this browser believes in windows.');
+      julibrotWindow.hidden = true;
+      retireJulibrotFrame();
       if (wasm) wasm.reset_run_state();
       activeRun = null;
       report = null;
       compactReport = '';
       guessCard.hidden = false;
       verdict.classList.remove('visible');
+      document.querySelector('#julibrot-result').hidden = true;
       telemetry.classList.remove('visible');
       guessReveal.textContent = '';
       guessInput.value = '';
@@ -1580,7 +2377,8 @@
     });
     runAgainButton.addEventListener('click', prepareForGuess);
 
-    prepareForGuess();
+    if (JULIBROT_STAGE_ONLY) beginRun(null);
+    else prepareForGuess();
   </script>
 </body>
 </html>

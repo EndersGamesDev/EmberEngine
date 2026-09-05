@@ -1,6 +1,6 @@
 {
-  "version": "r1293",
-  "commit": "d045403",
-  "built": "2026-09-05T13:22:01Z",
-  "subject": "release(arena): publish v23 hands on the weapon"
+  "version": "r1393",
+  "commit": "1e2ec48",
+  "built": "2026-09-05T14:45:51Z",
+  "subject": "feat(arena): ship weapon-specific ADS and authoritative accuracy in v24"
 }
