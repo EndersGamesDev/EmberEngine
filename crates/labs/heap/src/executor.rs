@@ -1000,7 +1000,7 @@ impl GpuKernelExecutor {
         Ok(())
     }
 
-    /// Publishes allocator metadata and resource-directory words without touching resident headers.
+    /// Publishes resource-directory words without touching allocator metadata or resident headers.
     pub fn sync_dispatch_resources(&self, dispatch: &ExecutorDispatch) {
         self.queue.write_buffer(
             &self.resources_buffer,
@@ -1076,7 +1076,8 @@ impl GpuKernelExecutor {
         let (headers, set_offset) =
             self.header_reservations
                 .resolve_set(&self.header_owner, header_sets, set)?;
-        let offsets = selected_header_offsets(headers, &dispatch.headers)?;
+        let offsets =
+            selected_header_offsets(headers, &dispatch.headers, dispatch.plan.passes.len(), set)?;
         for (page, header_offset) in dispatch.plan.passes.iter().zip(offsets.iter().copied()) {
             self.encode_page(
                 encoder,
@@ -1327,9 +1328,19 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
 fn selected_header_offsets<'a>(
     resident: &'a StaticHeaders,
     dispatch: &StaticHeaders,
+    pass_count: usize,
+    set: u32,
 ) -> Result<&'a [u32], DispatchError> {
     if resident != dispatch {
         return Err(DispatchError::HeaderMismatch);
+    }
+    if pass_count != resident.offsets.len() {
+        let first_unpaired = pass_count.min(resident.offsets.len()) as u32;
+        return Err(DispatchError::HeaderPageSelection {
+            set,
+            page: first_unpaired,
+            page_count: resident.offsets.len() as u32,
+        });
     }
     Ok(&resident.offsets)
 }
@@ -1384,16 +1395,6 @@ fn valid_row_regions(valid_records: u32, side: u32) -> [Option<UploadRegion>; 2]
             rows_per_image: None,
         }),
     ]
-}
-
-#[cfg(test)]
-fn planned_upload_bytes(logical_len: u32, page_records: u32, mode: SpanUploadMode) -> u64 {
-    match mode {
-        SpanUploadMode::PaddedPages => {
-            u64::from(logical_len.div_ceil(page_records) * page_records) * RECORD_BYTES as u64
-        }
-        SpanUploadMode::ValidRows => u64::from(logical_len) * RECORD_BYTES as u64,
-    }
 }
 
 pub(super) fn texture(
@@ -1510,8 +1511,8 @@ mod tests {
     use crate::{DispatchError, DispatchPlan, Handle, PagePass, SpanArena, StaticHeaders};
 
     use super::{
-        DispatchSelector, HeaderReservations, RetainedPageScratch, SpanUploadMode, UploadRegion,
-        copy_command_count, planned_upload_bytes, selected_header_offsets, valid_row_regions,
+        DispatchSelector, HeaderReservations, RetainedPageScratch, UploadRegion,
+        copy_command_count, selected_header_offsets, valid_row_regions,
     };
 
     #[test]
@@ -1537,27 +1538,53 @@ mod tests {
         let span = arena.allocate_span(2_048, 16).expect("eight-page span");
         let dispatch = StaticHeaders::for_span(&span, 256).expect("dispatch headers");
         let resident = dispatch.clone();
-        let selected = selected_header_offsets(&resident, &dispatch)
+        let selected = selected_header_offsets(&resident, &dispatch, 8, 0)
             .expect("one comparison admits the selected set");
         assert_eq!(selected, &[0, 256, 512, 768, 1_024, 1_280, 1_536, 1_792]);
         let mut mismatch = dispatch.clone();
         mismatch.bytes[0] ^= 1;
         assert_eq!(
-            selected_header_offsets(&resident, &mismatch),
+            selected_header_offsets(&resident, &mismatch, 8, 0),
             Err(DispatchError::HeaderMismatch)
         );
     }
 
     #[test]
+    fn selected_header_comparison_rejects_an_unpaired_dispatch_page() {
+        let mut arena = SpanArena::new(64, 1, 16, 1_024, 8).expect("arena");
+        let span = arena.allocate_span(512, 16).expect("two-page span");
+        let headers = StaticHeaders::for_span(&span, 256).expect("dispatch headers");
+        assert_eq!(
+            selected_header_offsets(&headers, &headers, 3, 4),
+            Err(DispatchError::HeaderPageSelection {
+                set: 4,
+                page: 2,
+                page_count: 2,
+            })
+        );
+    }
+
+    #[test]
     fn row_exact_reference_layout_removes_sixteen_fold_upload_amplification() {
-        assert_eq!(
-            planned_upload_bytes(4_096, 65_536, SpanUploadMode::PaddedPages),
-            1_048_576
-        );
-        assert_eq!(
-            planned_upload_bytes(4_096, 65_536, SpanUploadMode::ValidRows),
-            65_536
-        );
+        let logical_len = 4_096_u32;
+        let page_records = 65_536_u32;
+        let side = 256_u32;
+        let page_count = logical_len.div_ceil(page_records);
+        let padded_upload_bytes = usize::try_from(page_count).expect("page count fits")
+            * UploadRegion::padded_page(side).source_len_bytes;
+        let valid_upload_bytes = (0..page_count)
+            .map(|page| {
+                let page_start = page * page_records;
+                let valid_records = logical_len.saturating_sub(page_start).min(page_records);
+                valid_row_regions(valid_records, side)
+                    .into_iter()
+                    .flatten()
+                    .map(|region| region.source_len_bytes)
+                    .sum::<usize>()
+            })
+            .sum::<usize>();
+        assert_eq!(padded_upload_bytes, 1_048_576);
+        assert_eq!(valid_upload_bytes, 65_536);
         assert_eq!(
             valid_row_regions(4_096, 256),
             [
