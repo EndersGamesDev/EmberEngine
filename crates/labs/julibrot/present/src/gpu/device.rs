@@ -56,6 +56,7 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStenci
 const FENCE_BYTES: u64 = 4;
 const HOT_HOMOGRAPHY_BYTE_OFFSET: u64 = 144;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
+const SCENE_GRID_BYTE_OFFSET: u64 = 0;
 const EXPOSURE_FACT_STEPS: u32 = 9;
 const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
 const RGBA8_BYTES_PER_TEXEL: u32 = 4;

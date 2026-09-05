@@ -1011,8 +1011,27 @@ fn a_hold_with_an_unusable_extent_stays_a_clear_plan() {
 #[test]
 fn the_image_warp_states_the_destination_lattice_it_planned_against() {
     let source = include_str!("warp.rs");
-    assert!(source.contains("self.write_warp_destination_extent(warp_destination_extent);"));
-    assert!(source.contains("fn write_warp_destination_extent(&self, extent: [u32; 2])"));
+    let find = |needle: &str| {
+        source
+            .find(needle)
+            .unwrap_or_else(|| panic!("the warp submission contains {needle}"))
+    };
+    let stated = find("self.write_warp_destination_extent(warp_destination_extent);");
+    let encoded = find("encode_image_warp(");
+    let submitted = find("self.queue.submit(");
+    assert!(
+        stated < encoded,
+        "the destination lattice is stated before the pass that reads it is encoded"
+    );
+    assert!(
+        encoded < submitted,
+        "the image warp is encoded before the submission that carries both"
+    );
+    assert!(
+        source.contains("SCENE_GRID_BYTE_OFFSET"),
+        "the destination lattice is written at the named scene-grid offset"
+    );
+    assert_eq!(SCENE_GRID_BYTE_OFFSET, 0);
     assert_eq!(
         destination_extent(Some(&binding_pose()), None),
         BINDING_EXTENT

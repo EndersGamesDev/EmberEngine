@@ -9,15 +9,16 @@ use ember_julibrot_math::scene_uncovered_fraction;
 
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
-    apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw, identity_rows,
-    pose_is_finite, warp_exposed_fraction,
+    SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
+    identity_rows, pose_is_finite, warp_exposed_fraction,
 };
 
 impl Presenter {
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
     ///
-    /// When `hold_refused_warp` is true, a clear-only plan with a retained picture becomes an
-    /// identity `HoldStale` plan so the app cannot replace that picture with a disallowed clear.
+    /// When `hold_refused_warp` is true, a clear-only plan with a retained picture becomes a
+    /// `HoldStale` plan whose rows carry the ratio between the held picture's extent and the
+    /// destination lattice, so the app cannot replace that picture with a disallowed clear.
     #[allow(
         clippy::too_many_lines,
         reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
@@ -365,8 +366,11 @@ impl Presenter {
     /// one the rows assume. Both writers restate the whole uniform before their own pass, so this
     /// cannot reach a scene pass.
     fn write_warp_destination_extent(&self, extent: [u32; 2]) {
-        self.queue
-            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&extent));
+        self.queue.write_buffer(
+            &self.gpu.scene_buffers[0],
+            SCENE_GRID_BYTE_OFFSET,
+            bytemuck::bytes_of(&extent),
+        );
     }
 
     fn clear_hot_source(&self, hot_slot: HotSlot) {

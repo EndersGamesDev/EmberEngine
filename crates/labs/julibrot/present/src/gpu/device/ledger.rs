@@ -125,11 +125,24 @@ pub(super) const fn identity_rows() -> [[f32; 4]; 3] {
 ///
 /// A hold shows the last completed picture unchanged while the next scene renders, and the two
 /// lattices cover the same field of view whatever their pixel counts: the chart span a pose
-/// covers across its width is `4 / 2^zoom` however many pixels sample it, which is why a
-/// reprojection between two extents scales by exactly this ratio (`planner.rs` lines 415 to 417).
-/// The warp fragment normalises the mapped source pixel by the source texture's own dimensions,
-/// and a scene texture is allocated at exactly the delivered extent of the scene drawn into it,
-/// so the ratio between the two extents is the whole of the mapping. Equal extents give identity.
+/// covers across its width is `4 / 2^zoom` however many pixels sample it. The warp fragment
+/// normalises the mapped source pixel by the source texture's own dimensions, and a scene texture
+/// is allocated at exactly the delivered extent of the scene drawn into it, so the ratio between
+/// the two extents is the whole of the mapping. Equal extents give identity.
+///
+/// These are independent per-axis ratios, where a reprojection scales by the uniform width ratio
+/// on both axes (`math/src/warp.rs` lines 15 to 16). The difference is not cosmetic, because the
+/// two lattices are not proportional: a reduced extent rounds up per axis, so a 960 by 540
+/// surface at the `PictureFast` divisor 8 delivers 120 by 68 rather than 120 by 67.5. Its 68 rows
+/// carry 544 destination pixels of ground onto a 540-pixel destination. The per-axis ratio
+/// therefore lands the frame edge on the frame edge and absorbs the difference as a stretch of up
+/// to `(k-1)/2` destination pixels for divisor `k` — 3.5 px at the top of the `PictureFast`
+/// ladder, 2 px at this pairing — while the uniform width ratio would keep the picture
+/// unstretched and, in the opposite rounding case, put its edge past the source and expose
+/// up to `(k-1)/2`
+/// pixels of clear at the frame edge. A hold takes the bounded stretch: it is there precisely to
+/// avoid replacing the picture with clear, and a few pixels of stretch is inaccurate where a band
+/// of clear at the edge reads as a disocclusion that no scene is coming to fill.
 ///
 /// An unusable extent returns `None` so the caller refuses the hold rather than placing the
 /// picture somewhere the geometry does not put it.
