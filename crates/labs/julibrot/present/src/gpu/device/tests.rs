@@ -785,10 +785,9 @@ fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
     );
     let main_only = relief_redraw_clear_fraction(&pose, None, false)
         .expect("the main-only coverage mirror is finite");
-    let candidate_backdrop = ember_julibrot_math::scene_uncovered_fraction(
-        &object, &view, 960, 540, 2.0,
-    )
-    .expect("the candidate backdrop coverage mirror is finite");
+    let candidate_backdrop =
+        ember_julibrot_math::scene_uncovered_fraction(&object, &view, 960, 540, 2.0)
+            .expect("the candidate backdrop coverage mirror is finite");
     assert!(main_only > candidate_backdrop);
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(&relief, None);
