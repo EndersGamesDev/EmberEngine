@@ -242,7 +242,6 @@ impl BrowserFrameLoop {
                 orbit_length: response.length(),
             },
             view_centre: accepted_view_centre,
-            source_zoom_log2: submitted.zoom_log2,
             verification: response.reference_verification(),
             max_consumed_word_error_ulps: response.max_consumed_word_error_ulps(),
             precision_escalations: response.precision_escalations(),

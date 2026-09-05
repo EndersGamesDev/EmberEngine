@@ -524,7 +524,6 @@ mod browser {
     struct AcceptedReferenceReceipt {
         lease: super::ReferenceLeaseIdentity,
         view_centre: BigCentre,
-        source_zoom_log2: f64,
         verification: ember_julibrot_worker::ReferenceVerification,
         max_consumed_word_error_ulps: Option<u32>,
         precision_escalations: u32,
