@@ -579,9 +579,11 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     assert!(STATE.contains("pub fn pan_px("));
     // The slider goes through the crosshair anchor rather than the screen centre.
     assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
-    // A row load forgets the point, because the point belonged to the picture that was replaced.
+    // A row load clears the replaced picture's point before the atomic row restores its own.
     assert!(STATE.contains("pub fn clear_crosshair(&mut self)"));
     assert_eq!(MAIN.matches("api.app_clear_crosshair();").count(), 1);
+    assert!(SAVED.contains("pub target: Option<SavedCentre>"));
+    assert!(STATE.contains("self.crosshair = target;"));
     // The page draws the marker from the projection and never from a pixel it remembered.
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains("api.app_crosshair_json(bounds.width, bounds.height)"));
@@ -605,6 +607,24 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
             "missing published crosshair fact {fact}"
         );
     }
+}
+
+/// A fresh viewer boots with a target, so the page must draw a crosshair on the first refresh.
+///
+/// Only the two STATE lines are new here: they pin that the constructed viewer installs the named
+/// constant as its target rather than `None`, while the value itself is pinned bit-exactly by the
+/// native test beside `SEAHORSE_VALLEY_TARGET`, where a formatter cannot move it. The three MAIN
+/// lines are the unchanged page wiring this default now depends on: they held before this default
+/// existed and are asserted so a later edit cannot quietly remove the draw path underneath it.
+#[test]
+fn boot_draws_the_default_seahorse_valley_target() {
+    assert!(STATE.contains("BigCentre::from_f64(SEAHORSE_VALLEY_TARGET"));
+    assert!(STATE.contains("crosshair: Some(target),"));
+    assert!(MAIN.contains("const drawCrosshair = () => {"));
+    assert!(MAIN.contains(
+        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+    ));
+    assert!(MAIN.contains("TARGET.hidden = !crosshair.crosshair_on_surface;"));
 }
 
 #[test]
