@@ -1150,9 +1150,12 @@ fn headless_frame_loop_populates_a_per_level_timing_record() {
     assert_eq!(timings.records().len(), 1);
     let records = timings.records();
     let record = records.first().expect("one timing record");
-    assert_eq!(record.scene_us, Some(2_500));
-    assert_eq!(record.warp_us, Some(750));
-    assert_eq!(record.worker_reference_us, Some(1_250));
+    assert_eq!(record.scene_us, None);
+    assert_eq!(record.warp_us, None);
+    assert_eq!(record.worker_reference_us, None);
+    assert_eq!(record.scene_callback_observation_us, Some(2_500));
+    assert_eq!(record.warp_callback_observation_us, Some(750));
+    assert_eq!(record.worker_generation_us, Some(1_250));
     assert_eq!(record.dispatch_us, None);
     assert_eq!(record.credit_wait_us, None);
     assert!(!record.discarded);

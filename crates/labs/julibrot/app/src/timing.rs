@@ -38,20 +38,16 @@ pub struct LevelTimingRecord {
     /// Progressive-refinement level.
     pub level: TimingLevel,
     /// Kernel-only GPU wall, unavailable without another fence.
-    #[serde(skip_serializing)]
     pub dispatch_us: Option<u64>,
-    /// Legacy alias for the scene callback-observation wall.
-    #[serde(skip_serializing)]
+    /// Legacy scene wall name, retained as unavailable rather than mislabelled.
     pub scene_us: Option<u64>,
-    /// Legacy alias for the warp callback-observation wall.
-    #[serde(skip_serializing)]
+    /// Legacy warp wall name, retained as unavailable rather than mislabelled.
     pub warp_us: Option<u64>,
     /// Submission-to-scene-completion callback observation, not a GPU wall.
     pub scene_callback_observation_us: Option<u64>,
     /// Submission-to-warp-completion callback observation, not a GPU wall.
     pub warp_callback_observation_us: Option<u64>,
-    /// Legacy alias for worker generation wall.
-    #[serde(skip_serializing)]
+    /// Legacy worker-reference wall name, retained as unavailable rather than ambiguous.
     pub worker_reference_us: Option<u64>,
     /// Worker-measured reference-orbit generation wall.
     pub worker_generation_us: Option<u64>,
@@ -140,7 +136,7 @@ impl LevelTimingLedger {
                 warp_us: None,
                 scene_callback_observation_us: None,
                 warp_callback_observation_us: None,
-                worker_reference_us: worker.and_then(|item| item.sample.worker_generation),
+                worker_reference_us: None,
                 worker_generation_us: worker.and_then(|item| item.sample.worker_generation),
                 credit_wait_us: worker.and_then(|item| item.sample.credit_wait),
                 request_transfer_us: worker.and_then(|item| item.sample.request_transfer),
@@ -157,7 +153,6 @@ impl LevelTimingLedger {
     pub fn complete_scene(&mut self, scene_id: u64, measurement: SubmissionMeasurement) {
         if let Some(level) = self.level_mut(scene_id) {
             let observed = milliseconds_to_microseconds(measurement.wall_ms);
-            level.record.scene_us = observed;
             level.record.scene_callback_observation_us = observed;
         }
     }
@@ -168,7 +163,6 @@ impl LevelTimingLedger {
             level.record.discarded = true;
             let observed =
                 measurement.and_then(|value| milliseconds_to_microseconds(value.wall_ms));
-            level.record.scene_us = observed;
             level.record.scene_callback_observation_us = observed;
         }
     }
@@ -182,7 +176,6 @@ impl LevelTimingLedger {
             && level.record.warp_callback_observation_us.is_none()
         {
             let observed = milliseconds_to_microseconds(measurement.wall_ms);
-            level.record.warp_us = observed;
             level.record.warp_callback_observation_us = observed;
         }
     }
@@ -277,8 +270,8 @@ mod tests {
         let records = ledger.records();
         assert_eq!(records.len(), LEVEL_TIMING_CAPACITY);
         assert_eq!(records[0].edit, 1);
-        assert_eq!(records.last().map(|item| item.scene_us), Some(Some(2_250)));
-        assert_eq!(records.last().map(|item| item.warp_us), Some(Some(750)));
+        assert_eq!(records.last().map(|item| item.scene_us), Some(None));
+        assert_eq!(records.last().map(|item| item.warp_us), Some(None));
         assert_eq!(
             records
                 .last()
@@ -323,8 +316,8 @@ mod tests {
         }
         for legacy in ["dispatch_us", "scene_us", "warp_us", "worker_reference_us"] {
             assert!(
-                !newest.contains_key(legacy),
-                "legacy field {legacy} leaked into JSON"
+                newest.get(legacy).is_some_and(serde_json::Value::is_null),
+                "legacy field {legacy} was not serialized as unavailable"
             );
         }
     }
