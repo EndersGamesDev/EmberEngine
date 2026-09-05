@@ -424,9 +424,8 @@ function bindControls(api) {
   CANVAS.addEventListener("pointercancel", () => { drag = null; RUBBER.hidden = true; });
 
   // One row, one path, and no list of field names: every numeric field is written into the control
-  // named after it, and then the same handlers a user's own movement reaches apply them. The centre
-  // is the one field with no widget, so it is one explicit call after the row rather than a second
-  // way for the values that do have widgets to arrive. A built-in row has no centre and no depth.
+  // named after it, then the complete row crosses one app boundary. The app compares all fields,
+  // stages only differences, and releases at most one navigation decision after the row is whole.
   const applyRow = row => {
     if (Array.isArray(row.origin)) {
       for (const [index, [id]] of ORIGIN.entries()) {
@@ -439,11 +438,7 @@ function bindControls(api) {
       const element = controlFor(field);
       if (element) element.value = String(value);
     }
-    // A row that names no depth starts at the top: the origin it carries resets the zoom anyway, so
-    // the row that reaches the worker is the whole chart rather than the depth the user was at.
-    if (typeof row.zoom_log2 !== "number") SET("scale", 0);
-    for (const apply of Object.values(APPLY)) apply();
-    if (row.centre) api.app_set_centre(JSON.stringify(row.centre));
+    api.app_apply_saved_view(JSON.stringify(row));
   };
   const loadRow = row => {
     api.app_clear_crosshair();

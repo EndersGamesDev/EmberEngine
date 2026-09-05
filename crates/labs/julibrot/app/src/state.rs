@@ -16,12 +16,12 @@ use ember_julibrot_worker::{
     ViewerOwner, ViewerState,
 };
 
-use crate::AppError;
+use crate::{AppError, SavedView};
 
 /// Initial requested iteration cap; it is a policy, not a delivered fact.
 pub const INITIAL_ITERATION_CAP: u32 = 512;
 
-const NAVIGATION_PRECISION_BITS: u32 = 1_024;
+pub const NAVIGATION_PRECISION_BITS: u32 = 1_024;
 
 /// The `scale` control's ends, in base-two zoom exponent.
 ///
@@ -407,11 +407,14 @@ pub struct ReferenceSubmission {
 pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
+    requested_revision: u64,
     checked_plane: Plane,
     checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 3]>,
     checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 3]>,
     #[cfg(test)]
     plane_constructions: u64,
+    #[cfg(test)]
+    main_state_rebuilds: u64,
     #[cfg(test)]
     map_constructions: Cell<u64>,
     #[cfg(test)]
@@ -493,11 +496,14 @@ impl ViewerController {
         Ok(Self {
             owner,
             requested,
+            requested_revision: 0,
             checked_plane: plane,
             checked_screen_maps: RefCell::new([None; 3]),
             checked_scene_footprints: RefCell::new([None; 3]),
             #[cfg(test)]
             plane_constructions: 1,
+            #[cfg(test)]
+            main_state_rebuilds: 0,
             #[cfg(test)]
             map_constructions: Cell::new(0),
             #[cfg(test)]
@@ -517,6 +523,12 @@ impl ViewerController {
     #[must_use]
     pub const fn requested(&self) -> RequestedControls {
         self.requested
+    }
+
+    /// Returns the serial of the last bit-distinct requested picture state.
+    #[must_use]
+    pub const fn requested_revision(&self) -> u64 {
+        self.requested_revision
     }
 
     /// Returns the checked plane cached for the current object angles.
@@ -565,6 +577,7 @@ impl ViewerController {
         }
         self.refresh_navigation_centre_mirror();
         self.requested.zoom_log2 = zoom_log2;
+        self.note_requested_change();
         self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
         Ok(NavigationEdit::Zoom {
             delta_log2,
@@ -588,6 +601,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.refresh_navigation_centre_mirror();
+        self.note_requested_change();
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
@@ -800,8 +814,12 @@ impl ViewerController {
         if !angles.is_valid() {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
+        let angles_changed =
+            !f64_bits_eq(angles.as_array(), self.requested.object_angles.as_array());
+        if !angles_changed {
+            return Ok(());
+        }
         self.synchronize_shadow()?;
-        let angles_changed = angles.as_array() != self.requested.object_angles.as_array();
         let checked_plane = if angles_changed {
             construct_plane(angles).map_err(math_error)?
         } else {
@@ -841,6 +859,7 @@ impl ViewerController {
             }
             self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         }
+        self.note_requested_change();
         Ok(())
     }
 
@@ -870,6 +889,9 @@ impl ViewerController {
         if !origin.iter().all(|value| value.is_finite()) {
             return Err(AppError::Math("plane origin is not finite".to_string()));
         }
+        if f64_bits_eq(origin, self.requested.plane_origin) {
+            return Ok(());
+        }
         self.synchronize_shadow()?;
         self.requested.plane_origin = origin;
         self.requested.zoom_log2 = 0.0;
@@ -895,6 +917,10 @@ impl ViewerController {
         };
         self.staged_hot = hot;
         self.staged_main = main;
+        #[cfg(test)]
+        {
+            self.main_state_rebuilds = self.main_state_rebuilds.saturating_add(1);
+        }
         let plane = self.checked_plane;
         let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         self.owner.stage_hot(hot);
@@ -914,6 +940,7 @@ impl ViewerController {
         self.pending_reason = Some(OrbitReason::INITIAL);
         self.pending_reference_centre = None;
         self.navigation_centre_f64 = origin;
+        self.note_requested_change();
         Ok(())
     }
 
@@ -927,6 +954,9 @@ impl ViewerController {
     ///
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
+        if self.owner.navigation_centre().as_ref() == Some(&centre) {
+            return Ok(());
+        }
         self.synchronize_shadow()?;
         let plane = self.checked_plane;
         let centre_f64 = centre.to_f64_mirror();
@@ -944,6 +974,173 @@ impl ViewerController {
         }
         self.navigation_centre_f64 = centre_f64;
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
+        self.note_requested_change();
+        Ok(())
+    }
+
+    /// Applies a complete stored row as one bit-filtered transaction.
+    ///
+    /// Pose-only changes stage no navigation. A changed centre or scale configures navigation
+    /// once, and a slice change additionally retires the old orbit metadata before that one
+    /// navigation request is released.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math, owner, or epoch refusal without applying an invalid row.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "validation, bit comparison, staging, and the single navigation decision stay one transaction"
+    )]
+    pub fn apply_saved_view(&mut self, row: &SavedView) -> Result<(), AppError> {
+        let object = row.object_angles();
+        let origin = row.origin;
+        let view = row.view();
+        let zoom_log2 = row.zoom_log2;
+        let centre = row.centre()?;
+        let centre_f64 = centre.to_f64_mirror();
+        if !object.is_valid() {
+            return Err(AppError::Math(
+                "saved object angles are not valid".to_string(),
+            ));
+        }
+        if !origin.iter().all(|value| value.is_finite()) {
+            return Err(AppError::Math(
+                "saved plane origin is not finite".to_string(),
+            ));
+        }
+        if !view.is_valid() {
+            return Err(AppError::Math(
+                "saved VIEW controls are not valid".to_string(),
+            ));
+        }
+        if !zoom_log2.is_finite()
+            || zoom_log2 < SCALE_RANGE_LOG2[0]
+            || zoom_log2 > SCALE_RANGE_LOG2[1]
+        {
+            return Err(AppError::Math(format!(
+                "saved scale {zoom_log2} is outside the control range"
+            )));
+        }
+
+        let object_changed =
+            !f64_bits_eq(object.as_array(), self.requested.object_angles.as_array());
+        let origin_changed = !f64_bits_eq(origin, self.requested.plane_origin);
+        let view_changed = !f64_bits_eq(view.as_array(), self.requested.view.as_array());
+        let zoom_changed = zoom_log2.to_bits() != self.requested.zoom_log2.to_bits();
+        let centre_changed = self.owner.navigation_centre().as_ref() != Some(&centre);
+        if !object_changed && !origin_changed && !view_changed && !zoom_changed && !centre_changed {
+            return Ok(());
+        }
+
+        let checked_plane = if object_changed {
+            construct_plane(object).map_err(math_error)?
+        } else {
+            self.checked_plane
+        };
+        let plane_preserving = plane_chart_relation(self.checked_plane, checked_plane).is_some();
+        let slice_changed = !plane_preserving
+            || (origin_changed
+                && !origins_share_slice(
+                    self.requested.plane_origin,
+                    origin,
+                    checked_plane,
+                    zoom_log2,
+                    self.grid_width,
+                ));
+        let navigation_changed = slice_changed || centre_changed || zoom_changed;
+
+        if object_changed || origin_changed || navigation_changed {
+            self.synchronize_shadow()?;
+        }
+        let reoriented_displacement = if object_changed && plane_preserving && !navigation_changed {
+            Some(
+                self.owner
+                    .reorient_navigation_plane(checked_plane)
+                    .map_err(owner_error)?,
+            )
+        } else {
+            None
+        };
+
+        if object_changed {
+            self.requested.object_angles = object;
+            self.checked_plane = checked_plane;
+            #[cfg(test)]
+            {
+                self.plane_constructions = self.plane_constructions.saturating_add(1);
+            }
+        }
+        if origin_changed {
+            self.requested.plane_origin = origin;
+        }
+        if view_changed {
+            self.requested.view = view;
+        }
+        if zoom_changed {
+            self.requested.zoom_log2 = zoom_log2;
+        }
+        if slice_changed {
+            self.clear_crosshair();
+        }
+
+        if object_changed || zoom_changed || reoriented_displacement.is_some() {
+            let mut hot = self.staged_hot;
+            if zoom_changed {
+                hot.zoom_log2 = zoom_log2;
+            }
+            if object_changed {
+                hot.plane_theta_1 = object.rho_13;
+                hot.plane_theta_2 = object.rho_24;
+            }
+            if let Some(displacement) = reoriented_displacement {
+                hot.centre_from_reference_px = displacement;
+            }
+            self.staged_hot = hot;
+            self.owner.stage_hot(hot);
+        }
+
+        if origin_changed || slice_changed {
+            let mut main = self.staged_main;
+            main.plane_origin_f64 = origin;
+            if slice_changed {
+                main.generation_applied = 0;
+                main.orbit_length = 0;
+                main.orbit_id = 0;
+                main.precision_bits = 0;
+                main.reference_shift_px = [0.0; 2];
+                #[cfg(test)]
+                {
+                    self.main_state_rebuilds = self.main_state_rebuilds.saturating_add(1);
+                }
+            }
+            self.staged_main = main;
+            self.owner.stage_main(main);
+        }
+
+        if navigation_changed {
+            self.owner
+                .configure_navigation(NavigationConfig {
+                    centre: centre.clone(),
+                    reference_centre: centre,
+                    plane: checked_plane,
+                    grid_width: self.grid_width,
+                })
+                .map_err(owner_error)?;
+            self.owner.navigate(NavigationDelta::default());
+            if let Some(error) = self.owner.take_navigation_error() {
+                return Err(owner_error(error));
+            }
+            self.navigation_centre_f64 = centre_f64;
+            self.pending_reference_centre = None;
+            self.pending_reason = Some(if slice_changed {
+                OrbitReason::INITIAL
+            } else if centre_changed {
+                OrbitReason::CENTRE_THRESHOLD
+            } else {
+                OrbitReason::ZOOM_THRESHOLD
+            });
+        }
+        self.note_requested_change();
         Ok(())
     }
 
@@ -958,6 +1155,9 @@ impl ViewerController {
                 "iteration cap {max_iter} is below minimum {MIN_MAX_ITER}"
             )));
         }
+        if self.requested.iteration_cap == max_iter {
+            return Ok(());
+        }
         self.synchronize_shadow()?;
         self.requested.iteration_cap = max_iter;
         let mut main = self.staged_main;
@@ -969,6 +1169,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.add_reason(OrbitReason::MAX_ITER_CHANGE);
+        self.note_requested_change();
         Ok(())
     }
 
@@ -992,6 +1193,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.add_reason(OrbitReason::PRECISION_MODE_CHANGE);
+        self.note_requested_change();
         Ok(())
     }
 
@@ -1001,12 +1203,16 @@ impl ViewerController {
     ///
     /// Returns epoch exhaustion when the full worker-owned record can no longer synchronize.
     pub fn set_palette(&mut self, palette: PaletteId) -> Result<(), AppError> {
+        if self.requested.palette == palette {
+            return Ok(());
+        }
         self.synchronize_shadow()?;
         self.requested.palette = palette;
         let mut main = self.staged_main;
         main.palette_id = palette as u32;
         self.staged_main = main;
         self.owner.stage_main(main);
+        self.note_requested_change();
         Ok(())
     }
 
@@ -1021,7 +1227,11 @@ impl ViewerController {
                 "a VIEW control is not finite or is outside its range".to_string(),
             ));
         }
+        if f64_bits_eq(view.as_array(), self.requested.view.as_array()) {
+            return Ok(());
+        }
         self.requested.view = view;
+        self.note_requested_change();
         Ok(())
     }
 
@@ -1031,9 +1241,8 @@ impl ViewerController {
     ///
     /// Returns the typed failure of whichever staged control refused.
     pub fn apply_preset(&mut self, row: PresetRow) -> Result<(), AppError> {
-        self.set_view_controls(row.view)?;
-        self.set_object_angles(row.object_angles)?;
-        self.set_plane_origin(row.plane_origin)
+        let saved = SavedView::from_preset(row)?;
+        self.apply_saved_view(&saved)
     }
 
     /// Performs the mandatory HOT drain and constructs the current math pose.
@@ -1268,6 +1477,11 @@ impl ViewerController {
         self.footprint_constructions.get()
     }
 
+    #[cfg(test)]
+    pub(crate) const fn main_state_rebuild_count(&self) -> u64 {
+        self.main_state_rebuilds
+    }
+
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
         match self.screen_map(grid_extent)? {
             PoseMap::Mapped(map) => Ok(map),
@@ -1298,6 +1512,54 @@ impl ViewerController {
             self.navigation_centre_f64 = centre.to_f64_mirror();
         }
     }
+
+    const fn note_requested_change(&mut self) {
+        self.requested_revision = self.requested_revision.saturating_add(1);
+    }
+}
+
+fn f64_bits_eq<const N: usize>(first: [f64; N], second: [f64; N]) -> bool {
+    first
+        .into_iter()
+        .zip(second)
+        .all(|(first, second)| first.to_bits() == second.to_bits())
+}
+
+fn origins_share_slice(
+    first: [f64; 4],
+    second: [f64; 4],
+    plane: Plane,
+    zoom_log2: f64,
+    grid_width: u32,
+) -> bool {
+    let delta: [f64; 4] = core::array::from_fn(|axis| second[axis] - first[axis]);
+    let projection = [
+        dot_plane_axis(plane.basis_u, delta),
+        dot_plane_axis(plane.basis_v, delta),
+    ];
+    let residual: [f64; 4] = core::array::from_fn(|axis| {
+        delta[axis]
+            - f64::from(plane.basis_u[axis]).mul_add(
+                projection[0],
+                f64::from(plane.basis_v[axis]) * projection[1],
+            )
+    });
+    let pixels_per_chart = 0.25 * f64::from(grid_width) * zoom_log2.exp2();
+    residual
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt()
+        * pixels_per_chart
+        <= 0.5
+}
+
+fn dot_plane_axis(axis: [f32; 4], vector: [f64; 4]) -> f64 {
+    axis.into_iter()
+        .zip(vector)
+        .fold(0.0, |sum, (axis, value)| {
+            f64::from(axis).mul_add(value, sum)
+        })
 }
 
 fn map_for(
