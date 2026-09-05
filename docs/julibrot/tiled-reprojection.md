@@ -161,7 +161,7 @@ The heap does not supply render-pose identity, source-depth semantics, chart-foo
 
 ## Validity, compatibility, and invalidation
 
-Implementation decision, 2026-09-05 on `lane/jb-retain`: stage 0 retains one completed pre-transition image as a partition-stamped held source while the first scene of a new partition is in flight. That source admits only an unchanged hold, never cross-partition reprojection, and is replaced by the first accepted completion in the new partition. This transitional two-image ledger preserves honest visible continuity while the descriptor-map tile cache remains unshipped.
+Stage 0 retains one completed pre-transition image as a partition-stamped held source while the first scene of a new partition is in flight. That source admits only an unchanged hold, never cross-partition reprojection, and is replaced by the first accepted completion in the new partition. This transitional two-image ledger preserves honest visible continuity while the descriptor-map tile cache remains unshipped.
 
 A rendered tile is semantically valid for every requested render pose when its `content_key` matches. Source and requested camera positions may be arbitrarily different; pose distance affects projected coverage, error, and usefulness, but it does not change the mathematical value or source depth that was rendered.
 
@@ -306,7 +306,7 @@ The principal wins are reuse after returning to a stored render pose, useful cov
 
 ## Oracle, browser proofs, and published facts
 
-The descriptor-map layout oracle pins 32 header texels, both two-record sample columns, every lane and factor order, the 512-byte slot stride, the 64-record active prefix, 64 header slots, 63,424-record ownership arena, header and span generations, exact-in-f32 integer limits, zero reserved lanes, and the 2,097,664 logical bytes per tile. CPU packing followed by GPU readback must reproduce every finite header lane and both sample records bit-for-bit except the explicitly tolerance-bounded compensated splits.
+The stage-0 descriptor-map layout oracle pins the named `H00`–`H26` texel indices, five reserved header texels, the 512-byte slot stride, the exact `S0/S1` lane order and 32-byte pair, the 256×256 physical grid with 254×254 core and one-sample apron, the shared page's 64-record active prefix, 64 header slots, and 63,424-record ownership capacity, and the seven cost-table totals. GPU readback, generation checks, exact-in-f32 lane validation, and compensated-split tolerances remain stage-1 integration receipts.
 
 The descriptor round-trip oracle selects a header and sample using the same active-instance and vertex indices as the draw, reconstructs `O`, `Q`, origin, translation, observer, perspectives, source rectangle, exact-anchor-relative position, value height, and lifted source depth, and produces the source-visible five-dimensional point. It then projects that point back through the stored source pose to the original source pixel and depth, and through an independently supplied requested pose to screen and target depth; both results must agree with direct f64 construction within the declared source and 1.0 px target bounds.
 

@@ -98,6 +98,15 @@ pub struct SourcePixelRect {
     pub height: u32,
 }
 
+impl SourcePixelRect {
+    /// Physical side of a version-one rendered tile, including aprons.
+    pub const PHYSICAL_SIDE: u32 = 256;
+    /// Drawn core side of a version-one rendered tile.
+    pub const CORE_SIDE: u32 = 254;
+    /// Retained sample apron on each core edge.
+    pub const APRON_SAMPLES: u32 = 1;
+}
+
 /// Exact key form of a mapped or edge-on source screen transform.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PoseMapKey {
@@ -233,6 +242,60 @@ impl TilePoseHeader {
     pub const TEXELS: usize = 32;
     /// First reserved header texel.
     pub const RESERVED_START: usize = 27;
+    /// `H00`: stable identities and flags.
+    pub const H00_IDENTITIES: usize = 0;
+    /// `H01`: sample spans, ownership base, and header generation.
+    pub const H01_SPANS: usize = 1;
+    /// `H02`: object factors 12 and 13.
+    pub const H02_OBJECT_12_13: usize = 2;
+    /// `H03`: object factors 14 and 23.
+    pub const H03_OBJECT_14_23: usize = 3;
+    /// `H04`: object factors 24 and 34.
+    pub const H04_OBJECT_24_34: usize = 4;
+    /// `H05`: camera factors 12 and 13.
+    pub const H05_CAMERA_12_13: usize = 5;
+    /// `H06`: camera factors 14 and 23.
+    pub const H06_CAMERA_14_23: usize = 6;
+    /// `H07`: camera factors 24 and 34.
+    pub const H07_CAMERA_24_34: usize = 7;
+    /// `H08`: camera factors 15 and 25.
+    pub const H08_CAMERA_15_25: usize = 8;
+    /// `H09`: camera factors 35 and 45.
+    pub const H09_CAMERA_35_45: usize = 9;
+    /// `H10`: observer yaw and pitch factors.
+    pub const H10_OBSERVER: usize = 10;
+    /// `H11`: high source-origin lanes.
+    pub const H11_ORIGIN_HIGH: usize = 11;
+    /// `H12`: low source-origin lanes.
+    pub const H12_ORIGIN_LOW: usize = 12;
+    /// `H13`: source translations zero through three.
+    pub const H13_TRANSLATION_0_3: usize = 13;
+    /// `H14`: fifth translation, height, and perspective distances.
+    pub const H14_PROJECTION: usize = 14;
+    /// `H15`: zoom, extent, and chart density.
+    pub const H15_EXTENT_DENSITY: usize = 15;
+    /// `H16`: integer source rectangle.
+    pub const H16_SOURCE_RECT: usize = 16;
+    /// `H17`: compensated target-relative anchor delta.
+    pub const H17_ANCHOR_DELTA: usize = 17;
+    /// `H18`: accepted source-map row zero.
+    pub const H18_SOURCE_MAP_0: usize = 18;
+    /// `H19`: accepted source-map row one.
+    pub const H19_SOURCE_MAP_1: usize = 19;
+    /// `H20`: accepted source-map row two.
+    pub const H20_SOURCE_MAP_2: usize = 20;
+    /// `H21`: depth and error bounds.
+    pub const H21_BOUNDS: usize = 21;
+    /// `H22`: same-surface quality and scheduling facts.
+    pub const H22_QUALITY: usize = 22;
+    /// `H23`: sample status and mesh class.
+    pub const H23_STATUS: usize = 23;
+    /// `H24`: chart scale and exact-anchor provenance.
+    pub const H24_SCALE_ANCHOR: usize = 24;
+    /// `H25`: semantic and record provenance.
+    pub const H25_PROVENANCE: usize = 25;
+    /// `H26`: ownership and sample generations.
+    pub const H26_OWNERSHIP: usize = 26;
 
     /// Validates the version-one reserved region.
     #[must_use]
@@ -275,7 +338,16 @@ impl DescriptorCostLedger {
     /// Bytes in one RGBA32F texel.
     pub const TEXEL_BYTES: u64 = 16;
     /// Physical sample count in one 256-square tile.
-    pub const SAMPLES_PER_TILE: u64 = 256 * 256;
+    pub const SAMPLES_PER_TILE: u64 =
+        SourcePixelRect::PHYSICAL_SIDE as u64 * SourcePixelRect::PHYSICAL_SIDE as u64;
+    /// Active-instance records at the start of the shared descriptor page.
+    pub const ACTIVE_PREFIX_RECORDS: u64 = 64;
+    /// Complete pose-header slots in the shared descriptor page.
+    pub const HEADER_SLOTS: u64 = 64;
+    /// Compact ownership records after the active prefix and header slots.
+    pub const OWNERSHIP_RECORDS: u64 = 63_424;
+    /// Total records in one shared 256-square descriptor page.
+    pub const DESCRIPTOR_PAGE_RECORDS: u64 = 256 * 256;
     /// Bytes in the paired sample columns for one tile.
     pub const SAMPLE_BYTES_PER_TILE: u64 = 2 * Self::TEXEL_BYTES * Self::SAMPLES_PER_TILE;
     /// Bytes in one 32-texel pose header.
@@ -536,26 +608,66 @@ mod tests {
 
     #[test]
     fn descriptor_map_abi_round_trips_bytes_and_matches_the_cost_ledger() {
-        let mut header = TilePoseHeader::zeroed();
-        for (index, texel) in header.texels[..TilePoseHeader::RESERVED_START]
-            .iter_mut()
-            .enumerate()
-        {
-            let index = u16::try_from(index).expect("the header has 32 texels");
-            texel.lanes = [f32::from(index), 1.0, -2.0, 3.5];
+        #[repr(C, align(16))]
+        struct AlignedBytes<const N: usize>([u8; N]);
+
+        let named_indices = [
+            TilePoseHeader::H00_IDENTITIES,
+            TilePoseHeader::H01_SPANS,
+            TilePoseHeader::H02_OBJECT_12_13,
+            TilePoseHeader::H03_OBJECT_14_23,
+            TilePoseHeader::H04_OBJECT_24_34,
+            TilePoseHeader::H05_CAMERA_12_13,
+            TilePoseHeader::H06_CAMERA_14_23,
+            TilePoseHeader::H07_CAMERA_24_34,
+            TilePoseHeader::H08_CAMERA_15_25,
+            TilePoseHeader::H09_CAMERA_35_45,
+            TilePoseHeader::H10_OBSERVER,
+            TilePoseHeader::H11_ORIGIN_HIGH,
+            TilePoseHeader::H12_ORIGIN_LOW,
+            TilePoseHeader::H13_TRANSLATION_0_3,
+            TilePoseHeader::H14_PROJECTION,
+            TilePoseHeader::H15_EXTENT_DENSITY,
+            TilePoseHeader::H16_SOURCE_RECT,
+            TilePoseHeader::H17_ANCHOR_DELTA,
+            TilePoseHeader::H18_SOURCE_MAP_0,
+            TilePoseHeader::H19_SOURCE_MAP_1,
+            TilePoseHeader::H20_SOURCE_MAP_2,
+            TilePoseHeader::H21_BOUNDS,
+            TilePoseHeader::H22_QUALITY,
+            TilePoseHeader::H23_STATUS,
+            TilePoseHeader::H24_SCALE_ANCHOR,
+            TilePoseHeader::H25_PROVENANCE,
+            TilePoseHeader::H26_OWNERSHIP,
+        ];
+        assert_eq!(named_indices, core::array::from_fn::<_, 27, _>(|index| index));
+
+        let mut header_bytes = AlignedBytes([0_u8; 512]);
+        for texel in 0..TilePoseHeader::RESERVED_START {
+            for lane in 0..4 {
+                let ordinal = u16::try_from(texel * 4 + lane + 1).expect("header lane fits");
+                let start = (texel * 4 + lane) * size_of::<f32>();
+                header_bytes.0[start..start + size_of::<f32>()]
+                    .copy_from_slice(&f32::from(ordinal).to_ne_bytes());
+            }
         }
+        let header = *bytemuck::from_bytes::<TilePoseHeader>(&header_bytes.0);
         validate_pose_header(&header).expect("reserved header lanes are zero");
-        let pair = DescriptorSamplePair::new([31.0, 1.0, 2.0, 0.0], [0.25, -0.5, 7.0, 1.0]);
-        let header_bytes = bytemuck::bytes_of(&header);
-        let pair_bytes = bytemuck::bytes_of(&pair);
-        assert_eq!(
-            *bytemuck::from_bytes::<TilePoseHeader>(header_bytes),
-            header
-        );
-        assert_eq!(
-            *bytemuck::from_bytes::<DescriptorSamplePair>(pair_bytes),
-            pair
-        );
+        assert_eq!(header.texels[TilePoseHeader::H00_IDENTITIES].lanes, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(header.texels[TilePoseHeader::H26_OWNERSHIP].lanes, [105.0, 106.0, 107.0, 108.0]);
+        assert_eq!(bytemuck::bytes_of(&header), header_bytes.0);
+
+        let pair_lanes = [31.0_f32, 1.0, 2.0, 0.0, 0.25, -0.5, 7.0, 1.0];
+        let mut pair_bytes = AlignedBytes([0_u8; 32]);
+        for (lane, value) in pair_lanes.into_iter().enumerate() {
+            let start = lane * size_of::<f32>();
+            pair_bytes.0[start..start + size_of::<f32>()]
+                .copy_from_slice(&value.to_ne_bytes());
+        }
+        let pair = *bytemuck::from_bytes::<DescriptorSamplePair>(&pair_bytes.0);
+        assert_eq!(pair.s0.lanes, [31.0, 1.0, 2.0, 0.0]);
+        assert_eq!(pair.s1.lanes, [0.25, -0.5, 7.0, 1.0]);
+        assert_eq!(bytemuck::bytes_of(&pair), pair_bytes.0);
         assert_eq!(size_of::<DescriptorTexel>(), 16);
         assert_eq!(align_of::<DescriptorTexel>(), 16);
         assert_eq!(size_of::<TilePoseHeader>(), 512);
@@ -563,6 +675,19 @@ mod tests {
         assert_eq!(DescriptorCostLedger::SAMPLE_BYTES_PER_TILE, 2_097_152);
         assert_eq!(DescriptorCostLedger::HEADER_BYTES_PER_TILE, 512);
         assert_eq!(DescriptorCostLedger::LOGICAL_BYTES_PER_TILE, 2_097_664);
+        assert_eq!(SourcePixelRect::PHYSICAL_SIDE, 256);
+        assert_eq!(SourcePixelRect::CORE_SIDE, 254);
+        assert_eq!(SourcePixelRect::APRON_SAMPLES, 1);
+        assert_eq!(DescriptorCostLedger::ACTIVE_PREFIX_RECORDS, 64);
+        assert_eq!(DescriptorCostLedger::HEADER_SLOTS, 64);
+        assert_eq!(DescriptorCostLedger::OWNERSHIP_RECORDS, 63_424);
+        assert_eq!(DescriptorCostLedger::DESCRIPTOR_PAGE_RECORDS, 65_536);
+        assert_eq!(
+            DescriptorCostLedger::ACTIVE_PREFIX_RECORDS
+                + DescriptorCostLedger::HEADER_SLOTS * TilePoseHeader::TEXELS as u64
+                + DescriptorCostLedger::OWNERSHIP_RECORDS,
+            DescriptorCostLedger::DESCRIPTOR_PAGE_RECORDS
+        );
         assert_eq!(DescriptorCostLedger::logical_bytes(1), Some(2_097_664));
         assert_eq!(DescriptorCostLedger::logical_bytes(9), Some(18_878_976));
         assert_eq!(DescriptorCostLedger::logical_bytes(12), Some(25_171_968));
@@ -604,6 +729,31 @@ mod tests {
             [preview, final_tile, backdrop],
         ] {
             assert_eq!(select_same_surface_owner(order), Some(final_tile));
+        }
+        let worse_error = TileQuality {
+            error: ExactF64::new(0.02),
+            age: 99,
+            tile_id: 1,
+            ..final_tile
+        };
+        let older = TileQuality {
+            age: 0,
+            tile_id: 1,
+            ..final_tile
+        };
+        let higher_tile_id = TileQuality {
+            tile_id: 3,
+            ..final_tile
+        };
+        for contender in [worse_error, older, higher_tile_id] {
+            assert_eq!(
+                select_same_surface_owner([final_tile, contender]),
+                Some(final_tile)
+            );
+            assert_eq!(
+                select_same_surface_owner([contender, final_tile]),
+                Some(final_tile)
+            );
         }
         let cell = CanonicalChartCellKey {
             slice: slice(),
