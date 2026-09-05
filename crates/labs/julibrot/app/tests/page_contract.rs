@@ -697,7 +697,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(INDEX.contains("approximately 4.5 MB"));
     assert!(MAIN.contains("wasm_bundle_bytes"));
     assert!(MAIN.contains("javascript_bundle_bytes"));
-    assert!(MAIN.contains("wasm_instance_count = 2"));
+    assert!(MAIN.contains("wasm_instance_count: 2"));
     assert!(FACTS.contains("precision_mode: requested.precision_mode.as_str()"));
     assert!(
         FACTS.contains(
@@ -718,6 +718,24 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));
     assert!(FACTS.contains("warp_exposed_fraction: present.warp_exposed_fraction"));
+}
+
+#[test]
+fn immutable_boot_facts_are_merged_into_every_refresh() {
+    assert!(MAIN.contains("let BOOT_FACTS = Object.freeze({});"));
+    assert!(MAIN.contains("BOOT_FACTS = Object.freeze({"));
+    assert!(MAIN.contains(
+        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+    ));
+    for field in [
+        "wasm_bundle_bytes:",
+        "javascript_bundle_bytes:",
+        "wasm_instance_count: 2",
+        "timer_quantum_ms:",
+        "timer_probe:",
+    ] {
+        assert!(MAIN.contains(field), "missing immutable boot fact {field}");
+    }
 }
 
 #[test]
