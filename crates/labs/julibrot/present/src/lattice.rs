@@ -58,13 +58,20 @@ pub const COVERAGE_CHART_POINTS: [[f64; 2]; 5] = [
     [0.0, 0.0],
 ];
 
-/// Tolerance in normalised source units for the coverage check.
+/// Half a source texel, the reach of the source picture beyond its outermost sample centre.
 ///
-/// The rows are rounded to f32 before they are uploaded and the mirror reads the rounded rows, so
-/// a map that covers the destination exactly in f64 lands a corner a few parts in ten million
-/// outside it. That is rounding, not a scale error: a wrong scale is off by a ratio, which on any
-/// of the extent pairs the ladder produces is at least several per cent.
-pub const COVERAGE_TOLERANCE: f64 = 1.0e-4;
+/// The source's outermost samples sit exactly on the half-extent and own the half pixel past it,
+/// so a destination landing inside that footprint is still covered. It is the same reach the
+/// planner's exposure test already allows in the source pose's pixels
+/// (`planner.rs`, `RETAINED_TEXEL_REACH_PX`), and taking a different one here would refuse plans
+/// the exposure test calls covering: a bounded pan that lands the frame edge exactly on the source
+/// edge would go to clear rather than to the half texel it owns.
+///
+/// It also absorbs the f32 rounding the rows carry. The mirror reads the rounded rows, so a map
+/// that covers the destination exactly in f64 lands a corner a few parts in ten million outside
+/// it, which is orders below a half texel of any extent the ladder produces. Neither slack hides
+/// a scale error: a wrong scale is off by a ratio, at least several per cent on every pairing.
+pub const SOURCE_TEXEL_REACH_PX: f64 = 0.5;
 
 impl LatticePair {
     /// Names both extents of a plan.
@@ -175,12 +182,21 @@ impl LatticePair {
     /// asserts no geometry and is not checked either.
     #[must_use]
     pub fn covers_destination(self, rows: [[f32; 4]; 3]) -> bool {
+        let slack = self.coverage_slack();
         COVERAGE_CHART_POINTS.into_iter().all(|chart| {
             self.source_uv(rows, chart).is_some_and(|uv| {
                 uv.into_iter()
-                    .all(|value| (-COVERAGE_TOLERANCE..=1.0 + COVERAGE_TOLERANCE).contains(&value))
+                    .zip(slack)
+                    .all(|(value, slack)| (-slack..=1.0 + slack).contains(&value))
             })
         })
+    }
+
+    /// The half-texel reach expressed in the normalised units the coverage check works in.
+    #[must_use]
+    pub fn coverage_slack(self) -> [f64; 2] {
+        self.source
+            .map(|extent| SOURCE_TEXEL_REACH_PX / f64::from(extent))
     }
 }
 
@@ -232,9 +248,9 @@ mod tests {
             let corner = pair
                 .source_uv(rows, [1.0, 1.0])
                 .expect("the destination corner is in front of the source");
+            let slack = pair.coverage_slack();
             assert!(
-                (corner[0] - 1.0).abs() < COVERAGE_TOLERANCE
-                    && corner[1].abs() < COVERAGE_TOLERANCE,
+                (corner[0] - 1.0).abs() < slack[0] && corner[1].abs() < slack[1],
                 "the destination corner samples {corner:?} rather than the source corner"
             );
         }
@@ -265,5 +281,36 @@ mod tests {
         assert_eq!(composed[8], 1.0);
         let identity = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         assert_eq!(compose_homography(identity, solved), solved);
+    }
+
+    /// A bounded pan that lands the frame edge exactly on the source edge still covers.
+    ///
+    /// This is the pairing between the coverage check and the exposure test. The planner calls a
+    /// warp unexposed while every destination sample stays inside the source's half-extent plus
+    /// half a texel; a coverage check with a tighter slack would send exactly those plans to
+    /// clear, which is the disocclusion the reach exists to prevent, read off the other side.
+    #[test]
+    fn the_half_texel_reach_is_covered_rather_than_refused() {
+        for extent in [SURFACE, PICTURE_FAST] {
+            let pair = LatticePair::new(extent, extent).expect("a real lattice pair");
+            let mut rows = identity_warp_rows();
+            rows[0][2] = 0.5;
+            let corner = pair
+                .source_uv(rows, [1.0, 1.0])
+                .expect("the destination corner is in front of the source");
+            assert!(
+                corner[0] > 1.0,
+                "the pan puts the corner past the source edge"
+            );
+            assert!(
+                pair.covers_destination(rows),
+                "a half-texel pan on {extent:?} is refused where the exposure test calls it covering"
+            );
+            rows[0][2] = 2.0;
+            assert!(
+                !pair.covers_destination(rows),
+                "a two-pixel pan on {extent:?} reaches past the half texel and is not covering"
+            );
+        }
     }
 }
