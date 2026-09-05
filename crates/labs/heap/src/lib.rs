@@ -36,6 +36,7 @@ pub use dialect::{
 pub use executor::{
     DispatchSelector, ExecutorCapacity, ExecutorDispatch, ExecutorError, GpuKernel,
     GpuKernelExecutor, GpuKernelExecutorConfig, HeaderSetHandle, HeapPresentResources,
+    SpanUploadMode,
 };
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
 pub use lattice::{

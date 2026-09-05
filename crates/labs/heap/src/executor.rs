@@ -38,6 +38,16 @@ pub struct GpuKernelExecutorConfig {
     pub kernel_uniform_bytes: u32,
 }
 
+/// Capability-gated DATA upload layout.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SpanUploadMode {
+    /// Preserve the established one-full-square-staging-page upload.
+    #[default]
+    PaddedPages,
+    /// Upload only complete logical rows plus an optional exact-width tail row.
+    ValidRows,
+}
+
 /// Created capacity and byte facts; none are inferred measurements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutorCapacity {
@@ -404,6 +414,7 @@ pub struct GpuKernelExecutor {
     header_owner: Arc<()>,
     header_reservations: HeaderReservations,
     compatibility_header: Option<(StaticHeaders, HeaderSetHandle)>,
+    span_upload_mode: SpanUploadMode,
     next_kernel_id: u64,
 }
 
@@ -558,8 +569,20 @@ impl GpuKernelExecutor {
                 header_stride,
             ),
             compatibility_header: None,
+            span_upload_mode: SpanUploadMode::PaddedPages,
             next_kernel_id: 1,
         })
+    }
+
+    /// Selects the capability-gated DATA upload layout for later `write_span` calls.
+    pub const fn set_span_upload_mode(&mut self, mode: SpanUploadMode) {
+        self.span_upload_mode = mode;
+    }
+
+    /// Returns the selected DATA upload layout.
+    #[must_use]
+    pub const fn span_upload_mode(&self) -> SpanUploadMode {
+        self.span_upload_mode
     }
 
     #[must_use]
@@ -732,6 +755,9 @@ impl GpuKernelExecutor {
             });
         }
         let side = span.page_records.isqrt();
+        if side == 0 || side * side != span.page_records {
+            return Err(ExecutorError::Contract("span page is not square"));
+        }
         for (page, handle) in span.handles().iter().enumerate() {
             let descriptor = self
                 .arena
@@ -742,33 +768,59 @@ impl GpuKernelExecutor {
             let end = bytes
                 .len()
                 .min(start + span.page_records as usize * RECORD_BYTES);
-            let mut padded = vec![0_u8; span.page_records as usize * RECORD_BYTES];
-            padded[..end - start].copy_from_slice(&bytes[start..end]);
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.data,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: u32::from(descriptor.x),
-                        y: u32::from(descriptor.y),
-                        z: u32::from(descriptor.layer),
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &padded,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(side * 16),
-                    rows_per_image: Some(side),
-                },
-                wgpu::Extent3d {
-                    width: side,
-                    height: side,
-                    depth_or_array_layers: 1,
-                },
-            );
+            let valid_records = u32::try_from((end - start) / RECORD_BYTES)
+                .map_err(|_| ExecutorError::Contract("upload record count overflow"))?;
+            match self.span_upload_mode {
+                SpanUploadMode::PaddedPages => {
+                    let mut padded = vec![0_u8; span.page_records as usize * RECORD_BYTES];
+                    padded[..end - start].copy_from_slice(&bytes[start..end]);
+                    self.write_texture_region(descriptor, &padded, UploadRegion::padded_page(side));
+                }
+                SpanUploadMode::ValidRows => {
+                    for region in valid_row_regions(valid_records, side).into_iter().flatten() {
+                        let region_start = start + region.source_offset_bytes;
+                        let region_end = region_start + region.source_len_bytes;
+                        self.write_texture_region(
+                            descriptor,
+                            &bytes[region_start..region_end],
+                            region,
+                        );
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    fn write_texture_region(
+        &self,
+        descriptor: crate::Descriptor,
+        bytes: &[u8],
+        region: UploadRegion,
+    ) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.data,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: u32::from(descriptor.x),
+                    y: u32::from(descriptor.y) + region.origin_y,
+                    z: u32::from(descriptor.layer),
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: region.bytes_per_row,
+                rows_per_image: region.rows_per_image,
+            },
+            wgpu::Extent3d {
+                width: region.width,
+                height: region.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Builds immutable headers for exactly one active dense prefix.
@@ -1190,6 +1242,68 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
         .sum()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct UploadRegion {
+    source_offset_bytes: usize,
+    source_len_bytes: usize,
+    origin_y: u32,
+    width: u32,
+    height: u32,
+    bytes_per_row: Option<u32>,
+    rows_per_image: Option<u32>,
+}
+
+impl UploadRegion {
+    const fn padded_page(side: u32) -> Self {
+        let records = side as usize * side as usize;
+        Self {
+            source_offset_bytes: 0,
+            source_len_bytes: records * RECORD_BYTES,
+            origin_y: 0,
+            width: side,
+            height: side,
+            bytes_per_row: Some(side * RECORD_BYTES as u32),
+            rows_per_image: Some(side),
+        }
+    }
+}
+
+fn valid_row_regions(valid_records: u32, side: u32) -> [Option<UploadRegion>; 2] {
+    let full_rows = valid_records / side;
+    let tail = valid_records % side;
+    let row_bytes = side as usize * RECORD_BYTES;
+    [
+        (full_rows > 0).then_some(UploadRegion {
+            source_offset_bytes: 0,
+            source_len_bytes: full_rows as usize * row_bytes,
+            origin_y: 0,
+            width: side,
+            height: full_rows,
+            bytes_per_row: Some(side * RECORD_BYTES as u32),
+            rows_per_image: Some(full_rows),
+        }),
+        (tail > 0).then_some(UploadRegion {
+            source_offset_bytes: full_rows as usize * row_bytes,
+            source_len_bytes: tail as usize * RECORD_BYTES,
+            origin_y: full_rows,
+            width: tail,
+            height: 1,
+            bytes_per_row: None,
+            rows_per_image: None,
+        }),
+    ]
+}
+
+#[cfg(test)]
+fn planned_upload_bytes(logical_len: u32, page_records: u32, mode: SpanUploadMode) -> u64 {
+    match mode {
+        SpanUploadMode::PaddedPages => {
+            u64::from(logical_len.div_ceil(page_records) * page_records) * RECORD_BYTES as u64
+        }
+        SpanUploadMode::ValidRows => u64::from(logical_len) * RECORD_BYTES as u64,
+    }
+}
+
 pub(super) fn texture(
     device: &wgpu::Device,
     label: &'static str,
@@ -1303,7 +1417,60 @@ mod tests {
 
     use crate::{DispatchError, DispatchPlan, Handle, PagePass, SpanArena, StaticHeaders};
 
-    use super::{DispatchSelector, HeaderReservations, copy_command_count};
+    use super::{
+        DispatchSelector, HeaderReservations, SpanUploadMode, UploadRegion, copy_command_count,
+        planned_upload_bytes, valid_row_regions,
+    };
+
+    #[test]
+    fn row_exact_reference_layout_removes_sixteen_fold_upload_amplification() {
+        assert_eq!(
+            planned_upload_bytes(4_096, 65_536, SpanUploadMode::PaddedPages),
+            1_048_576
+        );
+        assert_eq!(
+            planned_upload_bytes(4_096, 65_536, SpanUploadMode::ValidRows),
+            65_536
+        );
+        assert_eq!(
+            valid_row_regions(4_096, 256),
+            [
+                Some(UploadRegion {
+                    source_offset_bytes: 0,
+                    source_len_bytes: 65_536,
+                    origin_y: 0,
+                    width: 256,
+                    height: 16,
+                    bytes_per_row: Some(4_096),
+                    rows_per_image: Some(16),
+                }),
+                None,
+            ]
+        );
+        assert_eq!(
+            valid_row_regions(257, 256),
+            [
+                Some(UploadRegion {
+                    source_offset_bytes: 0,
+                    source_len_bytes: 4_096,
+                    origin_y: 0,
+                    width: 256,
+                    height: 1,
+                    bytes_per_row: Some(4_096),
+                    rows_per_image: Some(1),
+                }),
+                Some(UploadRegion {
+                    source_offset_bytes: 4_096,
+                    source_len_bytes: 16,
+                    origin_y: 1,
+                    width: 1,
+                    height: 1,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                }),
+            ]
+        );
+    }
 
     #[test]
     fn exact_row_copy_count_keeps_full_and_tail_rows_separate() {

@@ -349,6 +349,8 @@ The v8 replay paid that missing diagnostic: the borrow panic was gone, and the f
 
 The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 
+Executor decision — 2026-09-05: `write_span` retains the established square-padded upload as `SpanUploadMode::PaddedPages`, and a caller may explicitly select `ValidRows` to upload only complete logical rows plus one optional exact-width tail. The native layout oracle pins a 4,096-record orbit at 65,536 uploaded bytes instead of the padded 1,048,576 bytes and pins both copy layouts, but WebGPU/WebGL2 validation and readback remain NEEDS BROWSER PROOF before enabling the capability in the app.
+
 The indexed box relies on the driver's post-transform cache to approach the `8E` ideal; the submitted work is always `36E` indices, and absent pipeline statistics the measured wall cannot prove an exact physical vertex-invocation count.
 
 Mode B's two-record validity layout deliberately spends 12 padding bytes per vertex; packing four flags would require an extra output or pass and is deferred because Mode C supplies the uncontaminated capacity comparison.
