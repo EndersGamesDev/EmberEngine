@@ -216,7 +216,7 @@ pub struct PageFacts<'a> {
     pub wasm_instance_count: u32,
     pub timing_status: &'static str,
     pub precision_mode: &'static str,
-    pub presented_scene_precision_policy: Option<&'static str>,
+    pub completed_scene_precision_policy: Option<&'static str>,
     pub scene_precision_mode: Option<&'static str>,
     pub warp_precision_mode: Option<&'static str>,
     pub level_timings: &'a LevelTimingLedger,
@@ -384,7 +384,7 @@ impl<'a> PageFacts<'a> {
             wasm_instance_count: 2,
             timing_status: "requires visible replay",
             precision_mode: requested.precision_mode.as_str(),
-            presented_scene_precision_policy: present
+            completed_scene_precision_policy: present
                 .last_scene
                 .map(|sample| sample.precision_mode),
             scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode),

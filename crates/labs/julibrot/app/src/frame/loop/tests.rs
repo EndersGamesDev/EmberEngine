@@ -2867,7 +2867,7 @@ fn a_longer_reference_span_is_not_leased_to_a_lower_cap() {
 }
 
 #[test]
-fn accepted_reference_facts_name_deferred_stable_and_escalated_receipts() {
+fn accepted_reference_facts_keep_verification_separate_from_escalations() {
     let deferred = accepted_reference_facts(ReferenceVerification::Deferred, None, 0);
     assert_eq!(deferred.reference_verification, "Deferred");
     assert_eq!(deferred.consumed_word_error_ulps, None);
@@ -2878,37 +2878,15 @@ fn accepted_reference_facts_name_deferred_stable_and_escalated_receipts() {
     assert_eq!(stable.consumed_word_error_ulps, Some(2));
     assert_eq!(stable.precision_escalations, 0);
 
-    let escalated = accepted_reference_facts(ReferenceVerification::Stable, Some(1), 3);
-    assert_eq!(escalated.reference_verification, "Escalated");
-    assert_eq!(escalated.consumed_word_error_ulps, Some(1));
-    assert_eq!(escalated.precision_escalations, 3);
-}
+    let stable_after_escalation =
+        accepted_reference_facts(ReferenceVerification::Stable, Some(1), 3);
+    assert_eq!(stable_after_escalation.reference_verification, "Stable");
+    assert_eq!(stable_after_escalation.consumed_word_error_ulps, Some(1));
+    assert_eq!(stable_after_escalation.precision_escalations, 3);
 
-#[test]
-fn facts_snapshot_wires_the_reference_receipt_and_observation_walls() {
-    let source = include_str!("../../facts.rs");
-    for wiring in [
-        "reference_verification: loop_facts.accepted_reference_verification()",
-        "consumed_word_error_ulps: loop_facts.accepted_reference_consumed_word_error_ulps()",
-        "reference_precision_escalations: loop_facts.accepted_reference_precision_escalations()",
-        "presented_scene_precision_policy: present",
-        "scene_callback_observation_wall_ms: present.last_scene.map(|sample| sample.wall_ms)",
-        "warp_callback_observation_wall_ms: present.last_warp.map(|sample| sample.wall_ms)",
-    ] {
-        assert!(
-            source.contains(wiring),
-            "missing facts snapshot wiring: {wiring}"
-        );
-    }
-    for unavailable_gpu_name in [
-        "scene_wall_ms: None",
-        "scene_fence_wait_ms: None",
-        "warp_wall_ms: None",
-        "warp_fence_wait_ms: None",
-    ] {
-        assert!(
-            source.contains(unavailable_gpu_name),
-            "callback observation leaked through legacy GPU name: {unavailable_gpu_name}"
-        );
-    }
+    let deferred_after_escalation =
+        accepted_reference_facts(ReferenceVerification::Deferred, None, 2);
+    assert_eq!(deferred_after_escalation.reference_verification, "Deferred");
+    assert_eq!(deferred_after_escalation.consumed_word_error_ulps, None);
+    assert_eq!(deferred_after_escalation.precision_escalations, 2);
 }

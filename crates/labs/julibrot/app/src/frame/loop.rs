@@ -369,13 +369,9 @@ const fn accepted_reference_facts(
     consumed_word_error_ulps: Option<u32>,
     precision_escalations: u32,
 ) -> AcceptedReferenceFacts {
-    let reference_verification = if precision_escalations != 0 {
-        "Escalated"
-    } else {
-        match verification {
-            ember_julibrot_worker::ReferenceVerification::Deferred => "Deferred",
-            ember_julibrot_worker::ReferenceVerification::Stable => "Stable",
-        }
+    let reference_verification = match verification {
+        ember_julibrot_worker::ReferenceVerification::Deferred => "Deferred",
+        ember_julibrot_worker::ReferenceVerification::Stable => "Stable",
     };
     AcceptedReferenceFacts {
         reference_verification,
