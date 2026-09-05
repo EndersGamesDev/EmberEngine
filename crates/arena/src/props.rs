@@ -3,8 +3,8 @@
 //! the ground.
 //!
 //! The renderer samples one base-colour texture per mesh, multiplied by the
-//! instance colour, and that is the whole material model (see the table in
-//! `CLAUDE.md`). So a container is a box whose six faces each map to a
+//! instance colour. Scalar surface presets supply material response without
+//! additional texture maps. A container is a box whose six faces each map to a
 //! rectangle of one picture (an *atlas box*), a trench wall is a box whose
 //! faces tile one picture at about a tile per 1.5 m, and a statue is a
 //! generated position-only mesh given faceted normals and a box-projected
@@ -102,6 +102,35 @@ impl Prop {
 
     const fn index(self) -> usize {
         self as usize
+    }
+
+    /// Coarse material classification, not a claim that a one-picture mesh
+    /// carries per-pixel roughness. Paint is dielectric even on a steel object.
+    /// Retired sky and gameplay loot retain their existing presentation.
+    const fn surface(self) -> Option<(f32, f32)> {
+        match self {
+            Self::Container => Some((0.58, 0.0)),
+            Self::Ammo => Some((0.62, 0.0)),
+            Self::Crate => Some((0.9, 0.0)),
+            Self::Sandbags => Some((0.98, 0.0)),
+            Self::TrenchWall | Self::TunnelRoof | Self::Rubble | Self::Floor | Self::Ground => {
+                Some((0.94, 0.0))
+            }
+            Self::Plinth | Self::CityWall | Self::Cathedral | Self::FacadeA | Self::FacadeB => {
+                Some((0.9, 0.0))
+            }
+            // Weathered bronze and scorched iron are rough, not chrome.
+            Self::Statue => Some((0.58, 0.75)),
+            Self::Wreck => Some((0.82, 0.35)),
+            Self::Lamp => Some((0.65, 0.7)),
+            Self::Sky | Self::Loot => None,
+        }
+    }
+
+    fn shade(self, instance: Instance) -> Instance {
+        self.surface().map_or(instance, |(roughness, metallic)| {
+            instance.with_surface(roughness, metallic)
+        })
     }
 }
 
@@ -557,9 +586,11 @@ impl Props {
         };
         let scale = target / ms;
         let pos = center - rot * (b.center() * scale);
-        let mut instance = Instance::new(pos, scale, color)
-            .with_rot(rot)
-            .with_mesh(self.mesh(p));
+        let mut instance = p.shade(
+            Instance::new(pos, scale, color)
+                .with_rot(rot)
+                .with_mesh(self.mesh(p)),
+        );
         // Painted metal and dressed stone hold a sheen; rough wood,
         // sandbags and loose rubble retain their diffuse surface.
         if matches!(
@@ -657,9 +688,11 @@ impl Props {
         let foot = Vec3::new(b.center().x, b.min.y, b.center().z) * s;
         let pos = Vec3::from(d.pos) - rot * foot;
         frame.instances.push(
-            Instance::new(pos, Vec3::splat(s), Vec3::ONE)
-                .with_rot(rot)
-                .with_mesh(self.mesh(prop)),
+            prop.shade(
+                Instance::new(pos, Vec3::splat(s), Vec3::ONE)
+                    .with_rot(rot)
+                    .with_mesh(self.mesh(prop)),
+            ),
         );
     }
 
@@ -667,14 +700,16 @@ impl Props {
     /// supplies sky, sun and clouds; the old cylinder would hide all three.
     pub fn push_ground(&self, frame: &mut Frame) {
         frame.instances.push(
-            Instance::new(
-                Vec3::new(0.0, GROUND_Y, 0.0),
-                Vec3::new(GROUND_SIZE, 1.0, GROUND_SIZE),
-                Vec3::splat(GROUND_DIM),
-            )
-            .with_mesh(self.mesh(Prop::Ground))
-            .with_wetness()
-            .without_shadow(),
+            Prop::Ground.shade(
+                Instance::new(
+                    Vec3::new(0.0, GROUND_Y, 0.0),
+                    Vec3::new(GROUND_SIZE, 1.0, GROUND_SIZE),
+                    Vec3::splat(GROUND_DIM),
+                )
+                .with_mesh(self.mesh(Prop::Ground))
+                .with_wetness()
+                .without_shadow(),
+            ),
         );
     }
 }
@@ -832,6 +867,32 @@ mod tests {
     }
 
     #[test]
+    fn world_materials_distinguish_paint_and_stone_from_metal_but_leave_loot_alone() {
+        for prop in Prop::ALL {
+            let instance = prop.shade(Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE));
+            assert_eq!(
+                instance
+                    .surface
+                    .map(|surface| (surface.roughness, surface.metallic)),
+                prop.surface()
+            );
+            if matches!(prop, Prop::Sky | Prop::Loot) {
+                assert_eq!(prop.surface(), None);
+            } else {
+                let (roughness, metallic) = prop.surface().expect("world prop material");
+                assert!((0.08..=1.0).contains(&roughness));
+                assert!((0.0..=1.0).contains(&metallic));
+            }
+        }
+        assert_eq!(Prop::Container.surface(), Some((0.58, 0.0)));
+        assert_eq!(Prop::Floor.surface(), Prop::Ground.surface());
+        assert!(Prop::Crate.surface().unwrap().0 >= 0.9);
+        assert!(Prop::Sandbags.surface().unwrap().0 >= 0.9);
+        assert!(Prop::Statue.surface().unwrap().1 > 0.5);
+        assert!(Prop::Lamp.surface().unwrap().1 > 0.5);
+    }
+
+    #[test]
     fn moving_sky_is_unobstructed_and_wet_materials_are_selected() {
         let props = props();
         let mut frame = Frame::default();
@@ -840,6 +901,12 @@ mod tests {
         assert_eq!(frame.instances[0].mesh, props.mesh(Prop::Ground));
         assert!(frame.instances[0].wettable);
         assert!(!frame.instances[0].casts_shadow);
+        assert_eq!(
+            frame.instances[0]
+                .surface
+                .map(|surface| (surface.roughness, surface.metallic)),
+            Prop::Ground.surface()
+        );
         for (kind, wettable) in [
             (Prop::Container, true),
             (Prop::Crate, false),
@@ -849,6 +916,12 @@ mod tests {
             let instance = frame.instances.last().unwrap();
             assert!(instance.casts_shadow);
             assert_eq!(instance.wettable, wettable);
+            assert_eq!(
+                instance
+                    .surface
+                    .map(|surface| (surface.roughness, surface.metallic)),
+                kind.surface()
+            );
         }
         assert!(
             frame
@@ -923,6 +996,7 @@ mod tests {
         assert!(close(wb.min, Vec3::new(5.5, 2.3, 9.6)), "{}", wb.min);
         assert!(close(wb.max, Vec3::new(6.5, 3.3, 10.6)), "{}", wb.max);
         assert_eq!(frame.instances[0].color, Vec3::ONE);
+        assert!(frame.instances[0].surface.is_none());
 
         // Bumped a quarter metre and a quarter turn round: still on its
         // footprint (a unit cube turned about its centre stays inside its

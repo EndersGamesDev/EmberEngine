@@ -5,7 +5,8 @@
 //!
 //! Existing v13 material pixels are reused at modest resolution; the palette
 //! applies authored paint colours to their neutral surface grain. No new
-//! downloaded or AI-generated asset, PBR material, or renderer feature is used.
+//! downloaded or AI-generated asset is used. Scalar surface presets distinguish
+//! painted metal, bare hardware and rough paving without extra texture maps.
 
 // Authored geometry loops are bounded below 256 and texture channels at 255.
 #![allow(
@@ -15,6 +16,7 @@
 )]
 
 use std::f32::consts::FRAC_PI_2;
+use std::sync::OnceLock;
 
 use arena_core::harbor::{
     CONTAINER_20, CONTAINER_40, CONTAINER_H, CONTAINER_W, CRANE_CENTERS_Z, CRANE_LEGS, HARBOR_HALF,
@@ -65,6 +67,11 @@ const PAINT: [[u8; 3]; 16] = [
     [87, 105, 113],
     [89, 71, 62],
 ];
+const CRANE_PAINT: usize = 1;
+// The lower crane columns share this neutral steel texture with the roof.
+// Their instance tint must compensate in linear light, not multiply two
+// independently chosen display colours at the seam with the upper structure.
+const STEEL_TILE_COLOR: [u8; 3] = [209, 215, 212];
 const CONTAINER_PAINT: [Vec3; 6] = [
     Vec3::new(0.61, 0.28, 0.21),
     Vec3::new(0.27, 0.42, 0.49),
@@ -73,6 +80,23 @@ const CONTAINER_PAINT: [Vec3; 6] = [
     Vec3::new(0.63, 0.65, 0.59),
     Vec3::new(0.40, 0.48, 0.53),
 ];
+
+fn srgb_component(channel: u8) -> f32 {
+    let encoded = f32::from(channel) / 255.0;
+    if encoded <= 0.04045 {
+        encoded / 12.92
+    } else {
+        ((encoded + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn crane_leg_tint() -> Vec3 {
+    static TINT: OnceLock<Vec3> = OnceLock::new();
+    *TINT.get_or_init(|| {
+        Vec3::from_array(PAINT[CRANE_PAINT].map(srgb_component))
+            / Vec3::from_array(STEEL_TILE_COLOR.map(srgb_component))
+    })
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct HarborArt {
@@ -85,11 +109,14 @@ impl HarborArt {
     }
 
     pub fn push_ground(self, frame: &mut Frame) {
-        for offset in [ASPHALT, QUAY, WATER] {
+        for (offset, roughness) in [(ASPHALT, 0.98), (QUAY, 0.92), (WATER, 0.12)] {
             let mut part = Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
                 .with_mesh(self.base + offset)
+                .with_surface(roughness, 0.0)
                 .with_wetness();
             if offset == WATER {
+                // Water reflects even in dry weather; rain wetness is only an
+                // additional weather response, not what makes this water.
                 part = part.without_shadow();
             }
             frame.instances.push(part);
@@ -100,11 +127,15 @@ impl HarborArt {
         frame.instances.push(
             Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
                 .with_mesh(self.base + STRUCTURES)
+                // This coarse batch is predominantly painted steel, not a
+                // bare-metal mirror: bridge paint and crane coatings insulate.
+                .with_surface(0.55, 0.0)
                 .with_wetness(),
         );
         frame.instances.push(
             Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
                 .with_mesh(self.base + MARKINGS)
+                .with_surface(0.85, 0.0)
                 .without_shadow(),
         );
     }
@@ -155,17 +186,25 @@ impl HarborArt {
                     obstacle.base + size.y / tiers * (tier + 0.5),
                     center.z,
                 );
-                for (offset, color) in [
+                for (offset, color, roughness, metallic) in [
                     (
                         if long { BOX40 } else { BOX20 },
                         CONTAINER_PAINT[row + column],
+                        0.58,
+                        0.0,
                     ),
-                    (if long { HARDWARE40 } else { HARDWARE20 }, Vec3::ONE),
+                    (
+                        if long { HARDWARE40 } else { HARDWARE20 },
+                        Vec3::ONE,
+                        0.38,
+                        0.8,
+                    ),
                 ] {
                     frame.instances.push(
                         Instance::new(pos, scale, color)
                             .with_rot(rot)
                             .with_mesh(self.base + offset)
+                            .with_surface(roughness, metallic)
                             .with_wetness(),
                     );
                 }
@@ -175,7 +214,7 @@ impl HarborArt {
             let roof = obstacle.kind == Cover::Roof;
             let crane_leg = CRANE_LEGS.contains(obstacle);
             let color = if crane_leg {
-                Vec3::new(0.30, 0.48, 0.58)
+                crane_leg_tint()
             } else if roof {
                 Vec3::new(0.57, 0.61, 0.61)
             } else if obstacle.kind == Cover::Crate {
@@ -183,9 +222,17 @@ impl HarborArt {
             } else {
                 Vec3::new(0.64, 0.65, 0.61)
             };
+            let roughness = if roof || crane_leg {
+                0.55
+            } else if obstacle.kind == Cover::Crate {
+                0.9
+            } else {
+                0.92
+            };
             frame.instances.push(
                 Instance::new(center, size, color)
                     .with_mesh(self.base + if roof || crane_leg { ROOF } else { SOLID })
+                    .with_surface(roughness, 0.0)
                     .with_wetness(),
             );
         }
@@ -239,7 +286,7 @@ pub fn harbor_meshes() -> Vec<MeshData> {
         hardware20.mesh,
         hardware40.mesh,
         MeshData::textured_box(2.0, Some(surface_texture(STONE, 128, [209, 209, 203]))),
-        MeshData::textured_box(5.0, Some(surface_texture(STEEL, 128, [209, 215, 212]))),
+        MeshData::textured_box(5.0, Some(surface_texture(STEEL, 128, STEEL_TILE_COLOR))),
     ];
     debug_assert_eq!(meshes.len(), MESH_COUNT);
     tracing::info!(
@@ -732,6 +779,7 @@ fn ship_cargo(builder: &mut Builder) {
 }
 
 fn crane(builder: &mut Builder, z: f32) {
+    let paint = CRANE_PAINT;
     // Lower legs are the authoritative solids drawn by push_cover. The
     // superstructure begins at their top and follows their actual centres.
     for leg in CRANE_LEGS
@@ -740,16 +788,31 @@ fn crane(builder: &mut Builder, z: f32) {
     {
         let x = f32::midpoint(leg.min[0], leg.max[0]);
         let zz = f32::midpoint(leg.min[1], leg.max[1]);
-        builder.beam(Vec3::new(x, leg.h, zz), Vec3::new(x, 25.0, zz), 1.0, 1);
+        builder.beam(Vec3::new(x, leg.h, zz), Vec3::new(x, 25.0, zz), 1.0, paint);
     }
     for side in [-1.0, 1.0] {
         let zz = z + side * 2.6;
-        builder.beam(Vec3::new(32.0, 25.0, zz), Vec3::new(44.0, 25.0, zz), 1.2, 1);
-        builder.beam(Vec3::new(32.0, 15.0, zz), Vec3::new(38.0, 25.0, zz), 0.5, 1);
-        builder.beam(Vec3::new(44.0, 15.0, zz), Vec3::new(38.0, 25.0, zz), 0.5, 1);
+        builder.beam(
+            Vec3::new(32.0, 25.0, zz),
+            Vec3::new(44.0, 25.0, zz),
+            1.2,
+            paint,
+        );
+        builder.beam(
+            Vec3::new(32.0, 15.0, zz),
+            Vec3::new(38.0, 25.0, zz),
+            0.5,
+            paint,
+        );
+        builder.beam(
+            Vec3::new(44.0, 15.0, zz),
+            Vec3::new(38.0, 25.0, zz),
+            0.5,
+            paint,
+        );
         // The boom is an open truss, with alternating diagonals, not a slab.
         for y in [31.0, 34.0] {
-            builder.beam(Vec3::new(13.0, y, zz), Vec3::new(91.0, y, zz), 0.55, 1);
+            builder.beam(Vec3::new(13.0, y, zz), Vec3::new(91.0, y, zz), 0.55, paint);
         }
         for segment in 0..13 {
             let x = 13.0 + segment as f32 * 6.0;
@@ -763,20 +826,20 @@ fn crane(builder: &mut Builder, z: f32) {
                 Vec3::new(x, 34.0, zz),
                 Vec3::new(x + 6.0, 31.0, zz),
                 0.28,
-                1,
+                paint,
             );
         }
         builder.beam(
             Vec3::new(35.0, 25.0, zz),
             Vec3::new(38.0, 48.0, zz),
             0.75,
-            1,
+            paint,
         );
         builder.beam(
             Vec3::new(42.0, 25.0, zz),
             Vec3::new(38.0, 48.0, zz),
             0.75,
-            1,
+            paint,
         );
         for end in [13.0, 89.0] {
             builder.beam(
@@ -792,7 +855,7 @@ fn crane(builder: &mut Builder, z: f32) {
             Vec3::new(x, 31.0, z - 2.6),
             Vec3::new(x, 31.0, z + 2.6),
             0.45,
-            1,
+            paint,
         );
     }
     builder.box_paint(Vec3::new(29.0, 28.5, z), Vec3::new(10.0, 4.0, 5.2), 0);
@@ -965,6 +1028,82 @@ fn boundary(builder: &mut Builder) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_surface(instance: &Instance, roughness: f32, metallic: f32) {
+        let surface = instance.surface.expect("authored harbor surface");
+        assert!((surface.roughness - roughness).abs() < 1e-6);
+        assert!((surface.metallic - metallic).abs() < 1e-6);
+    }
+
+    #[test]
+    fn crane_columns_share_the_upper_structures_paint_in_linear_light() {
+        let upper_paint = Vec3::from_array(PAINT[CRANE_PAINT].map(srgb_component));
+        let base_tile = Vec3::from_array(STEEL_TILE_COLOR.map(srgb_component));
+        assert!((base_tile * crane_leg_tint() - upper_paint).length() < 1e-6);
+        // The previous independently chosen tint visibly bleached the lower
+        // twelve metres of the otherwise continuous painted columns.
+        let previous = base_tile * Vec3::new(0.30, 0.48, 0.58);
+        assert!((previous - upper_paint).length() > 0.25);
+        let mut frame = Frame::default();
+        HarborArt::new(100).push_cover(&mut frame, &CRANE_LEGS[0]);
+        assert!((frame.instances[0].color - crane_leg_tint()).length() < 1e-6);
+
+        // Compare actual textured grain as well as nominal palette values.
+        // Eight-bit quantization and encoded grain modulation make the match
+        // approximate, but keep its linear RGB error below a visible seam.
+        let upper = surface_texture(STEEL, 64, PAINT[CRANE_PAINT]);
+        let lower = surface_texture(STEEL, 64, STEEL_TILE_COLOR);
+        for (upper_pixel, lower_pixel) in upper
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(lower.rgba8.as_chunks::<4>().0)
+        {
+            let upper_rgb = Vec3::from_array(
+                [upper_pixel[0], upper_pixel[1], upper_pixel[2]].map(srgb_component),
+            );
+            let lower_rgb = Vec3::from_array(
+                [lower_pixel[0], lower_pixel[1], lower_pixel[2]].map(srgb_component),
+            ) * crane_leg_tint();
+            assert!((upper_rgb - lower_rgb).abs().max_element() < 0.006);
+        }
+    }
+
+    #[test]
+    fn dry_weather_keeps_reflective_water_and_distinct_paving_paint_and_hardware() {
+        let art = HarborArt::new(100);
+        let mut frame = Frame {
+            environment: ember_engine::Environment::outdoor(ember_engine::Weather::Cloudy, 0.0),
+            ..Frame::default()
+        };
+        assert!(frame.environment.wetness < 0.001);
+        art.push_ground(&mut frame);
+        assert_surface(&frame.instances[0], 0.98, 0.0);
+        assert_surface(&frame.instances[1], 0.92, 0.0);
+        assert_surface(&frame.instances[2], 0.12, 0.0);
+        assert!(!frame.instances[2].casts_shadow);
+        art.push_decor(&mut frame);
+        assert_surface(&frame.instances[3], 0.55, 0.0);
+        assert_surface(&frame.instances[4], 0.85, 0.0);
+
+        frame.instances.clear();
+        art.push_cover(&mut frame, &arena_core::harbor::CONTAINERS[0].obstacle());
+        assert!(frame.instances.len() >= 2);
+        let (pairs, remainder) = frame.instances.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        for pair in pairs {
+            assert_surface(&pair[0], 0.58, 0.0);
+            assert_surface(&pair[1], 0.38, 0.8);
+            assert!(pair[0].casts_shadow && pair[1].casts_shadow);
+        }
+        frame.instances.clear();
+        art.push_cover(&mut frame, &CRANE_LEGS[0]);
+        assert_surface(&frame.instances[0], 0.55, 0.0);
+        frame.instances.clear();
+        art.push_cover(&mut frame, &WAREHOUSE[0]);
+        assert_surface(&frame.instances[0], 0.92, 0.0);
+    }
 
     #[test]
     fn meshes_are_finite_textured_batched_and_inside_the_budget() {

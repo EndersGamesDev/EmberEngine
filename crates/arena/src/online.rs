@@ -3560,6 +3560,7 @@ impl EmberGame for ShooterGame {
                         Vec3::ONE,
                     )
                     .with_mesh(pr.mesh(Prop::Floor))
+                    .with_surface(0.94, 0.0)
                     .with_wetness(),
                 );
             }
