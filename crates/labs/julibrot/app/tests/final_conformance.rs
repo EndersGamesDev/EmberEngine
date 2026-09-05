@@ -5,16 +5,19 @@
     reason = "the corpus pins exact policy and category values"
 )]
 
+use core::num::NonZeroU32;
+
 use ember_julibrot_kernels::{
     ConformanceVerdict, GridExtent, KernelMode, KernelSample, PerturbUniform, RefinementLevel,
     SampleStatus, ShallowUniform, escape_shallow_pixel, escape_shallow_point,
     evaluate_perturbation_conformance, perturb_scaled_offset,
 };
 use ember_julibrot_math::{
-    CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
-    PerturbationEnvelope, Plane, PlaneAngles, Pose, PoseMap, PrecisionMode, ReferenceOrbitRecord,
-    ScaleSplit, ViewControls, construct_plane, perturb_scaled_f64_with_envelope, precision_for,
-    scale_split, scaled_pixel_offset, shallow_pixel_scale, warp_matrix,
+    BigCentre, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep,
+    PerturbationEnvelope, Plane, PlaneAngles, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder,
+    ReferenceOrbitRecord, ReferencePass, ScaleSplit, ViewControls, construct_plane,
+    perturb_scaled_f64_with_envelope, precision_for, scale_split, scaled_pixel_offset,
+    shallow_pixel_scale, split_centre, warp_matrix,
 };
 use ember_julibrot_present::{
     DEBUG_TINT, GLITCH_DIAGNOSTIC, PaletteId, PaletteRecord, apply_homography,
@@ -69,10 +72,10 @@ struct DeepFixture<'a> {
 #[test]
 fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
     let (highest_zoom, highest_plan) = highest_admitted_plan()?;
-    assert!((946.0..947.0).contains(&highest_zoom));
-    assert_eq!(highest_plan.working_digits, highest_plan.policy_digits);
+    assert!((893.0..894.0).contains(&highest_zoom));
+    assert_eq!(highest_plan.working_digits + 16, highest_plan.policy_digits);
     assert!(matches!(
-        precision_for(
+        deterministic_precision_for(
             f64::from_bits(highest_zoom.to_bits() + 1),
             GRID_WIDTH,
             4_096
@@ -103,8 +106,17 @@ fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
                         });
                         if outside {
                             eligible += 1;
-                            assert_eq!(terminal(fast.sample), terminal(exact.sample));
-                            assert_eq!(fast.sample.escape_index, exact.sample.escape_index);
+                            assert_eq!(
+                                terminal(fast.sample),
+                                terminal(exact.sample),
+                                "{} zoom={zoom} cap={cap} centre={centre:?} pixel={pixel:?}",
+                                fixture.name
+                            );
+                            assert_eq!(
+                                fast.sample.escape_index, exact.sample.escape_index,
+                                "{} zoom={zoom} cap={cap} centre={centre:?} pixel={pixel:?}",
+                                fixture.name
+                            );
                         }
                         for palette_id in PALETTES {
                             assert_picture_colour(exact.sample, fast.sample, palette(palette_id));
@@ -315,19 +327,38 @@ fn highest_admitted_plan() -> Result<(f64, ember_julibrot_math::PrecisionPlan), 
     let mut refused_bits = 1_024.0_f64.to_bits();
     while accepted_bits + 1 < refused_bits {
         let candidate_bits = accepted_bits + (refused_bits - accepted_bits) / 2;
-        match precision_for(f64::from_bits(candidate_bits), GRID_WIDTH, 4_096) {
+        match deterministic_precision_for(f64::from_bits(candidate_bits), GRID_WIDTH, 4_096) {
             Ok(_) => accepted_bits = candidate_bits,
             Err(MathError::PrecisionExhausted { .. }) => refused_bits = candidate_bits,
             Err(error) => return Err(error),
         }
     }
     let zoom = f64::from_bits(accepted_bits);
-    let plan = precision_for(zoom, GRID_WIDTH, 4_096)?;
+    let plan = deterministic_precision_for(zoom, GRID_WIDTH, 4_096)?;
     assert!(matches!(
-        precision_for(f64::from_bits(refused_bits), GRID_WIDTH, 4_096),
+        deterministic_precision_for(f64::from_bits(refused_bits), GRID_WIDTH, 4_096),
         Err(MathError::PrecisionExhausted { .. })
     ));
     Ok((zoom, plan))
+}
+
+fn deterministic_precision_for(
+    zoom: f64,
+    grid_width: u32,
+    max_iter: u32,
+) -> Result<ember_julibrot_math::PrecisionPlan, MathError> {
+    let plan = precision_for(zoom, grid_width, max_iter)?;
+    let requested_digits = plan
+        .working_digits
+        .checked_add(16)
+        .ok_or(MathError::CounterOverflow)?;
+    if requested_digits > plan.policy_digits {
+        return Err(MathError::PrecisionExhausted {
+            requested_digits,
+            policy_digits: plan.policy_digits,
+        });
+    }
+    Ok(plan)
 }
 
 fn plane_fixtures() -> [PlaneFixture; 3] {
@@ -360,9 +391,13 @@ fn plane_fixtures() -> [PlaneFixture; 3] {
 
 fn shallow_bailout_boundary(mode: PrecisionMode) -> KernelSample {
     match mode {
-        PrecisionMode::Deterministic | PrecisionMode::PictureFast => {
+        PrecisionMode::Deterministic => {
             escape_shallow_point([16.0, 0.0, 0.0, 0.0], EscapeParams::new(1))
-                .expect("the fixed shallow boundary is valid")
+                .expect("the deterministic shallow boundary is valid")
+        }
+        PrecisionMode::PictureFast => {
+            escape_shallow_point([16.0, 0.0, 0.0, 0.0], EscapeParams::new(1))
+                .expect("the PictureFast shallow boundary is valid")
         }
     }
 }
@@ -388,7 +423,79 @@ fn render_picture_fast(
     cap: u32,
     pixel: [u32; 2],
 ) -> Result<Rendered, MathError> {
-    render_deterministic(plane, centre, zoom, cap, pixel)
+    if zoom < 14.0 {
+        let centre = BigCentre::from_f64(centre, 1_024)?;
+        let uniform = ShallowUniform::pack(
+            plane,
+            &Homography::IDENTITY,
+            split_centre(&centre)?,
+            shallow_pixel_scale(zoom, GRID_WIDTH)?,
+            SAMPLE_EXTENT,
+            EscapeParams::new(cap),
+            RefinementLevel::Final,
+        )
+        .expect("the PictureFast corpus shallow uniform is valid");
+        let index = pixel[1] * SAMPLE_EXTENT.width + pixel[0];
+        let sample = escape_shallow_pixel(&uniform, index)
+            .expect("the PictureFast corpus pixel is in bounds");
+        return Ok(Rendered {
+            sample,
+            envelope: None,
+        });
+    }
+    let scale = scale_split(zoom, GRID_WIDTH)?;
+    let orbit = picture_fast_reference_orbit(centre, zoom, cap)?;
+    let uniform = PerturbUniform::pack(
+        plane,
+        &Homography::IDENTITY,
+        scale,
+        SAMPLE_EXTENT,
+        EscapeParams::new(cap),
+        u32::try_from(orbit.len()).map_err(|_| MathError::OrbitTooLong)?,
+        RefinementLevel::Final,
+    )
+    .expect("the PictureFast corpus perturbation uniform is valid");
+    let offset = scaled_pixel_offset(
+        plane,
+        scale,
+        [SAMPLE_EXTENT.width, SAMPLE_EXTENT.height],
+        pixel,
+    )?;
+    let sample = perturb_scaled_offset(&uniform, &orbit, offset)
+        .map_err(|_| MathError::InvalidOrbitState)?;
+    let (_, envelope) = perturb_scaled_f64_with_envelope(
+        &orbit,
+        offset.map(f64::from),
+        scale.exponent,
+        EscapeParams::new(cap),
+    )?;
+    Ok(Rendered {
+        sample,
+        envelope: Some(envelope),
+    })
+}
+
+fn picture_fast_reference_orbit(
+    centre: [f64; 4],
+    zoom: f64,
+    cap: u32,
+) -> Result<Vec<ReferenceOrbitRecord>, MathError> {
+    let plan = precision_for(zoom, GRID_WIDTH, cap)?;
+    let centre = BigCentre::from_f64(centre, 1_024)?;
+    let mut builder = ReferenceOrbitBuilder::new_with_policy(
+        &centre,
+        plan,
+        EscapeParams::new(cap),
+        PrecisionMode::PictureFast,
+        ReferencePass::Preview,
+    )?;
+    let chunk = NonZeroU32::new(cap).expect("the conformance caps are nonzero");
+    loop {
+        match builder.step(chunk)? {
+            OrbitStep::Pending { .. } => {}
+            OrbitStep::Complete(orbit) => return Ok(orbit.records),
+        }
+    }
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -400,13 +507,11 @@ fn render_deterministic(
     pixel: [u32; 2],
 ) -> Result<Rendered, MathError> {
     if zoom < 14.0 {
+        let centre = BigCentre::from_f64(centre, 1_024)?;
         let uniform = ShallowUniform::pack(
             plane,
             &Homography::IDENTITY,
-            CentreSplit {
-                hi: centre.map(|value| value as f32),
-                lo: [0.0; 4],
-            },
+            split_centre(&centre)?,
             shallow_pixel_scale(zoom, GRID_WIDTH)?,
             SAMPLE_EXTENT,
             EscapeParams::new(cap),
@@ -421,7 +526,7 @@ fn render_deterministic(
         });
     }
     let scale = scale_split(zoom, GRID_WIDTH)?;
-    let orbit = reference_orbit(centre, cap);
+    let orbit = deterministic_reference_orbit(centre, zoom, cap)?;
     let uniform = PerturbUniform::pack(
         plane,
         &Homography::IDENTITY,
@@ -452,25 +557,21 @@ fn render_deterministic(
     })
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "the corpus deliberately constructs the binary32 reference path"
-)]
-fn reference_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
-    let [mut z_re, mut z_im, c_re, c_im] = centre.map(|value| value as f32);
-    let capacity = usize::try_from(cap).expect("fixture cap fits usize");
-    let mut records = Vec::with_capacity(capacity);
-    for _ in 0..cap {
-        records.push(ReferenceOrbitRecord { re: z_re, im: z_im });
-        if z_re.mul_add(z_re, z_im * z_im) > EscapeParams::BAILOUT {
-            break;
+fn deterministic_reference_orbit(
+    centre: [f64; 4],
+    zoom: f64,
+    cap: u32,
+) -> Result<Vec<ReferenceOrbitRecord>, MathError> {
+    let plan = deterministic_precision_for(zoom, GRID_WIDTH, cap)?;
+    let centre = BigCentre::from_f64(centre, 1_024)?;
+    let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(cap))?;
+    let chunk = NonZeroU32::new(cap).expect("the conformance caps are nonzero");
+    loop {
+        match builder.step(chunk)? {
+            OrbitStep::Pending { .. } => {}
+            OrbitStep::Complete(orbit) => return Ok(orbit.records),
         }
-        let next_re = z_re.mul_add(z_re, -(z_im * z_im)) + c_re;
-        let next_im = (2.0 * z_re).mul_add(z_im, c_im);
-        z_re = next_re;
-        z_im = next_im;
     }
-    records
 }
 
 fn render_special(
@@ -492,7 +593,38 @@ fn render_special_picture_fast(
     exponent: i32,
     cap: u32,
 ) -> Rendered {
-    render_special_deterministic(orbit, offset, exponent, cap)
+    let uniform = PerturbUniform::pack(
+        Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        },
+        &Homography::IDENTITY,
+        ScaleSplit {
+            mantissa: 0.5,
+            exponent,
+        },
+        GridExtent {
+            width: 1,
+            height: 1,
+        },
+        EscapeParams::new(cap),
+        u32::try_from(orbit.len()).expect("PictureFast fixture orbit length fits u32"),
+        RefinementLevel::Final,
+    )
+    .expect("PictureFast special fixture uniform is valid");
+    let sample =
+        perturb_scaled_offset(&uniform, orbit, offset).expect("PictureFast special mirror accepts");
+    let (_, envelope) = perturb_scaled_f64_with_envelope(
+        orbit,
+        offset.map(f64::from),
+        exponent,
+        EscapeParams::new(cap),
+    )
+    .expect("PictureFast special oracle accepts");
+    Rendered {
+        sample,
+        envelope: Some(envelope),
+    }
 }
 
 fn render_special_deterministic(
@@ -580,7 +712,7 @@ fn category_colour(mode: PrecisionMode, record: [f32; 4], selected: PaletteRecor
 }
 
 fn category_colour_picture_fast(record: [f32; 4], selected: PaletteRecord) -> [f32; 4] {
-    category_colour_deterministic(record, selected)
+    shade_lit_escape_record(record, selected, LIGHT).rgba
 }
 
 fn category_colour_deterministic(record: [f32; 4], selected: PaletteRecord) -> [f32; 4] {
@@ -606,7 +738,21 @@ fn warp_rows(mode: PrecisionMode, plane: Plane, zoom: f64) -> Result<[f64; 9], M
 }
 
 fn warp_rows_picture_fast(plane: Plane, zoom: f64) -> Result<[f64; 9], MathError> {
-    warp_rows_deterministic(plane, zoom)
+    let from = pose(plane, zoom, [13.25, -7.5]);
+    let to = pose(plane, zoom + 0.025, [-4.0, 9.125]);
+    let rows =
+        pack_homography_rows(warp_matrix(&from, &to)?.forward).ok_or(MathError::DegenerateWarp)?;
+    Ok([
+        f64::from(rows[0][0]),
+        f64::from(rows[0][1]),
+        f64::from(rows[0][2]),
+        f64::from(rows[1][0]),
+        f64::from(rows[1][1]),
+        f64::from(rows[1][2]),
+        f64::from(rows[2][0]),
+        f64::from(rows[2][1]),
+        f64::from(rows[2][2]),
+    ])
 }
 
 fn warp_rows_deterministic(plane: Plane, zoom: f64) -> Result<[f64; 9], MathError> {
