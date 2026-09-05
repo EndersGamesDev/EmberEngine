@@ -757,6 +757,7 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../web/games/what-is-this/v1/index.html"
         ));
+        assert!(page.contains("Nine stages reveal"));
         assert!(page.contains("data-stage=\"stage.julibrot-slide.v1\""));
         assert!(page.contains("id=\"julibrot-result\""));
         assert!(page.contains("The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input."));
