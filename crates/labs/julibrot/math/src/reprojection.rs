@@ -362,6 +362,8 @@ mod tests {
         pixel: [f64; 2],
         value: RetainedValueSample,
     ) -> SourceDepthRecord {
+        const STEP: f64 = 1.0e-6;
+
         let PoseMap::Mapped(map) = pose.map else {
             panic!("lifted fixture has a finite source map");
         };
@@ -371,7 +373,6 @@ mod tests {
             chart_scale * homogeneous[0] / homogeneous[2],
             chart_scale * homogeneous[1] / homogeneous[2],
         ];
-        const STEP: f64 = 1.0e-6;
         for _ in 0..12 {
             let projected = project_ambient_point(
                 pose,
@@ -408,12 +409,12 @@ mod tests {
                     (shifted_b.screen[1] - projected.screen[1]) / STEP,
                 ],
             ];
-            let determinant =
-                jacobian[0][0] * jacobian[1][1] - jacobian[0][1] * jacobian[1][0];
+            let determinant = jacobian[0][1]
+                .mul_add(-jacobian[1][0], jacobian[0][0] * jacobian[1][1]);
             assert!(determinant.abs() > 1.0e-12);
             let delta = [
-                (error[0] * jacobian[1][1] - jacobian[0][1] * error[1]) / determinant,
-                (jacobian[0][0] * error[1] - error[0] * jacobian[1][0]) / determinant,
+                jacobian[0][1].mul_add(-error[1], error[0] * jacobian[1][1]) / determinant,
+                error[0].mul_add(-jacobian[1][0], jacobian[0][0] * error[1]) / determinant,
             ];
             coordinate[0] -= delta[0];
             coordinate[1] -= delta[1];
