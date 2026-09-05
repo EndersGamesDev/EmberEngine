@@ -2,6 +2,8 @@
 
 All source citations in this audit name the immutable baseline eb5ce23e; later commits are named only when establishing the disposition of an open line, and every timing identified as measured was collected on sokol through the required run-report wrapper.
 
+Every size, count, bound, and policy constant described from a source citation is code-derived and not wall-measured unless its paragraph explicitly labels a sokol measurement; every browser or GPU wall without such a receipt is labelled unmeasured.
+
 ## 1. Latency ledger
 
 The control-to-scene path is control mutation and navigation state, worker request construction, transfer into the worker, reference-orbit construction when deep precision requires it, credit-controlled response publication, response transfer and decoding, reference upload, refinement planning and heap dispatch, and scratch landing before presentation; the handoffs are visible at `crates/labs/julibrot/app/src/state.rs:542`, `crates/labs/julibrot/app/src/frame/loop/browser/reference.rs:281`, `crates/labs/julibrot/worker/src/browser.rs:59`, `crates/labs/julibrot/worker/src/compute.rs:115`, `crates/labs/julibrot/app/src/frame/loop/browser/reference.rs:111`, `crates/labs/julibrot/kernels/src/gpu.rs:267`, and `crates/labs/heap/src/executor.rs:1053`.
