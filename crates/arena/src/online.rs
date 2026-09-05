@@ -11,7 +11,7 @@ use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
     HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, PLAYER_R,
     Projectile, RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT,
-    advance_ads, move_circle, movement_speed, step_vertical, support_height, weapon_name,
+    advance_ads, move_circle_in, movement_speed, step_vertical, support_height, weapon_name,
     weapon_spread, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
@@ -23,6 +23,7 @@ use serde::Deserialize;
 
 use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
 use crate::grips;
+use crate::harbor::HarborArt;
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
 use crate::script;
@@ -1418,6 +1419,8 @@ pub struct ShooterGame {
     /// one-frame status event still learns who won.
     round_line: Option<String>,
     arena_half: f32,
+    /// Select the authored port scenery only for the matching authoritative level.
+    is_harbor: bool,
     /// Presentation only: the map's daylight and native capture override.
     climate: weather::Climate,
     weather_override: Option<ember_engine::Weather>,
@@ -1507,6 +1510,7 @@ pub struct ShooterGame {
     /// The v13 prop set (cover by kind, city, sky, ground) and where it got
     /// registered; None = plain coloured boxes and no city.
     props: Option<Props>,
+    harbor: Option<HarborArt>,
     /// The round meshes, the streak and the core (v20) and where they got
     /// registered. `run_online` always sets it; None (a frame built by a
     /// test that did not ask) draws no tracer at all, since the box rods
@@ -1649,6 +1653,7 @@ impl ShooterGame {
             hill: None,
             round_line: None,
             arena_half: 24.0,
+            is_harbor: false,
             climate: weather::Climate::Yard,
             weather_override: weather::capture_override(),
             obstacles: Vec::new(),
@@ -1699,6 +1704,7 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             props: None,
+            harbor: None,
             rounds: None,
             decor: Vec::new(),
             env_base: 0,
@@ -2022,6 +2028,11 @@ impl ShooterGame {
     /// after load).
     pub const fn set_rounds(&mut self, base: u32) {
         self.rounds = Some(Rounds { base });
+    }
+
+    /// Harbor scenery is registered after all older mesh groups.
+    pub const fn set_harbor(&mut self, base: u32) {
+        self.harbor = Some(HarborArt::new(base));
     }
 
     /// Install the jointed character (set by `run_online` after load).
@@ -2393,6 +2404,7 @@ impl EmberGame for ShooterGame {
                     self.my_id = Some(id);
                     self.mode = GameMode::from_name(&mode).unwrap_or_default();
                     self.arena_half = arena_half;
+                    self.is_harbor = map == arena_core::shooter::MAP_HARBOR;
                     // The same level the server built its lobby from, so
                     // prediction and authority resolve against identical
                     // cover; the seed is only what an unknown name falls
@@ -2730,7 +2742,15 @@ impl EmberGame for ShooterGame {
                                         c.shield,
                                         &self.obstacles,
                                     );
-                                    p = move_circle(p, y, c.mv, speed, step, &self.obstacles);
+                                    p = move_circle_in(
+                                        p,
+                                        y,
+                                        c.mv,
+                                        speed,
+                                        step,
+                                        &self.obstacles,
+                                        self.arena_half,
+                                    );
                                     let stepped =
                                         step_vertical(p, y, vy, press, step, &self.obstacles);
                                     press = false;
@@ -3254,13 +3274,14 @@ impl EmberGame for ShooterGame {
                 shield,
                 &self.obstacles,
             );
-            let p = move_circle(
+            let p = move_circle_in(
                 self.pred_pos.to_array(),
                 self.pred_y,
                 [mv.x, mv.y],
                 speed,
                 dt,
                 &self.obstacles,
+                self.arena_half,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
             let stepped = step_vertical(
@@ -3513,61 +3534,67 @@ impl EmberGame for ShooterGame {
         // box-body players; the props carry every other picture.
         let env = self.env_base;
         let props = self.props;
-        if let Some(pr) = &props {
-            pr.push_ground(&mut frame);
-        }
-        // The floor slab: what the arena stands on, and what closes the gap
-        // between the cobble plane and the far ground.
-        frame.instances.push(
-            Instance::new(
-                Vec3::new(0.0, -0.5, 0.0),
-                Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-                Vec3::new(0.12, 0.13, 0.17),
-            )
-            .with_wetness(),
-        );
-        if let Some(pr) = &props {
+        let harbor = if self.is_harbor { self.harbor } else { None };
+        if let Some(port) = &harbor {
+            port.push_ground(&mut frame);
+            port.push_decor(&mut frame);
+        } else {
+            if let Some(pr) = &props {
+                pr.push_ground(&mut frame);
+            }
+            // The floor slab: what the arena stands on, and what closes the gap
+            // between the cobble plane and the far ground.
             frame.instances.push(
                 Instance::new(
-                    Vec3::new(0.0, 0.004, 0.0),
+                    Vec3::new(0.0, -0.5, 0.0),
                     Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-                    Vec3::ONE,
+                    Vec3::new(0.12, 0.13, 0.17),
                 )
-                .with_mesh(pr.mesh(Prop::Floor))
                 .with_wetness(),
             );
-        }
-        for (px, pz, sx, sz) in [
-            (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
-            (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
-            (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
-            (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
-        ] {
             if let Some(pr) = &props {
-                // The balustrade picture, one tile per wall height; the
-                // fit turns the east and west walls so the long faces
-                // carry it whichever way the wall runs.
-                pr.push_fitted(
-                    &mut frame,
-                    Prop::CityWall,
-                    Vec3::new(px, 1.75, pz),
-                    Vec3::new(sx, 3.5, sz),
-                    Vec3::ONE,
-                );
-            } else {
-                inst(
-                    &mut frame,
-                    Vec3::new(px, 1.75, pz),
-                    Vec3::new(sx, 3.5, sz),
-                    Vec3::new(0.26, 0.28, 0.34),
+                frame.instances.push(
+                    Instance::new(
+                        Vec3::new(0.0, 0.004, 0.0),
+                        Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
+                        Vec3::ONE,
+                    )
+                    .with_mesh(pr.mesh(Prop::Floor))
+                    .with_wetness(),
                 );
             }
-        }
-        // The listed decor: statue, cathedral, the façade ring, lamps and
-        // wrecks, each scaled to the height the level gives it.
-        if let Some(pr) = &props {
-            for d in &self.decor {
-                pr.push_decor(&mut frame, d);
+            for (px, pz, sx, sz) in [
+                (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+                (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+                (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
+                (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
+            ] {
+                if let Some(pr) = &props {
+                    // The balustrade picture, one tile per wall height; the
+                    // fit turns the east and west walls so the long faces
+                    // carry it whichever way the wall runs.
+                    pr.push_fitted(
+                        &mut frame,
+                        Prop::CityWall,
+                        Vec3::new(px, 1.75, pz),
+                        Vec3::new(sx, 3.5, sz),
+                        Vec3::ONE,
+                    );
+                } else {
+                    inst(
+                        &mut frame,
+                        Vec3::new(px, 1.75, pz),
+                        Vec3::new(sx, 3.5, sz),
+                        Vec3::new(0.26, 0.28, 0.34),
+                    );
+                }
+            }
+            // The listed decor: statue, cathedral, the façade ring, lamps and
+            // wrecks, each scaled to the height the level gives it.
+            if let Some(pr) = &props {
+                for d in &self.decor {
+                    pr.push_decor(&mut frame, d);
+                }
             }
         }
         // Weapon-upgrade pads: base slab always, a spinning pickup while
@@ -3627,7 +3654,9 @@ impl EmberGame for ShooterGame {
                 // Drawn below with their own state.
                 continue;
             }
-            if let Some(pr) = &props {
+            if let Some(port) = &harbor {
+                port.push_cover(&mut frame, o);
+            } else if let Some(pr) = &props {
                 pr.push_obstacle(&mut frame, o);
             } else {
                 let height = o.h - o.base;
@@ -5065,6 +5094,111 @@ mod wire_tests {
             ack_age_ticks: 0,
             team: 0,
         }
+    }
+
+    #[test]
+    fn harbor_join_selects_port_art_and_prediction_replays_outside_old_bounds() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.set_harbor(1000);
+        inbox
+            .send(S2C::GameJoined {
+                id: 2,
+                seed: 37,
+                arena_half: 48.0,
+                players: Vec::new(),
+                map: arena_core::shooter::MAP_HARBOR.into(),
+                mode: "tdm".into(),
+            })
+            .unwrap();
+        let frame = game.update(&InputState::default(), 0.0);
+        assert!(game.is_harbor);
+        assert_eq!(game.arena_half, 48.0);
+        assert_eq!(game.climate, weather::Climate::Harbor);
+        assert_eq!(game.obstacles, Level::harbor().obstacles);
+        assert!(
+            frame.instances.iter().any(|i| i.mesh >= 1000),
+            "port art is selected"
+        );
+        assert!(
+            !frame
+                .instances
+                .iter()
+                .any(|i| i.scale == Vec3::new(0.9, 3.5, 98.7)),
+            "no old city balustrade"
+        );
+
+        // A clear real quay position, with no teleport or invented bigger fixture world.
+        let mut p = me(2);
+        p.x = 38.0;
+        p.z = 0.0;
+        game.latest.insert(2, p);
+        game.was_alive = true;
+        game.pred_pos = Vec2::new(38.0, 0.0);
+        game.own_render = game.pred_pos;
+        let walk = InputState::from_parts(&[KeyCode::KeyW], &[], (0.0, 0.0), None);
+        for _ in 0..30 {
+            game.update(&walk, FIXED_DT);
+        }
+        assert!(
+            (game.pred_pos.x - 40.0).abs() < 0.01,
+            "4 m/s prediction past x24: {:?}",
+            game.pred_pos
+        );
+
+        game.time = 5.0;
+        game.pred_pos = Vec2::new(38.4, 0.0);
+        game.own_render = game.pred_pos;
+        game.history.clear();
+        game.history.push_back(Cmd {
+            seq: 7,
+            mv: [1.0, 0.0],
+            sprint: false,
+            crouch: false,
+            shield: false,
+            jump: false,
+            sent_at: 4.9,
+        });
+        p.ack = 7;
+        inbox
+            .send(S2C::State {
+                tick: 30,
+                players: vec![p],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&InputState::default(), 0.0);
+        assert!(
+            (game.pred_pos.x - 38.4).abs() < 0.01,
+            "reconciliation must use the same 48 m bounds: {:?}",
+            game.pred_pos
+        );
+
+        // Joining an old map must also switch the art and movement bound back.
+        inbox
+            .send(S2C::GameJoined {
+                id: 2,
+                seed: 37,
+                arena_half: 24.0,
+                players: Vec::new(),
+                map: arena_core::shooter::MAP_TRENCH_CITY.into(),
+                mode: "ffa".into(),
+            })
+            .unwrap();
+        let frame = game.update(&InputState::default(), 0.0);
+        assert!(!game.is_harbor);
+        assert_eq!(game.arena_half, 24.0);
+        assert_eq!(game.climate, weather::Climate::City);
+        assert!(
+            !frame.instances.iter().any(|i| i.mesh >= 1000),
+            "old maps do not inherit harbor scenery"
+        );
     }
 
     /// Weather differs between clients' presentation clocks; the same input

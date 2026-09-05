@@ -14,6 +14,7 @@ mod feel;
 #[cfg(test)]
 mod grip_tests;
 mod grips;
+mod harbor;
 mod online;
 mod props;
 mod rounds;
@@ -276,11 +277,16 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     let rounds_base =
         u32::try_from(meshes.len()).map_err(|_| "prop mesh count exceeds u32".to_string())? + 1;
     meshes.extend(rounds::round_meshes());
+    // Harbor's batched, hand-authored scenery is appended so existing IDs stay fixed.
+    let harbor_base =
+        u32::try_from(meshes.len()).map_err(|_| "round mesh count exceeds u32".to_string())? + 1;
+    meshes.extend(harbor::harbor_meshes());
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
     game.set_parts(parts);
     game.set_props(props_base, &prop_fits);
     game.set_rounds(rounds_base);
+    game.set_harbor(harbor_base);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),
