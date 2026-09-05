@@ -6,6 +6,7 @@ mod contract;
 mod fence;
 mod gpu;
 mod homography;
+mod lattice;
 mod mesh;
 mod palette;
 mod planner;
@@ -26,6 +27,9 @@ pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};
 pub use gpu::Presenter;
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
+};
+pub use lattice::{
+    COVERAGE_CHART_POINTS, COVERAGE_TOLERANCE, LatticePair, compose_homography, identity_warp_rows,
 };
 pub use mesh::{
     HeightSample, MeshError, camera_rotation, camera_rotation_pairs, camera_translation,

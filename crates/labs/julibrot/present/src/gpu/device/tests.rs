@@ -288,7 +288,7 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     assert_eq!(held.source_texture_index, Some(sampled.texture_index));
     assert!(held.source_valid);
     assert!(!held.exposed);
-    assert_eq!(held.rows, identity_rows());
+    assert_eq!(held.rows, crate::identity_warp_rows());
 
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(&held, Some(0.0));
@@ -334,7 +334,7 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
     );
     let plan = apply_hold_policy(refused, Some(&held.frame), true, BINDING_EXTENT);
     assert_eq!(plan.kind, WarpKind::HoldStale);
-    assert_eq!(plan.rows, identity_rows());
+    assert_eq!(plan.rows, crate::identity_warp_rows());
     assert!(!plan.exposed);
 
     let mut geometric = plan;
@@ -877,38 +877,14 @@ fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
     }
 }
 
-/// CPU mirror of the warp fragment's source lookup.
-///
-/// The fragment builds its destination point from the chart corner and the scene grid, applies
-/// the plan rows, and normalises the mapped source pixel by the source texture's own dimensions
-/// (`warp_shader.rs` lines 20 and 25 to 27). The source texture is allocated at exactly the
-/// delivered extent of the scene drawn into it, so the frame's extent is that divisor. A point
-/// outside the unit square is painted clear rather than sampled.
+/// The seam's mirror of the warp fragment's source lookup, named the way these tests read.
 fn warp_source_uv(
     rows: [[f32; 4]; 3],
     destination_extent: [u32; 2],
     source_extent: [u32; 2],
     chart: [f64; 2],
 ) -> Option<[f64; 2]> {
-    let destination = [
-        chart[0] * f64::from(destination_extent[0]) * 0.5,
-        chart[1] * f64::from(destination_extent[1]) * 0.5,
-        1.0,
-    ];
-    let mapped = rows.map(|row| {
-        f64::from(row[0]).mul_add(
-            destination[0],
-            f64::from(row[1]).mul_add(destination[1], f64::from(row[2]) * destination[2]),
-        )
-    });
-    if !mapped.iter().all(|value| value.is_finite()) || mapped[2] <= 0.0 {
-        return None;
-    }
-    let source_pixel = [mapped[0] / mapped[2], mapped[1] / mapped[2]];
-    Some([
-        source_pixel[0] / f64::from(source_extent[0]) + 0.5,
-        0.5 - source_pixel[1] / f64::from(source_extent[1]),
-    ])
+    crate::LatticePair::new(source_extent, destination_extent)?.source_uv(rows, chart)
 }
 
 /// A held picture drawn at a reduced extent must fill the destination, not sit in its centre.
@@ -980,15 +956,18 @@ fn a_held_picture_at_the_destination_extent_holds_by_identity() {
     let held = frame_at_extent(59, extent);
     let plan = apply_hold_policy(clear_warp_plan(false, true), Some(&held), true, extent);
     assert_eq!(plan.kind, WarpKind::HoldStale);
-    assert_eq!(plan.rows, identity_rows());
+    assert_eq!(plan.rows, crate::identity_warp_rows());
 }
 
 /// A hold whose scale cannot be stated is refused rather than placed somewhere.
 #[test]
 fn a_hold_with_an_unusable_extent_stays_a_clear_plan() {
-    assert_eq!(hold_rows([0, 68], [960, 540]), None);
-    assert_eq!(hold_rows([120, 68], [960, 0]), None);
-    assert_eq!(hold_rows([960, 540], [960, 540]), Some(identity_rows()));
+    assert_eq!(crate::LatticePair::new([0, 68], [960, 540]), None);
+    assert_eq!(crate::LatticePair::new([120, 68], [960, 0]), None);
+    assert_eq!(
+        crate::LatticePair::new([960, 540], [960, 540]).and_then(crate::LatticePair::covering_rows),
+        Some(crate::identity_warp_rows())
+    );
 
     let mut degenerate = frame_at_extent(60, [120, 68]);
     degenerate.extent = [120, 0];
