@@ -17,7 +17,7 @@ mod warp_shader;
 
 pub use contract::{
     DropReason, FenceRefusal, FramePartition, FrameReceipt, FrameState, PresentBackdrop,
-    PresentConfig, PresentError, PresentEvent, PresentFacts, PresentHot, PresentMain,
+    PresentConfig, PresentError, PresentEvent, PresentEvents, PresentFacts, PresentHot, PresentMain,
     PresentStatus, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement, WarpKind,
     WarpPlan, WarpValidation,
 };

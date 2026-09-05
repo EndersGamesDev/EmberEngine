@@ -345,6 +345,47 @@ pub enum PresentEvent {
     },
 }
 
+/// Fixed-capacity result of one non-blocking presenter poll.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PresentEvents {
+    slots: [Option<PresentEvent>; 2],
+}
+
+impl PresentEvents {
+    /// Builds the ordered scene-then-warp result without allocating.
+    #[must_use]
+    pub const fn new(scene: Option<PresentEvent>, warp: Option<PresentEvent>) -> Self {
+        Self {
+            slots: [scene, warp],
+        }
+    }
+
+    /// Returns the number of terminal events observed by this poll.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match (self.slots[0].is_some(), self.slots[1].is_some()) {
+            (false, false) => 0,
+            (true, true) => 2,
+            (false, true) | (true, false) => 1,
+        }
+    }
+
+    /// Reports whether no terminal event was ready.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl IntoIterator for PresentEvents {
+    type Item = PresentEvent;
+    type IntoIter = std::iter::Flatten<std::array::IntoIter<Option<PresentEvent>, 2>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.slots.into_iter().flatten()
+    }
+}
+
 /// Honest current display state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PresentStatus {

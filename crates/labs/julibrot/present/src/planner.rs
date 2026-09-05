@@ -10,6 +10,7 @@ use crate::{
 
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
+const ERROR_SAMPLE_CAPACITY: usize = 405;
 const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 const REDRAW_NEUTRAL_EPSILON: f64 = 1.0e-12;
@@ -256,19 +257,8 @@ fn anchor_plan(
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let rows = pack_homography_rows(inverse_sampling)?;
     let displayed_sampling = core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]));
-    let metrics = sampled_errors(from_pose, to_pose, displayed_sampling).and_then(|mut errors| {
-        if errors.is_empty() {
-            return None;
-        }
-        errors.sort_by(f64::total_cmp);
-        let maximum = errors.last().copied()?;
-        let percentile_index = errors
-            .len()
-            .saturating_mul(95)
-            .div_ceil(100)
-            .saturating_sub(1);
-        Some((maximum, *errors.get(percentile_index)?))
-    });
+    let metrics = sampled_errors(from_pose, to_pose, displayed_sampling)
+        .and_then(ErrorSamples::maximum_and_p95);
     Some(WarpPlan {
         rows,
         source_scene_id: Some(last_frame.scene_id),
@@ -345,11 +335,54 @@ fn in_front_of_horizon(pose: &Pose, screen: [f64; 2]) -> bool {
 /// cannot be projected — a perspective pole on the sampled surface — still refuses, as does a
 /// non-finite error, which is broken arithmetic rather than geometry. `None` means the corpus
 /// could not be measured at all.
-fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Option<Vec<f64>> {
-    let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?;
-    let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
-    let mut errors = Vec::new();
-    errors.try_reserve_exact(sample_count).ok()?;
+#[derive(Clone)]
+struct ErrorSamples {
+    values: [f64; ERROR_SAMPLE_CAPACITY],
+    len: usize,
+    maximum: f64,
+}
+
+impl ErrorSamples {
+    const fn new() -> Self {
+        Self {
+            values: [0.0; ERROR_SAMPLE_CAPACITY],
+            len: 0,
+            maximum: 0.0,
+        }
+    }
+
+    fn push(&mut self, error: f64) -> Option<()> {
+        *self.values.get_mut(self.len)? = error;
+        self.len += 1;
+        self.maximum = self.maximum.max(error);
+        Some(())
+    }
+
+    const fn len(&self) -> usize {
+        self.len
+    }
+
+    fn iter(&self) -> core::slice::Iter<'_, f64> {
+        self.values[..self.len].iter()
+    }
+
+    fn maximum_and_p95(mut self) -> Option<(f64, f64)> {
+        if self.len == 0 {
+            return None;
+        }
+        let percentile_index = self
+            .len
+            .saturating_mul(95)
+            .div_ceil(100)
+            .saturating_sub(1);
+        let (_, percentile, _) = self.values[..self.len]
+            .select_nth_unstable_by(percentile_index, f64::total_cmp);
+        Some((self.maximum, *percentile))
+    }
+}
+
+fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Option<ErrorSamples> {
+    let mut errors = ErrorSamples::new();
     for row in 0..SCREEN_STEPS {
         for column in 0..SCREEN_STEPS {
             let target_screen = [
@@ -373,7 +406,7 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
                 if !pixel_error.is_finite() {
                     return None;
                 }
-                errors.push(pixel_error);
+                errors.push(pixel_error)?;
             }
         }
     }
@@ -1447,7 +1480,7 @@ mod tests {
         );
         assert_eq!(
             measured.approx_max_error_px,
-            full.into_iter().reduce(f64::max)
+            full.iter().copied().reduce(f64::max)
         );
     }
 

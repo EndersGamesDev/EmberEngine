@@ -1,25 +1,31 @@
 use crate::fence::FenceDecision;
 use crate::state::SceneCompletion;
-use crate::{PresentEvent, PresentFacts, PresentStatus, RefinementLevel, SubmissionKind};
+use crate::{
+    PresentEvent, PresentEvents, PresentFacts, PresentStatus, RefinementLevel, SubmissionKind,
+};
 
 use super::census::{census_if_ready, mapped_census, observe_fence, take_glitch_readback_result};
 use super::{Presenter, SceneCensus};
 
 impl Presenter {
     /// Observes every pending fence once without waiting and returns terminal events.
+    ///
+    /// This compatibility entry point preserves the app's existing `Vec` contract. New callers
+    /// can use [`Self::poll_fixed`] to avoid the result allocation.
     #[must_use]
     pub fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
+        self.poll_fixed(now_ms).into_iter().collect()
+    }
+
+    /// Observes every pending fence once and returns its at-most-two events in fixed storage.
+    #[must_use]
+    pub fn poll_fixed(&mut self, now_ms: f64) -> PresentEvents {
         if self.scene_fence.is_some() || self.warp_fence.is_some() {
             self.device.poll(wgpu::Maintain::Poll);
         }
-        let mut events = Vec::with_capacity(2);
-        if let Some(event) = self.poll_scene(now_ms) {
-            events.push(event);
-        }
-        if let Some(event) = self.poll_warp(now_ms) {
-            events.push(event);
-        }
-        events
+        let scene = self.poll_scene(now_ms);
+        let warp = self.poll_warp(now_ms);
+        PresentEvents::new(scene, warp)
     }
 
     /// Returns the latest immutable facts without polling or submitting.
