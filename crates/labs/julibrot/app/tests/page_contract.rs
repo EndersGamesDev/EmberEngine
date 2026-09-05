@@ -611,7 +611,8 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
 
 #[test]
 fn boot_draws_the_default_seahorse_valley_target() {
-    assert!(STATE.contains("pub const SEAHORSE_VALLEY_TARGET: [f64; 4] = [0.0, 0.0, -0.75, 0.1];"));
+    assert!(STATE.contains("-0.743_643_887_037_151,"));
+    assert!(STATE.contains("0.131_825_904_205_33]"));
     assert!(STATE.contains("crosshair: Some(target),"));
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains(

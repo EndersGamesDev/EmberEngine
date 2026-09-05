@@ -24,7 +24,8 @@ pub const INITIAL_ITERATION_CAP: u32 = 512;
 pub const NAVIGATION_PRECISION_BITS: u32 = 1_024;
 
 /// The boundary point a fresh whole-set view marks as its zoom target.
-pub const SEAHORSE_VALLEY_TARGET: [f64; 4] = [0.0, 0.0, -0.75, 0.1];
+pub const SEAHORSE_VALLEY_TARGET: [f64; 4] =
+    [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33];
 
 /// The `scale` control's ends, in base-two zoom exponent.
 ///
