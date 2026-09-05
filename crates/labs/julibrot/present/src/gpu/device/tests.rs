@@ -361,12 +361,10 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
         "a held partition is not a relief-redraw source"
     );
 
-    let clear_only_frames = std::iter::once(plan)
-        .filter(|candidate| candidate.kind == WarpKind::ClearOnly)
-        .count();
     assert_eq!(
-        clear_only_frames, 0,
-        "the CPU coverage mirror must not expose a clear-only frame across the slice change"
+        warp_exposed_fraction(&plan, &held.frame.pose, Some(&held.frame)),
+        Some(0.0),
+        "the held image covers the synthetic transition without a clear-only region"
     );
 
     let replacement = promote_binding_scene(&mut ledger, 39);
@@ -745,6 +743,58 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
         main.grid.span.directory_index
     );
     assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
+}
+
+#[test]
+fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
+    let angle = -1.316_653_720_171_549_4;
+    let object = ObjectAngles {
+        rho_13: angle,
+        rho_24: angle,
+        ..ObjectAngles::IDENTITY
+    };
+    let camera_angle = -0.254_142_606_623_347_1;
+    let mut camera = [0.0; 10];
+    camera[1] = camera_angle;
+    camera[4] = camera_angle;
+    let view = ViewControls {
+        camera,
+        camera_yaw: 0.960_422_302_787_256,
+        camera_pitch: core::f64::consts::PI,
+        height_scale: 4.0,
+        distance_five: 2.0,
+        distance_four: 2.0,
+        ..ViewControls::NEUTRAL
+    };
+    let mut pose = binding_pose();
+    pose.object = object;
+    pose.plane = construct_plane(object).expect("coverage fixture plane constructs");
+    pose.view = view;
+    pose.grid_width = 960;
+    pose.grid_height = 540;
+    let relief = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        source_valid: true,
+        exposed: true,
+        ..clear_warp_plan(false, true)
+    };
+    assert_eq!(
+        planned_exposed_fraction(&relief, Some(&pose), None),
+        None,
+        "HOT publication cannot assume the candidate backdrop will validate"
+    );
+    let main_only = relief_redraw_clear_fraction(&pose, None, false)
+        .expect("the main-only coverage mirror is finite");
+    let candidate_backdrop = ember_julibrot_math::scene_uncovered_fraction(
+        &object, &view, 960, 540, 2.0,
+    )
+    .expect("the candidate backdrop coverage mirror is finite");
+    assert!(main_only > candidate_backdrop);
+    let mut facts = PresentFacts::default();
+    facts.record_warp_plan(&relief, None);
+    assert_eq!(facts.warp_exposed_fraction, None);
+    facts.record_relief_coverage(Some(main_only));
+    assert_eq!(facts.warp_exposed_fraction, Some(main_only));
 }
 
 #[test]

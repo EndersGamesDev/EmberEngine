@@ -35,6 +35,8 @@ use uniforms::{
     create_heap_layout, create_scene_layout, create_warp_hot_layout, create_warp_texture_layout,
 };
 use warp::{color, create_warp_pipeline, warp_load_color};
+#[cfg(test)]
+use warp::{planned_exposed_fraction, relief_redraw_clear_fraction};
 
 mod census;
 mod ledger;
@@ -68,7 +70,7 @@ const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
 /// The coarse backdrop is drawn first and the main grid over it.
 ///
 /// The depth ranges keep the independently sampled layers ordered while preserving depth ordering
-/// inside each mesh; see [`scene_depth_range`]. The stencil separately records main coverage.
+/// inside each mesh; see [`scene_depth_range`].
 const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
     if has_backdrop {
         &BACKDROP_THEN_MAIN
@@ -78,7 +80,10 @@ const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
 }
 
 /// Disjoint viewport-depth ranges make every main fragment at least as near as every backdrop
-/// fragment without disabling depth ordering inside either mesh.
+/// fragment without disabling depth ordering inside either mesh. This is same-surface quality
+/// ownership rather than a claim that independently sampled chords have comparable physical depth:
+/// a backdrop chord that passes in front of a main back-face still loses, matching the previous
+/// stencil ownership rule instead of letting a coarse draft displace main content.
 const fn scene_depth_range(layer: SceneLayer, has_backdrop: bool) -> [f32; 2] {
     if !has_backdrop {
         return [0.0, 1.0];
@@ -97,8 +102,7 @@ const fn viewport_dimension(value: u32) -> f32 {
     value as f32
 }
 
-/// The stencil value a drawn main-grid fragment leaves behind, and so the value the backdrop is
-/// refused at. Zero is the pass's clear value: the untouched frame.
+/// The main-grid stencil stamp and the pass's clear value.
 const MAIN_STENCIL: u32 = 1;
 const BACKDROP_STENCIL: u32 = 0;
 
@@ -110,11 +114,11 @@ const fn stencil_reference(layer: SceneLayer) -> u32 {
     }
 }
 
-/// The composition rule, as the fixed-function state that enforces it.
+/// Stencil state retained by the depth-stencil pipelines.
 ///
-/// The main grid stamps every fragment it draws and the backdrop stamps nothing. The disjoint
-/// viewport-depth ranges make the later main grid win wherever it draws; the backdrop remains in
-/// its holes. Within each layer the depth buffer still orders the layer against itself.
+/// Backdrop now draws first, so its equality test sees the clear zero, while the later main stamp
+/// is read by no draw. Both stencil operations are therefore vacuous; the disjoint depth ranges
+/// alone enforce main-over-backdrop ownership and preserve ordering within each mesh.
 const fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
     let face = match layer {
         SceneLayer::Main => wgpu::StencilFaceState {

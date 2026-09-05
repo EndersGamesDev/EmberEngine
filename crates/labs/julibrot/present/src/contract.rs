@@ -492,6 +492,11 @@ impl PresentFacts {
         self.warp_hold_count = self.warp_hold_count.saturating_add(1);
     }
 
+    /// Records relief coverage only after the redraw's resident records and backdrop were checked.
+    pub(crate) const fn record_relief_coverage(&mut self, exposed_fraction: Option<f64>) {
+        self.warp_exposed_fraction = exposed_fraction;
+    }
+
     /// Records the planner and exposure facts from one warp plan.
     ///
     /// A clear-only or exact-flat plan has no sampled tumbled corpus, so both error facts stay
@@ -692,6 +697,30 @@ mod tests {
         assert_eq!(facts.warp_max_error_px, None);
         assert_eq!(facts.warp_p95_error_px, None);
         assert_eq!(facts.warp_exposed_fraction, None);
+    }
+
+    #[test]
+    fn relief_coverage_stays_absent_until_submit_validation() {
+        let mut facts = PresentFacts {
+            warp_exposed_fraction: Some(0.125),
+            ..PresentFacts::default()
+        };
+        let relief = WarpPlan {
+            rows: [[0.0; 4]; 3],
+            source_scene_id: Some(9),
+            source_texture_index: Some(1),
+            source_valid: true,
+            edge_on: false,
+            exposed: true,
+            kind: WarpKind::ReliefRedraw,
+            chart_residual: 0.0,
+            approx_max_error_px: Some(2.0),
+            approx_p95_error_px: Some(1.0),
+        };
+        facts.record_warp_plan(&relief, None);
+        assert_eq!(facts.warp_exposed_fraction, None);
+        facts.record_relief_coverage(Some(0.25));
+        assert_eq!(facts.warp_exposed_fraction, Some(0.25));
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {

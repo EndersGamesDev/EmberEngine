@@ -141,19 +141,13 @@ impl Presenter {
         self.exposure.observe_warp(exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
-        let exposed_fraction = pose.as_ref().and_then(|to_pose| {
-            if plan.kind == WarpKind::ReliefRedraw {
-                relief_redraw_clear_fraction(to_pose, self.main.as_ref(), true)
-            } else {
-                warp_exposed_fraction(
-                    &plan,
-                    to_pose,
-                    self.ledger
-                        .retained()
-                        .or_else(|| self.ledger.held().map(|held| &held.frame)),
-                )
-            }
-        });
+        let exposed_fraction = planned_exposed_fraction(
+            &plan,
+            pose.as_ref(),
+            self.ledger
+                .retained()
+                .or_else(|| self.ledger.held().map(|held| &held.frame)),
+        );
         self.facts.record_warp_plan(&plan, exposed_fraction);
         self.facts.warp_exposed = exposed;
         self.facts.scene_fill_due = self.exposure.due();
@@ -297,11 +291,12 @@ impl Presenter {
                 has_backdrop,
             );
             self.facts.record_relief_redraw();
-            self.facts.warp_exposed_fraction = self.hot[hot_slot.index() as usize]
+            let exposed_fraction = self.hot[hot_slot.index() as usize]
                 .as_ref()
                 .and_then(|pose| {
                     relief_redraw_clear_fraction(pose, self.main.as_ref(), has_backdrop)
                 });
+            self.facts.record_relief_coverage(exposed_fraction);
         } else {
             encode_image_warp(
                 &mut encoder,
@@ -368,7 +363,18 @@ impl Presenter {
     }
 }
 
-fn relief_redraw_clear_fraction(
+pub(super) fn planned_exposed_fraction(
+    plan: &crate::WarpPlan,
+    to_pose: Option<&Pose>,
+    source: Option<&crate::SceneFrame>,
+) -> Option<f64> {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return None;
+    }
+    to_pose.and_then(|to_pose| warp_exposed_fraction(plan, to_pose, source))
+}
+
+pub(super) fn relief_redraw_clear_fraction(
     pose: &Pose,
     main: Option<&PresentMain>,
     use_backdrop: bool,
