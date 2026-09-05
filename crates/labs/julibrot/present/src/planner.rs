@@ -5,10 +5,13 @@ use ember_julibrot_math::{
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    LatticePair, SceneFrame, WarpKind, WarpPlan, WarpValidation, apply_homography,
-    compose_homography, identity_warp_rows, pack_homography_rows,
+    LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpValidation,
+    apply_homography, compose_homography, height_for_record, identity_warp_rows,
+    pack_homography_rows,
 };
 
+/// The escape record status the kernel writes for a pixel with no plane point.
+const HORIZON_STATUS: f32 = 2.0;
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
 const ERROR_SAMPLE_CAPACITY: usize = 405;
@@ -88,9 +91,9 @@ impl Warp {
 /// escape records still describe the destination exactly, so redrawing them under the new pose
 /// reprojects the motion with no new sampling at all.
 ///
-/// An unmeasurable corpus is a different matter. It means a perspective pole fell on the sampled
-/// relief, where the projection has no finite answer to redraw towards, so the plan stays an
-/// honest `ClearOnly`.
+/// An unmeasurable corpus is a different matter. It means a perspective limit fell on the sampled
+/// relief of one of the poses, where that pose has no drawn point to compare against, so the plan
+/// stays an honest `ClearOnly`.
 fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
     match plan.approx_max_error_px {
         Some(error) if error <= WARP_MAX_ERROR_PX => return plan,
@@ -422,6 +425,12 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
                 continue;
             }
             for height in HEIGHT_SAMPLES {
+                // A refusal on either side abandons the whole measurement. Skipping the sample
+                // instead is fail-open in one direction: where the destination refuses a sample
+                // the source draws, an approved homography paints the source's relief into ground
+                // the settled frame shows as sky, which is the same wrong claim the scene pass
+                // refuses to make itself. The horizon skip above is not that case, because a
+                // sample beyond the destination's horizon is sky in the warp output too.
                 let destination_relief = project_scene_point(to_pose, target_screen, height)?;
                 let expected_source = project_scene_point(from_pose, source_screen, height)?;
                 let approximate_source = apply_homography(approximate, destination_relief)?;
@@ -513,9 +522,8 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
 
 /// Mirrors the generated scene WGSL from one grid-screen point through its plane point and relief.
 ///
-/// `record_height` is the escape record's normalized height in `[-2,2]`. The five-dimensional
-/// near pole is clamped; `None` means the later four-dimensional or observer projection is behind
-/// its pole and the exterior sky remains visible.
+/// `record_height` is the escape record's normalized height in `[-2,2]`. `None` means the vertex
+/// is past one of the three perspective poles and the exterior sky remains visible.
 #[must_use]
 pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
     project_scene_vertex(pose, screen, record_height).map(|projected| projected.0)
@@ -524,7 +532,12 @@ pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) ->
 /// Mirrors one scene vertex and returns its screen point with its clip-space `w`.
 ///
 /// The second value lets CPU raster oracles reproduce perspective-correct interpolation of the
-/// grid coordinate. `None` means the vertex lies behind a later perspective pole.
+/// grid coordinate. `None` means the vertex is past one of the three perspective limits.
+///
+/// A sample with no lift takes the identity shortcut, which is what the vertex stage itself does
+/// for a flat chart. [`project_scene_vertex_exact`] runs the whole chain instead, which is what a
+/// measurement of the chain has to use: the shortcut returns the argument it was given, so a test
+/// comparing its result against its own screen point compares a value with itself.
 #[must_use]
 pub fn project_scene_vertex(
     pose: &Pose,
@@ -532,6 +545,48 @@ pub fn project_scene_vertex(
     record_height: f64,
 ) -> Option<([f64; 2], f64)> {
     project_scene_vertex_with_shortcut(pose, screen, record_height, true)
+}
+
+/// Mirrors the whole scene vertex stage for one escape record, status branches included.
+///
+/// [`project_scene_vertex`] starts from a relief height a caller already chose; this starts from
+/// the record the shader itself loads, so it reproduces the three decisions the record makes: an
+/// edge-on map or a flat chart keeps every sample where the screen-to-plane map put it, a horizon
+/// record has no plane point and so no vertex at all, and every other record is lifted by its own
+/// height. `None` is a vertex the shader refuses, whose primitive is not drawn.
+///
+/// # Errors
+///
+/// Returns an error when the iteration cap is zero, which no record height is defined against.
+pub fn project_scene_record_vertex(
+    pose: &Pose,
+    screen: [f64; 2],
+    record: [f32; 4],
+    iteration_cap: u32,
+    selected: PaletteRecord,
+) -> Result<Option<([f64; 2], f64)>, MeshError> {
+    let height = height_for_record(record, iteration_cap, selected)?;
+    if !matches!(pose.map, PoseMap::Mapped(_)) || pose.view.height_scale == 0.0 {
+        return Ok(Some((screen, 1.0)));
+    }
+    if record[3] == HORIZON_STATUS {
+        return Ok(None);
+    }
+    Ok(project_scene_vertex(pose, screen, f64::from(height.height)))
+}
+
+/// Mirrors one scene vertex through the whole forward chain, taking no identity shortcut.
+///
+/// The shortcut [`project_scene_vertex`] takes at zero lift is exact only because the projection
+/// restricted to the plane is the screen-to-plane map's own inverse. This runs the chain that
+/// claim is about, so a caller can measure the claim instead of assuming it.
+#[must_use]
+pub fn project_scene_vertex_exact(
+    pose: &Pose,
+    screen: [f64; 2],
+    record_height: f64,
+) -> Option<([f64; 2], f64)> {
+    project_scene_vertex_with_shortcut(pose, screen, record_height, false)
 }
 
 #[cfg(test)]
@@ -547,7 +602,7 @@ fn project_scene_point_with_shortcut(
 
 #[allow(
     clippy::float_cmp,
-    reason = "height zero selects the scene shader's exact identity branch"
+    reason = "a zero lift selects the exact identity the screen-to-plane map already defines"
 )]
 fn project_scene_vertex_with_shortcut(
     pose: &Pose,
@@ -570,16 +625,13 @@ fn project_scene_vertex_with_shortcut(
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
     let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
-    if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
-        return Some((screen, 1.0));
-    }
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let chart_coordinate = [chart_scale * mapped[0], chart_scale * mapped[1]];
     let rotated = ambient_point(pose.plane, chart_coordinate, height, &pose.view);
     let distance_five = pose.view.distance_five;
     let distance_four = pose.view.distance_four;
-    let denominator_five = (distance_five - rotated[4]).max(RELIEF_NEAR_FRACTION * distance_five);
-    if denominator_five <= POLE_EPSILON {
+    let denominator_five = distance_five - rotated[4];
+    if denominator_five < RELIEF_NEAR_FRACTION * distance_five || denominator_five <= POLE_EPSILON {
         return None;
     }
     let scale_five = distance_five / denominator_five;
@@ -625,10 +677,19 @@ fn project_scene_vertex_with_shortcut(
         ndc[0] * f64::from(pose.grid_width) * 0.5,
         ndc[1] * f64::from(pose.grid_height) * 0.5,
     ];
-    projected
-        .iter()
-        .all(|value| value.is_finite())
-        .then_some((projected, clip_w))
+    if !projected.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    // A sample with no lift stays in the plane, where the forward projection is the screen-to-plane
+    // map's own inverse, so the screen point it came from is its exact answer and the chain's is
+    // that answer with drift in it. The shortcut is taken only once the chain has placed the
+    // vertex: the identity is an algebraic fact about the projective map, not a claim that the
+    // point is in front of all three limits, and at this pose family the later limits do refuse
+    // points the map itself still maps.
+    if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
+        return Some((screen, 1.0));
+    }
+    Some((projected, clip_w))
 }
 
 #[cfg(test)]
@@ -1309,10 +1370,12 @@ mod tests {
     }
 
     #[test]
-    fn the_five_dimensional_pole_is_clamped_but_resampling_still_clears() {
-        // The bounded near plane turns the former five-dimensional pole into a closed finite
-        // surface. Moving the sampling lattice still requires fresh records, so this finite
-        // over-ceiling plan clears rather than mislabelling stale records as an exact redraw.
+    fn the_five_dimensional_near_limit_refuses_and_resampling_still_clears() {
+        // Three of this fixture's five census heights lift past `0.05 * d5` and are refused, so
+        // the corpus has a height it cannot measure and abandons the measurement. Moving the
+        // sampling lattice still requires fresh records either way, so the plan clears rather
+        // than mislabelling stale records as an exact redraw; what the refusal changes is that
+        // the clear is now the unmeasurable one rather than an over-ceiling number.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
@@ -1325,7 +1388,10 @@ mod tests {
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::ClearOnly);
         assert!(!plan.source_valid);
-        assert!(plan.approx_max_error_px.is_some_and(f64::is_finite));
+        assert_eq!(
+            plan.approx_max_error_px, None,
+            "a corpus holding a refused height reports no error rather than a partial one"
+        );
     }
 
     /// The owner's broken row, taken from the page's own Copy row JSON.

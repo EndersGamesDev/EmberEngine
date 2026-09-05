@@ -43,7 +43,8 @@ pub use palette::{
     shade_lit_escape_record,
 };
 pub use planner::{
-    WARP_MAX_ERROR_PX, Warp, project_scene_point, project_scene_vertex, renders_same_picture,
+    WARP_MAX_ERROR_PX, Warp, project_scene_point, project_scene_record_vertex,
+    project_scene_vertex, project_scene_vertex_exact, renders_same_picture,
 };
 pub use shader::{glitch_count_shader, scene_shader};
 pub use tile::{
