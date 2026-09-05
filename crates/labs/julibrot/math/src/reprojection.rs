@@ -159,7 +159,7 @@ pub fn retained_value_sample(
     {
         return Err(ReprojectionError::InvalidSource);
     }
-    let record_height = if record.status == 1.0 || record.status == 2.0 {
+    let record_height = if matches!(record.status.to_bits(), 0x3f80_0000 | 0x4000_0000) {
         0.0
     } else if record.escaped == 0.0 {
         -2.0
