@@ -1,6 +1,6 @@
 {
   "ws": "wss://ent-sir-trademarks-exercises.trycloudflare.com",
-  "v": "1788619556",
+  "v": "1788622283",
   "proto": 19,
   "fire_ws": "wss://automation-awesome-entrance-precise.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://ent-sir-trademarks-exercises.trycloudflare.com",
-      "proto": 19,
-      "version": "r1393",
-      "commit": "1e2ec48",
+      "ws": "wss://deleted-fancy-ink-surgeon.trycloudflare.com",
+      "proto": 20,
+      "version": "r1397",
+      "commit": "00982ed",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-05T14:45:34Z"
+      "updated": "2026-09-05T15:31:23Z"
     },
     {
       "name": "quiet-egret",
