@@ -467,12 +467,11 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.reconciled = acknowledged;
         let resize = drain.resize;
         if acknowledged {
-            return match resize {
-                Some(max_iter) => self.restart_pool(max_iter),
-                None => {
-                    self.finish_close();
-                    Ok(())
-                }
+            return if let Some(max_iter) = resize {
+                self.restart_pool(max_iter)
+            } else {
+                self.finish_close();
+                Ok(())
             };
         }
         let armed_us = drain.armed_us;
