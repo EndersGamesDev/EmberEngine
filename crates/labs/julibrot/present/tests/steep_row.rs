@@ -234,6 +234,12 @@ fn uploaded_fifth(uploaded: &Uploaded, column: u32, row: u32, record_height: f32
 /// Every count here comes from `SceneUniform` and the HOT lanes and is compared against the same
 /// census taken in binary64 through the pose, so a field that differed between the two would show
 /// up as a differing count rather than as an assumption nobody checked.
+///
+/// The two sides do not test the same predicate. The uploaded side tests the fifth coordinate
+/// against the near limit and nothing else; the pose side asks whether the whole chain places the
+/// vertex, so it also refuses at the four-dimensional and observer limits. At this row those two
+/// coincide sample for sample, which is why the count below is pinned at zero: the pin is that
+/// they agree here, not that the predicates are the same predicate.
 #[test]
 fn the_uploaded_payloads_carry_the_same_census_as_the_pose() {
     let pose = pose_with(steep_view());
@@ -276,8 +282,8 @@ fn the_uploaded_payloads_carry_the_same_census_as_the_pose() {
         uploaded_horizon > 0 && uploaded_past > 0,
         "the uploaded payload must reach both refusals, or the lane's numbers describe nothing"
     );
-    assert!(
-        disagreements * 200 <= total,
+    assert_eq!(
+        disagreements, 0,
         "the uploaded payload and the pose disagree about {disagreements} of {total} samples"
     );
 }

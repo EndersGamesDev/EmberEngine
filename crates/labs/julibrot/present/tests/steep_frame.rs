@@ -550,25 +550,42 @@ fn steep_records(pose: &Pose) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// This render is the frame the browser read back, to the precision either can claim.
+/// This render lands in the band the browser read back, which is a calibration, not a proof.
 ///
 /// The browser measured, on the served build of this lane's head, 38 of 90 sampled columns with
 /// six or more background flips, a mean of 5.4, and background shares 0.999 / 0.749 / 0.796 /
 /// 0.882 over the four bands; on the previous build 39, 5.3, and 0.999 / 0.749 / 0.797 / 0.910.
 /// It also reported exactly two background colours, (255,129,129) and (221,112,112), whose ratio
 /// 0.867 is the fragment lighting term: the first is the pass clear and an unlit horizon fragment,
-/// the second a lit exterior fragment of the drawn mesh. This oracle reproduces all of that.
+/// the second a lit exterior fragment of the drawn mesh.
+///
+/// The tolerances below admit BOTH of those readbacks, so this test says the oracle is the right
+/// instrument for this frame and says nothing about which build produced it. It cannot: the two
+/// builds' browser numbers differ by less than the oracle's own record source does. What
+/// discriminates the builds is the A/B in
+/// [`the_refusals_change_only_the_lower_third_of_this_row_s_frame`], which renders one record
+/// array under both rules.
 #[test]
-fn the_native_render_reproduces_the_browser_readback_of_this_row() {
+fn the_native_render_lands_in_the_browser_s_calibration_band_for_this_row() {
     let pose = pose_with(steep_view(3.565));
     let records = steep_records(&pose);
-    let horizon = records.iter().filter(|record| record[3] == 2.0).count();
-    assert_eq!(horizon, 17_556, "the row's horizon record count");
+    // Two horizon conventions, four samples apart. The records are sampled at pixel centres, which
+    // is what the kernel does; the mesh places its outermost ring on the frame boundary instead, so
+    // a vertex of that ring can fall on the other side of the plane's horizon line from the pixel
+    // centre it carries. Both are named wherever either number is published.
+    let horizon_records = records.iter().filter(|record| record[3] == 2.0).count();
+    let horizon_vertices = (0..EXTENT[1])
+        .flat_map(|row| (0..EXTENT[0]).map(move |column| draw_screen(column, row)))
+        .filter(|screen| map_plane_offset(&pose, *screen).is_none())
+        .count();
+    assert_eq!(horizon_records, 17_556, "horizon records at pixel centres");
+    assert_eq!(horizon_vertices, 17_560, "horizon vertices at draw points");
+
     let (image, covered) = render(&pose, &records, Rule::Fixed);
     let measured = statistics(&image, &covered);
     assert!(
-        (39..=43).contains(&measured.busy_columns),
-        "busy columns {} against the browser's 38",
+        (36..=45).contains(&measured.busy_columns),
+        "busy columns {} outside the band around the browser's 38 and 39",
         measured.busy_columns
     );
     assert!((measured.mean_transitions - 5.4).abs() <= 0.3);
@@ -589,11 +606,21 @@ fn the_native_render_reproduces_the_browser_readback_of_this_row() {
     );
 }
 
-/// Refusing the two kinds of vertex changes one part of the frame in a hundred, and only below it.
+/// Refusing the two kinds of vertex changes the lower third of this frame and nothing above it.
 ///
 /// This is why the browser proof saw an unchanged picture: a refused sample was already painted
 /// the exterior colour, and the pass clears to that same colour, so the change is a lighting
 /// change over the ground below the plane's horizon rather than a change of shape.
+///
+/// The pixel count and the first changed row below are properties of THIS oracle's record field,
+/// which comes from `escape_shallow_point` and not from the shallow WGSL kernel that fills the
+/// delivered grid. They do not transfer to the frame: adding one iteration to every escaped record
+/// of this same array, with the rule held fixed, changes 391,471 of 518,400 pixels from row 8 down,
+/// so the set of vertices sitting past the near limit — and the area the refusal clears — moves
+/// with the record field far more than with the rule. The browser's own readback of the two builds
+/// puts the change at 11,440 pixels or more, with 47 of them above row 362. What transfers is what
+/// the horizon geometry governs and the records do not: the location below the plane's horizon,
+/// the direction, and the size of the band-3 background shift.
 #[test]
 fn the_refusals_change_only_the_lower_third_of_this_row_s_frame() {
     let pose = pose_with(steep_view(3.565));
@@ -612,13 +639,13 @@ fn the_refusals_change_only_the_lower_third_of_this_row_s_frame() {
         }
     }
     let total = u64::from(EXTENT[0]) * u64::from(EXTENT[1]);
-    assert!(
-        (4_000..7_000).contains(&differing),
-        "the refusals changed {differing} of {total} pixels"
+    assert_eq!(
+        differing, 5_442,
+        "the refusals changed {differing} of {total} pixels of this oracle's own record field"
     );
-    assert!(
-        first_row >= 350,
-        "the first changed row is {first_row}, above the plane's horizon"
+    assert_eq!(
+        first_row, 362,
+        "the first row this oracle's record field changes at"
     );
     let base_statistics = statistics(&base, &base_cover);
     let fixed_statistics = statistics(&fixed, &fixed_cover);
@@ -634,25 +661,22 @@ fn the_refusals_change_only_the_lower_third_of_this_row_s_frame() {
 
 /// The curtain is the height control, continuous from the flat picture that has none.
 ///
-/// At zero height the frame is the two-dimensional chart: fully covered, no column flipping six
-/// times. The flips appear as the amplitude rises and are monotone in it up to the row's own
-/// 3.565, so the streaks are the relief this row asks for and not a defect of the pass.
+/// At zero height the frame is the two-dimensional chart: fully covered, with no column flipping
+/// six times. One column does at amplitude 0.2, thirty-one at 1.0 and forty-one at the row's own
+/// 3.565, monotone throughout, so the streaks are the relief this row asks for and not a defect of
+/// the pass. The counts are exact for this oracle's record field, which is what the doc paragraph
+/// in `docs/julibrot/present.md` quotes.
 #[test]
 fn the_curtain_grows_with_the_height_control_from_a_flat_frame_that_has_none() {
     let sampling = pose_with(steep_view(3.565));
     let records = steep_records(&sampling);
     let mut previous = 0;
-    for (height_scale, floor, ceiling) in [
-        (0.0_f64, 0_u32, 0_u32),
-        (0.2, 0, 4),
-        (1.0, 20, 40),
-        (3.565, 35, 50),
-    ] {
+    for (height_scale, expected) in [(0.0_f64, 0_u32), (0.2, 1), (1.0, 31), (3.565, 41)] {
         let pose = pose_with(steep_view(height_scale));
         let (image, covered) = render(&pose, &records, Rule::Fixed);
         let measured = statistics(&image, &covered);
-        assert!(
-            (floor..=ceiling).contains(&measured.busy_columns),
+        assert_eq!(
+            measured.busy_columns, expected,
             "height {height_scale} gave {} busy columns",
             measured.busy_columns
         );
