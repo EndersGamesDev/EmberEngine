@@ -1472,6 +1472,14 @@
       return tailIndex < 0 ? finalTimings : finalTimings.slice(tailIndex + 1);
     }
 
+    function julibrotTimingFieldSample(records, field, legacyFields = []) {
+      for (const source of [field, ...legacyFields]) {
+        const values = cappedNumbers(records.map(record => record[source]));
+        if (values.length) return { values, source };
+      }
+      return { values: null, source: null };
+    }
+
     function julibrotCollector(spec, baselineFacts) {
       const frames = { sample_count: 0, observed: 0, frames_from_raf: 0, frames_from_fallback: 0, frame_schedules: 0, clear_only: 0, held: 0 };
       const uncoveredFractions = [];
@@ -1519,21 +1527,19 @@
         finish(scriptedHoldWallMs = null) {
           const finalTimings = Array.isArray(finalFacts.level_timings) ? finalFacts.level_timings : [];
           const levelTimings = appendedJulibrotTimings(baselineTimingKeys, finalTimings);
-          const sample = field => cappedNumbers(levelTimings.map(record => record[field]));
-          const optional = field => {
-            const values = sample(field);
-            return values.length ? values : null;
+          const wallMeasurements = {
+            worker_generation_us: julibrotTimingFieldSample(levelTimings, 'worker_generation_us', ['worker_reference_us']),
+            credit_wait_us: julibrotTimingFieldSample(levelTimings, 'credit_wait_us'),
+            request_transfer_us: julibrotTimingFieldSample(levelTimings, 'request_transfer_us'),
+            worker_round_trip_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'worker_round_trip_callback_observation_us'),
+            acceptance_us: julibrotTimingFieldSample(levelTimings, 'acceptance_us'),
+            reference_upload_us: julibrotTimingFieldSample(levelTimings, 'reference_upload_us'),
+            scene_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'scene_callback_observation_us', ['scene_us']),
+            warp_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'warp_callback_observation_us', ['warp_us']),
+            dispatch_us: julibrotTimingFieldSample(levelTimings, 'dispatch_us'),
           };
-          const fence = cappedNumbers(levelTimings.flatMap(record => [record.scene_us, record.warp_us]));
-          const walls = {
-            worker_reference_us: optional('worker_reference_us'),
-            credit_wait_us: optional('credit_wait_us'),
-            transfer_us: null,
-            packing_us: null,
-            upload_us: null,
-            dispatch_us: optional('dispatch_us'),
-            fence_us: fence.length ? fence : null,
-          };
+          const walls = Object.fromEntries(Object.entries(wallMeasurements).map(([field, measurement]) => [field, measurement.values]));
+          const wallSources = Object.fromEntries(Object.entries(wallMeasurements).map(([field, measurement]) => [field, measurement.source]));
           const denominator = frames.observed || 1;
           return {
             scenario_id: spec.scenario_id,
@@ -1557,6 +1563,7 @@
             sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
             timing_records_observed: levelTimings.length,
             walls_us: walls,
+            wall_sources: wallSources,
             scripted_hold_wall_ms: Number.isFinite(scriptedHoldWallMs) ? roundJulibrot(scriptedHoldWallMs, 2) : null,
             game_side_wall_ms: gameSideWallMs,
           };
