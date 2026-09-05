@@ -158,16 +158,16 @@
     {
       "id": "fire",
       "title": "Fire Racer",
-      "tag": "local + online · 8 cars · 3 laps",
-      "desc": "Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.",
+      "tag": "V2 · 3 machines · 5 power-ups · local + online",
+      "desc": "GT circuit racing with a tactical twist. Choose a balanced GT, agile lightweight or powerful muscle car, then race seven opponents through the castle circuit. Collect mystery boxes for Nitro, Shield, Pulse, Oil and Grip. Build drift boosts, trade paint, and fight for the finish over three laps. WASD drives, Space drifts, Shift boosts, E uses your item, R recovers.",
       "versions": [
         {
           "v": "v2",
           "path": "games/fire/v2/",
           "live": true,
-          "proto": 1,
+          "proto": 2,
           "handover": true,
-          "note": "castle circuit, drift + boost, online lobbies"
+          "note": "GT Circuit V2: three vehicles, tactical items, contact physics, garage and rematches"
         },
         {
           "v": "v1",

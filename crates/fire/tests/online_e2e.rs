@@ -144,6 +144,17 @@ fn a_client_joins_races_and_its_prediction_converges() {
         me.dump("me")
     );
     let slot = me.game.my_slot.expect("no grid slot");
+    me.net.send(&C2S::SelectVehicle { vehicle: 2 });
+    assert!(
+        me.wait_for(Duration::from_secs(3), |game| game
+            .my_car()
+            .is_some_and(|car| car.vehicle == 2)),
+        "garage selection did not reach the authoritative snapshot"
+    );
+    assert!(
+        !me.game.race.pickups.is_empty(),
+        "V2 item boxes missing from the authoritative world"
+    );
 
     me.net.send(&C2S::Ready { ready: true });
     assert!(
@@ -163,6 +174,7 @@ fn a_client_joins_races_and_its_prediction_converges() {
         steer: 0.15,
         handbrake: false,
         boost: false,
+        use_item: false,
     };
     let start = me.game.my_car().unwrap().pos;
     let mut worst_error = 0.0f32;
@@ -276,6 +288,7 @@ fn two_clients_see_each_other_move() {
         steer: 0.0,
         handbrake: false,
         boost: false,
+        use_item: false,
     };
     let idle = CarInput::default();
     let a_start_seen_by_b = b.game.race.racers[usize::from(a_slot)].car.pos;

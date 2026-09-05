@@ -6,7 +6,9 @@
 //! out of the menu business and means the browser works from a frozen page
 //! even when this build's protocol has moved on.
 
-use ember_engine::{EmberGame, Frame, InputState};
+use std::cell::RefCell;
+
+use ember_engine::{EmberGame, Frame, InputState, KeyCode, PadButton};
 use fire_core::car::CarInput;
 use fire_core::proto::{C2S, Phase};
 use fire_core::sim::FixedStep;
@@ -14,6 +16,16 @@ use fire_core::sim::FixedStep;
 use crate::game::{self, Chase, Hud, Meshes};
 use crate::net::{Inbox, Net, Status};
 use crate::online::Online;
+
+thread_local! {
+    static ONLINE_STATUS: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Actionable connection state for the page; empty while racing normally.
+#[must_use]
+pub fn status() -> String {
+    ONLINE_STATUS.with(|value| value.borrow().clone())
+}
 
 /// What the page hands to `start_online`.
 #[derive(Debug, Clone)]
@@ -24,6 +36,8 @@ pub struct Config {
     pub password: Option<String>,
     /// Create the lobby rather than join an existing one.
     pub create: bool,
+    /// Garage vehicle profile, validated before being sent to the server.
+    pub vehicle: u8,
 }
 
 impl Config {
@@ -61,11 +75,23 @@ impl Config {
                 lobby.to_string()
             },
             password,
+            vehicle: v
+                .get("vehicle")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|value| *value < 3)
+                .map_or(0, |value| u8::try_from(value).unwrap_or(0)),
             create: v
                 .get("create")
                 .is_some_and(|value| value.as_bool() == Some(true)),
         })
     }
+}
+
+/// Edge state and an unconsumed press across render frames without sim ticks.
+#[derive(Default)]
+struct PressLatch {
+    was_down: bool,
+    pending: bool,
 }
 
 pub struct OnlineGame {
@@ -74,7 +100,10 @@ pub struct OnlineGame {
     state: Online,
     ids: Meshes,
     chase: Chase,
-    boost_was_down: bool,
+    boost: PressLatch,
+    item: PressLatch,
+    recover_was_down: bool,
+    vehicle: u8,
     /// Auto-ready remains a Fire game action after shared lobby admission.
     readied: bool,
     connection_notice: bool,
@@ -88,6 +117,7 @@ impl OnlineGame {
     ///
     /// Returns an error if the networking backend cannot start the connection.
     pub fn connect(cfg: &Config, ids: Meshes) -> Result<Self, String> {
+        ONLINE_STATUS.with(|value| *value.borrow_mut() = "Connecting to race server...".into());
         let net = Net::connect_session(
             &cfg.ws,
             &cfg.handle,
@@ -103,7 +133,10 @@ impl OnlineGame {
             state,
             ids,
             chase,
-            boost_was_down: false,
+            boost: PressLatch::default(),
+            item: PressLatch::default(),
+            recover_was_down: false,
+            vehicle: cfg.vehicle,
             readied: false,
             connection_notice: false,
             clock: FixedStep::default(),
@@ -143,7 +176,18 @@ impl OnlineGame {
             boosting: racer.is_some_and(|r| r.car.boosting()),
             drifting: racer.is_some_and(|r| r.car.drift > 0.25),
             countdown: self.state.countdown,
-            finished: self.state.results.is_some(),
+            finished: self.state.results.is_some()
+                || racer.is_some_and(|r| r.finish_tick.is_some()),
+            item: racer.map_or(0, |r| r.car.item),
+            vehicle: racer.map_or(self.vehicle, |r| r.car.vehicle),
+            gear: racer.map_or(0, |r| game::display_gear(&r.car)),
+            race_time: racer
+                .and_then(|r| r.finish_time)
+                .unwrap_or(self.state.race.elapsed),
+            drift_charge: racer.map_or(0.0, |r| r.car.drift_charge),
+            shield: racer.map_or(0.0, |r| r.car.shield_left),
+            grip: racer.map_or(0.0, |r| r.car.grip_left),
+            hit: racer.map_or(0.0, |r| r.car.hit_left),
         });
     }
 }
@@ -166,30 +210,65 @@ impl EmberGame for OnlineGame {
 
         if !self.readied && self.state.my_slot.is_some() {
             self.readied = true;
+            self.net.send(&C2S::SelectVehicle {
+                vehicle: self.vehicle,
+            });
             self.net.send(&C2S::Ready { ready: true });
         }
 
-        let mine = game::read_input(input, &mut self.boost_was_down);
+        let recover_down =
+            input.down(KeyCode::KeyR) || input.pad().is_some_and(|pad| pad.down(PadButton::North));
+        if recover_down && !self.recover_was_down && self.state.phase == Phase::Racing {
+            self.net.send(&C2S::Recover);
+        }
+        self.recover_was_down = recover_down;
+
+        let mut mine = game::read_input(input, &mut self.boost.was_down, &mut self.item.was_down);
+        self.boost.pending |= mine.boost;
+        self.item.pending |= mine.use_item;
         let ticks = self.clock.ticks(dt);
-        if self.state.my_slot.is_some() && self.state.phase == Phase::Racing {
+        if self.state.my_slot.is_some()
+            && self.state.phase == Phase::Racing
+            && !self.connection_notice
+        {
             // One input message per simulated tick, so the sequence numbers
             // the server acks line up one-for-one with the history the client
             // replays. Sending once per frame while predicting several ticks
             // would leave the replay with inputs the server never saw.
             for _ in 0..ticks {
+                // A press survives a zero-tick render frame and is consumed
+                // only once when a later frame catches up multiple ticks.
+                mine.boost = std::mem::take(&mut self.boost.pending);
+                mine.use_item = std::mem::take(&mut self.item.pending);
                 let msg = self.state.make_input(mine);
                 self.net.send(&msg);
                 self.state.predict_tick(mine);
             }
         } else {
+            self.boost.pending = false;
+            self.item.pending = false;
             // Still keep the connection alive while waiting on the grid.
-            let idle = CarInput::default();
-            let msg = self.state.make_input(idle);
-            self.net.send(&msg);
+            if !self.connection_notice {
+                let idle = CarInput::default();
+                let msg = self.state.make_input(idle);
+                self.net.send(&msg);
+            }
         }
 
         let me = usize::from(self.state.my_slot.unwrap_or(0));
         let camera = self.chase.update(&self.state.race.racers[me].car, dt);
+        ONLINE_STATUS.with(|value| {
+            let next = self.state.notice.clone().unwrap_or_else(|| {
+                if self.state.my_slot.is_none() {
+                    "Joining the starting grid...".into()
+                } else if self.state.phase == Phase::Waiting {
+                    "Waiting for drivers to ready...".into()
+                } else {
+                    String::new()
+                }
+            });
+            *value.borrow_mut() = next;
+        });
         self.publish_hud();
         game::scene(&self.state.race, &self.ids, me, camera)
     }
@@ -210,6 +289,7 @@ mod tests {
         assert_eq!(c.lobby, "castle");
         assert_eq!(c.password.as_deref(), Some("p"));
         assert!(c.create);
+        assert_eq!(c.vehicle, 0);
     }
 
     #[test]
@@ -231,6 +311,28 @@ mod tests {
     fn an_empty_password_field_means_no_password() {
         let c = Config::from_json(r#"{"ws":"ws://x:1","password":""}"#).unwrap();
         assert!(c.password.is_none());
+    }
+
+    #[test]
+    fn config_validates_vehicle_selection() {
+        assert_eq!(
+            Config::from_json(r#"{"ws":"ws://x","vehicle":2}"#)
+                .unwrap()
+                .vehicle,
+            2
+        );
+        assert_eq!(
+            Config::from_json(r#"{"ws":"ws://x","vehicle":3}"#)
+                .unwrap()
+                .vehicle,
+            0
+        );
+        assert_eq!(
+            Config::from_json(r#"{"ws":"ws://x","vehicle":-1}"#)
+                .unwrap()
+                .vehicle,
+            0
+        );
     }
 
     #[test]

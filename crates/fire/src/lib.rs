@@ -1,10 +1,10 @@
 // Preserve established client simulation arithmetic and its rounding behavior.
 #![allow(clippy::suboptimal_flops)]
 
-//! Fire Racer — arcade racing through a gothic castle bailey.
+//! Fire Racer V2 — GT circuit racing with tactical power-ups.
 //!
 //! Controls: W/S throttle and brake, A/D steer, Space handbrake to drift,
-//! Shift to spend a boost charge. Three laps of the castle yard.
+//! Shift boosts, E uses the held item, R recovers. Three laps of the castle circuit.
 //!
 //! Layering, per the repo's one-way rule: this crate is game code. It talks
 //! to `fire-core` for the simulation and to `ember-engine` for the window and
@@ -22,6 +22,11 @@ use ember_engine::EngineConfig;
 
 /// Start the local game: one human, seven AI cars, three laps.
 pub fn run_local() {
+    run_local_vehicle(0);
+}
+
+/// Start practice with a selected GT, lightweight or muscle car.
+pub fn run_local_vehicle(vehicle: u8) {
     let track = fire_core::castle::track();
     tracing::info!(
         "fire: castle circuit — {:.0} m lap, {:.0} m wide, tightest corner {:.0} m",
@@ -30,7 +35,7 @@ pub fn run_local() {
         track.min_curvature_radius(),
     );
     let (meshes, ids) = game::build_meshes(&track);
-    let game = game::Game::new(ids);
+    let game = game::Game::new_with_vehicle(ids, vehicle.min(2));
     ember_engine::run(
         EngineConfig {
             title: "ember — fire racer".to_string(),
@@ -84,6 +89,17 @@ mod wasm_api {
         super::run_local();
     }
 
+    #[wasm_bindgen]
+    pub fn start_local_vehicle(vehicle: u8) {
+        super::run_local_vehicle(vehicle);
+    }
+
+    /// Reuse the live renderer while resetting a local race and its timers.
+    #[wasm_bindgen]
+    pub fn restart_local(vehicle: u8) {
+        super::game::request_restart(vehicle.min(2));
+    }
+
     /// `{"ws":"wss://...","handle":"...","lobby":"...","password":null,"create":false}`
     #[wasm_bindgen]
     pub fn start_online(config_json: &str) -> Result<(), JsValue> {
@@ -99,6 +115,12 @@ mod wasm_api {
         fire_core::proto::PROTO_VERSION
     }
 
+    /// Connection and lobby status, kept separate from numeric driving telemetry.
+    #[wasm_bindgen]
+    pub fn online_status() -> String {
+        super::online_game::status()
+    }
+
     /// The page draws the HUD: this renderer has one scene pass, no 2D layer
     /// and no text, so speed, lap, place and boost charges are handed to the
     /// surrounding HTML instead of drawn in the world.
@@ -107,7 +129,9 @@ mod wasm_api {
         let h = super::game::hud();
         format!(
             "{{\"speed\":{:.0},\"lap\":{},\"laps\":{},\"place\":{},\"racers\":{},\
-             \"boost\":{},\"boosting\":{},\"drifting\":{},\"countdown\":{:.2},\"finished\":{}}}",
+             \"boost\":{},\"boosting\":{},\"drifting\":{},\"countdown\":{:.2},\"finished\":{},\
+             \"item\":{},\"vehicle\":{},\"gear\":{},\"race_time\":{:.3},\"drift_charge\":{:.3},\
+             \"shield\":{:.2},\"grip\":{:.2},\"hit\":{:.2}}}",
             h.speed_kmh,
             h.lap,
             h.laps_total,
@@ -117,7 +141,15 @@ mod wasm_api {
             h.boosting,
             h.drifting,
             h.countdown,
-            h.finished
+            h.finished,
+            h.item,
+            h.vehicle,
+            h.gear,
+            h.race_time,
+            h.drift_charge,
+            h.shield,
+            h.grip,
+            h.hit
         )
     }
 }

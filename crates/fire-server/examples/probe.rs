@@ -35,10 +35,27 @@ const EXIT_OCCUPIED: u8 = 2;
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(url) = args.next() else {
-        eprintln!("usage: probe <ws-url> [--require-empty]");
+        eprintln!("usage: probe <ws-url> [--require-empty] [--expect-commit COMMIT]");
         return std::process::ExitCode::from(1);
     };
-    let require_empty = args.any(|a| a == "--require-empty");
+    let mut require_empty = false;
+    let mut expect_commit = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--require-empty" => require_empty = true,
+            "--expect-commit" => {
+                let Some(commit) = args.next() else {
+                    eprintln!("probe: --expect-commit requires a commit");
+                    return std::process::ExitCode::from(1);
+                };
+                expect_commit = Some(commit);
+            }
+            _ => {
+                eprintln!("probe: unknown argument {arg}");
+                return std::process::ExitCode::from(1);
+            }
+        }
+    }
 
     // Needed for wss:// through the tunnel; harmless for plain ws://.
     drop(rustls::crypto::ring::default_provider().install_default());
@@ -78,13 +95,20 @@ fn main() -> std::process::ExitCode {
                         commit,
                         ..
                     } => {
-                        if server != proto::PROTO_VERSION {
+                        if server != proto::PROTO_VERSION && !require_empty {
                             drop(ws.close(None));
                             eprintln!(
                                 "probe: server is ALIVE but speaks fire protocol v{server}, \
                                  this build speaks v{}",
                                 proto::PROTO_VERSION
                             );
+                            return std::process::ExitCode::from(1);
+                        }
+                        if let Some(expected) = &expect_commit
+                            && &commit != expected
+                        {
+                            drop(ws.close(None));
+                            eprintln!("probe: expected commit {expected}, server reports {commit}");
                             return std::process::ExitCode::from(1);
                         }
                         // Naming the host and build is what makes this

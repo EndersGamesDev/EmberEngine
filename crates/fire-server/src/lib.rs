@@ -26,7 +26,8 @@ use fire_core::ai;
 use fire_core::car::{CarInput, DT};
 use fire_core::castle;
 use fire_core::proto::{
-    self, C2S, CarState, LobbyInfo, MAX_PLAYERS, Phase, PlayerMeta, S2C, STATE_EVERY_TICKS,
+    self, C2S, CarState, HazardState, LobbyInfo, MAX_PLAYERS, Phase, PickupState, PlayerMeta,
+    ProjectileState, S2C, STATE_EVERY_TICKS,
 };
 use fire_core::sim::{Race, RaceState};
 
@@ -44,8 +45,6 @@ const MAX_WS_MESSAGE: usize = proto::MAX_FRAME_BYTES;
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 /// Per-tick message allowance. A peer above this is flooding.
 const MAX_MSGS_PER_TICK: u32 = 32;
-/// How long a finished race stays on screen before the lobby resets.
-const RESULTS_SECS: f32 = 8.0;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -124,8 +123,6 @@ struct Lobby {
     ready: HashSet<u64>,
     /// slot -> (latest intent, its client sequence number).
     inputs: HashMap<u8, (CarInput, u32)>,
-    /// Seconds left on the results screen once everyone has finished.
-    results_left: f32,
     last_phase: Phase,
 }
 
@@ -138,7 +135,6 @@ impl Lobby {
             slots: HashMap::new(),
             ready: HashSet::new(),
             inputs: HashMap::new(),
-            results_left: 0.0,
             last_phase: Phase::Waiting,
         }
     }
@@ -434,7 +430,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
 fn tick_lobbies(
     lobbies: &mut HashMap<String, Lobby>,
     conns: &HashMap<u64, Conn>,
-    cfg: &ServerConfig,
+    _cfg: &ServerConfig,
 ) {
     let mut empty: Vec<String> = Vec::new();
     for (name, lobby) in lobbies.iter_mut() {
@@ -460,6 +456,7 @@ fn tick_lobbies(
         // next one arrives — the same bug the arena hit with jump.
         for (input, _) in lobby.inputs.values_mut() {
             input.boost = false;
+            input.use_item = false;
         }
 
         let phase = lobby.phase();
@@ -481,7 +478,6 @@ fn tick_lobbies(
                     .map(|&i| u8::try_from(i).expect("race grid fits in a wire player id"))
                     .collect();
                 broadcast(conns, lobby, &S2C::Results { order });
-                lobby.results_left = RESULTS_SECS;
             }
         } else if phase == Phase::Countdown && lobby.race.tick % STATE_EVERY_TICKS == 0 {
             // 30 Hz, not 60: the page only renders `ceil(countdown)`, and the
@@ -500,24 +496,8 @@ fn tick_lobbies(
             broadcast_race_state(conns, lobby);
         }
 
-        // Reset for another race once the results have been shown.
-        if lobby.race.state == RaceState::Finished {
-            lobby.results_left -= DT;
-            if lobby.results_left <= 0.0 {
-                lobby.race = Race::new(castle::track(), MAX_PLAYERS as usize, cfg.laps);
-                lobby.ready.clear();
-                lobby.inputs.clear();
-                lobby.last_phase = Phase::Waiting;
-                broadcast(
-                    conns,
-                    lobby,
-                    &S2C::Phase {
-                        phase: Phase::Waiting,
-                        countdown: 0.0,
-                    },
-                );
-            }
-        }
+        // Keep results until drivers leave. The page offers Race Again and
+        // garage; a hidden timed reset used to strand everyone on a dead grid.
     }
     for name in empty {
         lobbies.remove(&name);
@@ -570,6 +550,17 @@ fn broadcast_race_state(conns: &HashMap<u64, Conn>, lobby: &Lobby) {
                 boosting: racer.car.boosting(),
                 drift: racer.car.drift,
                 ack: lobby.inputs.get(&id).map_or(0, |(_, sequence)| *sequence),
+                vehicle: racer.car.vehicle,
+                item: racer.car.item,
+                boost_left: racer.car.boost_left,
+                steer_angle: racer.car.steer_angle,
+                shield_left: racer.car.shield_left,
+                grip_left: racer.car.grip_left,
+                hit_left: racer.car.hit_left,
+                drift_charge: racer.car.drift_charge,
+                oil_left: racer.car.oil_left,
+                finish_tick: racer.finish_tick,
+                finish_time: racer.finish_time,
             }
         })
         .collect();
@@ -579,6 +570,41 @@ fn broadcast_race_state(conns: &HashMap<u64, Conn>, lobby: &Lobby) {
         &S2C::State {
             tick: lobby.race.tick,
             cars,
+            elapsed: lobby.race.elapsed,
+            pickups: lobby
+                .race
+                .pickups
+                .iter()
+                .map(|pickup| PickupState {
+                    id: pickup.id,
+                    x: pickup.pos.x,
+                    z: pickup.pos.y,
+                    respawn_left: pickup.respawn_left,
+                })
+                .collect(),
+            projectiles: lobby
+                .race
+                .projectiles
+                .iter()
+                .map(|pulse| ProjectileState {
+                    owner: pulse.owner,
+                    target: pulse.target,
+                    x: pulse.pos.x,
+                    z: pulse.pos.y,
+                    life_left: pulse.life_left,
+                })
+                .collect(),
+            hazards: lobby
+                .race
+                .hazards
+                .iter()
+                .map(|oil| HazardState {
+                    owner: oil.owner,
+                    x: oil.pos.x,
+                    z: oil.pos.y,
+                    life_left: oil.life_left,
+                })
+                .collect(),
         },
     );
 }
@@ -719,6 +745,9 @@ fn handle_msg(
 
         C2S::LeaveLobby => leave_lobby(id, conns, lobbies),
 
+        C2S::SelectVehicle { vehicle } => select_vehicle(id, vehicle, conns, lobbies),
+        C2S::Recover => recover_car(id, conns, lobbies),
+
         C2S::Ready { ready } => {
             let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else {
                 return;
@@ -738,12 +767,14 @@ fn handle_msg(
             steer,
             handbrake,
             boost,
+            use_item,
         } => {
             let incoming = CarInput {
                 throttle,
                 steer,
                 handbrake,
                 boost,
+                use_item,
             }
             .sanitized();
             record_input(id, seq, incoming, conns, lobbies);
@@ -752,6 +783,46 @@ fn handle_msg(
         C2S::Ping { nonce } => {
             send_to(conns, id, &S2C::Pong { nonce });
         }
+    }
+}
+
+fn select_vehicle(
+    id: u64,
+    vehicle: u8,
+    conns: &HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+) {
+    let Some(name) = conns.get(&id).and_then(|conn| conn.lobby.as_ref()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(name) else {
+        return;
+    };
+    let Some(&slot) = lobby.slots.get(&id) else {
+        return;
+    };
+    if vehicle >= 3 || lobby.race.state != RaceState::Waiting {
+        // Late joiners inherit the AI's existing car; a race in progress
+        // cannot have its vehicle physics replaced underneath it.
+        return;
+    }
+    lobby.race.racers[usize::from(slot)].car.vehicle = vehicle;
+    broadcast_race_state(conns, lobby);
+}
+
+fn recover_car(id: u64, conns: &HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
+    let Some(name) = conns.get(&id).and_then(|conn| conn.lobby.as_ref()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(name) else {
+        return;
+    };
+    let Some(&slot) = lobby.slots.get(&id) else {
+        return;
+    };
+    let index = usize::from(slot);
+    if lobby.race.state == RaceState::Racing && lobby.race.racers[index].finish_tick.is_none() {
+        lobby.race.recover(index);
     }
 }
 
@@ -819,8 +890,10 @@ fn record_input(
             // A boost press latches until a tick consumes it, so a press is
             // never lost between two input packets.
             let pending = held.boost;
+            let pending_item = held.use_item;
             *held = incoming;
             held.boost |= pending;
+            held.use_item |= pending_item;
             *last_seq = seq;
         }
         None => {
@@ -986,6 +1059,119 @@ mod tests {
         l
     }
 
+    fn connected_lobby() -> (
+        HashMap<u64, Conn>,
+        HashMap<String, Lobby>,
+        Receiver<Message>,
+    ) {
+        let (tx, rx) = mpsc::sync_channel(OUTBOUND_QUEUE);
+        let conn = Conn {
+            tx,
+            peer: "test".into(),
+            handle: Some("driver".into()),
+            proto: proto::PROTO_VERSION,
+            lobby: Some("t".into()),
+            last_seen: Instant::now(),
+            msgs_this_tick: 0,
+        };
+        (
+            HashMap::from([(7, conn)]),
+            HashMap::from([("t".into(), lobby_with(&[7]))]),
+            rx,
+        )
+    }
+
+    #[test]
+    fn vehicle_selection_is_authoritative_and_locked_after_waiting() {
+        let (mut conns, mut lobbies, _rx) = connected_lobby();
+        let cfg = ServerConfig::default();
+        handle_msg(
+            7,
+            C2S::SelectVehicle { vehicle: 2 },
+            &mut conns,
+            &mut lobbies,
+            &cfg,
+        );
+        assert_eq!(lobbies["t"].race.racers[0].car.vehicle, 2);
+        handle_msg(
+            7,
+            C2S::SelectVehicle { vehicle: 200 },
+            &mut conns,
+            &mut lobbies,
+            &cfg,
+        );
+        assert_eq!(lobbies["t"].race.racers[0].car.vehicle, 2);
+        lobbies.get_mut("t").unwrap().race.start_countdown();
+        handle_msg(
+            7,
+            C2S::SelectVehicle { vehicle: 1 },
+            &mut conns,
+            &mut lobbies,
+            &cfg,
+        );
+        assert_eq!(lobbies["t"].race.racers[0].car.vehicle, 2);
+    }
+
+    #[test]
+    fn manual_recovery_repositions_without_awarding_a_lap() {
+        let (mut conns, mut lobbies, _rx) = connected_lobby();
+        let race = &mut lobbies.get_mut("t").unwrap().race;
+        race.state = RaceState::Racing;
+        let progress = race.racers[0].lap.progress;
+        race.racers[0].car.yaw += std::f32::consts::PI;
+        handle_msg(
+            7,
+            C2S::Recover,
+            &mut conns,
+            &mut lobbies,
+            &ServerConfig::default(),
+        );
+        let race = &lobbies["t"].race;
+        assert_eq!(race.racers[0].lap.progress, progress);
+        assert_eq!(race.racers[0].lap.lap, 0);
+        assert!(race.racers[0].car.vel.length() < 10.0);
+        let tangent = race.track.locate(race.racers[0].car.pos).tangent;
+        assert!(fire_core::car::forward(race.racers[0].car.yaw).dot(tangent) > 0.9);
+    }
+
+    #[test]
+    fn item_press_survives_later_packet_and_is_consumed_on_one_tick() {
+        let (conns, mut lobbies, _rx) = connected_lobby();
+        let race = &mut lobbies.get_mut("t").unwrap().race;
+        race.state = RaceState::Racing;
+        race.racers[0].car.item = 2; // Shield.
+        record_input(
+            7,
+            1,
+            CarInput {
+                use_item: true,
+                ..CarInput::default()
+            },
+            &conns,
+            &mut lobbies,
+        );
+        record_input(7, 2, CarInput::default(), &conns, &mut lobbies);
+        assert!(lobbies["t"].inputs[&0].0.use_item);
+        tick_lobbies(&mut lobbies, &conns, &ServerConfig::default());
+        assert_eq!(lobbies["t"].race.racers[0].car.item, 0);
+        assert!(lobbies["t"].race.racers[0].car.shield_left > 0.0);
+        assert!(!lobbies["t"].inputs[&0].0.use_item);
+        // A new item cannot be consumed by the previous press.
+        lobbies.get_mut("t").unwrap().race.racers[0].car.item = 1;
+        tick_lobbies(&mut lobbies, &conns, &ServerConfig::default());
+        assert_eq!(lobbies["t"].race.racers[0].car.item, 1);
+    }
+
+    #[test]
+    fn finished_race_keeps_results_until_drivers_leave() {
+        let (conns, mut lobbies, _rx) = connected_lobby();
+        lobbies.get_mut("t").unwrap().race.state = RaceState::Finished;
+        for _ in 0..600 {
+            tick_lobbies(&mut lobbies, &conns, &ServerConfig::default());
+        }
+        assert_eq!(lobbies["t"].race.state, RaceState::Finished);
+    }
+
     #[test]
     fn slots_are_allocated_without_collision() {
         let mut l = lobby_with(&[10, 11, 12]);
@@ -1069,6 +1255,7 @@ mod tests {
                 steer: 0.0,
                 handbrake: false,
                 boost: true,
+                use_item: false,
             },
             &mut conns,
             &mut lobbies,
@@ -1118,6 +1305,7 @@ mod tests {
                     steer: 0.0,
                     handbrake: false,
                     boost: false,
+                    use_item: false,
                 },
                 conns,
                 lobbies,

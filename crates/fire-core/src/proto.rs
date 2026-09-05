@@ -19,7 +19,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Fire's own protocol version. Independent of `arena_core::proto::PROTO_VERSION`.
-pub const PROTO_VERSION: u16 = 1;
+// V2 changes vehicle physics, item attacks and prediction state. Defaulted
+// fields keep archived JSON readable; the exact join gate still rejects V1.
+pub const PROTO_VERSION: u16 = 2;
 
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
@@ -62,7 +64,7 @@ pub struct PlayerMeta {
 /// Flat scalars on purpose: the sim's `Car` holds `glam::Vec2`, and keeping
 /// the wire shape separate means the internal struct can be refactored without
 /// that being a protocol question.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
 pub struct CarState {
     pub id: u8,
     pub x: f32,
@@ -88,6 +90,56 @@ pub struct CarState {
     /// reconcile against and prediction cannot converge.
     #[serde(default)]
     pub ack: u32,
+    #[serde(default)]
+    pub vehicle: u8,
+    #[serde(default)]
+    pub item: u8,
+    /// Exact remaining duration, required to replay boosts without extending them.
+    #[serde(default)]
+    pub boost_left: f32,
+    #[serde(default)]
+    pub steer_angle: f32,
+    #[serde(default)]
+    pub shield_left: f32,
+    #[serde(default)]
+    pub grip_left: f32,
+    #[serde(default)]
+    pub hit_left: f32,
+    #[serde(default)]
+    pub drift_charge: f32,
+    #[serde(default)]
+    pub oil_left: f32,
+    #[serde(default)]
+    pub finish_tick: Option<u64>,
+    #[serde(default)]
+    pub finish_time: Option<f32>,
+}
+
+/// V2 world objects are authoritative. Clients render these snapshots and
+/// never award pickups or resolve projectiles locally.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct PickupState {
+    pub id: u16,
+    pub x: f32,
+    pub z: f32,
+    pub respawn_left: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ProjectileState {
+    pub owner: u8,
+    pub target: u8,
+    pub x: f32,
+    pub z: f32,
+    pub life_left: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct HazardState {
+    pub owner: u8,
+    pub x: f32,
+    pub z: f32,
+    pub life_left: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +175,13 @@ pub enum C2S {
     Ready {
         ready: bool,
     },
+    /// Select one of the three vehicle profiles before the race starts.
+    SelectVehicle {
+        vehicle: u8,
+    },
+    /// Reset an unfinished car onto its nearest circuit tangent. Race progress
+    /// remains authoritative and no checkpoint is awarded by recovery.
+    Recover,
     /// Held driver intents. Doubles as the liveness keepalive.
     Input {
         /// Client-assigned, monotonic. Echoed back as `CarState::ack` so the
@@ -139,6 +198,9 @@ pub enum C2S {
         /// never boosts, which is a worse race but a legal one.
         #[serde(default)]
         boost: bool,
+        /// One-shot item activation, latched until a simulation tick consumes it.
+        #[serde(default)]
+        use_item: bool,
     },
     Ping {
         nonce: u32,
@@ -210,6 +272,14 @@ pub enum S2C {
     State {
         tick: u64,
         cars: Vec<CarState>,
+        #[serde(default)]
+        elapsed: f32,
+        #[serde(default)]
+        pickups: Vec<PickupState>,
+        #[serde(default)]
+        projectiles: Vec<ProjectileState>,
+        #[serde(default)]
+        hazards: Vec<HazardState>,
     },
     /// Finishing order, by player id.
     Results {
@@ -292,6 +362,7 @@ mod tests {
             steer: -0.5,
             handbrake: true,
             boost: true,
+            use_item: true,
         };
         assert!(matches!(
             roundtrip(&c),
@@ -317,10 +388,15 @@ mod tests {
                 boosting: true,
                 drift: 0.4,
                 ack: 41,
+                ..CarState::default()
             }],
+            elapsed: 15.0,
+            pickups: vec![],
+            projectiles: vec![],
+            hazards: vec![],
         };
         match roundtrip(&s) {
-            S2C::State { tick, cars } => {
+            S2C::State { tick, cars, .. } => {
                 assert_eq!(tick, 900);
                 assert_eq!(cars[0].id, 3);
                 assert_eq!(cars[0].ack, 41);

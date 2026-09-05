@@ -101,6 +101,7 @@ fn drive_until_progress(
             steer: 0.0,
             handbrake: false,
             boost: false,
+            use_item: false,
         };
         send(a, &input);
         send(b, &input);

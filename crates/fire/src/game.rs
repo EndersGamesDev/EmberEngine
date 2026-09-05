@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{
-    Camera, EmberGame, Frame, InputState, Instance, KeyCode, MeshData, TextureData,
+    Camera, EmberGame, Frame, InputState, Instance, KeyCode, MeshData, PadButton, TextureData,
 };
 use fire_core::ai;
 use fire_core::car::{self, CarInput};
@@ -15,23 +15,26 @@ use crate::meshes;
 use crate::texgen;
 use crate::trackmesh;
 
+#[path = "presentation.rs"]
+mod presentation;
+
 const PLAYERS: usize = 8;
 const LAPS: u32 = 3;
 
 // ---- camera ---------------------------------------------------------------
 
-const CAM_DIST: f32 = 13.5;
-const CAM_HEIGHT: f32 = 5.5;
+const CAM_DIST: f32 = 8.8;
+const CAM_HEIGHT: f32 = 3.15;
 /// Chase-camera lag, 1/s. Applied as an exponential so it is frame-rate
 /// independent for the same reason the tyre friction is.
-const CAM_LAG: f32 = 5.0;
+const CAM_LAG: f32 = 8.0;
 /// How much the camera follows the car's *velocity* rather than its nose.
 /// A camera welded to the heading swings wildly through a drift and hides
 /// the apex; one welded to the velocity never shows you where you are
 /// pointing. The blend keeps the slide legible.
-const CAM_VEL_BLEND: f32 = 0.35;
+const CAM_VEL_BLEND: f32 = 0.23;
 const FOV_BASE: f32 = 62.0;
-const FOV_SPEED_GAIN: f32 = 16.0;
+const FOV_SPEED_GAIN: f32 = 10.0;
 
 /// Everything the page's HUD needs. Published through a thread-local because
 /// `ember_engine::run` takes the game by value and never gives it back.
@@ -47,14 +50,29 @@ pub struct Hud {
     pub drifting: bool,
     pub countdown: f32,
     pub finished: bool,
+    pub item: u8,
+    pub vehicle: u8,
+    pub gear: u8,
+    pub race_time: f32,
+    pub drift_charge: f32,
+    pub shield: f32,
+    pub grip: f32,
+    pub hit: f32,
 }
 
 thread_local! {
     static HUD: RefCell<Hud> = const { RefCell::new(Hud {
         speed_kmh: 0.0, lap: 0, laps_total: 0, place: 0, racers: 0,
         boost_charges: 0, boosting: false, drifting: false,
-        countdown: 0.0, finished: false,
+        countdown: 0.0, finished: false, item: 0, vehicle: 0, gear: 1,
+        race_time: 0.0, drift_charge: 0.0, shield: 0.0, grip: 0.0, hit: 0.0,
     }) };
+    static RESTART: RefCell<Option<u8>> = const { RefCell::new(None) };
+}
+
+/// Restart in the existing engine loop; no extra canvas or event loop.
+pub fn request_restart(vehicle: u8) {
+    RESTART.with(|r| *r.borrow_mut() = Some(vehicle.min(2)));
 }
 
 #[must_use]
@@ -66,6 +84,18 @@ pub fn hud() -> Hud {
 /// reads one shape regardless of which one is running.
 pub fn set_hud(h: Hud) {
     HUD.with(|c| *c.borrow_mut() = h);
+}
+
+/// Speed-based automatic gear indication; reverse is shown as zero by the page.
+#[must_use]
+pub fn display_gear(car: &car::Car) -> u8 {
+    if car.vel.dot(car::forward(car.yaw)) < -0.5 {
+        return 0;
+    }
+    let speed = car.speed() * 3.6;
+    [38.0, 72.0, 112.0, 157.0, 208.0]
+        .iter()
+        .fold(1, |gear, &threshold| gear + u8::from(speed > threshold))
 }
 
 // ---- meshes ---------------------------------------------------------------
@@ -84,23 +114,30 @@ pub struct Meshes {
     pub wall_r: u32,
     pub start: u32,
     pub car: u32,
+    pub bodies: [u32; 3],
+    pub glass: [u32; 3],
+    pub tyre: u32,
+    pub rim: u32,
+    pub disc: u32,
+    pub pickup: u32,
+    pub edges: [u32; 2],
+    pub runoff: [u32; 2],
+    pub sky: u32,
+    pub foliage: u32,
     pub gatehouse: u32,
     pub tower: u32,
     pub fountain: u32,
     /// Longest-axis extent of each prop mesh, so `Prop::scale` can be given
     /// in metres rather than in whatever units the generator happened to use.
-    pub car_extent: f32,
     pub gatehouse_extent: f32,
     pub tower_extent: f32,
     pub fountain_extent: f32,
     /// How far to lift each prop so it stands on the courtyard floor.
-    pub car_lift: f32,
     pub gatehouse_lift: f32,
     pub tower_lift: f32,
     pub fountain_lift: f32,
 }
 
-const CAR_GLB: &[u8] = include_bytes!("../../../assets/models/fire/fire-car.glb");
 const GATEHOUSE_GLB: &[u8] = include_bytes!("../../../assets/models/fire/fire-gatehouse.glb");
 const TOWER_GLB: &[u8] = include_bytes!("../../../assets/models/fire/fire-tower.glb");
 const FOUNTAIN_GLB: &[u8] = include_bytes!("../../../assets/models/fire/fire-fountain.glb");
@@ -118,6 +155,7 @@ fn prop_or_cube(bytes: &[u8], tex: Option<TextureData>, tiles: f32, what: &str) 
 }
 
 #[must_use]
+#[allow(clippy::too_many_lines)] // Registration order and ids are reviewed together.
 pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) {
     let half = track.half_width();
     let wall_off = half + fire_core::sim::WALL_MARGIN;
@@ -125,7 +163,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
     // Textures are generated rather than shipped: `include_bytes!` bakes
     // assets into the wasm bundle that every web player downloads, and these
     // cost zero bytes. See texgen for the rest of the reasoning.
-    let list = vec![
+    let mut list = vec![
         // 1 ground
         trackmesh::ground(track, 90.0, 10.0, Some(texgen::turf(128))),
         // 2 road
@@ -136,7 +174,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
             0.0,
             10.0,
             3.0,
-            Some(texgen::cobblestone(256, 10)),
+            Some(texgen::asphalt(256)),
         ),
         // 3,4 kerbs — a hair above the road so they never z-fight with it
         trackmesh::flat_ribbon(
@@ -146,7 +184,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
             0.03,
             4.0,
             1.0,
-            Some(texgen::chequer(64, 2)),
+            Some(texgen::kerb(64)),
         ),
         trackmesh::flat_ribbon(
             track,
@@ -155,13 +193,13 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
             0.03,
             4.0,
             1.0,
-            Some(texgen::chequer(64, 2)),
+            Some(texgen::kerb(64)),
         ),
         // 5,6 courtyard walls
         trackmesh::wall_ribbon(
             track,
             wall_off,
-            6.0,
+            1.1,
             12.0,
             1.0,
             Some(texgen::castle_stone(256, 4, 6)),
@@ -169,7 +207,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
         trackmesh::wall_ribbon(
             track,
             -wall_off,
-            6.0,
+            1.1,
             12.0,
             1.0,
             Some(texgen::castle_stone(256, 4, 6)),
@@ -178,7 +216,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
         trackmesh::cross_band(track, 0.0, 4.0, 10.0, Some(texgen::chequer(64, 8))),
         // 8 the car — untextured on purpose, so the instance colour is the
         // whole livery and eight players are eight different cars
-        prop_or_cube(CAR_GLB, None, 1.0, "car"),
+        meshes::car_body(0, false),
         // 9,10,11 architecture, wearing the same stone as the walls
         prop_or_cube(
             GATEHOUSE_GLB,
@@ -198,8 +236,39 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
             2.0,
             "fountain",
         ),
+        meshes::car_body(1, false),
+        meshes::car_body(2, false),
+        meshes::car_body(0, true),
+        meshes::car_body(1, true),
+        meshes::car_body(2, true),
+        meshes::wheel(0.36, 0.29),
+        meshes::wheel(0.235, 0.035),
+        meshes::disc(),
+        MeshData::textured_box(1.0, Some(texgen::mystery(128))),
+        trackmesh::flat_ribbon(track, half - 0.18, 0.16, 0.015, 10.0, 1.0, None),
+        trackmesh::flat_ribbon(track, -half + 0.18, 0.16, 0.015, 10.0, 1.0, None),
+        trackmesh::flat_ribbon(
+            track,
+            half + 3.4,
+            3.2,
+            0.005,
+            9.0,
+            1.0,
+            Some(texgen::asphalt(128)),
+        ),
+        trackmesh::flat_ribbon(
+            track,
+            -half - 3.4,
+            3.2,
+            0.005,
+            9.0,
+            1.0,
+            Some(texgen::asphalt(128)),
+        ),
     ];
 
+    list.push(meshes::sky());
+    list.push(meshes::foliage());
     let ids = Meshes {
         ground: 1,
         road: 2,
@@ -209,14 +278,22 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
         wall_r: 6,
         start: 7,
         car: 8,
+        bodies: [8, 12, 13],
+        glass: [14, 15, 16],
+        tyre: 17,
+        rim: 18,
+        disc: 19,
+        pickup: 20,
+        edges: [21, 22],
+        runoff: [23, 24],
+        sky: 25,
+        foliage: 26,
         gatehouse: 9,
         tower: 10,
         fountain: 11,
-        car_extent: meshes::longest_extent(&list[7]),
         gatehouse_extent: meshes::longest_extent(&list[8]),
         tower_extent: meshes::longest_extent(&list[9]),
         fountain_extent: meshes::longest_extent(&list[10]),
-        car_lift: meshes::ground_offset(&list[7]),
         gatehouse_lift: meshes::ground_offset(&list[8]),
         tower_lift: meshes::ground_offset(&list[9]),
         fountain_lift: meshes::ground_offset(&list[10]),
@@ -232,6 +309,7 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
 pub struct Chase {
     dir: Vec2,
     eye: Vec3,
+    previous_pos: Vec2,
 }
 
 impl Chase {
@@ -239,7 +317,9 @@ impl Chase {
     pub fn new(car: &car::Car) -> Self {
         Self {
             dir: car::forward(car.yaw),
-            eye: Vec3::new(car.pos.x, CAM_HEIGHT, car.pos.y),
+            eye: Vec3::new(car.pos.x, CAM_HEIGHT, car.pos.y)
+                - Vec3::new(car::forward(car.yaw).x, 0.0, car::forward(car.yaw).y) * CAM_DIST,
+            previous_pos: car.pos,
         }
     }
 
@@ -259,13 +339,23 @@ impl Chase {
 
         let p = Vec3::new(car.pos.x, 0.0, car.pos.y);
         let d = Vec3::new(self.dir.x, 0.0, self.dir.y);
-        let want_eye = p - d * CAM_DIST + Vec3::Y * CAM_HEIGHT;
-        // Lag the eye too, so kerb strikes do not jolt the whole frame.
+        let want_eye =
+            p - d * (CAM_DIST + (speed / car::MAX_SPEED).min(1.3) * 1.6) + Vec3::Y * CAM_HEIGHT;
+        // Translate with the car before smoothing its relative orbit. Smoothing
+        // world translation adds speed / lag metres to chase distance.
+        let movement = car.pos - self.previous_pos;
+        self.eye += Vec3::new(movement.x, 0.0, movement.y);
+        self.previous_pos = car.pos;
         self.eye += (want_eye - self.eye) * k;
+        // Direction already has its own damping. A second sideways lag would
+        // push the driver's car out of frame during a fast corner.
+        let relative = self.eye - p;
+        let distance = Vec2::new(relative.x, relative.z).length();
+        self.eye = p - d * distance + Vec3::Y * CAM_HEIGHT;
 
         Camera {
             eye: self.eye,
-            target: p + d * 10.0 + Vec3::Y * 1.4,
+            target: p + d * 12.0 + Vec3::Y * 1.05,
             // Widening with speed is the cheapest sense of velocity there is.
             fov_y_deg: FOV_BASE + FOV_SPEED_GAIN * (speed / car::MAX_SPEED).min(1.4),
         }
@@ -275,9 +365,13 @@ impl Chase {
 /// Read the keyboard into a car intent. `boost_was_down` is the caller's
 /// rising-edge latch: a held key must spend exactly one charge.
 #[must_use]
-pub fn read_input(input: &InputState, boost_was_down: &mut bool) -> CarInput {
+pub fn read_input(
+    input: &InputState,
+    boost_was_down: &mut bool,
+    item_was_down: &mut bool,
+) -> CarInput {
     let held = |a: KeyCode, b: KeyCode| input.down(a) || input.down(b);
-    let throttle = if held(KeyCode::KeyW, KeyCode::ArrowUp) {
+    let mut throttle = if held(KeyCode::KeyW, KeyCode::ArrowUp) {
         1.0
     } else if held(KeyCode::KeyS, KeyCode::ArrowDown) {
         -1.0
@@ -292,17 +386,34 @@ pub fn read_input(input: &InputState, boost_was_down: &mut bool) -> CarInput {
     if held(KeyCode::KeyD, KeyCode::ArrowRight) {
         steer -= 1.0;
     }
-    let boost_down = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
+    let pad = input.pad();
+    if let Some(pad) = pad {
+        if throttle == 0.0 {
+            throttle = pad.rt - pad.lt;
+        }
+        if steer == 0.0 {
+            steer = -pad.left[0];
+        }
+    }
+    let button = |b| pad.is_some_and(|p| p.down(b));
+    let boost_down = input.down(KeyCode::ShiftLeft)
+        || input.down(KeyCode::ShiftRight)
+        || button(PadButton::South);
     let boost = boost_down && !*boost_was_down;
     *boost_was_down = boost_down;
+    let item_down = input.down(KeyCode::KeyE) || button(PadButton::RB);
+    let use_item = item_down && !*item_was_down;
+    *item_was_down = item_down;
     CarInput {
         throttle,
         steer,
-        handbrake: input.down(KeyCode::Space),
+        handbrake: input.down(KeyCode::Space) || button(PadButton::West),
         boost,
+        use_item,
     }
 }
 
+#[allow(clippy::struct_excessive_bools)] // Independent input edges and queued presses must not share state.
 pub struct Game {
     race: Race,
     me: usize,
@@ -310,6 +421,10 @@ pub struct Game {
     chase: Chase,
     /// Rising-edge latch for boost. A held key must spend exactly one charge.
     boost_was_down: bool,
+    item_was_down: bool,
+    pending_boost: bool,
+    pending_item: bool,
+    recover_was_down: bool,
     started: bool,
     clock: FixedStep,
 }
@@ -317,7 +432,13 @@ pub struct Game {
 impl Game {
     #[must_use]
     pub fn new(ids: Meshes) -> Self {
-        let race = Race::new(castle::track(), PLAYERS, LAPS);
+        Self::new_with_vehicle(ids, 0)
+    }
+
+    #[must_use]
+    pub fn new_with_vehicle(ids: Meshes, vehicle: u8) -> Self {
+        let mut race = Race::new(castle::track(), PLAYERS, LAPS);
+        race.racers[0].car.vehicle = vehicle.min(2);
         let chase = Chase::new(&race.racers[0].car);
         Self {
             race,
@@ -325,6 +446,10 @@ impl Game {
             ids,
             chase,
             boost_was_down: false,
+            item_was_down: false,
+            pending_boost: false,
+            pending_item: false,
+            recover_was_down: false,
             started: false,
             clock: FixedStep::default(),
         }
@@ -351,6 +476,16 @@ impl Game {
                 drifting: me.car.drift > 0.25,
                 countdown: self.race.countdown_left(),
                 finished: me.finish_tick.is_some(),
+                item: me.car.item,
+                vehicle: me.car.vehicle,
+                gear: display_gear(&me.car),
+                race_time: me
+                    .finish_time
+                    .unwrap_or_else(|| self.race.elapsed_seconds()),
+                drift_charge: me.car.drift_charge,
+                shield: me.car.shield_left,
+                grip: me.car.grip_left,
+                hit: me.car.hit_left,
             };
         });
     }
@@ -362,12 +497,32 @@ impl EmberGame for Game {
         // teleport every car through a wall.
         let dt = dt.clamp(0.0, 0.05);
 
+        if let Some(vehicle) = RESTART.with(|r| r.borrow_mut().take()) {
+            self.race = Race::new(castle::track(), PLAYERS, LAPS);
+            self.race.racers[0].car.vehicle = vehicle;
+            self.chase = Chase::new(&self.race.racers[0].car);
+            self.started = false;
+            self.clock = FixedStep::default();
+            self.pending_boost = false;
+            self.pending_item = false;
+        }
+
         if !self.started {
             self.race.start_countdown();
             self.started = true;
         }
 
-        let mine = read_input(input, &mut self.boost_was_down);
+        let mut mine = read_input(input, &mut self.boost_was_down, &mut self.item_was_down);
+        self.pending_boost |= mine.boost;
+        self.pending_item |= mine.use_item;
+        mine.boost = self.pending_boost;
+        mine.use_item = self.pending_item;
+        let recover_down =
+            input.down(KeyCode::KeyR) || input.pad().is_some_and(|pad| pad.down(PadButton::North));
+        if recover_down && !self.recover_was_down {
+            self.race.recover(self.me);
+        }
+        self.recover_was_down = recover_down;
         let mut inputs: Vec<CarInput> = self
             .race
             .racers
@@ -392,6 +547,10 @@ impl EmberGame for Game {
         // and the local game disagree with the server's fixed clock.
         for _ in 0..self.clock.ticks(dt) {
             self.race.step(&inputs, fire_core::car::DT);
+            self.pending_boost = false;
+            self.pending_item = false;
+            inputs[self.me].boost = false;
+            inputs[self.me].use_item = false;
         }
 
         let camera = self.chase.update(&self.race.racers[self.me].car, dt);
@@ -437,17 +596,33 @@ fn push_prop(frame: &mut Frame, ids: &Meshes, kind: PropKind, pos: Vec2, yaw: f3
 /// Build the whole frame from a race. Shared by local and online play so
 /// the two modes cannot drift apart visually.
 #[must_use]
-pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
+pub fn scene(race: &Race, ids: &Meshes, _me: usize, camera: Camera) -> Frame {
     let mut frame = Frame {
         camera,
-        instances: Vec::with_capacity(64),
-        fog: ember_engine::Fog::default(),
+        instances: Vec::with_capacity(700),
+        fog: ember_engine::Fog {
+            color: [0.22, 0.29, 0.36],
+            density: 0.0011,
+        },
     };
+    frame
+        .instances
+        .push(Instance::new(frame.camera.eye, Vec3::splat(400.0), Vec3::ONE).with_mesh(ids.sky));
 
     // The track meshes are already in world space, so each is one
     // instance at the origin with unit scale and no rotation.
     for mesh in [
-        ids.ground, ids.road, ids.kerb_l, ids.kerb_r, ids.wall_l, ids.wall_r, ids.start,
+        ids.ground,
+        ids.road,
+        ids.kerb_l,
+        ids.kerb_r,
+        ids.wall_l,
+        ids.wall_r,
+        ids.start,
+        ids.edges[0],
+        ids.edges[1],
+        ids.runoff[0],
+        ids.runoff[1],
     ] {
         frame
             .instances
@@ -458,56 +633,18 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
         push_prop(&mut frame, ids, p.kind, p.pos, p.yaw, p.scale);
     }
 
-    let car_scale = if ids.car_extent > 1e-4 {
-        4.4 / ids.car_extent
-    } else {
-        1.0
-    };
-    for (i, r) in race.racers.iter().enumerate() {
-        let c = &r.car;
-        let colour = livery(i);
-        frame.instances.push(
-            Instance::new(
-                Vec3::new(c.pos.x, ids.car_lift * car_scale, c.pos.y),
-                Vec3::splat(car_scale),
-                colour,
-            )
-            .with_yaw(c.yaw)
-            .with_mesh(ids.car),
-        );
-
-        // Boost flame: an opaque wedge behind the car. There is no
-        // additive blending in this renderer, so a glow can only ever be
-        // a solid mesh — this is that, and nothing fancier.
-        if c.boosting() {
-            let back = -car::forward(c.yaw);
-            let p = c.pos + back * 2.4;
-            frame.instances.push(
-                Instance::new(
-                    Vec3::new(p.x, 0.55, p.y),
-                    Vec3::new(0.7, 0.5, 1.8),
-                    Vec3::new(1.0, 0.62, 0.16),
-                )
-                .with_yaw(c.yaw),
-            );
-        }
-    }
-
-    // Remaining boost charges, floating over the player's car: the only
-    // HUD the engine can draw, since there is no 2D pass and no text.
-    let me = &race.racers[me].car;
-    for n in 0..me.boost_charges {
-        let side = (f32::from(n) - f32::from(car::BOOST_CHARGES - 1) * 0.5) * 0.85;
-        let r = car::right(me.yaw) * side;
-        frame.instances.push(
-            Instance::new(
-                Vec3::new(me.pos.x + r.x, 3.1, me.pos.y + r.y),
-                Vec3::splat(0.45),
-                Vec3::new(1.0, 0.72, 0.2),
-            )
-            .with_yaw(me.yaw),
+    presentation::circuit(&mut frame, race, ids);
+    for (i, racer) in race.racers.iter().enumerate() {
+        presentation::car(
+            &mut frame,
+            ids,
+            &racer.car,
+            livery(i),
+            race.elapsed_seconds(),
+            racer.lap.progress,
         );
     }
+    presentation::items(&mut frame, race, ids);
 
     // Lights: three bars over the line during the countdown, going out
     // one by one. Cheap, readable, and needs no font.
@@ -540,13 +677,30 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
 mod tests {
     use super::*;
 
+    #[test]
+    fn chase_keeps_a_fast_turning_car_centred_without_translation_lag() {
+        let mut car = car::Car::new(Vec2::ZERO, 0.0);
+        let mut chase = Chase::new(&car);
+        for _ in 0..180 {
+            car.yaw += 0.012;
+            car.vel = car::forward(car.yaw) * 45.0;
+            car.pos += car.vel * car::DT;
+            let camera = chase.update(&car, car::DT);
+            let centre = Vec3::new(car.pos.x, 0.65, car.pos.y);
+            let ndc = camera.view_proj(16.0 / 9.0).project_point3(centre);
+            assert!(ndc.x.abs() < 0.01, "driver escaped centre: {ndc}");
+            let offset = camera.eye - Vec3::new(car.pos.x, CAM_HEIGHT, car.pos.y);
+            assert!(offset.length() < 10.6, "camera fell behind: {offset}");
+        }
+    }
+
     /// The mesh-id struct and the registration order are written out twice
     /// and must agree; if they drift, every prop draws as the wrong shape.
     #[test]
     fn mesh_ids_match_registration_order() {
         let track = castle::track();
         let (list, ids) = build_meshes(&track);
-        assert_eq!(list.len(), 11, "mesh count changed — update the id struct");
+        assert_eq!(list.len(), 26, "mesh count changed — update the id struct");
         // Ids are 1-based: list[i] has id i+1.
         for (i, id) in [
             ids.ground,
@@ -560,6 +714,21 @@ mod tests {
             ids.gatehouse,
             ids.tower,
             ids.fountain,
+            ids.bodies[1],
+            ids.bodies[2],
+            ids.glass[0],
+            ids.glass[1],
+            ids.glass[2],
+            ids.tyre,
+            ids.rim,
+            ids.disc,
+            ids.pickup,
+            ids.edges[0],
+            ids.edges[1],
+            ids.runoff[0],
+            ids.runoff[1],
+            ids.sky,
+            ids.foliage,
         ]
         .iter()
         .enumerate()
@@ -590,7 +759,7 @@ mod tests {
     fn generated_props_actually_loaded() {
         let track = castle::track();
         let (list, _) = build_meshes(&track);
-        for (slot, name) in [(7, "car"), (8, "gatehouse"), (9, "tower"), (10, "fountain")] {
+        for (slot, name) in [(8, "gatehouse"), (9, "tower"), (10, "fountain")] {
             assert!(
                 list[slot].vertices.len() > 100,
                 "{name} fell back to the placeholder cube ({} verts)",
@@ -605,7 +774,9 @@ mod tests {
         let (_, ids) = build_meshes(&track);
         let mut game = Game::new(ids);
         let input = InputState::default();
-        for _ in 0..60 * 30 {
+        // Exercise the scene and AI field, including contacts with the parked
+        // player. Contact may legitimately move a car with no throttle input.
+        for _ in 0..60 * 10 {
             let frame = game.update(&input, 1.0 / 60.0);
             assert!(frame.camera.eye.is_finite(), "camera eye went non-finite");
             assert!(
@@ -620,17 +791,12 @@ mod tests {
                 );
             }
         }
-        // The countdown expires and the AI field gets moving. The player's own
-        // car stays put, and should: no keys are held. Asserting the HUD shows
-        // speed here would be asserting that a parked car drives itself.
+        // The countdown expires and the AI field moves. Driver resources stay
+        // untouched, even when a following AI car bumps the parked player.
         assert_eq!(game.race.state, RaceState::Racing);
         assert!(
             game.race.racers.iter().skip(1).any(|r| r.car.speed() > 5.0),
             "no AI car got moving"
-        );
-        assert!(
-            game.race.racers[game.me].car.speed() < 0.5,
-            "the unmanned player car drove off"
         );
         let hud = hud();
         assert_eq!(hud.racers, PLAYERS);
@@ -678,6 +844,7 @@ mod tests {
             steer: 0.0,
             handbrake: false,
             boost: false,
+            use_item: false,
         };
         for _ in 0..120 {
             game.race.step(&inputs, 1.0 / 60.0);
@@ -706,5 +873,42 @@ mod tests {
             }
         }
         assert_eq!(pressed, 1, "a held key produced {pressed} presses");
+    }
+
+    #[test]
+    fn item_and_boost_have_independent_edges() {
+        let mut boost = false;
+        let mut item = false;
+        let held_boost = InputState::from_parts(&[KeyCode::ShiftLeft], &[], (0.0, 0.0), None);
+        assert!(read_input(&held_boost, &mut boost, &mut item).boost);
+        let both =
+            InputState::from_parts(&[KeyCode::ShiftLeft, KeyCode::KeyE], &[], (0.0, 0.0), None);
+        let second = read_input(&both, &mut boost, &mut item);
+        assert!(second.use_item);
+        assert!(!second.boost);
+        assert!(!read_input(&both, &mut boost, &mut item).use_item);
+    }
+
+    #[test]
+    fn presses_survive_frames_without_a_tick_and_restart_reuses_the_game() {
+        let (_, ids) = build_meshes(&castle::track());
+        let mut game = Game::new_with_vehicle(ids, 2);
+        game.race.state = RaceState::Racing;
+        game.started = true;
+        game.race.racers[0].car.item = 1;
+        game.race.racers[0].car.vel = car::forward(game.race.racers[0].car.yaw) * 20.0;
+        let press = InputState::from_parts(&[KeyCode::KeyE], &[], (0.0, 0.0), None);
+        game.update(&press, 0.0);
+        assert_eq!(game.race.racers[0].car.item, 1);
+        game.update(&InputState::default(), car::DT);
+        assert_eq!(game.race.racers[0].car.item, 0);
+        assert!(game.race.racers[0].car.boosting());
+        request_restart(1);
+        let frame = game.update(&InputState::default(), car::DT);
+        assert_eq!(game.race.racers[0].car.vehicle, 1);
+        assert_eq!(game.race.state, RaceState::Countdown);
+        assert!(game.race.elapsed_seconds() < 0.01);
+        let p = game.race.racers[0].car.pos;
+        assert!((frame.camera.eye - Vec3::new(p.x, CAM_HEIGHT, p.y)).length() > 8.0);
     }
 }
