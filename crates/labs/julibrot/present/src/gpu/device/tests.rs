@@ -348,8 +348,7 @@ fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
         "a held partition is not a relief-redraw source"
     );
 
-    let clear_only_frames = [plan]
-        .into_iter()
+    let clear_only_frames = std::iter::once(plan)
         .filter(|candidate| candidate.kind == WarpKind::ClearOnly)
         .count();
     assert_eq!(
@@ -665,7 +664,7 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
     assert!(body.contains("previous.backdrop != main.backdrop"));
     assert!(
         body.find("previous.backdrop != main.backdrop")
-            < body.find("if self.ledger.invalidate_incompatible("),
+            < body.find("self.ledger.invalidate_incompatible("),
         "the backdrop comparison belongs to the selection test, never to the clear"
     );
 }

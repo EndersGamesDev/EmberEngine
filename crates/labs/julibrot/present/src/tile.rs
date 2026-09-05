@@ -539,7 +539,8 @@ mod tests {
             .iter_mut()
             .enumerate()
         {
-            texel.lanes = [index as f32, 1.0, -2.0, 3.5];
+            let index = u16::try_from(index).expect("the header has 32 texels");
+            texel.lanes = [f32::from(index), 1.0, -2.0, 3.5];
         }
         validate_pose_header(&header).expect("reserved header lanes are zero");
         let pair = DescriptorSamplePair::new(

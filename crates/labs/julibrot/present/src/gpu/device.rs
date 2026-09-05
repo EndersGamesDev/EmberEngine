@@ -375,15 +375,12 @@ impl Presenter {
         if selection_replaced {
             self.ledger.mark_replaced();
         }
-        let mut retained_became_held = false;
-        if self.ledger.invalidate_incompatible(
+        let retained_became_held = self.ledger.invalidate_incompatible(
             main.state.delivered_iter_cap,
             main.state.plane_origin_f64,
             main.plane,
             precision_mode_name,
-        ) {
-            retained_became_held = true;
-        }
+        );
         if revision_advanced {
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
@@ -434,7 +431,7 @@ impl Presenter {
         self.active_warp_count = 0;
     }
 
-    fn publish_held_facts(&mut self) {
+    const fn publish_held_facts(&mut self) {
         let Some(held) = self.ledger.held() else {
             self.clear_retained_facts();
             return;
