@@ -4,7 +4,8 @@ use ember_game_what_is_this_v1::{KernelMeasurement, KernelStatus, SummaryStats};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const STAGE_ID: &str = "stage.julibrot-slide.v1";
-pub(crate) const REPORT_BYTE_BUDGET: usize = 10 * 1_024;
+/// Maximum compact JSON bytes reserved for all Julibrot scenario measurements.
+pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 10 * 1_024;
 const FACT_SAMPLE_CAP: usize = 12;
 const NOTE_BYTE_CAP: usize = 1_280;
 
@@ -150,7 +151,9 @@ fn scenario(scenario_id: &str) -> Option<&'static JulibrotScenarioSpec> {
 }
 
 fn finite_nonnegative(values: &[f64]) -> bool {
-    values.iter().all(|value| value.is_finite() && *value >= 0.0)
+    values
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
 }
 
 fn validate_optional_samples(values: &Option<Vec<u64>>) -> bool {
@@ -159,7 +162,9 @@ fn validate_optional_samples(values: &Option<Vec<u64>>) -> bool {
         .is_none_or(|samples| samples.len() <= FACT_SAMPLE_CAP)
 }
 
-fn validate_observation(observation: &ScenarioObservation) -> Result<&'static JulibrotScenarioSpec, String> {
+fn validate_observation(
+    observation: &ScenarioObservation,
+) -> Result<&'static JulibrotScenarioSpec, String> {
     let spec = scenario(&observation.scenario_id)
         .ok_or_else(|| format!("unknown Julibrot scenario {}", observation.scenario_id))?;
     if observation.step_count != spec.step_count || observation.interval_ms != spec.interval_ms {
@@ -207,7 +212,9 @@ fn validate_observation(observation: &ScenarioObservation) -> Result<&'static Ju
         || observation
             .settle_to_paint_ms
             .as_ref()
-            .is_some_and(|samples| samples.len() > usize::from(spec.step_count) || !finite_nonnegative(samples))
+            .is_some_and(|samples| {
+                samples.len() > usize::from(spec.step_count) || !finite_nonnegative(samples)
+            })
         || !validate_optional_samples(&observation.walls_us.worker_reference_us)
         || !validate_optional_samples(&observation.walls_us.credit_wait_us)
         || !validate_optional_samples(&observation.walls_us.transfer_us)
@@ -252,7 +259,13 @@ fn summarize(samples: &[f64]) -> Option<SummaryStats> {
     })
 }
 
-pub(crate) fn measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
+/// Validates one browser observation and builds its bounded schema-1 measurement.
+///
+/// # Errors
+///
+/// Returns a typed explanation when the observation does not match the fixed scenario table or
+/// exceeds a stage-specific sample or byte cap.
+pub fn julibrot_measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
     let observation = serde_json::from_str::<ScenarioObservation>(observation_json)
         .map_err(|error| format!("Julibrot scenario record is invalid: {error}"))?;
     let spec = validate_observation(&observation)?;
@@ -282,7 +295,9 @@ pub(crate) fn measurement(observation_json: &str) -> Result<KernelMeasurement, S
     })
 }
 
-pub(crate) fn unavailable_measurement(reason: &str) -> KernelMeasurement {
+/// Builds the schema-1 kernel record paired with an unavailable Julibrot stage.
+#[must_use]
+pub fn julibrot_unavailable_measurement(reason: &str) -> KernelMeasurement {
     KernelMeasurement {
         kernel_id: "julibrot-slide.unavailable.v1".to_string(),
         workload: "load the same-origin Julibrot lab and reach a settled Final scene".to_string(),
@@ -292,7 +307,10 @@ pub(crate) fn unavailable_measurement(reason: &str) -> KernelMeasurement {
         unavailable_reason: Some(reason.to_string()),
         raw_samples: Vec::new(),
         summary: None,
-        notes: vec!["the Julibrot refusal is stage unavailability, not a failure of the diagnostic game".to_string()],
+        notes: vec![
+            "the Julibrot refusal is stage unavailability, not a failure of the diagnostic game"
+                .to_string(),
+        ],
     }
 }
 
@@ -308,7 +326,10 @@ fn unavailable_stage(reason: &str, duration_ms: f64) -> ember_game_what_is_this_
 }
 
 pub(crate) fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
-    let stage = report.stages.iter().find(|stage| stage.stage_id == STAGE_ID)?;
+    let stage = report
+        .stages
+        .iter()
+        .find(|stage| stage.stage_id == STAGE_ID)?;
     if stage.status == ember_game_what_is_this_v1::StageStatus::Unavailable {
         return Some(format!(
             "The Julibrot slide stage was unavailable: {}.",
@@ -322,11 +343,9 @@ pub(crate) fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport)
     let mut observed = 0_u32;
     let mut clear_only = 0_u32;
     let mut held = 0_u32;
-    for kernel in report
-        .kernels
-        .iter()
-        .filter(|kernel| kernel.kernel_id.starts_with("julibrot-slide.") && kernel.status == KernelStatus::Complete)
-    {
+    for kernel in report.kernels.iter().filter(|kernel| {
+        kernel.kernel_id.starts_with("julibrot-slide.") && kernel.status == KernelStatus::Complete
+    }) {
         let Some(note) = kernel.notes.first() else {
             continue;
         };
@@ -408,28 +427,44 @@ mod tests {
         let records = SCENARIOS
             .into_iter()
             .map(|spec| {
-                measurement(&serde_json::to_string(&observation_for(spec)).expect("fixture JSON"))
+                julibrot_measurement(
+                    &serde_json::to_string(&observation_for(spec)).expect("fixture JSON"),
+                )
                     .expect("bounded scenario")
             })
             .collect::<Vec<_>>();
-        let bytes = serde_json::to_vec(&records).expect("measurement JSON").len();
-        assert!(bytes <= REPORT_BYTE_BUDGET, "{bytes} > {REPORT_BYTE_BUDGET}");
+        let bytes = serde_json::to_vec(&records)
+            .expect("measurement JSON")
+            .len();
+        assert!(
+            bytes <= JULIBROT_REPORT_BYTE_BUDGET,
+            "{bytes} > {JULIBROT_REPORT_BYTE_BUDGET}"
+        );
     }
 
     #[test]
     fn unavailable_path_is_an_honest_schema_measurement() {
-        let record = unavailable_measurement("WebGL2 unavailable");
+        let record = julibrot_unavailable_measurement("WebGL2 unavailable");
         let stage = unavailable_stage("WebGL2 unavailable", 12.5);
         assert_eq!(record.status, KernelStatus::Unavailable);
-        assert_eq!(record.unavailable_reason.as_deref(), Some("WebGL2 unavailable"));
-        assert_eq!(stage.status, ember_game_what_is_this_v1::StageStatus::Unavailable);
+        assert_eq!(
+            record.unavailable_reason.as_deref(),
+            Some("WebGL2 unavailable")
+        );
+        assert_eq!(
+            stage.status,
+            ember_game_what_is_this_v1::StageStatus::Unavailable
+        );
         assert_eq!(stage.unavailable_reason, record.unavailable_reason);
-        assert!(serde_json::to_vec(&record).expect("measurement JSON").len() < REPORT_BYTE_BUDGET);
+        assert!(
+            serde_json::to_vec(&record).expect("measurement JSON").len()
+                < JULIBROT_REPORT_BYTE_BUDGET
+        );
     }
 
     #[test]
     fn scenario_record_round_trips_through_the_schema_measurement() {
-        let record = measurement(
+        let record = julibrot_measurement(
             &serde_json::to_string(&observation_for(SCENARIOS[0])).expect("fixture JSON"),
         )
         .expect("bounded scenario");
@@ -442,7 +477,7 @@ mod tests {
     fn measurement_rejects_a_changed_scenario_table() {
         let mut changed = observation_for(SCENARIOS[0]);
         changed.step_count += 1;
-        let error = measurement(&serde_json::to_string(&changed).expect("fixture JSON"))
+        let error = julibrot_measurement(&serde_json::to_string(&changed).expect("fixture JSON"))
             .expect_err("changed step table must be rejected");
         assert!(error.contains("fixed step table"));
     }

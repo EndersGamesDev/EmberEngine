@@ -2,8 +2,8 @@
 
 #![deny(missing_docs)]
 
-mod kernels;
 mod julibrot;
+mod kernels;
 
 #[cfg(target_arch = "wasm32")]
 mod gpu;
@@ -14,8 +14,11 @@ mod render_bar;
 use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStatus};
 use serde::Serialize;
 
+pub use julibrot::{
+    JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_measurement, julibrot_scenarios,
+    julibrot_unavailable_measurement,
+};
 pub use kernels::{FloatProbeResult, KernelSpec, KernelSuite, jank_chunk, kernel_specs};
-pub use julibrot::{JulibrotScenarioSpec, julibrot_scenarios};
 
 /// One report-derived sentence shown on the final verdict card.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

@@ -145,23 +145,24 @@ pub fn julibrot_scenario_inventory_json() -> String {
 /// stage-specific byte and sample cap is invalid.
 #[wasm_bindgen]
 pub fn julibrot_measurement_json(observation_json: &str) -> Result<String, JsValue> {
-    let measurement = crate::julibrot::measurement(observation_json)
+    let measurement = crate::julibrot_measurement(observation_json)
         .map_err(|error| JsValue::from_str(&error))?;
-    serde_json::to_string(&measurement)
-        .map_err(|error| JsValue::from_str(&format!("could not encode Julibrot measurement: {error}")))
+    serde_json::to_string(&measurement).map_err(|error| {
+        JsValue::from_str(&format!("could not encode Julibrot measurement: {error}"))
+    })
 }
 
 /// Encodes an unavailable Julibrot stage result as a schema-1 kernel measurement.
 #[wasm_bindgen]
 pub fn julibrot_unavailable_measurement_json(reason: &str) -> String {
-    serde_json::to_string(&crate::julibrot::unavailable_measurement(reason))
+    serde_json::to_string(&crate::julibrot_unavailable_measurement(reason))
         .unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Returns the maximum compact bytes reserved for all Julibrot scenario measurements.
 #[wasm_bindgen]
 pub fn julibrot_report_byte_budget() -> u32 {
-    u32::try_from(crate::julibrot::REPORT_BYTE_BUDGET).unwrap_or(u32::MAX)
+    u32::try_from(crate::JULIBROT_REPORT_BYTE_BUDGET).unwrap_or(u32::MAX)
 }
 
 /// Returns the stable compute-only WebGPU kernel inventory as JSON.
