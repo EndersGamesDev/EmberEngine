@@ -4,7 +4,7 @@ use ember_game_what_is_this_v1::KernelStatus;
 use serde::Serialize;
 
 const STAGE_ID: &str = "stage.julibrot-slide.v1";
-/// Maximum compact JSON bytes reserved for all Julibrot scenario measurements. The adversarial page-contract fixture starts with 17-significant-digit browser floats, rounds them at the shipped precisions, and uses 17-digit scene, worker, credit, and fence values. Its eight compact records measure 18,879 bytes, leaving 1,601 bytes here and 32 KiB of the protocol cap for the existing report.
+/// Maximum compact JSON bytes reserved for all Julibrot scenario measurements. The untrimmed adversarial page-contract fixture uses the shipped rounding, 17-digit ids and all eight 12-value timing arrays; its eight records measure 32,631 bytes. Truncation is the enforcement that reduces that hostile shape to this 20 KiB allocation while preserving room for the existing stages.
 pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 20 * 1_024;
 
 /// Stable metadata for one scripted Julibrot control sequence.
@@ -190,7 +190,7 @@ mod tests {
     const ADVERSARIAL_HIGH_FRACTION_INPUT: &str = "0.98765432109876543";
     const ADVERSARIAL_HOLD_WALL_INPUT: &str = "2000.0099999999998";
     const ADVERSARIAL_INTEGER: u64 = 12_345_678_901_234_567;
-    const ADVERSARIAL_RECORD_BYTES: usize = 18_879;
+    const ADVERSARIAL_RECORD_BYTES: usize = 32_631;
 
     fn round_fixture(value: &str, decimal_places: i32) -> f64 {
         let value = value.parse::<f64>().expect("browser decimal input");
@@ -251,15 +251,29 @@ mod tests {
             "settle_to_paint_ms": null,
             "reference_requests_issued": null,
             "sampled_reference_requests_issued": 4_294_967_295_u64,
-            "timing_records_observed": 64,
+            "timing_records_observed": 4_294_967_295_u64,
+            "records_overflowed": true,
             "walls_us": {
-                "worker_reference_us": wall_samples,
+                "worker_generation_us": wall_samples,
                 "credit_wait_us": wall_samples,
-                "transfer_us": null,
-                "packing_us": null,
-                "upload_us": null,
+                "request_transfer_us": wall_samples,
+                "worker_round_trip_callback_observation_us": wall_samples,
+                "acceptance_us": wall_samples,
+                "reference_upload_us": wall_samples,
+                "scene_callback_observation_us": wall_samples,
+                "warp_callback_observation_us": wall_samples,
                 "dispatch_us": null,
-                "fence_us": wall_samples,
+            },
+            "wall_sources": {
+                "worker_generation_us": "worker_generation_us",
+                "credit_wait_us": "credit_wait_us",
+                "request_transfer_us": "request_transfer_us",
+                "worker_round_trip_callback_observation_us": "worker_round_trip_callback_observation_us",
+                "acceptance_us": "acceptance_us",
+                "reference_upload_us": "reference_upload_us",
+                "scene_callback_observation_us": "scene_callback_observation_us",
+                "warp_callback_observation_us": "warp_callback_observation_us",
+                "dispatch_us": null,
             },
             "scripted_hold_wall_ms": (spec.scenario_id == "hold-exact-2000ms").then_some(hold_wall_ms),
         });
@@ -306,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn adversarial_shipped_records_fit_the_stage_byte_budget() {
+    fn adversarial_shipped_records_require_the_stage_byte_enforcement() {
         let records = SCENARIOS
             .into_iter()
             .enumerate()
@@ -318,20 +332,21 @@ mod tests {
         assert_eq!(decoded, records);
         let bytes = encoded.len();
         assert_eq!(bytes, ADVERSARIAL_RECORD_BYTES);
-        assert!(
-            bytes <= JULIBROT_REPORT_BYTE_BUDGET,
-            "{bytes} > {JULIBROT_REPORT_BYTE_BUDGET}"
-        );
+        assert!(bytes > JULIBROT_REPORT_BYTE_BUDGET);
     }
 
     #[test]
     fn shipped_page_uses_lab_turns_appended_timings_and_bounded_waits() {
         let timing = section(
             page(),
-            "function appendedJulibrotTimings",
-            "function julibrotCollector",
+            "function julibrotTimingOverlap",
+            "function julibrotTimingFieldSample",
         );
-        assert!(timing.contains("finalKeys.lastIndexOf(baselineTail)"));
+        assert!(timing.contains("const exactIdentity = record => JSON.stringify(record)"));
+        assert!(timing.contains("const stableIdentity = record =>"));
+        assert!(timing.contains("overflowed = true"));
+        assert!(timing.contains("records[recordIndex] = current[index]"));
+        assert!(!timing.contains("return finalTimings"));
         let collector = section(
             page(),
             "function julibrotCollector",
@@ -341,10 +356,16 @@ mod tests {
         assert!(collector.contains("frames.frames_from_raf"));
         assert!(collector.contains("frames.frames_from_fallback"));
         assert!(collector.contains("warp_refused: null"));
-        assert!(collector.contains("appendedJulibrotTimings"));
+        assert!(collector.contains("timingTracker.observe(facts)"));
+        assert!(collector.contains("records_overflowed: recordsOverflowed"));
         assert!(!collector.contains("record.edit >"));
         assert!(collector.contains("roundJulibrot(wallMs, 2)"));
         assert!(collector.contains("julibrotNumberSummary(uncoveredFractions, 4)"));
+        assert!(collector.contains("'worker_generation_us', ['worker_reference_us']"));
+        assert!(collector.contains("'scene_callback_observation_us', ['scene_us']"));
+        assert!(collector.contains("'warp_callback_observation_us', ['warp_us']"));
+        assert!(collector.contains("worker_round_trip_callback_observation_us"));
+        assert!(collector.contains("wall_sources: wallSources"));
         let baseline = section(
             page(),
             "async function establishJulibrotBaseline",
@@ -379,6 +400,13 @@ mod tests {
             "function setJulibrotStageProgress",
         );
         assert!(!local_budget.contains("throw"));
+        let raw_truncation = section(
+            page(),
+            "function truncateJulibrotRawSample",
+            "function truncateJulibrotNoteDetail",
+        );
+        assert!(raw_truncation.contains("candidate.raw_samples.length > 1"));
+        assert!(raw_truncation.contains("encodedBytes(right) - encodedBytes(left)"));
         let report_budget = section(
             page(),
             "function fitReportToByteCap",
@@ -409,7 +437,9 @@ mod tests {
         assert!(stage.contains("const visibilityDetail = stageVisibilityDetail()"));
         assert!(stage.contains("page visibility over the stage:"));
         assert!(stage.contains("cancelStageToken(token, outcome.unavailableReason)"));
-        assert!(page().contains("wasm.julibrot_report_byte_budget()"));
+        assert!(page().contains("const JULIBROT_REPORT_BYTE_BUDGET_FLOOR = 20 * 1024"));
+        assert!(page().contains("Math.max(JULIBROT_REPORT_BYTE_BUDGET_FLOOR, bundledBudget)"));
+        assert!(page().contains("fitJulibrotRecordsToBudget(records, julibrotReportByteBudget())"));
         assert!(page().contains("'held lab turns'"));
         assert!(page().contains("['unavailable', 'warp-refused lab turns']"));
     }
