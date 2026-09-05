@@ -12,7 +12,7 @@ const { chromium } = require(process.env.EMBER_QA_PLAYWRIGHT || 'playwright');
 
 const root = process.cwd();
 const webRoot = path.join(root, 'web');
-const output = path.join(root, 'target', 'environment-captures');
+const output = path.resolve(process.env.EMBER_QA_OUTPUT || path.join(root, 'target', 'environment-captures'));
 const gamePort = 7779;
 const webPort = 8079;
 const started = Date.now();

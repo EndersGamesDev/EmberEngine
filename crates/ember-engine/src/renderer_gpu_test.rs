@@ -407,6 +407,87 @@ fn save_capture(name: &str, pixels: &[u8]) {
 
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
+fn environment_gpu_isolated_receivers_do_not_shadow_themselves() {
+    let rig = pollster::block_on(Rig::new());
+    let mut failures = Vec::new();
+    for extent in [55.0, 75.0] {
+        for (sun_name, sun) in [
+            ("harbor", Vec3::new(-0.48, 0.76, -0.30)),
+            ("low", Vec3::new(-0.9, 0.25, -0.3)),
+        ] {
+            for column in [false, true] {
+                let (name, camera, receiver) = if column {
+                    (
+                        "column",
+                        Camera {
+                            eye: Vec3::new(-5.0, 8.0, -8.0),
+                            target: Vec3::new(0.0, 6.0, 0.0),
+                            fov_y_deg: 60.0,
+                        },
+                        Instance::new(
+                            Vec3::new(0.0, 6.0, 0.0),
+                            Vec3::new(1.2, 12.0, 1.2),
+                            Vec3::splat(0.45),
+                        ),
+                    )
+                } else {
+                    (
+                        "ground",
+                        Camera {
+                            eye: Vec3::new(12.0, 6.0, 18.0),
+                            target: Vec3::ZERO,
+                            fov_y_deg: 60.0,
+                        },
+                        Instance::new(
+                            Vec3::new(0.0, -0.1, 0.0),
+                            Vec3::new(240.0, 0.2, 240.0),
+                            Vec3::splat(0.45),
+                        ),
+                    )
+                };
+                let frame = Frame {
+                    camera,
+                    environment: Environment {
+                        enabled: true,
+                        sun_direction: sun.normalize(),
+                        shadow_extent: extent,
+                        cloud_coverage: 0.0,
+                        wetness: 0.0,
+                        ..Environment::default()
+                    },
+                    fog: Fog {
+                        color: [0.55, 0.65, 0.75],
+                        density: 0.0,
+                    },
+                    // A convex object has no other caster in front of its
+                    // sun-facing surfaces. The texture is the rig's white
+                    // pixel: any periodic bands are shadow sampling, not art.
+                    instances: vec![receiver],
+                    ..Frame::default()
+                };
+                let shadowed = rig.render(&frame, true);
+                let unshadowed = rig.render(&frame, false);
+                let label = format!("receiver-{name}-{sun_name}-{extent}");
+                let changed = changed_pixels(&shadowed, &unshadowed, 2);
+                save_capture(&label, &shadowed);
+                save_capture(&format!("{label}-reference"), &unshadowed);
+                // Permit a tiny silhouette fringe from the finite 3x3
+                // footprint; never a band or triangle pattern on the face.
+                if changed > 64 {
+                    failures.push(format!("{label}: {changed} self-shadowed pixels"));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "isolated receivers must match the no-caster reference:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 #[allow(clippy::too_many_lines)]
 fn environment_gpu_pixels_cover_sky_shadows_reflections_and_particles() {
     let rig = pollster::block_on(Rig::new());
