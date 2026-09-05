@@ -5,8 +5,8 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, height_for_record,
-    project_scene_point, project_scene_vertex, shade_lit_escape_record,
+    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, grid_screen,
+    height_for_record, project_scene_point, project_scene_vertex, shade_lit_escape_record,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -167,6 +167,10 @@ fn pixel_screen(extent: [u32; 2], column: u32, row: u32) -> [f64; 2] {
         0.5_f64.mul_add(-f64::from(extent[0]), f64::from(column) + 0.5),
         0.5_f64.mul_add(-f64::from(extent[1]), f64::from(row) + 0.5),
     ]
+}
+
+fn draw_screen(extent: [u32; 2], column: u32, row: u32) -> [f64; 2] {
+    [grid_screen(column, extent[0]), grid_screen(row, extent[1])]
 }
 
 fn render_retained(pose: &Pose) -> Vec<KernelSample> {
@@ -425,7 +429,7 @@ fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Opt
                 .height;
             project_scene_vertex(
                 &redraw_pose,
-                pixel_screen([from.grid_width, from.grid_height], column, row),
+                draw_screen([from.grid_width, from.grid_height], column, row),
                 f64::from(height),
             )
             .map(|(screen, clip_w)| RedrawVertex {
@@ -435,6 +439,31 @@ fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Opt
             })
         })
         .collect()
+}
+
+#[test]
+fn redraw_oracle_separates_sample_centres_from_draw_boundaries() {
+    let pose = pose(
+        ObjectAngles::JULIA,
+        ViewControls::NEUTRAL,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let extent = [pose.grid_width, pose.grid_height];
+    assert_eq!(pixel_screen(extent, 0, 0), [-47.5, -26.5]);
+    assert_eq!(draw_screen(extent, 0, 0), [-48.0, -27.0]);
+    assert_eq!(pixel_screen(extent, 95, 53), [47.5, 26.5]);
+    assert_eq!(draw_screen(extent, 95, 53), [48.0, 27.0]);
+
+    let records = render_retained(&pose);
+    let vertices = redraw_vertices(&pose, &pose, &records);
+    for boundary in [[-48.0, -27.0], [48.0, -27.0], [-48.0, 27.0], [48.0, 27.0]] {
+        assert!(
+            sample_redraw_mesh(boundary, extent, &records, &vertices).is_some(),
+            "draw boundary {boundary:?} is not covered"
+        );
+    }
 }
 
 #[allow(

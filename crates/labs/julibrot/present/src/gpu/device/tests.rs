@@ -1,5 +1,5 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
-use ember_julibrot_math::{PrecisionMode, ViewControls};
+use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_plane};
 use ember_julibrot_worker::MainState;
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
@@ -290,10 +290,87 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&held, false);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(37)
     );
-    assert_eq!(hot.accepted_frame(ledger.retained()), None);
+    assert_eq!(hot.accepted_frame(ledger.retained(), ledger.held()), None);
+}
+
+#[test]
+fn incompatible_slice_admits_only_an_unchanged_held_plan_until_replacement() {
+    let mut ledger = SceneLedger::default();
+    let sampled = promote_binding_scene(&mut ledger, 38);
+    let tilted = construct_plane(ObjectAngles {
+        rho_13: ObjectAngles::JULIA.rho_13 + 0.25,
+        ..ObjectAngles::JULIA
+    })
+    .expect("tilted slice constructs");
+    assert!(ledger.invalidate_incompatible(
+        sampled.iteration_cap,
+        sampled.plane_origin_f64,
+        tilted,
+        sampled.precision_mode,
+    ));
+    assert!(ledger.retained().is_none());
+    let held = ledger
+        .held()
+        .expect("the incompatible transition keeps one image");
+    assert_eq!(held.frame.scene_id, sampled.scene_id);
+    assert_eq!(held.partition.plane, sampled.pose.plane);
+
+    let refused = clear_warp_plan(false, true);
+    assert_eq!(
+        apply_hold_policy(refused, Some(&held.frame), false).kind,
+        WarpKind::ClearOnly
+    );
+    let plan = apply_hold_policy(refused, Some(&held.frame), true);
+    assert_eq!(plan.kind, WarpKind::HoldStale);
+    assert_eq!(plan.rows, identity_rows());
+    assert!(!plan.exposed);
+
+    let mut geometric = plan;
+    geometric.kind = WarpKind::AnchorHomography;
+    let mut former_source = WarpSourceSlot::default();
+    former_source.write_hot(&geometric, false);
+    assert!(
+        former_source
+            .frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a pre-transition geometric slot cannot discover the held frame"
+    );
+
+    let mut source = WarpSourceSlot::default();
+    source.write_hot(&plan, false);
+    assert_eq!(
+        source
+            .frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
+        Some(sampled.scene_id)
+    );
+    assert!(
+        source
+            .accepted_frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a held partition is not an accepted geometric warp source"
+    );
+    assert!(
+        source
+            .relief_frame(ledger.retained(), ledger.held())
+            .is_none(),
+        "a held partition is not a relief-redraw source"
+    );
+
+    assert_eq!(
+        warp_exposed_fraction(&plan, &held.frame.pose, Some(&held.frame)),
+        Some(0.0),
+        "the held image covers the synthetic transition without a clear-only region"
+    );
+
+    let replacement = promote_binding_scene(&mut ledger, 39);
+    assert_ne!(replacement.texture_index, sampled.texture_index);
+    assert!(ledger.held().is_none());
+    assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(39));
 }
 
 #[test]
@@ -340,14 +417,16 @@ fn browser_order_clears_a_hot_plan_after_scene_promotion() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&plan, false);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(41)
     );
 
     let promoted = promote_binding_scene(&mut ledger, 42);
     assert_eq!(promoted.scene_id, 42);
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         None
     );
     assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
@@ -367,7 +446,8 @@ fn accepted_exposed_plan_remains_a_source_and_reports_its_clear_share() {
     hot.write_hot(&plan, false);
 
     assert_eq!(
-        hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+        hot.frame(ledger.retained(), ledger.held())
+            .map(|frame| frame.scene_id),
         Some(51),
         "exposure does not invalidate the accepted source"
     );
@@ -388,7 +468,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&plan, false);
     assert_eq!(
-        hot.relief_frame(ledger.retained())
+        hot.relief_frame(ledger.retained(), ledger.held())
             .map(|frame| frame.scene_id),
         Some(61)
     );
@@ -417,12 +497,11 @@ enum ComposedPixel {
     Main,
 }
 
-/// Runs the pass's real depth and stencil state over one pixel, in draw order.
+/// Runs the pass's real depth-range and stencil state over one pixel, in draw order.
 ///
 /// Nothing here knows the intended answer: it reads `scene_draw_order`, `scene_stencil`,
 /// `stencil_reference` and `SCENE_DEPTH_COMPARE` — the same values the pipelines and the
-/// encoder are built from — and applies the fixed-function rules to them. Restore the old
-/// backdrop-first, stencil-free composition and the interior cases below fail.
+/// encoder are built from — and applies the fixed-function rules to them.
 fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
     let mut colour = ComposedPixel::Sky;
     let mut depth = 1.0_f32;
@@ -438,6 +517,8 @@ fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
         let state = scene_stencil(*layer);
         let reference = stencil_reference(*layer);
         let face = state.front;
+        let [minimum_depth, maximum_depth] = scene_depth_range(*layer, backdrop.is_some());
+        let fragment = (maximum_depth - minimum_depth).mul_add(fragment, minimum_depth);
         let operation = if !compares(
             face.compare,
             f64::from(reference & state.read_mask),
@@ -491,10 +572,9 @@ fn stencil_write(operation: wgpu::StencilOperation, reference: u32, stored: u32)
 
 /// The composition rule, driven through the state the pass actually carries.
 ///
-/// The two grids are independent samplings of the same field, so the coarse backdrop's chords
-/// land nearer than the fine surface over large areas. Depth alone therefore lets the backdrop
-/// punch through the interior of the picture; the stencil is what makes the main grid own every
-/// pixel it reaches, and the backdrop own exactly the rest.
+/// The two grids are independent samplings of the same field, so the coarse backdrop is assigned
+/// the farther half of the viewport depth range and the main grid the nearer half. Each grid still
+/// depth-orders its own folds, while the main owns every pixel it reaches.
 #[test]
 fn the_backdrop_shows_only_where_the_main_grid_has_no_fragment() {
     for main in [0.1_f32, 0.5, 0.9] {
@@ -530,6 +610,17 @@ fn the_backdrop_is_ordered_against_itself_by_depth() {
     assert_eq!(scene_stencil(SceneLayer::Backdrop).write_mask, 0);
     assert!(compares(SCENE_DEPTH_COMPARE, 0.25, 0.75));
     assert!(!compares(SCENE_DEPTH_COMPARE, 0.75, 0.25));
+}
+
+#[test]
+fn backdrop_then_main_uses_disjoint_depth_ranges() {
+    assert_eq!(
+        scene_draw_order(true),
+        [SceneLayer::Backdrop, SceneLayer::Main]
+    );
+    assert_eq!(scene_depth_range(SceneLayer::Backdrop, true), [0.5, 1.0]);
+    assert_eq!(scene_depth_range(SceneLayer::Main, true), [0.0, 0.5]);
+    assert_eq!(scene_depth_range(SceneLayer::Main, false), [0.0, 1.0]);
 }
 
 /// The status-one census counts the MAIN grid's records, with or without a backdrop attached.
@@ -595,7 +686,7 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
     assert!(body.contains("previous.backdrop != main.backdrop"));
     assert!(
         body.find("previous.backdrop != main.backdrop")
-            < body.find("if self.ledger.invalidate_incompatible("),
+            < body.find("self.ledger.invalidate_incompatible("),
         "the backdrop comparison belongs to the selection test, never to the clear"
     );
 }
@@ -652,6 +743,81 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
         main.grid.span.directory_index
     );
     assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
+}
+
+#[test]
+fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
+    let angle = -1.316_653_720_171_549_4;
+    let object = ObjectAngles {
+        rho_13: angle,
+        rho_24: angle,
+        ..ObjectAngles::IDENTITY
+    };
+    let camera_angle = -0.254_142_606_623_347_1;
+    let mut camera = [0.0; 10];
+    camera[1] = camera_angle;
+    camera[4] = camera_angle;
+    let view = ViewControls {
+        camera,
+        camera_yaw: 0.960_422_302_787_256,
+        camera_pitch: core::f64::consts::PI,
+        height_scale: 4.0,
+        distance_five: 2.0,
+        distance_four: 2.0,
+        ..ViewControls::NEUTRAL
+    };
+    let mut pose = binding_pose();
+    pose.object = object;
+    pose.plane = construct_plane(object).expect("coverage fixture plane constructs");
+    pose.view = view;
+    pose.grid_width = 960;
+    pose.grid_height = 540;
+    let mut main = binding_main();
+    let mut invalid_grid = main.grid.clone();
+    invalid_grid.width = 0;
+    let backdrop_map = ember_julibrot_math::Homography {
+        apron_scale: 2.0,
+        ..ember_julibrot_math::Homography::IDENTITY
+    };
+    main.backdrop = Some(crate::PresentBackdrop {
+        grid: invalid_grid,
+        iteration_cap: 64,
+        plane: pose.plane,
+        map: PoseMap::Mapped(backdrop_map),
+    });
+    assert!(
+        validate_backdrop(
+            main.backdrop.as_ref().expect("candidate backdrop exists"),
+            ember_lab_heap::DialectLimits {
+                descriptor_capacity: u32::MAX,
+                span_capacity: u32::MAX,
+                handle_capacity: u32::MAX,
+            },
+        )
+        .is_err(),
+        "the submit path refuses this candidate before publishing its coverage"
+    );
+    let relief = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        source_valid: true,
+        exposed: true,
+        ..clear_warp_plan(false, true)
+    };
+    assert_eq!(
+        planned_exposed_fraction(&relief, Some(&pose), None),
+        None,
+        "HOT publication cannot assume the candidate backdrop will validate"
+    );
+    let main_only = relief_redraw_clear_fraction(&pose, Some(&main), false)
+        .expect("the main-only coverage mirror is finite");
+    let candidate_backdrop = relief_redraw_clear_fraction(&pose, Some(&main), true)
+        .expect("the unvalidated candidate coverage mirror is finite");
+    assert!(main_only > candidate_backdrop);
+    let mut facts = PresentFacts::default();
+    facts.record_warp_plan(&relief, None);
+    assert_eq!(facts.warp_exposed_fraction, None);
+    facts.record_relief_coverage(Some(main_only));
+    assert_eq!(facts.warp_exposed_fraction, Some(main_only));
 }
 
 #[test]

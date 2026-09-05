@@ -163,6 +163,49 @@ pub fn scene_footprint(
     })
 }
 
+/// Measures the share of the render surface left uncovered by one specified scene apron.
+///
+/// This is the presentation fact used when a retained-record redraw has no resident backdrop: an
+/// apron of one measures the main grid alone, while the selected backdrop apron measures their
+/// conservative combined reach through the same binary64 coverage mirror.
+///
+/// # Errors
+///
+/// Returns an error for invalid controls, extent, or apron, or for a degenerate screen map.
+pub fn scene_uncovered_fraction(
+    object: &ObjectAngles,
+    view: &ViewControls,
+    grid_w: u32,
+    grid_h: u32,
+    apron_scale: f64,
+) -> Result<f64, MathError> {
+    if !object.is_valid() || !view.is_valid() {
+        return Err(MathError::InvalidViewControls);
+    }
+    if grid_w == 0 || grid_h == 0 {
+        return Err(MathError::InvalidExtent);
+    }
+    if !apron_scale.is_finite() || apron_scale < 1.0 {
+        return Err(MathError::NonFinite);
+    }
+    if view.height_scale == 0.0 {
+        return Ok(0.0);
+    }
+    let aspect = f64::from(grid_w) / f64::from(grid_h);
+    let map = crate::screen_to_plane(object, view, 0.0, grid_w, grid_h, aspect)?;
+    let plane = construct_plane(*object)?;
+    let chain = VertexChain {
+        map: &map,
+        plane,
+        view,
+        matrix: camera_matrix(view),
+    };
+    Ok(
+        uncovered_points(&chain, [grid_w, grid_h], apron_scale) as f64
+            / COVERAGE_CENSUS_POINTS as f64,
+    )
+}
+
 /// The fixed part of the scene vertex chain, built once per pose.
 ///
 /// The sampling map, its plane, the view controls and the five-dimensional camera matrix are the
@@ -504,8 +547,8 @@ mod tests {
     use super::{
         APRON_CANDIDATES, CENSUS_HEIGHTS, COVERAGE_CENSUS_POINTS, COVERAGE_LATTICE_POINTS,
         COVERAGE_LATTICE_SIDE, COVERAGE_MESH_SIDE, MINIMUM_BACKDROP_GAIN_POINTS, SceneFootprint,
-        VertexChain, displayed_height, rasterize_height, scene_footprint, uncovered_fraction,
-        uncovered_points,
+        VertexChain, displayed_height, rasterize_height, scene_footprint, scene_uncovered_fraction,
+        uncovered_fraction, uncovered_points,
     };
     use crate::screen::camera_matrix;
     use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
@@ -663,6 +706,20 @@ mod tests {
             footprint.uncovered_fraction
         );
         assert!(footprint.uncovered_fraction > 0.14);
+    }
+
+    #[test]
+    fn coverage_mirror_publishes_main_holes_and_the_backdrop_reduces_them() {
+        let (object, view) = close_owner_row();
+        let main = scene_uncovered_fraction(&object, &view, 960, 540, 1.0)
+            .expect("main coverage is measurable");
+        let with_backdrop = scene_uncovered_fraction(&object, &view, 960, 540, 2.0)
+            .expect("backdrop coverage is measurable");
+        assert!(
+            main > with_backdrop,
+            "{main} did not improve to {with_backdrop}"
+        );
+        assert!((with_backdrop - 571.0 / 3969.0).abs() < 1.0e-12);
     }
 
     /// Every candidate's deterministic lattice count at the close owner row.

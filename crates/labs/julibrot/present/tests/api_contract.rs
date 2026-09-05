@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use ember_julibrot_present::{
-    FrameReceipt, FrameState, HotSlot, PresentConfig, PresentError, PresentEvent, PresentFacts,
-    PresentHot, PresentMain, Presenter, Warp, WarpPlan, WarpValidation,
+    FrameReceipt, FrameState, HotSlot, PresentConfig, PresentError, PresentEvent, PresentEvents,
+    PresentFacts, PresentHot, PresentMain, Presenter, Warp, WarpPlan, WarpValidation,
 };
 use ember_lab_heap::HeapPresentResources;
 
@@ -28,6 +28,7 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
         HotSlot,
     ) -> Result<FrameReceipt, PresentError> = Presenter::frame;
     let poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
+    let poll_fixed: fn(&mut Presenter, f64) -> PresentEvents = Presenter::poll_fixed;
     let facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
     let warp: fn(
         &ember_julibrot_present::SceneFrame,
@@ -42,6 +43,7 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
     std::hint::black_box(submit_scene);
     std::hint::black_box(frame);
     std::hint::black_box(poll);
+    std::hint::black_box(poll_fixed);
     std::hint::black_box(facts);
     std::hint::black_box(warp);
 }

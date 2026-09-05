@@ -5,6 +5,7 @@ use crate::{
     WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
     exterior_zero, pack_homography_rows, palette, view_scale, warp_shader,
 };
+use ember_julibrot_math::scene_uncovered_fraction;
 
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
@@ -72,7 +73,11 @@ impl Presenter {
         } else {
             plan
         };
-        let plan = apply_hold_policy(plan, self.ledger.retained(), hold_refused_warp);
+        let hold_source = self
+            .ledger
+            .retained()
+            .or_else(|| self.ledger.held().map(|held| &held.frame));
+        let plan = apply_hold_policy(plan, hold_source, hold_refused_warp);
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -136,9 +141,13 @@ impl Presenter {
         self.exposure.observe_warp(exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
-        let exposed_fraction = pose
-            .as_ref()
-            .and_then(|to_pose| warp_exposed_fraction(&plan, to_pose, self.ledger.retained()));
+        let exposed_fraction = planned_exposed_fraction(
+            &plan,
+            pose.as_ref(),
+            self.ledger
+                .retained()
+                .or_else(|| self.ledger.held().map(|held| &held.frame)),
+        );
         self.facts.record_warp_plan(&plan, exposed_fraction);
         self.facts.warp_exposed = exposed;
         self.facts.scene_fill_due = self.exposure.due();
@@ -157,7 +166,7 @@ impl Presenter {
     #[must_use]
     pub fn accepted_warp_source(&self, slot: HotSlot) -> Option<(RefinementLevel, bool)> {
         self.hot_warp_source[slot.index() as usize]
-            .accepted_frame(self.ledger.retained())
+            .accepted_frame(self.ledger.retained(), self.ledger.held())
             .map(|frame| (frame.level, self.hot_exposed[slot.index() as usize]))
     }
 
@@ -165,7 +174,7 @@ impl Presenter {
     #[must_use]
     pub fn accepted_relief_redraw(&self, slot: HotSlot) -> bool {
         self.hot_warp_source[slot.index() as usize]
-            .relief_frame(self.ledger.retained())
+            .relief_frame(self.ledger.retained(), self.ledger.held())
             .is_some()
     }
     /// Submits the sole warp pass to the borrowed surface view and returns before completion.
@@ -219,12 +228,16 @@ impl Presenter {
             operation: "advance warp identity",
         })?;
         let source_slot = self.hot_warp_source[hot_slot.index() as usize];
-        let source = source_slot.frame(self.ledger.retained()).cloned();
+        let source = source_slot
+            .frame(self.ledger.retained(), self.ledger.held())
+            .cloned();
         let mut source_scene_id = source.as_ref().map(|frame| frame.scene_id);
         let mut texture_index = source
             .as_ref()
             .map_or(0, |frame| frame.texture_index as usize);
-        let planned_relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
+        let planned_relief_redraw = source_slot
+            .relief_frame(self.ledger.retained(), self.ledger.held())
+            .is_some();
         if source.is_none() {
             self.clear_hot_source(hot_slot);
         }
@@ -233,7 +246,7 @@ impl Presenter {
             .as_ref()
             .and_then(PresentMain::selected_palette)
             .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
-        let relief_redraw = if planned_relief_redraw {
+        let relief_redraw_backdrop = if planned_relief_redraw {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
             })?;
@@ -243,8 +256,9 @@ impl Presenter {
                 selected.1,
             )?
         } else {
-            false
+            None
         };
+        let relief_redraw = relief_redraw_backdrop.is_some();
         let mut held_stale = source_slot.held_stale;
         if planned_relief_redraw && !relief_redraw {
             let fallback = apply_hold_policy(
@@ -267,14 +281,22 @@ impl Presenter {
                 label: Some("Julibrot warp and fence"),
             });
         if relief_redraw {
+            let has_backdrop = relief_redraw_backdrop.unwrap_or(false);
             encode_relief_redraw(
                 &mut encoder,
                 &self.gpu,
                 state.surface_view,
                 hot_slot.dynamic_offset(),
                 selected.1,
+                has_backdrop,
             );
             self.facts.record_relief_redraw();
+            let exposed_fraction = self.hot[hot_slot.index() as usize]
+                .as_ref()
+                .and_then(|pose| {
+                    relief_redraw_clear_fraction(pose, self.main.as_ref(), has_backdrop)
+                });
+            self.facts.record_relief_coverage(exposed_fraction);
         } else {
             encode_image_warp(
                 &mut encoder,
@@ -339,6 +361,42 @@ impl Presenter {
             bytemuck::bytes_of(&u32::from(plan.source_valid)),
         );
     }
+}
+
+pub(super) fn planned_exposed_fraction(
+    plan: &crate::WarpPlan,
+    to_pose: Option<&Pose>,
+    source: Option<&crate::SceneFrame>,
+) -> Option<f64> {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return None;
+    }
+    to_pose.and_then(|to_pose| warp_exposed_fraction(plan, to_pose, source))
+}
+
+pub(super) fn relief_redraw_clear_fraction(
+    pose: &Pose,
+    main: Option<&PresentMain>,
+    use_backdrop: bool,
+) -> Option<f64> {
+    let apron_scale = use_backdrop
+        .then(|| {
+            main.and_then(|main| main.backdrop.as_ref())
+                .and_then(|backdrop| match backdrop.map {
+                    PoseMap::Mapped(map) => Some(map.apron_scale),
+                    PoseMap::EdgeOn => None,
+                })
+        })
+        .flatten()
+        .unwrap_or(1.0);
+    scene_uncovered_fraction(
+        &pose.object,
+        &pose.view,
+        pose.grid_width,
+        pose.grid_height,
+        apron_scale,
+    )
+    .ok()
 }
 
 pub(super) fn create_warp_pipeline(

@@ -8,6 +8,7 @@ mod navigation;
 mod orbit;
 mod perturb;
 mod plane;
+mod reprojection;
 mod scale;
 mod screen;
 mod types;
@@ -18,7 +19,9 @@ pub use big::{
     centre_precision_for, decode_big_scalar, encode_big_scalar,
 };
 pub use drift::{navigation_drift_f32, navigation_drift_f64};
-pub use footprint::{RELIEF_NEAR_FRACTION, SceneFootprint, scene_footprint};
+pub use footprint::{
+    RELIEF_NEAR_FRACTION, SceneFootprint, scene_footprint, scene_uncovered_fraction,
+};
 pub use morph::{
     MORPH_EXTRA_BITS, lerp_centre, lerp_f64, lerp_object_angles, lerp_origin, lerp_plane_angles,
     lerp_view, morph_precision_bits, round_centre,
@@ -28,6 +31,11 @@ pub use perturb::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};
 pub use plane::{
     PlaneChartRelation, SEED_AXES, construct_plane, object_plane_relation, plane_chart_relation,
     rotation_orthonormality_4,
+};
+pub use reprojection::{
+    ProjectedSample, ReconstructedSample, ReprojectionError, RetainedValueSample,
+    SourceDepthRecord, project_reconstructed_sample, reconstruct_source_sample,
+    retained_value_sample, source_depth_record,
 };
 pub use scale::{
     centre_displacement_px, centre_from_reference_px, mirror_centre, pixel_scale, precision_for,

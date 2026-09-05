@@ -5,8 +5,8 @@ use crate::{PaletteRecord, PresentError, PresentMain, exterior_zero, scene_indic
 
 use super::{
     BACKDROP_STENCIL, DEPTH_FORMAT, DepthTarget, GpuState, IndexTarget, SCENE_DEPTH_COMPARE,
-    SCENE_FORMAT, SceneLayer, SceneTexture, color, scene_draw_order, scene_stencil,
-    stencil_reference,
+    SCENE_FORMAT, SceneLayer, SceneTexture, color, scene_depth_range, scene_draw_order,
+    scene_stencil, stencil_reference, viewport_dimension,
 };
 
 mod submit;
@@ -241,7 +241,7 @@ pub(super) fn encode_scene(
     has_backdrop: bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Julibrot main then backdrop scene pass"),
+        label: Some("Julibrot backdrop then main scene pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
@@ -256,6 +256,15 @@ pub(super) fn encode_scene(
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
     for layer in scene_draw_order(has_backdrop) {
+        let [minimum_depth, maximum_depth] = scene_depth_range(*layer, has_backdrop);
+        pass.set_viewport(
+            0.0,
+            0.0,
+            viewport_dimension(gpu.depth.extent[0]),
+            viewport_dimension(gpu.depth.extent[1]),
+            minimum_depth,
+            maximum_depth,
+        );
         let (pipeline, group, indices) = match layer {
             SceneLayer::Main => (
                 &gpu.scene_pipeline,
@@ -298,9 +307,9 @@ pub(super) fn encode_scene_mesh(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
     color_view: &wgpu::TextureView,
-    pipeline: &wgpu::RenderPipeline,
     hot_offset: u32,
     load_color: wgpu::Color,
+    has_backdrop: bool,
     label: &'static str,
 ) {
     let depth_attachment = Some(scene_depth_attachment(&gpu.depth.view));
@@ -319,14 +328,32 @@ pub(super) fn encode_scene_mesh(
         timestamp_writes: None,
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_pipeline(pipeline);
-    pass.set_stencil_reference(stencil_reference(SceneLayer::Main));
-    draw_scene_mesh(
-        &mut pass,
-        &gpu.scene_groups[0],
-        gpu.indices.as_ref(),
-        hot_offset,
-    );
+    for layer in scene_draw_order(has_backdrop) {
+        let [minimum_depth, maximum_depth] = scene_depth_range(*layer, has_backdrop);
+        pass.set_viewport(
+            0.0,
+            0.0,
+            viewport_dimension(gpu.depth.extent[0]),
+            viewport_dimension(gpu.depth.extent[1]),
+            minimum_depth,
+            maximum_depth,
+        );
+        let (pipeline, group, indices) = match layer {
+            SceneLayer::Main => (
+                &gpu.relief_redraw_pipeline,
+                &gpu.scene_groups[0],
+                gpu.indices.as_ref(),
+            ),
+            SceneLayer::Backdrop => (
+                &gpu.relief_redraw_backdrop_pipeline,
+                &gpu.scene_groups[1],
+                gpu.backdrop_indices.as_ref(),
+            ),
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_stencil_reference(stencil_reference(*layer));
+        draw_scene_mesh(&mut pass, group, indices, hot_offset);
+    }
 }
 
 pub(super) fn draw_scene_mesh<'pass>(

@@ -185,6 +185,38 @@ pub struct SceneFrame {
     pub measurement: SubmissionMeasurement,
 }
 
+/// Semantic partition under which a held completed image was produced.
+///
+/// The plane and origin identify the sampled slice. Iteration cap, precision policy, and MAIN
+/// generation identify the value contract inside that slice. A frame from this partition may be
+/// held unchanged while another partition renders, but it may not be geometrically reprojected
+/// into the new partition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FramePartition {
+    /// Once-rounded sampled plane basis.
+    pub plane: Plane,
+    /// Defining plane origin, including Julia's constant.
+    pub plane_origin_f64: [f64; 4],
+    /// Delivered iteration cap used by the held pixels.
+    pub iteration_cap: u32,
+    /// Precision policy used by the held pixels.
+    pub precision_mode: &'static str,
+    /// MAIN generation accepted when the held pixels completed.
+    pub main_generation: u32,
+}
+
+impl FramePartition {
+    pub(crate) const fn from_frame(frame: &SceneFrame) -> Self {
+        Self {
+            plane: frame.pose.plane,
+            plane_origin_f64: frame.plane_origin_f64,
+            iteration_cap: frame.iteration_cap,
+            precision_mode: frame.precision_mode,
+            main_generation: frame.pose.orbit_generation,
+        }
+    }
+}
+
 /// CPU-only result of the f64 reprojection planner.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WarpPlan {
@@ -313,6 +345,47 @@ pub enum PresentEvent {
     },
 }
 
+/// Fixed-capacity result of one non-blocking presenter poll.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PresentEvents {
+    slots: [Option<PresentEvent>; 2],
+}
+
+impl PresentEvents {
+    /// Builds the ordered scene-then-warp result without allocating.
+    #[must_use]
+    pub const fn new(scene: Option<PresentEvent>, warp: Option<PresentEvent>) -> Self {
+        Self {
+            slots: [scene, warp],
+        }
+    }
+
+    /// Returns the number of terminal events observed by this poll.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match (self.slots[0].is_some(), self.slots[1].is_some()) {
+            (false, false) => 0,
+            (true, true) => 2,
+            (false, true) | (true, false) => 1,
+        }
+    }
+
+    /// Reports whether no terminal event was ready.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl IntoIterator for PresentEvents {
+    type Item = PresentEvent;
+    type IntoIter = std::iter::Flatten<std::array::IntoIter<Option<PresentEvent>, 2>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.slots.into_iter().flatten()
+    }
+}
+
 /// Honest current display state.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PresentStatus {
@@ -354,6 +427,10 @@ pub struct PresentFacts {
     pub in_flight_scene_id: Option<u64>,
     /// Orbit generation carried by the retained source.
     pub source_generation: Option<u32>,
+    /// Partition stamp of the completed image held across an incompatible MAIN transition.
+    pub held_frame_partition: Option<FramePartition>,
+    /// Scene identity at which the completed image entered the held-only state.
+    pub held_since_scene_id: Option<u64>,
     /// Precision policy of the current MAIN selection and retained image.
     pub precision_mode: &'static str,
     /// Delivered width in pixels.
@@ -390,7 +467,7 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
-    /// Share of the destination exposure lattice that the warp paints clear.
+    /// Share of the destination coverage mirror that the warp or redraw leaves clear.
     pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,
@@ -413,6 +490,11 @@ impl PresentFacts {
 
     pub(crate) const fn record_warp_hold(&mut self) {
         self.warp_hold_count = self.warp_hold_count.saturating_add(1);
+    }
+
+    /// Records relief coverage only after the redraw's resident records and backdrop were checked.
+    pub(crate) const fn record_relief_coverage(&mut self, exposed_fraction: Option<f64>) {
+        self.warp_exposed_fraction = exposed_fraction;
     }
 
     /// Records the planner and exposure facts from one warp plan.
@@ -442,6 +524,8 @@ impl Default for PresentFacts {
             completed_scene_id: None,
             in_flight_scene_id: None,
             source_generation: None,
+            held_frame_partition: None,
+            held_since_scene_id: None,
             precision_mode: PrecisionMode::default().as_str(),
             delivered_width: 0,
             delivered_height: 0,
@@ -613,6 +697,30 @@ mod tests {
         assert_eq!(facts.warp_max_error_px, None);
         assert_eq!(facts.warp_p95_error_px, None);
         assert_eq!(facts.warp_exposed_fraction, None);
+    }
+
+    #[test]
+    fn relief_coverage_stays_absent_until_submit_validation() {
+        let mut facts = PresentFacts {
+            warp_exposed_fraction: Some(0.125),
+            ..PresentFacts::default()
+        };
+        let relief = WarpPlan {
+            rows: [[0.0; 4]; 3],
+            source_scene_id: Some(9),
+            source_texture_index: Some(1),
+            source_valid: true,
+            edge_on: false,
+            exposed: true,
+            kind: WarpKind::ReliefRedraw,
+            chart_residual: 0.0,
+            approx_max_error_px: Some(2.0),
+            approx_p95_error_px: Some(1.0),
+        };
+        facts.record_warp_plan(&relief, None);
+        assert_eq!(facts.warp_exposed_fraction, None);
+        facts.record_relief_coverage(Some(0.25));
+        assert_eq!(facts.warp_exposed_fraction, Some(0.25));
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {
