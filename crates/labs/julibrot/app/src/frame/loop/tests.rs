@@ -2824,7 +2824,10 @@ fn facts_snapshot_wires_the_reference_receipt_and_observation_walls() {
         "scene_callback_observation_wall_ms: present.last_scene.map(|sample| sample.wall_ms)",
         "warp_callback_observation_wall_ms: present.last_warp.map(|sample| sample.wall_ms)",
     ] {
-        assert!(source.contains(wiring), "missing facts snapshot wiring: {wiring}");
+        assert!(
+            source.contains(wiring),
+            "missing facts snapshot wiring: {wiring}"
+        );
     }
     for unavailable_gpu_name in [
         "scene_wall_ms: None",
