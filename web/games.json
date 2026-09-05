@@ -7,9 +7,17 @@
       "desc": "Online first-person shooter for up to eight players, with three hand-authored maps: Breakwater Harbor, a 96 × 96 m cargo terminal with a warehouse flank, tactical container lanes, gantry cranes and a moored ship; Freight Yard, a compact rail yard; and Trench City, a fought-over European square. Choose free for all, 4v4 team deathmatch or king of the hill. Seven weapons have individual sight animations and optical zoom; ADS and grounded crouching improve accuracy, while movement, jumping and sustained fire widen spread. Start with a weaker sidearm and earn stronger guns from jump-to-hit loot blocks. Walk at 4 m/s, sprint, crouch silently and keep the original jump reach. Fitted weapon grips, sun and shadows, moving clouds, weather, visible bullet paths, spatial sound and gamepad support. WASD + mouse, Space jump, RMB aim, R reload, Shift sprint, C crouch, Q shield, E melee, Tab scoreboard and F fullscreen.",
       "versions": [
         {
+          "v": "v26",
+          "path": "games/arena/v26/",
+          "live": true,
+          "proto": 20,
+          "handover": true,
+          "note": "first material polish: view-dependent metal and paint highlights, matte concrete, dry-weather sky reflection on harbor water, consistent crane paint and linear-light texture filtering"
+        },
+        {
           "v": "v25",
           "path": "games/arena/v25/",
-          "live": true,
+          "live": false,
           "proto": 20,
           "handover": true,
           "note": "Breakwater Harbor: a hand-authored 96 × 96 m tactical port for eight players, with a moored ship, cranes, container routes, proper large-map collision and 4 m/s walking"
