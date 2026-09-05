@@ -286,7 +286,7 @@ pub fn julibrot_measurement(observation_json: &str) -> Result<KernelMeasurement,
     Ok(KernelMeasurement {
         kernel_id: format!("julibrot-slide.{}.v1", spec.scenario_id),
         workload: format!(
-            "{}; baseline {}; {} scripted updates at {} ms intervals; raw samples are game-side input-dispatch walls",
+            "{}; baseline {}; steps={}; interval_ms={}; raw=game-side input-dispatch ms",
             spec.name, spec.baseline_row, spec.step_count, spec.interval_ms
         ),
         unit: "ms".to_string(),
