@@ -504,6 +504,7 @@
       const visibilityAtStart = document.visibilityState;
       let hiddenDuringStage = document.hidden;
       const observeStageVisibility = () => { hiddenDuringStage ||= document.hidden; };
+      const stageVisibilityDetail = () => `${visibilityAtStart}→${document.visibilityState}${hiddenDuringStage ? ', hidden for part of the stage' : ''}`;
       document.addEventListener('visibilitychange', observeStageVisibility);
       const token = { cancelled: false, cancelReason: null, cancelListeners: new Set() };
       const stageIndex = STAGES.findIndex(stage => stage[0] === stageId);
@@ -519,10 +520,9 @@
       let deadlineTimer = 0;
       const deadlineResult = new Promise(resolve => {
         deadlineTimer = setTimeout(() => {
-          const visibility = `${visibilityAtStart}→${document.visibilityState}${hiddenDuringStage ? ', hidden for part of the stage' : ''}`;
           resolve({
             state: 'unavailable',
-            unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline; page visibility over the stage: ${visibility}`,
+            unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline; page visibility over the stage: ${stageVisibilityDetail()}`,
             timedOut: true,
           });
         }, deadlineMs);
@@ -551,7 +551,7 @@
         unavailable_reason: outcome.unavailableReason,
         duration_ms: duration,
       });
-      const visibilityDetail = visibilityAtStart === document.visibilityState ? document.visibilityState : `${visibilityAtStart}→${document.visibilityState}`;
+      const visibilityDetail = stageVisibilityDetail();
       showStage(stageId, outcome.state, outcome.state === 'complete' ? `${duration.toFixed(1)} ms · ${visibilityDetail}` : `unavailable · ${outcome.unavailableReason}`);
       progress.style.width = `${run.stageReports.length / STAGES.length * 100}%`;
       setRealProgress(run, run.stageReports.length);
@@ -1955,9 +1955,9 @@
           [julibrot.frames, 'distinct lab turns observed'],
           [julibrot.samples, 'parent Facts samples'],
           [`${julibrot.rafFrames}/${julibrot.fallbackFrames}`, 'lab rAF/fallback turns'],
-          [julibrot.clearOnly, 'clear-only frames'],
-          [julibrot.held, 'held frames'],
-          ['unavailable', 'warp-refused frames'],
+          [julibrot.clearOnly, 'clear-only lab turns'],
+          [julibrot.held, 'held lab turns'],
+          ['unavailable', 'warp-refused lab turns'],
         ].map(([value, label]) => {
           const fact = document.createElement('div');
           fact.className = 'fact';

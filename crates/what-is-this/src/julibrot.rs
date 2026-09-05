@@ -406,8 +406,11 @@ mod tests {
         assert!(retirement.contains("retired.contentDocument === null"));
         let stage = section(page(), "async function runStage", "function completeKernel");
         assert!(stage.contains("hiddenDuringStage"));
+        assert!(stage.contains("const visibilityDetail = stageVisibilityDetail()"));
         assert!(stage.contains("page visibility over the stage:"));
         assert!(stage.contains("cancelStageToken(token, outcome.unavailableReason)"));
         assert!(page().contains("wasm.julibrot_report_byte_budget()"));
+        assert!(page().contains("'held lab turns'"));
+        assert!(page().contains("['unavailable', 'warp-refused lab turns']"));
     }
 }
