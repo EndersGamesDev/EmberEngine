@@ -163,7 +163,7 @@ pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Opt
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
                 .unwrap_or_else(|| u32::try_from(SCENARIOS.len()).unwrap_or(u32::MAX));
-            partial = Some((total, reason));
+            partial = Some((total, reason.to_string()));
         }
     }
     if scenarios == 0 {
