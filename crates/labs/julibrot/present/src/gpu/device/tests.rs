@@ -1042,3 +1042,55 @@ fn the_image_warp_states_the_destination_lattice_it_planned_against() {
     );
     assert_eq!(destination_extent(None, None), [0, 0]);
 }
+
+/// The lattice pair a plan maps between is a property of every plan kind, not of the hold alone.
+///
+/// A plan's rows are read by the warp fragment as destination pixels in, source pixels out, and
+/// the fragment then normalises the source pixel by the source texture's own dimensions. Two
+/// extents therefore decide where a plan puts the picture: the destination lattice written to
+/// `scene.grid.xy`, and the source texture's extent, which is the delivered extent of the scene
+/// drawn into it. A plan built from one extent, or from identity by default, asserts that the two
+/// are equal; nothing in the presenter makes them equal.
+///
+/// A scene is submitted at `main.grid`'s extent while its pose carries the surface lattice, and no
+/// check relates the two. So a completed picture can be retained at the `PictureFast` divisor
+/// extent with a pose whose grid is the full surface, and `renders_same_picture` — which compares
+/// the two poses' grids and nothing else — then admits the identity `exact_self` plan. Identity on
+/// that pair is the morph thumbnail again, reached through the planner rather than through the
+/// hold: the whole picture inside the central 120 by 68 pixels of a 960 by 540 destination, clear
+/// around it. Under the rendering rule a moving frame may be very inaccurate but never wrong, and
+/// a frame at the wrong scale is wrong.
+#[test]
+fn a_plan_states_the_lattice_pair_it_maps_between_whatever_its_kind() {
+    let destination_extent = [960, 540];
+    let source_extent = [120, 68];
+    let mut pose = binding_pose();
+    pose.grid_width = destination_extent[0];
+    pose.grid_height = destination_extent[1];
+    let mut frame = frame_at_extent(61, source_extent);
+    frame.pose = pose;
+    let plan = crate::Warp::reproject(
+        &frame,
+        &pose,
+        &pose,
+        PrecisionMode::PictureFast,
+        crate::WarpValidation::Ordinary,
+    );
+    assert_eq!(plan.kind, WarpKind::AnchorHomography);
+    assert!(plan.source_valid);
+    for chart in [
+        [-1.0, -1.0],
+        [1.0, -1.0],
+        [-1.0, 1.0],
+        [1.0, 1.0],
+        [0.0, 0.0],
+    ] {
+        let uv = warp_source_uv(plan.rows, destination_extent, source_extent, chart)
+            .expect("a plan keeps every destination point in front of the source");
+        assert!(
+            uv.iter().all(|value| (-1.0e-4..=1.000_1).contains(value)),
+            "chart {chart:?} samples {uv:?}, outside the source picture: the plan was built from \
+             the pose lattice alone and ignores the extent the picture was delivered at"
+        );
+    }
+}
