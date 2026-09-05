@@ -138,7 +138,6 @@ struct ScenarioObservation {
     reference_requests_issued: Option<u32>,
     sampled_reference_requests_issued: Option<u32>,
     walls_us: WallObservation,
-    unavailable_fields: Vec<String>,
     scripted_hold_wall_ms: Option<f64>,
     game_side_wall_ms: Vec<f64>,
 }
@@ -401,17 +400,6 @@ mod tests {
                 dispatch_us: None,
                 fence_us: Some(vec![2; FACT_SAMPLE_CAP]),
             },
-            unavailable_fields: vec![
-                "presented_scene_ids".to_string(),
-                "settle_to_paint_ms".to_string(),
-                "discarded_scene_ids".to_string(),
-                "reference_requests_issued".to_string(),
-                "credit_wait_us".to_string(),
-                "transfer_us".to_string(),
-                "packing_us".to_string(),
-                "upload_us".to_string(),
-                "dispatch_us".to_string(),
-            ],
             scripted_hold_wall_ms: (spec.scenario_id == "hold-exact-2000ms").then_some(2_000.25),
             game_side_wall_ms: vec![0.125; usize::from(spec.step_count)],
         }

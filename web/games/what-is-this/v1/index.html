@@ -1383,7 +1383,6 @@
             return values.length ? values : null;
           };
           const fence = cappedNumbers(levelTimings.flatMap(record => [record.scene_us, record.warp_us]));
-          const unavailableFields = [];
           const presented = presentedSceneIds.length ? cappedDistinct(presentedSceneIds) : null;
           const settleToPaint = presented ? [] : null;
           const walls = {
@@ -1395,11 +1394,6 @@
             dispatch_us: optional('dispatch_us'),
             fence_us: fence.length ? fence : null,
           };
-          if (!presented) unavailableFields.push('presented_scene_ids', 'settle_to_paint_ms');
-          unavailableFields.push('discarded_scene_ids');
-          for (const field of ['worker_reference_us', 'credit_wait_us', 'transfer_us', 'packing_us', 'upload_us', 'dispatch_us', 'fence_us']) {
-            if (walls[field] === null) unavailableFields.push(field);
-          }
           const denominator = frames.observed || 1;
           return {
             scenario_id: spec.scenario_id,
@@ -1418,7 +1412,6 @@
             reference_requests_issued: null,
             sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
             walls_us: walls,
-            unavailable_fields: ['reference_requests_issued', ...unavailableFields],
             scripted_hold_wall_ms: scriptedHoldWallMs,
             game_side_wall_ms: gameSideWallMs,
           };
