@@ -1,3 +1,8 @@
+#![allow(
+    unsafe_code,
+    reason = "the test-only global allocator must implement Rust's unsafe allocation boundary"
+)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
