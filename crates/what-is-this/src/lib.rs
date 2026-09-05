@@ -2,6 +2,7 @@
 
 #![deny(missing_docs)]
 
+mod julibrot;
 mod kernels;
 
 #[cfg(target_arch = "wasm32")]
@@ -13,6 +14,7 @@ mod render_bar;
 use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStatus};
 use serde::Serialize;
 
+pub use julibrot::{JULIBROT_REPORT_BYTE_BUDGET, JulibrotScenarioSpec, julibrot_scenarios};
 pub use kernels::{FloatProbeResult, KernelSpec, KernelSuite, jank_chunk, kernel_specs};
 
 /// One report-derived sentence shown on the final verdict card.
@@ -341,6 +343,10 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
         });
     }
 
+    if let Some(text) = julibrot::observation(report) {
+        observations.push(VerdictObservation { text });
+    }
+
     if let Some(gpu) = report
         .kernels
         .iter()
@@ -500,8 +506,8 @@ mod wasm_api;
 mod tests {
     use ember_game_what_is_this_v1::{
         CapabilityFlags, CapabilityProbe, EnvironmentFacts, FaerWasmVerdict,
-        FloatBehaviorFingerprint, FmaProbe, ScreenFacts, SummaryStats, TimerFacts,
-        TranscendentalObservation,
+        FloatBehaviorFingerprint, FmaProbe, ScreenFacts, StageReport, StageStatus, SummaryStats,
+        TimerFacts, TranscendentalObservation,
     };
 
     use super::*;
@@ -603,6 +609,40 @@ mod tests {
                 notes: Vec::new(),
             }],
         }
+    }
+
+    fn add_julibrot_stage(
+        report: &mut DiagnosticReport,
+        status: StageStatus,
+        reason: Option<&str>,
+    ) {
+        report.stages.push(StageReport {
+            stage_id: "stage.julibrot-slide.v1".to_string(),
+            name: "Julibrot fast-slide".to_string(),
+            status,
+            unavailable_reason: reason.map(str::to_string),
+            duration_ms: 12_345.67,
+        });
+    }
+
+    fn add_julibrot_measurement(report: &mut DiagnosticReport, suffix: &str, note: &str) {
+        report.kernels.push(KernelMeasurement {
+            kernel_id: format!("julibrot-slide.{suffix}.v1"),
+            workload: "fixed scripted slide".to_string(),
+            unit: "ms".to_string(),
+            warmup_runs: 0,
+            status: KernelStatus::Complete,
+            unavailable_reason: None,
+            raw_samples: vec![12.34],
+            summary: Some(SummaryStats {
+                sample_count: 1,
+                median: 12.34,
+                p95: 12.34,
+                min: 12.34,
+                max: 12.34,
+            }),
+            notes: vec![note.to_string()],
+        });
     }
 
     #[test]
@@ -743,5 +783,98 @@ mod tests {
             observation.text.contains("19 measured frames")
                 && observation.text.contains("16.667 ms")
         }));
+    }
+
+    #[test]
+    fn julibrot_observation_reports_complete_measurements() {
+        let mut report = sample_report();
+        add_julibrot_stage(&mut report, StageStatus::Complete, None);
+        add_julibrot_measurement(
+            &mut report,
+            "object-o13-range",
+            r#"{"frames":{"sample_count":19,"observed":17,"clear_only":3,"held":2}}"#,
+        );
+        add_julibrot_measurement(
+            &mut report,
+            "height-gentle-d5-8",
+            r#"{"frames":{"sample_count":23,"observed":21,"clear_only":4,"held":1}}"#,
+        );
+        assert_eq!(
+            julibrot::observation(&report).as_deref(),
+            Some(
+                "The Julibrot slide completed 2 fixed scenarios across 38 distinct lab turns from 42 parent Facts samples: 7 clear-only and 3 held."
+            )
+        );
+    }
+
+    #[test]
+    fn julibrot_observation_reports_partial_progress() {
+        let mut report = sample_report();
+        add_julibrot_stage(&mut report, StageStatus::Complete, None);
+        add_julibrot_measurement(
+            &mut report,
+            "object-o13-range",
+            r#"{"frames":{"sample_count":19,"observed":17,"clear_only":3,"held":2}}"#,
+        );
+        add_julibrot_measurement(
+            &mut report,
+            "height-gentle-d5-8",
+            r#"{"frames":{"sample_count":23,"observed":21,"clear_only":4,"held":1},"stage_progress":{"completed_scenarios":2,"total_scenarios":8,"partial_reason":"the page was hidden"}}"#,
+        );
+        assert_eq!(
+            julibrot::observation(&report).as_deref(),
+            Some(
+                "The Julibrot slide completed 2 of 8 fixed scenarios across 38 distinct lab turns from 42 parent Facts samples before stopping early: the page was hidden."
+            )
+        );
+    }
+
+    #[test]
+    fn julibrot_observation_reports_stage_unavailability() {
+        let mut report = sample_report();
+        add_julibrot_stage(
+            &mut report,
+            StageStatus::Unavailable,
+            Some("WebGL2 unavailable"),
+        );
+        assert_eq!(
+            julibrot::observation(&report).as_deref(),
+            Some("The Julibrot slide stage was unavailable: WebGL2 unavailable.")
+        );
+    }
+
+    #[test]
+    fn julibrot_observation_reports_malformed_notes() {
+        let mut report = sample_report();
+        add_julibrot_stage(&mut report, StageStatus::Complete, None);
+        add_julibrot_measurement(&mut report, "object-o13-range", "not JSON");
+        assert_eq!(
+            julibrot::observation(&report).as_deref(),
+            Some(
+                "The Julibrot slide stage completed, but all 1 scenario measurement notes were malformed."
+            )
+        );
+    }
+
+    #[test]
+    fn page_contract_carries_the_julibrot_card_disclosure_and_stage_only_query() {
+        let page = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/games/what-is-this/v1/index.html"
+        ));
+        assert!(page.contains("Nine stages reveal"));
+        assert!(page.contains("data-stage=\"stage.julibrot-slide.v1\""));
+        assert!(page.contains("id=\"julibrot-result\""));
+        assert!(page.contains("The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input."));
+        assert!(page.contains("get('stage') === 'julibrot-slide'"));
+        assert!(page.contains("if (JULIBROT_STAGE_ONLY) beginRun(null)"));
+        assert!(page.contains("new URL('labs/julibrot/', ROOT)"));
+        assert!(page.contains("const JULIBROT_FACT_SAMPLE_CAP = 12"));
+        assert!(page.contains("wasm.julibrot_report_byte_budget()"));
+        assert!(page.contains("raw=game-side step wall ms"));
+        assert!(page.contains("presented_scene_ids: null"));
+        assert!(page.contains("warp_refused: null"));
+        assert!(page.contains("live_iteration_cap"));
+        assert!(!page.contains("facts.presented_scene_id"));
     }
 }
