@@ -87,6 +87,14 @@ pub const fn julibrot_scenarios() -> &'static [JulibrotScenarioSpec] {
     &SCENARIOS
 }
 
+fn measured_u32(value: &serde_json::Value, field: &str) -> u32 {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_default()
+}
+
 /// Derives the report-backed Julibrot verdict sentence when the stage was present.
 pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Option<String> {
     let stage = report
@@ -125,34 +133,10 @@ pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Opt
             continue;
         };
         scenarios += 1;
-        observed = observed.saturating_add(
-            frames
-                .get("observed")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or_default(),
-        );
-        samples = samples.saturating_add(
-            frames
-                .get("sample_count")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or_default(),
-        );
-        clear_only = clear_only.saturating_add(
-            frames
-                .get("clear_only")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or_default(),
-        );
-        held = held.saturating_add(
-            frames
-                .get("held")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u32::try_from(value).ok())
-                .unwrap_or_default(),
-        );
+        observed = observed.saturating_add(measured_u32(frames, "observed"));
+        samples = samples.saturating_add(measured_u32(frames, "sample_count"));
+        clear_only = clear_only.saturating_add(measured_u32(frames, "clear_only"));
+        held = held.saturating_add(measured_u32(frames, "held"));
         if let Some(progress) = measured.get("stage_progress")
             && let Some(reason) = progress
                 .get("partial_reason")
@@ -200,15 +184,16 @@ mod tests {
     use super::*;
 
     const FACT_SAMPLE_CAP: usize = 12;
-    const ADVERSARIAL_GAME_WALL_INPUT: f64 = 239_999.989_999_999_99;
-    const ADVERSARIAL_FRACTION_INPUT: f64 = 0.123_456_789_012_345_67;
-    const ADVERSARIAL_MEDIAN_FRACTION_INPUT: f64 = 0.567_890_123_456_789_01;
-    const ADVERSARIAL_HIGH_FRACTION_INPUT: f64 = 0.987_654_321_098_765_43;
-    const ADVERSARIAL_HOLD_WALL_INPUT: f64 = 2_000.009_999_999_999_8;
+    const ADVERSARIAL_GAME_WALL_INPUT: &str = "239999.98999999999";
+    const ADVERSARIAL_FRACTION_INPUT: &str = "0.12345678901234567";
+    const ADVERSARIAL_MEDIAN_FRACTION_INPUT: &str = "0.56789012345678901";
+    const ADVERSARIAL_HIGH_FRACTION_INPUT: &str = "0.98765432109876543";
+    const ADVERSARIAL_HOLD_WALL_INPUT: &str = "2000.0099999999998";
     const ADVERSARIAL_INTEGER: u64 = 12_345_678_901_234_567;
     const ADVERSARIAL_RECORD_BYTES: usize = 18_879;
 
-    fn round_fixture(value: f64, decimal_places: i32) -> f64 {
+    fn round_fixture(value: &str, decimal_places: i32) -> f64 {
+        let value = value.parse::<f64>().expect("browser decimal input");
         let scale = 10_f64.powi(decimal_places);
         (value * scale).round() / scale
     }
