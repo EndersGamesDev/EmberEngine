@@ -61,16 +61,23 @@ pub enum ReprojectionError {
     ProjectionPole,
 }
 
-/// Builds the `S1` source-depth record for one visible source sample.
+/// Builds a flat-chart `S1` fixture record for one visible source sample.
+///
+/// A lifted source needs the post-visibility plane coordinates selected by rasterization; those
+/// cannot be recovered by inverting the neutral-height source map and must come from the rendered
+/// descriptor instead.
 ///
 /// # Errors
 ///
-/// Returns a typed refusal for an invalid map, non-finite input, or projection pole.
+/// Returns a typed refusal for a lifted pose, invalid map, non-finite input, or projection pole.
 pub fn source_depth_record(
     pose: &Pose,
     source_pixel: [f64; 2],
     value: RetainedValueSample,
 ) -> Result<SourceDepthRecord, ReprojectionError> {
+    if pose.view.height_scale.to_bits() != 0.0_f64.to_bits() {
+        return Err(ReprojectionError::InvalidSource);
+    }
     let PoseMap::Mapped(map) = pose.map else {
         return Err(ReprojectionError::InvalidSource);
     };
@@ -300,8 +307,7 @@ mod tests {
     use super::*;
     use crate::{ObjectAngles, construct_plane, screen_to_plane};
 
-    fn pose(view: ViewControls) -> Pose {
-        let object = ObjectAngles::JULIA;
+    fn pose_for(object: ObjectAngles, view: ViewControls) -> Pose {
         let extent = [960, 540];
         let map = screen_to_plane(
             &object,
@@ -327,6 +333,127 @@ mod tests {
         }
     }
 
+    fn pose(view: ViewControls) -> Pose {
+        pose_for(ObjectAngles::JULIA, view)
+    }
+
+    fn lifted_pose() -> Pose {
+        let object = ObjectAngles {
+            rho_13: 0.17,
+            rho_24: -0.11,
+            ..ObjectAngles::JULIA
+        };
+        let mut camera = [0.0; 10];
+        camera[1] = 0.12;
+        camera[6] = 0.19;
+        camera[9] = -0.08;
+        pose_for(
+            object,
+            ViewControls {
+                camera,
+                camera_translation: [0.05, -0.03, 0.02, 0.01, -0.04],
+                camera_yaw: 0.21,
+                camera_pitch: -0.13,
+                height_scale: 0.8,
+                distance_five: 6.0,
+                distance_four: 7.0,
+            },
+        )
+    }
+
+    fn lifted_record(
+        pose: &Pose,
+        pixel: [f64; 2],
+        value: RetainedValueSample,
+    ) -> SourceDepthRecord {
+        let PoseMap::Mapped(map) = pose.map else {
+            panic!("lifted fixture has a finite source map");
+        };
+        let homogeneous = apply_homogeneous(map.rows, pixel);
+        let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
+        let mut coordinate = [
+            chart_scale * homogeneous[0] / homogeneous[2],
+            chart_scale * homogeneous[1] / homogeneous[2],
+        ];
+        const STEP: f64 = 1.0e-6;
+        for _ in 0..12 {
+            let projected = project_ambient_point(
+                pose,
+                absolute_plane_point(pose, coordinate),
+                value,
+            )
+            .expect("lifted fixture remains visible");
+            let error = [
+                projected.screen[0] - pixel[0],
+                projected.screen[1] - pixel[1],
+            ];
+            if error[0].hypot(error[1]) <= 1.0e-12 {
+                break;
+            }
+            let shifted_a = project_ambient_point(
+                pose,
+                absolute_plane_point(pose, [coordinate[0] + STEP, coordinate[1]]),
+                value,
+            )
+            .expect("first finite-difference point remains visible");
+            let shifted_b = project_ambient_point(
+                pose,
+                absolute_plane_point(pose, [coordinate[0], coordinate[1] + STEP]),
+                value,
+            )
+            .expect("second finite-difference point remains visible");
+            let jacobian = [
+                [
+                    (shifted_a.screen[0] - projected.screen[0]) / STEP,
+                    (shifted_b.screen[0] - projected.screen[0]) / STEP,
+                ],
+                [
+                    (shifted_a.screen[1] - projected.screen[1]) / STEP,
+                    (shifted_b.screen[1] - projected.screen[1]) / STEP,
+                ],
+            ];
+            let determinant =
+                jacobian[0][0] * jacobian[1][1] - jacobian[0][1] * jacobian[1][0];
+            assert!(determinant.abs() > 1.0e-12);
+            let delta = [
+                (error[0] * jacobian[1][1] - jacobian[0][1] * error[1]) / determinant,
+                (jacobian[0][0] * error[1] - error[0] * jacobian[1][0]) / determinant,
+            ];
+            coordinate[0] -= delta[0];
+            coordinate[1] -= delta[1];
+        }
+        let projected = project_ambient_point(
+            pose,
+            absolute_plane_point(pose, coordinate),
+            value,
+        )
+        .expect("solved lifted fixture remains visible");
+        assert!(
+            (projected.screen[0] - pixel[0]).hypot(projected.screen[1] - pixel[1])
+                <= SOURCE_ROUND_TRIP_EPSILON
+        );
+        SourceDepthRecord {
+            a_f: coordinate[0],
+            b_f: coordinate[1],
+            zeta_f: projected.linear_depth,
+            valid: true,
+        }
+    }
+
+    fn reproject_lifted_pixel(
+        source: &Pose,
+        target: &Pose,
+        pixel: [f64; 2],
+        value: RetainedValueSample,
+    ) -> [f64; 2] {
+        let depth = lifted_record(source, pixel, value);
+        let sample = reconstruct_source_sample(source, pixel, depth, value)
+            .expect("GPU-shaped source receipt round-trips");
+        project_reconstructed_sample(target, sample)
+            .expect("lifted sample projects to target")
+            .screen
+    }
+
     #[test]
     fn retained_sample_reprojects_to_its_own_pixel_within_binary64_bound() {
         let source = pose(ViewControls::NEUTRAL);
@@ -342,6 +469,34 @@ mod tests {
         assert!((projected.screen[0] - pixel[0]).abs() <= SOURCE_ROUND_TRIP_EPSILON);
         assert!((projected.screen[1] - pixel[1]).abs() <= SOURCE_ROUND_TRIP_EPSILON);
         assert!((projected.linear_depth - depth.zeta_f).abs() <= SOURCE_ROUND_TRIP_EPSILON);
+    }
+
+    #[test]
+    fn gpu_shaped_lifted_record_round_trips_a_noncanonical_pose_and_checks_depth() {
+        let source = lifted_pose();
+        let pixel = [137.5, -81.5];
+        let value = RetainedValueSample { record_height: 0.5 };
+        assert_eq!(
+            source_depth_record(&source, pixel, value),
+            Err(ReprojectionError::InvalidSource),
+            "the flat-chart helper cannot invent post-visibility lifted coordinates"
+        );
+        let depth = lifted_record(&source, pixel, value);
+        let reconstructed = reconstruct_source_sample(&source, pixel, depth, value)
+            .expect("external lifted receipt round-trips");
+        let projected = project_reconstructed_sample(&source, reconstructed)
+            .expect("lifted self projection stays visible");
+        assert!((projected.screen[0] - pixel[0]).abs() <= SOURCE_ROUND_TRIP_EPSILON);
+        assert!((projected.screen[1] - pixel[1]).abs() <= SOURCE_ROUND_TRIP_EPSILON);
+
+        let wrong_depth = SourceDepthRecord {
+            zeta_f: depth.zeta_f + 1.0e-6,
+            ..depth
+        };
+        assert_eq!(
+            reconstruct_source_sample(&source, pixel, wrong_depth, value),
+            Err(ReprojectionError::SourceRoundTrip)
+        );
     }
 
     #[test]
@@ -415,6 +570,38 @@ mod tests {
             0.25 * (projected[0][1] + projected[1][1] + projected[2][1] + projected[3][1]),
         ];
         let error = (direct[0] - interpolated[0]).hypot(direct[1] - interpolated[1]);
-        assert!(error <= 1.0, "one-pixel tile interpolation error {error}");
+        assert!(
+            error <= SOURCE_ROUND_TRIP_EPSILON,
+            "near-affine one-pixel interpolation error {error}"
+        );
+    }
+
+    #[test]
+    fn curved_one_pixel_tile_stays_inside_the_admission_bound() {
+        let source = lifted_pose();
+        let mut target_view = source.view;
+        target_view.camera[1] += 0.18;
+        target_view.camera[6] -= 0.14;
+        target_view.camera_yaw += 0.11;
+        target_view.camera_pitch -= 0.07;
+        target_view.height_scale = 1.1;
+        target_view.distance_five = 5.5;
+        let target = pose_for(source.object, target_view);
+        let value = RetainedValueSample { record_height: 0.5 };
+        let corners = [
+            [300.0, 180.0],
+            [301.0, 180.0],
+            [300.0, 181.0],
+            [301.0, 181.0],
+        ];
+        let projected = corners.map(|pixel| reproject_lifted_pixel(&source, &target, pixel, value));
+        let direct = reproject_lifted_pixel(&source, &target, [300.5, 180.5], value);
+        let interpolated = [
+            0.25 * (projected[0][0] + projected[1][0] + projected[2][0] + projected[3][0]),
+            0.25 * (projected[0][1] + projected[1][1] + projected[2][1] + projected[3][1]),
+        ];
+        let error = (direct[0] - interpolated[0]).hypot(direct[1] - interpolated[1]);
+        assert!(error > SOURCE_ROUND_TRIP_EPSILON, "curved error {error}");
+        assert!(error <= 1.0, "curved one-pixel interpolation error {error}");
     }
 }
