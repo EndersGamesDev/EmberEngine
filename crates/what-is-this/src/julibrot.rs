@@ -1,19 +1,11 @@
 //! Fixed Julibrot slide scenarios and bounded report records.
 
 use ember_game_what_is_this_v1::KernelStatus;
-#[cfg(test)]
-use ember_game_what_is_this_v1::{KernelMeasurement, SummaryStats};
-#[cfg(test)]
-use serde::Deserialize;
 use serde::Serialize;
 
 const STAGE_ID: &str = "stage.julibrot-slide.v1";
-/// Maximum compact JSON bytes reserved for all Julibrot scenario measurements.
-pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 10 * 1_024;
-#[cfg(test)]
-const FACT_SAMPLE_CAP: usize = 12;
-#[cfg(test)]
-const NOTE_BYTE_CAP: usize = 1_280;
+/// Maximum compact JSON bytes reserved for all Julibrot scenario measurements. The adversarial page-contract fixture starts with 17-significant-digit browser floats, rounds them at the shipped precisions, and uses 17-digit scene, worker, credit, and fence values. Its eight compact records measure 18,879 bytes, leaving 1,601 bytes here and 32 KiB of the protocol cap for the existing report.
+pub const JULIBROT_REPORT_BYTE_BUDGET: usize = 20 * 1_024;
 
 /// Stable metadata for one scripted Julibrot control sequence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -28,8 +20,6 @@ pub struct JulibrotScenarioSpec {
     pub step_count: u16,
     /// Fixed delay between updates in milliseconds.
     pub interval_ms: u16,
-    /// Driver action interpreted by the page.
-    pub action: &'static str,
 }
 
 const SCENARIOS: [JulibrotScenarioSpec; 8] = [
@@ -39,7 +29,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "Mandelbrot",
         step_count: 12,
         interval_ms: 50,
-        action: "range:o13",
     },
     JulibrotScenarioSpec {
         scenario_id: "height-gentle-d5-8",
@@ -47,7 +36,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "gentle-d5-8",
         step_count: 24,
         interval_ms: 125,
-        action: "height:d5=8",
     },
     JulibrotScenarioSpec {
         scenario_id: "height-close-d5-2",
@@ -55,7 +43,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "close-d5-2",
         step_count: 24,
         interval_ms: 125,
-        action: "height:d5=2",
     },
     JulibrotScenarioSpec {
         scenario_id: "scale-deep-row",
@@ -63,7 +50,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "deep-scale-14",
         step_count: 10,
         interval_ms: 80,
-        action: "range:scale=14..18",
     },
     JulibrotScenarioSpec {
         scenario_id: "rapid-a-to-b-morph",
@@ -71,7 +57,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "Mandelbrot relief to Julia relief",
         step_count: 16,
         interval_ms: 25,
-        action: "range:morph",
     },
     JulibrotScenarioSpec {
         scenario_id: "iteration-cap-mid-view",
@@ -79,7 +64,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "deep-scale-14",
         step_count: 2,
         interval_ms: 100,
-        action: "select:iteration-cap=512,1024",
     },
     JulibrotScenarioSpec {
         scenario_id: "hold-exact-2000ms",
@@ -87,7 +71,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "Mandelbrot relief",
         step_count: 1,
         interval_ms: 2_000,
-        action: "hold:o13",
     },
     JulibrotScenarioSpec {
         scenario_id: "alternating-two-slider-burst",
@@ -95,7 +78,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
         baseline_row: "Mandelbrot relief",
         step_count: 30,
         interval_ms: 16,
-        action: "alternate:o13,q13",
     },
 ];
 
@@ -103,241 +85,6 @@ const SCENARIOS: [JulibrotScenarioSpec; 8] = [
 #[must_use]
 pub const fn julibrot_scenarios() -> &'static [JulibrotScenarioSpec] {
     &SCENARIOS
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct FrameObservation {
-    observed: u32,
-    clear_only: u32,
-    held: u32,
-    warp_refused: u32,
-    clear_only_fraction: f64,
-    held_fraction: f64,
-    warp_refused_fraction: f64,
-    uncovered_fraction_samples: Vec<f64>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-#[allow(
-    clippy::struct_field_names,
-    reason = "the unit suffix keeps the compact JSON timing fields unambiguous"
-)]
-struct WallObservation {
-    worker_reference_us: Option<Vec<u64>>,
-    credit_wait_us: Option<Vec<u64>>,
-    transfer_us: Option<Vec<u64>>,
-    packing_us: Option<Vec<u64>>,
-    upload_us: Option<Vec<u64>>,
-    dispatch_us: Option<Vec<u64>>,
-    fence_us: Option<Vec<u64>>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ScenarioObservation {
-    scenario_id: String,
-    step_count: u16,
-    interval_ms: u16,
-    frames: FrameObservation,
-    completed_scene_ids: Vec<u64>,
-    discarded_scene_ids: Option<Vec<u64>>,
-    presented_scene_ids: Option<Vec<u64>>,
-    settle_to_paint_ms: Option<Vec<f64>>,
-    reference_requests_issued: Option<u32>,
-    sampled_reference_requests_issued: Option<u32>,
-    walls_us: WallObservation,
-    scripted_hold_wall_ms: Option<f64>,
-    game_side_wall_ms: Vec<f64>,
-}
-
-#[cfg(test)]
-fn scenario(scenario_id: &str) -> Option<&'static JulibrotScenarioSpec> {
-    SCENARIOS
-        .iter()
-        .find(|candidate| candidate.scenario_id == scenario_id)
-}
-
-#[cfg(test)]
-fn finite_nonnegative(values: &[f64]) -> bool {
-    values
-        .iter()
-        .all(|value| value.is_finite() && *value >= 0.0)
-}
-
-#[cfg(test)]
-fn validate_optional_samples(values: Option<&[u64]>) -> bool {
-    values.is_none_or(|samples| samples.len() <= FACT_SAMPLE_CAP)
-}
-
-#[cfg(test)]
-fn validate_observation(
-    observation: &ScenarioObservation,
-) -> Result<&'static JulibrotScenarioSpec, String> {
-    let spec = scenario(&observation.scenario_id)
-        .ok_or_else(|| format!("unknown Julibrot scenario {}", observation.scenario_id))?;
-    if observation.step_count != spec.step_count || observation.interval_ms != spec.interval_ms {
-        return Err(format!(
-            "Julibrot scenario {} did not use its fixed step table",
-            observation.scenario_id
-        ));
-    }
-    if observation.game_side_wall_ms.len() != usize::from(spec.step_count)
-        || !finite_nonnegative(&observation.game_side_wall_ms)
-    {
-        return Err(format!(
-            "Julibrot scenario {} omitted a finite game-side wall for one or more steps",
-            observation.scenario_id
-        ));
-    }
-    let frames = &observation.frames;
-    if frames.clear_only > frames.observed
-        || frames.held > frames.observed
-        || frames.warp_refused > frames.observed
-        || frames.uncovered_fraction_samples.len() > FACT_SAMPLE_CAP
-        || !finite_nonnegative(&frames.uncovered_fraction_samples)
-        || ![
-            frames.clear_only_fraction,
-            frames.held_fraction,
-            frames.warp_refused_fraction,
-        ]
-        .into_iter()
-        .all(|value| value.is_finite() && (0.0..=1.0).contains(&value))
-    {
-        return Err(format!(
-            "Julibrot scenario {} supplied invalid frame observations",
-            observation.scenario_id
-        ));
-    }
-    if observation.completed_scene_ids.len() > FACT_SAMPLE_CAP
-        || observation
-            .discarded_scene_ids
-            .as_ref()
-            .is_some_and(|samples| samples.len() > FACT_SAMPLE_CAP)
-        || observation
-            .presented_scene_ids
-            .as_ref()
-            .is_some_and(|samples| samples.len() > FACT_SAMPLE_CAP)
-        || observation
-            .settle_to_paint_ms
-            .as_ref()
-            .is_some_and(|samples| {
-                samples.len() > usize::from(spec.step_count) || !finite_nonnegative(samples)
-            })
-        || !validate_optional_samples(observation.walls_us.worker_reference_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.credit_wait_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.transfer_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.packing_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.upload_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.dispatch_us.as_deref())
-        || !validate_optional_samples(observation.walls_us.fence_us.as_deref())
-        || if spec.scenario_id == "hold-exact-2000ms" {
-            observation
-                .scripted_hold_wall_ms
-                .is_none_or(|wall| !wall.is_finite() || wall < 2_000.0)
-        } else {
-            observation.scripted_hold_wall_ms.is_some()
-        }
-    {
-        return Err(format!(
-            "Julibrot scenario {} exceeded a stage sample cap",
-            observation.scenario_id
-        ));
-    }
-    Ok(spec)
-}
-
-#[cfg(test)]
-fn summarize(samples: &[f64]) -> Option<SummaryStats> {
-    if samples.is_empty() {
-        return None;
-    }
-    let mut ordered = samples.to_vec();
-    ordered.sort_by(f64::total_cmp);
-    let middle = ordered.len() / 2;
-    let median = if ordered.len().is_multiple_of(2) {
-        f64::midpoint(ordered[middle - 1], ordered[middle])
-    } else {
-        ordered[middle]
-    };
-    let p95_index = (ordered.len() * 95).div_ceil(100).saturating_sub(1);
-    Some(SummaryStats {
-        sample_count: u32::try_from(samples.len()).unwrap_or(u32::MAX),
-        median,
-        p95: ordered[p95_index],
-        min: ordered[0],
-        max: ordered[ordered.len() - 1],
-    })
-}
-
-#[cfg(test)]
-fn measurement(observation_json: &str) -> Result<KernelMeasurement, String> {
-    let observation = serde_json::from_str::<ScenarioObservation>(observation_json)
-        .map_err(|error| format!("Julibrot scenario record is invalid: {error}"))?;
-    let spec = validate_observation(&observation)?;
-    let mut note_value = serde_json::to_value(&observation)
-        .map_err(|error| format!("Julibrot scenario record could not be encoded: {error}"))?;
-    note_value
-        .as_object_mut()
-        .ok_or_else(|| "Julibrot scenario record did not encode as an object".to_string())?
-        .remove("game_side_wall_ms");
-    let note = serde_json::to_string(&note_value)
-        .map_err(|error| format!("Julibrot scenario note could not be encoded: {error}"))?;
-    if note.len() > NOTE_BYTE_CAP {
-        return Err(format!(
-            "Julibrot scenario {} note is {} bytes; cap is {NOTE_BYTE_CAP}",
-            spec.scenario_id,
-            note.len()
-        ));
-    }
-    let summary = summarize(&observation.game_side_wall_ms);
-    Ok(KernelMeasurement {
-        kernel_id: format!("julibrot-slide.{}.v1", spec.scenario_id),
-        workload: format!(
-            "{}; baseline {}; steps={}; interval_ms={}; raw=game-side step wall ms",
-            spec.name, spec.baseline_row, spec.step_count, spec.interval_ms
-        ),
-        unit: "ms".to_string(),
-        warmup_runs: 0,
-        status: KernelStatus::Complete,
-        unavailable_reason: None,
-        raw_samples: observation.game_side_wall_ms,
-        summary,
-        notes: vec![note],
-    })
-}
-
-#[cfg(test)]
-fn unavailable_measurement(reason: &str) -> KernelMeasurement {
-    KernelMeasurement {
-        kernel_id: "julibrot-slide.unavailable.v1".to_string(),
-        workload: "load the same-origin Julibrot lab and reach a settled Final scene".to_string(),
-        unit: "facts".to_string(),
-        warmup_runs: 0,
-        status: KernelStatus::Unavailable,
-        unavailable_reason: Some(reason.to_string()),
-        raw_samples: Vec::new(),
-        summary: None,
-        notes: vec![
-            "the Julibrot refusal is stage unavailability, not a failure of the diagnostic game"
-                .to_string(),
-        ],
-    }
-}
-
-#[cfg(test)]
-fn unavailable_stage(reason: &str, duration_ms: f64) -> ember_game_what_is_this_v1::StageReport {
-    ember_game_what_is_this_v1::StageReport {
-        stage_id: STAGE_ID.to_string(),
-        name: "Julibrot fast-slide".to_string(),
-        status: ember_game_what_is_this_v1::StageStatus::Unavailable,
-        unavailable_reason: Some(reason.to_string()),
-        duration_ms,
-    }
 }
 
 /// Derives the report-backed Julibrot verdict sentence when the stage was present.
@@ -357,24 +104,37 @@ pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Opt
     }
     let mut scenarios = 0_u32;
     let mut observed = 0_u32;
+    let mut samples = 0_u32;
     let mut clear_only = 0_u32;
     let mut held = 0_u32;
+    let mut malformed = 0_u32;
+    let mut partial = None;
     for kernel in report.kernels.iter().filter(|kernel| {
         kernel.kernel_id.starts_with("julibrot-slide.") && kernel.status == KernelStatus::Complete
     }) {
         let Some(note) = kernel.notes.first() else {
+            malformed = malformed.saturating_add(1);
             continue;
         };
         let Ok(measured) = serde_json::from_str::<serde_json::Value>(note) else {
+            malformed = malformed.saturating_add(1);
             continue;
         };
         let Some(frames) = measured.get("frames") else {
+            malformed = malformed.saturating_add(1);
             continue;
         };
         scenarios += 1;
         observed = observed.saturating_add(
             frames
                 .get("observed")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or_default(),
+        );
+        samples = samples.saturating_add(
+            frames
+                .get("sample_count")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
                 .unwrap_or_default(),
@@ -393,73 +153,189 @@ pub fn observation(report: &ember_game_what_is_this_v1::DiagnosticReport) -> Opt
                 .and_then(|value| u32::try_from(value).ok())
                 .unwrap_or_default(),
         );
+        if let Some(progress) = measured.get("stage_progress")
+            && let Some(reason) = progress
+                .get("partial_reason")
+                .and_then(serde_json::Value::as_str)
+        {
+            let total = progress
+                .get("total_scenarios")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or_else(|| u32::try_from(SCENARIOS.len()).unwrap_or(u32::MAX));
+            partial = Some((total, reason));
+        }
     }
-    Some(format!(
-        "The Julibrot slide drove {scenarios} fixed scenarios across {observed} observed frames: {clear_only} clear-only and {held} held."
-    ))
+    if scenarios == 0 {
+        return Some(if malformed == 0 {
+            "The Julibrot slide stage completed but supplied no readable scenario measurements."
+                .to_string()
+        } else {
+            format!(
+                "The Julibrot slide stage completed, but all {malformed} scenario measurement notes were malformed."
+            )
+        });
+    }
+    let observation = if let Some((total, reason)) = partial {
+        format!(
+            "The Julibrot slide completed {scenarios} of {total} fixed scenarios across {observed} distinct lab turns from {samples} parent Facts samples before stopping early: {reason}."
+        )
+    } else {
+        format!(
+            "The Julibrot slide completed {scenarios} fixed scenarios across {observed} distinct lab turns from {samples} parent Facts samples: {clear_only} clear-only and {held} held."
+        )
+    };
+    Some(if malformed == 0 {
+        observation
+    } else {
+        format!("{observation} {malformed} additional scenario notes were malformed.")
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use ember_game_what_is_this_v1::{KernelMeasurement, SummaryStats};
+    use serde_json::json;
+
     use super::*;
 
-    fn observation_for(spec: JulibrotScenarioSpec) -> ScenarioObservation {
-        ScenarioObservation {
-            scenario_id: spec.scenario_id.to_string(),
-            step_count: spec.step_count,
-            interval_ms: spec.interval_ms,
-            frames: FrameObservation {
-                observed: 120,
-                clear_only: 12,
-                held: 20,
-                warp_refused: 20,
-                clear_only_fraction: 0.1,
-                held_fraction: 1.0 / 6.0,
-                warp_refused_fraction: 1.0 / 6.0,
-                uncovered_fraction_samples: vec![0.25; FACT_SAMPLE_CAP],
+    const FACT_SAMPLE_CAP: usize = 12;
+    const ADVERSARIAL_GAME_WALL_INPUT: f64 = 239_999.989_999_999_99;
+    const ADVERSARIAL_FRACTION_INPUT: f64 = 0.123_456_789_012_345_67;
+    const ADVERSARIAL_MEDIAN_FRACTION_INPUT: f64 = 0.567_890_123_456_789_01;
+    const ADVERSARIAL_HIGH_FRACTION_INPUT: f64 = 0.987_654_321_098_765_43;
+    const ADVERSARIAL_HOLD_WALL_INPUT: f64 = 2_000.009_999_999_999_8;
+    const ADVERSARIAL_INTEGER: u64 = 12_345_678_901_234_567;
+    const ADVERSARIAL_RECORD_BYTES: usize = 18_879;
+
+    fn round_fixture(value: f64, decimal_places: i32) -> f64 {
+        let scale = 10_f64.powi(decimal_places);
+        (value * scale).round() / scale
+    }
+
+    fn page() -> &'static str {
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/games/what-is-this/v1/index.html"
+        ))
+    }
+
+    fn section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
+        let (_, tail) = source.split_once(start).expect("section start");
+        let (body, _) = tail.split_once(end).expect("section end");
+        body
+    }
+
+    fn adversarial_record(
+        spec: JulibrotScenarioSpec,
+        final_record: bool,
+    ) -> KernelMeasurement {
+        let game_wall_ms = round_fixture(ADVERSARIAL_GAME_WALL_INPUT, 2);
+        let low_fraction = round_fixture(ADVERSARIAL_FRACTION_INPUT, 4);
+        let median_fraction = round_fixture(ADVERSARIAL_MEDIAN_FRACTION_INPUT, 4);
+        let high_fraction = round_fixture(ADVERSARIAL_HIGH_FRACTION_INPUT, 4);
+        let hold_wall_ms = round_fixture(ADVERSARIAL_HOLD_WALL_INPUT, 2);
+        let wall_samples = vec![ADVERSARIAL_INTEGER; FACT_SAMPLE_CAP];
+        let scene_ids = (0..FACT_SAMPLE_CAP)
+            .map(|index| ADVERSARIAL_INTEGER + u64::try_from(index).expect("fixture index"))
+            .collect::<Vec<_>>();
+        let mut note = json!({
+            "scenario_id": spec.scenario_id,
+            "step_count": spec.step_count,
+            "interval_ms": spec.interval_ms,
+            "sample_window": "last 12 distinct lab turns",
+            "live_iteration_cap": 4096,
+            "frames": {
+                "sample_count": 4_294_967_295_u64,
+                "observed": 4_294_967_295_u64,
+                "frames_from_raf": 4_294_967_295_u64,
+                "frames_from_fallback": 4_294_967_295_u64,
+                "frame_schedules": 4_294_967_295_u64,
+                "clear_only": 4_294_967_295_u64,
+                "held": 4_294_967_295_u64,
+                "clear_only_fraction": low_fraction,
+                "held_fraction": high_fraction,
+                "warp_refused": null,
+                "warp_refused_fraction": null,
+                "uncovered_fraction": {
+                    "min": low_fraction,
+                    "median": median_fraction,
+                    "max": high_fraction,
+                },
             },
-            completed_scene_ids: (1..=u64::try_from(FACT_SAMPLE_CAP).unwrap_or(12)).collect(),
-            discarded_scene_ids: None,
-            presented_scene_ids: None,
-            settle_to_paint_ms: None,
-            reference_requests_issued: None,
-            sampled_reference_requests_issued: Some(2),
-            walls_us: WallObservation {
-                worker_reference_us: Some(vec![1; FACT_SAMPLE_CAP]),
-                credit_wait_us: None,
-                transfer_us: None,
-                packing_us: None,
-                upload_us: None,
-                dispatch_us: None,
-                fence_us: Some(vec![2; FACT_SAMPLE_CAP]),
+            "completed_scene_ids": scene_ids,
+            "discarded_scene_ids": null,
+            "presented_scene_ids": null,
+            "settle_to_paint_ms": null,
+            "reference_requests_issued": null,
+            "sampled_reference_requests_issued": 4_294_967_295_u64,
+            "timing_records_observed": 64,
+            "walls_us": {
+                "worker_reference_us": wall_samples,
+                "credit_wait_us": wall_samples,
+                "transfer_us": null,
+                "packing_us": null,
+                "upload_us": null,
+                "dispatch_us": null,
+                "fence_us": wall_samples,
             },
-            scripted_hold_wall_ms: (spec.scenario_id == "hold-exact-2000ms").then_some(2_000.25),
-            game_side_wall_ms: vec![0.125; usize::from(spec.step_count)],
+            "scripted_hold_wall_ms": (spec.scenario_id == "hold-exact-2000ms").then_some(hold_wall_ms),
+        });
+        if final_record {
+            note["stage_progress"] = json!({
+                "completed_scenarios": 8,
+                "total_scenarios": 8,
+                "partial_reason": null,
+            });
+        }
+        let raw_samples = vec![game_wall_ms; usize::from(spec.step_count)];
+        KernelMeasurement {
+            kernel_id: format!("julibrot-slide.{}.v1", spec.scenario_id),
+            workload: format!(
+                "{}; baseline {}; steps={}; interval_ms={}; raw=game-side step wall ms",
+                spec.name, spec.baseline_row, spec.step_count, spec.interval_ms
+            ),
+            unit: "ms".to_string(),
+            warmup_runs: 0,
+            status: KernelStatus::Complete,
+            unavailable_reason: None,
+            raw_samples,
+            summary: Some(SummaryStats {
+                sample_count: u32::from(spec.step_count),
+                median: game_wall_ms,
+                p95: game_wall_ms,
+                min: game_wall_ms,
+                max: game_wall_ms,
+            }),
+            notes: vec![serde_json::to_string(&note).expect("fixture note")],
         }
     }
 
     #[test]
     fn scenario_table_is_stable_and_covers_every_requested_sequence() {
         assert_eq!(SCENARIOS.len(), 8);
-        assert_eq!(SCENARIOS[0].action, "range:o13");
+        assert_eq!(SCENARIOS[0].scenario_id, "object-o13-range");
         assert_eq!(SCENARIOS[1].baseline_row, "gentle-d5-8");
         assert_eq!(SCENARIOS[2].baseline_row, "close-d5-2");
         assert_eq!(SCENARIOS[6].interval_ms, 2_000);
         assert_eq!(SCENARIOS[7].step_count, 30);
+        let inventory = serde_json::to_string(&SCENARIOS).expect("scenario inventory");
+        assert!(!inventory.contains("\"action\""));
     }
 
     #[test]
-    fn complete_scenario_records_fit_the_stage_byte_budget() {
+    fn adversarial_shipped_records_fit_the_stage_byte_budget() {
         let records = SCENARIOS
             .into_iter()
-            .map(|spec| {
-                measurement(&serde_json::to_string(&observation_for(spec)).expect("fixture JSON"))
-                    .expect("bounded scenario")
-            })
+            .enumerate()
+            .map(|(index, spec)| adversarial_record(spec, index + 1 == SCENARIOS.len()))
             .collect::<Vec<_>>();
-        let bytes = serde_json::to_vec(&records)
-            .expect("measurement JSON")
-            .len();
+        let encoded = serde_json::to_vec(&records).expect("measurement JSON");
+        let decoded =
+            serde_json::from_slice::<Vec<KernelMeasurement>>(&encoded).expect("schema records");
+        assert_eq!(decoded, records);
+        let bytes = encoded.len();
+        assert_eq!(bytes, ADVERSARIAL_RECORD_BYTES);
         assert!(
             bytes <= JULIBROT_REPORT_BYTE_BUDGET,
             "{bytes} > {JULIBROT_REPORT_BYTE_BUDGET}"
@@ -467,42 +343,89 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_path_is_an_honest_schema_measurement() {
-        let record = unavailable_measurement("WebGL2 unavailable");
-        let stage = unavailable_stage("WebGL2 unavailable", 12.5);
-        assert_eq!(record.status, KernelStatus::Unavailable);
-        assert_eq!(
-            record.unavailable_reason.as_deref(),
-            Some("WebGL2 unavailable")
+    fn shipped_page_uses_lab_turns_appended_timings_and_bounded_waits() {
+        let timing = section(
+            page(),
+            "function appendedJulibrotTimings",
+            "function julibrotCollector",
         );
-        assert_eq!(
-            stage.status,
-            ember_game_what_is_this_v1::StageStatus::Unavailable
+        assert!(timing.contains("finalKeys.lastIndexOf(baselineTail)"));
+        let collector = section(
+            page(),
+            "function julibrotCollector",
+            "async function observeJulibrotInterval",
         );
-        assert_eq!(stage.unavailable_reason, record.unavailable_reason);
-        assert!(
-            serde_json::to_vec(&record).expect("measurement JSON").len()
-                < JULIBROT_REPORT_BYTE_BUDGET
+        assert!(collector.contains("frames.sample_count += 1"));
+        assert!(collector.contains("frames.frames_from_raf"));
+        assert!(collector.contains("frames.frames_from_fallback"));
+        assert!(collector.contains("warp_refused: null"));
+        assert!(collector.contains("appendedJulibrotTimings"));
+        assert!(!collector.contains("record.edit >"));
+        assert!(collector.contains("roundJulibrot(wallMs, 2)"));
+        assert!(collector.contains("julibrotNumberSummary(uncoveredFractions, 4)"));
+        let baseline = section(
+            page(),
+            "async function establishJulibrotBaseline",
+            "function cappedDistinct",
         );
+        assert!(baseline.contains("setJulibrotControl(document, 'iteration-cap', 512, 'change')"));
+        let reader = section(
+            page(),
+            "function julibrotFrameFacts",
+            "function isSettledJulibrotFinal",
+        );
+        assert!(reader.contains("JULIBROT_FACT_FRAME_DEADLINE_MS"));
+        assert!(reader.contains("onStageTokenCancel"));
+        assert!(page().contains("the page was hidden during the Julibrot slide; the lab drops to its 250 ms fallback timer and the game's animation-frame sampling stops, so no fast-slide frame can be observed"));
     }
 
     #[test]
-    fn scenario_record_round_trips_through_the_schema_measurement() {
-        let record = measurement(
-            &serde_json::to_string(&observation_for(SCENARIOS[0])).expect("fixture JSON"),
-        )
-        .expect("bounded scenario");
-        let encoded = serde_json::to_vec(&record).expect("measurement JSON");
-        let decoded = serde_json::from_slice::<KernelMeasurement>(&encoded).expect("schema record");
-        assert_eq!(decoded, record);
-    }
-
-    #[test]
-    fn measurement_rejects_a_changed_scenario_table() {
-        let mut changed = observation_for(SCENARIOS[0]);
-        changed.step_count += 1;
-        let error = measurement(&serde_json::to_string(&changed).expect("fixture JSON"))
-            .expect_err("changed step table must be rejected");
-        assert!(error.contains("fixed step table"));
+    fn shipped_page_keeps_unavailable_partial_and_teardown_paths_distinct() {
+        let measurement = section(
+            page(),
+            "async function measureJulibrotSlide",
+            "function julibrotReportSummary",
+        );
+        assert!(measurement.contains("if (!records.length && failure)"));
+        assert!(measurement.contains("run.kernels.push(...records)"));
+        assert!(!measurement.contains("run.kernels.push(record)"));
+        assert!(measurement.contains("setJulibrotStageProgress"));
+        assert!(measurement.contains("fitJulibrotRecordsToBudget"));
+        let local_budget = section(
+            page(),
+            "function fitJulibrotRecordsToBudget",
+            "function setJulibrotStageProgress",
+        );
+        assert!(!local_budget.contains("throw"));
+        let report_budget = section(
+            page(),
+            "function fitReportToByteCap",
+            "function fallbackPersonality",
+        );
+        let julibrot_raw = report_budget
+            .find("truncateJulibrotRawSample(julibrotRecords)")
+            .expect("Julibrot raw-sample truncation");
+        let julibrot_note = report_budget
+            .find("truncateJulibrotNoteDetail(julibrotRecords)")
+            .expect("Julibrot note-detail truncation");
+        let other_raw = report_budget
+            .find("!kernel.kernel_id.startsWith('julibrot-slide.') && kernel.raw_samples.length")
+            .expect("other-stage raw-sample truncation");
+        assert!(julibrot_raw < julibrot_note && julibrot_note < other_raw);
+        assert!(page().contains("report cap truncation:'))"));
+        assert!(page().contains("summary still describes the full measured sample set"));
+        let retirement = section(
+            page(),
+            "function retireJulibrotFrame",
+            "function julibrotFrameFacts",
+        );
+        assert!(retirement.contains("retired.src = 'about:blank'"));
+        assert!(retirement.contains("retired.remove()"));
+        assert!(retirement.contains("retired.contentDocument === null"));
+        let stage = section(page(), "async function runStage", "function completeKernel");
+        assert!(stage.contains("hiddenDuringStage"));
+        assert!(stage.contains("page visibility over the stage:"));
+        assert!(stage.contains("cancelStageToken(token, outcome.unavailableReason)"));
+        assert!(page().contains("wasm.julibrot_report_byte_budget()"));
     }
 }
