@@ -83,13 +83,13 @@ struct WorkerTiming {
 
 /// Monotonic reference handoff measurements available without changing the frozen wire.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ReferenceTimingSample {
-    pub worker_generation_us: Option<u64>,
-    pub credit_wait_us: Option<u64>,
-    pub request_transfer_us: Option<u64>,
-    pub worker_round_trip_callback_observation_us: Option<u64>,
-    pub acceptance_us: Option<u64>,
-    pub reference_upload_us: Option<u64>,
+pub struct ReferenceTimingSample {
+    pub worker_generation: Option<u64>,
+    pub credit_wait: Option<u64>,
+    pub request_transfer: Option<u64>,
+    pub worker_round_trip_callback_observation: Option<u64>,
+    pub acceptance: Option<u64>,
+    pub reference_upload: Option<u64>,
 }
 
 /// Bounded application ledger populated only from measured completion records.
@@ -105,8 +105,8 @@ impl LevelTimingLedger {
         self.record_reference(
             edit,
             ReferenceTimingSample {
-                worker_generation_us: Some(u64::from(reference_us)),
-                credit_wait_us,
+                worker_generation: Some(u64::from(reference_us)),
+                credit_wait: credit_wait_us,
                 ..ReferenceTimingSample::default()
             },
         );
@@ -143,14 +143,14 @@ impl LevelTimingLedger {
                 warp_us: None,
                 scene_callback_observation_us: None,
                 warp_callback_observation_us: None,
-                worker_reference_us: worker.and_then(|item| item.sample.worker_generation_us),
-                worker_generation_us: worker.and_then(|item| item.sample.worker_generation_us),
-                credit_wait_us: worker.and_then(|item| item.sample.credit_wait_us),
-                request_transfer_us: worker.and_then(|item| item.sample.request_transfer_us),
+                worker_reference_us: worker.and_then(|item| item.sample.worker_generation),
+                worker_generation_us: worker.and_then(|item| item.sample.worker_generation),
+                credit_wait_us: worker.and_then(|item| item.sample.credit_wait),
+                request_transfer_us: worker.and_then(|item| item.sample.request_transfer),
                 worker_round_trip_callback_observation_us: worker
-                    .and_then(|item| item.sample.worker_round_trip_callback_observation_us),
-                acceptance_us: worker.and_then(|item| item.sample.acceptance_us),
-                reference_upload_us: worker.and_then(|item| item.sample.reference_upload_us),
+                    .and_then(|item| item.sample.worker_round_trip_callback_observation),
+                acceptance_us: worker.and_then(|item| item.sample.acceptance),
+                reference_upload_us: worker.and_then(|item| item.sample.reference_upload),
                 discarded: false,
             },
         });
@@ -256,12 +256,12 @@ mod tests {
             ledger.record_reference(
                 edit,
                 ReferenceTimingSample {
-                    worker_generation_us: Some(u64::from(edit + 10)),
-                    credit_wait_us: None,
-                    request_transfer_us: Some(5),
-                    worker_round_trip_callback_observation_us: Some(20),
-                    acceptance_us: Some(7),
-                    reference_upload_us: Some(3),
+                    worker_generation: Some(u64::from(edit + 10)),
+                    credit_wait: None,
+                    request_transfer: Some(5),
+                    worker_round_trip_callback_observation: Some(20),
+                    acceptance: Some(7),
+                    reference_upload: Some(3),
                 },
             );
             ledger.begin_scene(edit, scene_id, RefinementLevel::Final);

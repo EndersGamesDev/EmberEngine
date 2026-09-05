@@ -276,15 +276,15 @@ impl BrowserFrameLoop {
         self.level_timings.record_reference(
             response.centre_revision(),
             ReferenceTimingSample {
-                worker_generation_us: Some(u64::from(response.compute_us())),
-                credit_wait_us: None,
-                request_transfer_us: submitted.request_transfer_us,
-                worker_round_trip_callback_observation_us: elapsed_us(
+                worker_generation: Some(u64::from(response.compute_us())),
+                credit_wait: None,
+                request_transfer: submitted.request_transfer_us,
+                worker_round_trip_callback_observation: elapsed_us(
                     submitted.transferred_at_us,
                     response_observed_us,
                 ),
-                acceptance_us: elapsed_us(response_observed_us, accepted_us),
-                reference_upload_us: elapsed_us(upload_started_us, upload_finished_us),
+                acceptance: elapsed_us(response_observed_us, accepted_us),
+                reference_upload: elapsed_us(upload_started_us, upload_finished_us),
             },
         );
         Ok((disposition, true))
