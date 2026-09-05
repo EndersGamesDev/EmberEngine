@@ -2771,7 +2771,10 @@ fn one_ulp_of_deep_zoom_renews_the_scene_without_a_worker_request() {
 
 #[test]
 fn a_longer_reference_span_is_not_leased_to_a_lower_cap() {
-    let plane = construct_plane(0.0, 0.0).expect("canonical plane");
+    let plane = Plane {
+        basis_u: [0.0, 0.0, 1.0, 0.0],
+        basis_v: [0.0, 0.0, 0.0, 1.0],
+    };
     let lease = ReferenceLeaseIdentity {
         main_generation: 8,
         source_generation: 7,
