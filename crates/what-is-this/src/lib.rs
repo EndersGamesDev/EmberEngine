@@ -870,7 +870,8 @@ mod tests {
         assert!(page.contains("if (JULIBROT_STAGE_ONLY) beginRun(null)"));
         assert!(page.contains("new URL('labs/julibrot/', ROOT)"));
         assert!(page.contains("const JULIBROT_FACT_SAMPLE_CAP = 12"));
-        assert!(page.contains("wasm.julibrot_report_byte_budget()"));
+        assert!(page.contains("function julibrotReportByteBudget()"));
+        assert!(page.contains("wasm?.julibrot_report_byte_budget?.()"));
         assert!(page.contains("raw=game-side step wall ms"));
         assert!(page.contains("presented_scene_ids: null"));
         assert!(page.contains("warp_refused: null"));
