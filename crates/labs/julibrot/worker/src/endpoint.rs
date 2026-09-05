@@ -1110,8 +1110,8 @@ mod tests {
         assert_eq!(harness.submit(1, 512), SubmitOutcome::Transferred);
         let work = harness.wire.borrow_mut().begin_work().expect("in flight");
 
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
-        assert_eq!(harness.core.pending_request_depth(), 1);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
+        assert_eq!(harness.core.pending_request_depth(), 0);
         assert_eq!(
             harness.core.take_error(),
             None,
@@ -1150,10 +1150,14 @@ mod tests {
         let mut harness = Harness::boot(512);
         let mut generation = 1;
         assert_eq!(harness.submit(generation, 512), SubmitOutcome::Transferred);
-        for cap in [64_u32, 4_096, 512] {
+        for (cap, expected) in [
+            (64_u32, SubmitOutcome::Transferred),
+            (4_096, SubmitOutcome::Coalesced),
+            (512, SubmitOutcome::Transferred),
+        ] {
             let work = harness.wire.borrow_mut().begin_work().expect("in flight");
             generation += 1;
-            assert_eq!(harness.submit(generation, cap), SubmitOutcome::Coalesced);
+            assert_eq!(harness.submit(generation, cap), expected);
             harness
                 .wire
                 .borrow_mut()
@@ -1217,7 +1221,7 @@ mod tests {
         let held_epoch = harness.core.pool_epoch();
         let (held, _) = harness.core.take_arrival().expect("one queued arrival");
 
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
+        assert_eq!(harness.submit(2, 4_096), SubmitOutcome::Coalesced);
         assert_eq!(harness.core.facts().allocation_events, 1);
         assert_eq!(harness.core.pending_request_depth(), 1);
 
@@ -1237,7 +1241,7 @@ mod tests {
         );
         harness.pump();
         assert_eq!(harness.core.pending_request_depth(), 0);
-        assert_eq!(harness.wire.borrow().delivered.last(), Some(&(2, 64)));
+        assert_eq!(harness.wire.borrow().delivered.last(), Some(&(2, 4_096)));
 
         let now_us = harness.wire.borrow().now_us;
         harness
@@ -1249,10 +1253,10 @@ mod tests {
             2,
             "a lease from the superseded pool is charged and dropped, never transferred"
         );
-        harness.produce(64);
+        harness.produce(4_096);
         assert_eq!(
             harness.drain_arrival(OrbitDisposition::Applied),
-            (2, 64, buffer_capacity(64).unwrap())
+            (2, 4_096, buffer_capacity(4_096).unwrap())
         );
     }
 
@@ -1485,7 +1489,7 @@ mod tests {
         let mut harness = Harness::boot(512);
         assert_eq!(harness.submit(1, 512), SubmitOutcome::Transferred);
         let work = harness.wire.borrow_mut().begin_work().expect("in flight");
-        assert_eq!(harness.submit(2, 64), SubmitOutcome::Coalesced);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
         harness
             .wire
             .borrow_mut()
@@ -1499,7 +1503,7 @@ mod tests {
             WorkerChannel::new(WorkerConfig { max_iter: 512 }, WorkerMode::SameThread).unwrap();
         assert_eq!(owner.submit(request(1, 512)), SubmitOutcome::Transferred);
         let lease = producer.next_request().unwrap().unwrap();
-        assert_eq!(owner.submit(request(2, 64)), SubmitOutcome::Coalesced);
+        assert_eq!(owner.submit(request(2, 64)), SubmitOutcome::Transferred);
         producer
             .complete(lease, &orbit_records(8), 64, 1_000, 250_000)
             .unwrap();
