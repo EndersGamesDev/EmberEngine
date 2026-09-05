@@ -17,7 +17,8 @@ use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    FloatProbeResult, KernelSuite, bar_progress, derive_verdict, jank_chunk, kernel_specs,
+    FloatProbeResult, KernelSuite, bar_progress, derive_verdict, jank_chunk, julibrot_scenarios,
+    kernel_specs,
 };
 
 thread_local! {
@@ -128,6 +129,39 @@ pub fn wasm_init() {}
 #[wasm_bindgen]
 pub fn kernel_inventory_json() -> String {
     serde_json::to_string(kernel_specs()).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Returns the stable Julibrot slide scenario inventory as JSON.
+#[wasm_bindgen]
+pub fn julibrot_scenario_inventory_json() -> String {
+    serde_json::to_string(julibrot_scenarios()).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Validates and encodes one bounded Julibrot scenario as a schema-1 kernel measurement.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when the scenario identifier, fixed step table, numeric samples, or
+/// stage-specific byte and sample cap is invalid.
+#[wasm_bindgen]
+pub fn julibrot_measurement_json(observation_json: &str) -> Result<String, JsValue> {
+    let measurement = crate::julibrot::measurement(observation_json)
+        .map_err(|error| JsValue::from_str(&error))?;
+    serde_json::to_string(&measurement)
+        .map_err(|error| JsValue::from_str(&format!("could not encode Julibrot measurement: {error}")))
+}
+
+/// Encodes an unavailable Julibrot stage result as a schema-1 kernel measurement.
+#[wasm_bindgen]
+pub fn julibrot_unavailable_measurement_json(reason: &str) -> String {
+    serde_json::to_string(&crate::julibrot::unavailable_measurement(reason))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Returns the maximum compact bytes reserved for all Julibrot scenario measurements.
+#[wasm_bindgen]
+pub fn julibrot_report_byte_budget() -> u32 {
+    u32::try_from(crate::julibrot::REPORT_BYTE_BUDGET).unwrap_or(u32::MAX)
 }
 
 /// Returns the stable compute-only WebGPU kernel inventory as JSON.

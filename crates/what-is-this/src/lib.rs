@@ -3,6 +3,7 @@
 #![deny(missing_docs)]
 
 mod kernels;
+mod julibrot;
 
 #[cfg(target_arch = "wasm32")]
 mod gpu;
@@ -14,6 +15,7 @@ use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStat
 use serde::Serialize;
 
 pub use kernels::{FloatProbeResult, KernelSpec, KernelSuite, jank_chunk, kernel_specs};
+pub use julibrot::{JulibrotScenarioSpec, julibrot_scenarios};
 
 /// One report-derived sentence shown on the final verdict card.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -339,6 +341,10 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
             text: "The page was hidden during this run; the report kept the visibility change instead of pretending the scheduler behaved normally."
                 .to_string(),
         });
+    }
+
+    if let Some(text) = julibrot::observation(report) {
+        observations.push(VerdictObservation { text });
     }
 
     if let Some(gpu) = report
@@ -743,5 +749,17 @@ mod tests {
             observation.text.contains("19 measured frames")
                 && observation.text.contains("16.667 ms")
         }));
+    }
+
+    #[test]
+    fn page_contract_carries_the_julibrot_card_disclosure_and_stage_only_query() {
+        let page = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../web/games/what-is-this/v1/index.html"
+        ));
+        assert!(page.contains("data-stage=\"stage.julibrot-slide.v1\""));
+        assert!(page.contains("id=\"julibrot-result\""));
+        assert!(page.contains("The game drove the same-origin Julibrot lab at labs/julibrot/, read the lab's own Facts display, and recorded none of your input."));
+        assert!(page.contains("stage=julibrot-slide"));
     }
 }
