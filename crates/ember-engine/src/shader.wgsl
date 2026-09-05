@@ -118,6 +118,21 @@ fn shadow_visibility(world: vec3<f32>, normal: vec3<f32>, ndotl: f32) -> f32 {
     }
     let dimensions = vec2<i32>(textureDimensions(shadow_tex));
     let texel = vec2<i32>(uv * vec2<f32>(dimensions));
+    // Each PCF tap samples a different point on the receiver plane. Comparing
+    // every tap with the centre depth self-shadows even perfectly flat ground,
+    // especially in a wider shadow volume. Transform the normal by inverse
+    // transpose using the orthogonal rows of our directional-light matrix.
+    // This analytic slope needs no screen derivatives or extra GPU features.
+    let row_x = vec3<f32>(scene.light_view_proj[0].x, scene.light_view_proj[1].x, scene.light_view_proj[2].x);
+    let row_y = vec3<f32>(scene.light_view_proj[0].y, scene.light_view_proj[1].y, scene.light_view_proj[2].y);
+    let row_z = vec3<f32>(scene.light_view_proj[0].z, scene.light_view_proj[1].z, scene.light_view_proj[2].z);
+    let plane = vec3<f32>(dot(normal, row_x) / dot(row_x, row_x),
+        dot(normal, row_y) / dot(row_y, row_y), dot(normal, row_z) / dot(row_z, row_z));
+    if abs(plane.z) < 0.00001 {
+        return 1.0;
+    }
+    // Texture V points down while clip Y points up.
+    let depth_gradient = vec2<f32>(-2.0 * plane.x, 2.0 * plane.y) / plane.z;
     let compare_depth = ndc.z - (0.00008 + 0.00010 * (1.0 - ndotl));
     var sum = 0.0;
     for (var y = -1; y <= 1; y += 1) {
@@ -125,7 +140,9 @@ fn shadow_visibility(world: vec3<f32>, normal: vec3<f32>, ndotl: f32) -> f32 {
             let coord = clamp(texel + vec2<i32>(x, y), vec2<i32>(0), dimensions - vec2<i32>(1));
             let packed = textureLoad(shadow_tex, coord, 0).rgb;
             let depth = dot(packed, vec3<f32>(1.0, 1.0 / 255.0, 1.0 / 65025.0));
-            sum += select(0.0, 1.0, compare_depth <= depth);
+            let tap_uv = (vec2<f32>(coord) + vec2<f32>(0.5)) / vec2<f32>(dimensions);
+            let receiver_depth = compare_depth + dot(depth_gradient, tap_uv - uv);
+            sum += select(0.0, 1.0, receiver_depth <= depth);
         }
     }
     let border = min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y));

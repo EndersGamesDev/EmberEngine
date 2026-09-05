@@ -6,7 +6,19 @@
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const ARENA_HALF: f32 = 24.0;
-pub const MOVE_SPEED: f32 = 9.0;
+/// Invalid custom-level extents fall back to the original arena boundary.
+#[must_use]
+pub fn valid_arena_half(value: f32) -> f32 {
+    if value.is_finite() && (4.0..=256.0).contains(&value) {
+        value
+    } else {
+        ARENA_HALF
+    }
+}
+pub const MOVE_SPEED: f32 = 4.0;
+/// Base horizontal speed while airborne. Kept separate from `MOVE_SPEED` so
+/// grounded movement can be tuned without changing the authored jump routes.
+pub const AIR_MOVE_SPEED: f32 = 9.0;
 /// Shift: faster. C: slower (and a lower profile, cosmetically).
 pub const SPRINT_MULT: f32 = 1.6;
 pub const CROUCH_MULT: f32 = 0.55;
@@ -142,8 +154,9 @@ pub const MAX_PITCH: f32 = 1.45;
 /// of the weapon table IS the pistol and every shot test written before
 /// v18 reads its world through these.
 ///
-/// v20 set them to the .45 ACP's real muzzle velocity and a 60 m range
-/// (`docs/plans/arena-v20-realism.md` section 3.1). A round now crosses
+/// Historical v20 set the .45 ACP's real muzzle velocity and a 60 m range
+/// (`docs/plans/arena-v20-realism.md` section 3.1). Protocol 19's handling
+/// pass keeps that speed but limits the starter pistol to 30 m. It crosses
 /// 4.67 m a tick, which is why every test on the segment below is exact
 /// rather than sampled: the old 34 m/s was the speed at which a sampled
 /// head band and an end-point cover test happened to be good enough. The
@@ -151,8 +164,8 @@ pub const MAX_PITCH: f32 = 1.45;
 /// that is exact and the seconds follow from it.
 pub const BULLET_SPEED: f32 = 280.0;
 pub const BULLET_R: f32 = 0.22;
-pub const BULLET_TTL: f32 = 60.0 / BULLET_SPEED;
-pub const RELOAD_SECS: f32 = 1.1;
+pub const BULLET_TTL: f32 = 30.0 / BULLET_SPEED;
+pub const RELOAD_SECS: f32 = 1.3;
 pub const PAD_RESPAWN_SECS: f32 = 15.0;
 pub const PAD_RADIUS: f32 = 1.3;
 /// A pad is taken only with the feet below this.
@@ -163,8 +176,8 @@ pub const PAD_RADIUS: f32 = 1.3;
 /// lands below it, so a pad on open floor is still grabbed in passing.
 pub const PAD_PICK_H: f32 = 1.0;
 
-/// The weapon everyone spawns with and falls back to: today's pistol, bit
-/// for bit, with an infinite reserve.
+/// The modest close-range pistol everyone spawns with and falls back to,
+/// with an infinite reserve. Loot improves firepower rather than ammunition access.
 pub const SIDEARM: u8 = 1;
 /// Weapon ids run `1..=WEAPON_COUNT`. `weapon_stats` answers any id, so a
 /// client that reads an id it does not know still draws something, but the
@@ -180,7 +193,7 @@ pub const RESERVE_INFINITE: u8 = 255;
 pub const LOOT_POOL: [u8; 5] = [2, 3, 5, 6, 7];
 /// An airborne shooter's cone widens by this much, so a jumping spray is a
 /// worse spray than a planted one.
-pub const ADS_SPREAD_AIR_MULT: f32 = 1.6;
+pub const ADS_SPREAD_AIR_MULT: f32 = 2.4;
 /// A block's edge length. Every loot block is one metre on a side.
 pub const LOOT_SIZE: f32 = 1.0;
 /// How long a bonked block stays dark before it pays again.
@@ -230,8 +243,8 @@ pub struct WeaponStats {
     pub ttl: f32,
     /// Hit radius of the round itself.
     pub radius: f32,
-    /// Base cone half-angle, radians; `bloom` widens it per round fired
-    /// since the last reload, capped at `spread_max`.
+    /// Base hip-fire cone half-angle, radians. A shot adds `bloom` radians
+    /// of recoverable recoil spread, capped with the base at `spread_max`.
     pub spread: f32,
     pub bloom: f32,
     pub spread_max: f32,
@@ -246,6 +259,144 @@ pub struct WeaponStats {
     /// Splash radius of a rocket; zero for a bullet.
     pub splash_r: f32,
     pub reload: f32,
+}
+
+/// Shared server/client handling.
+///
+/// Timings describe a complete 0..1 sight
+/// transition; optical zoom is true angular magnification, not a FOV angle.
+/// Spread multipliers never change movement or the authored jump reach.
+#[derive(Clone, Copy, Debug)]
+pub struct WeaponHandling {
+    pub ads_in_secs: f32,
+    pub ads_out_secs: f32,
+    pub optical_zoom: f32,
+    pub crouch_spread: f32,
+    pub moving_spread: f32,
+    pub air_spread: f32,
+    /// Minimum airborne half-cone, even through a settled sniper scope.
+    pub air_floor: f32,
+    /// Recoil cone radians recovered per second, including between shots.
+    pub bloom_recovery: f32,
+}
+
+#[must_use]
+pub const fn weapon_handling(id: u8) -> WeaponHandling {
+    let (
+        ads_in_secs,
+        ads_out_secs,
+        optical_zoom,
+        crouch_spread,
+        moving_spread,
+        air_spread,
+        air_floor,
+        bloom_recovery,
+    ) = match id {
+        2 => (0.18, 0.12, 1.3, 0.72, 1.8, 2.3, 0.025, 0.028),
+        3 => (0.24, 0.14, 1.5, 0.66, 1.9, 2.6, 0.035, 0.024),
+        4 => (0.22, 0.13, 1.6, 0.66, 1.8, 2.4, 0.030, 0.020),
+        5 => (0.19, 0.12, 1.4, 0.70, 1.85, 2.4, 0.028, 0.032),
+        6 => (0.45, 0.20, 6.0, 0.60, 4.0, 3.0, 0.060, 0.040),
+        7 => (0.30, 0.18, 2.0, 0.75, 1.9, 2.2, 0.035, 0.035),
+        _ => (
+            0.14,
+            0.10,
+            1.15,
+            0.70,
+            1.7,
+            ADS_SPREAD_AIR_MULT,
+            0.028,
+            0.040,
+        ),
+    };
+    WeaponHandling {
+        ads_in_secs,
+        ads_out_secs,
+        optical_zoom,
+        crouch_spread,
+        moving_spread,
+        air_spread,
+        air_floor,
+        bloom_recovery,
+    }
+}
+
+/// Shared, finite-safe ADS progression. The authoritative sim calls this at
+/// fixed dt; clients may render the same progression at their frame cadence.
+#[must_use]
+pub fn advance_ads(fraction: f32, held: bool, weapon: u8, dt: f32) -> f32 {
+    let fraction = if fraction.is_finite() {
+        fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if !dt.is_finite() || dt <= 0.0 {
+        return fraction;
+    }
+    let handling = weapon_handling(weapon);
+    if held {
+        (fraction + dt / handling.ads_in_secs).min(1.0)
+    } else {
+        (fraction - dt / handling.ads_out_secs).max(0.0)
+    }
+}
+
+/// Effective half-angle in radians.
+///
+/// Crouch steadies a planted shooter only;
+/// airborne floors prevent a zero-cone scoped jump. `moving` must describe
+/// actual displacement, not a held direction while blocked by a wall.
+#[must_use]
+pub fn weapon_spread(
+    weapon: u8,
+    ads_fraction: f32,
+    bloom: f32,
+    crouch: bool,
+    moving: bool,
+    grounded: bool,
+) -> f32 {
+    spread_with_stats(
+        &weapon_stats(weapon),
+        &weapon_handling(weapon),
+        ads_fraction,
+        bloom,
+        crouch,
+        moving,
+        grounded,
+    )
+}
+
+fn spread_with_stats(
+    stats: &WeaponStats,
+    handling: &WeaponHandling,
+    ads_fraction: f32,
+    bloom: f32,
+    crouch: bool,
+    moving: bool,
+    grounded: bool,
+) -> f32 {
+    let ads = if ads_fraction.is_finite() {
+        ads_fraction.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let bloom = if bloom.is_finite() {
+        bloom.max(0.0)
+    } else {
+        0.0
+    };
+    let mut cone =
+        (stats.spread + bloom).min(stats.spread_max) * (1.0 + (stats.ads_spread - 1.0) * ads);
+    if crouch && grounded {
+        cone *= handling.crouch_spread;
+    }
+    if moving {
+        cone *= handling.moving_spread;
+    }
+    if !grounded {
+        cone = (cone * handling.air_spread).max(handling.air_floor);
+    }
+    cone
 }
 
 /// The table row for an id.
@@ -271,10 +422,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 380.0,
             ttl: 40.0 / 380.0,
             radius: BULLET_R,
-            spread: 0.015,
-            bloom: 0.005,
-            spread_max: 0.075,
-            ads_spread: 0.5,
+            spread: 0.024,
+            bloom: 0.006,
+            spread_max: 0.085,
+            ads_spread: 0.40,
             gravity: 0.0,
             pierce: 0,
             kind: Projectile::Bullet,
@@ -293,10 +444,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 715.0,
             ttl: 80.0 / 715.0,
             radius: BULLET_R,
-            spread: 0.006,
+            spread: 0.022,
             bloom: 0.006,
-            spread_max: 0.05,
-            ads_spread: 0.5,
+            spread_max: 0.075,
+            ads_spread: 0.28,
             gravity: 0.0,
             pierce: 0,
             kind: Projectile::Bullet,
@@ -315,10 +466,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 880.0,
             ttl: 80.0 / 880.0,
             radius: BULLET_R,
-            spread: 0.008,
-            bloom: 0.003,
-            spread_max: 0.04,
-            ads_spread: 0.5,
+            spread: 0.019,
+            bloom: 0.004,
+            spread_max: 0.060,
+            ads_spread: 0.28,
             gravity: 0.0,
             pierce: 0,
             kind: Projectile::Bullet,
@@ -339,10 +490,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 450.0,
             ttl: 60.0 / 450.0,
             radius: BULLET_R,
-            spread: 0.0,
-            bloom: 0.0,
-            spread_max: 0.0,
-            ads_spread: 1.0,
+            spread: 0.020,
+            bloom: 0.014,
+            spread_max: 0.050,
+            ads_spread: 0.30,
             gravity: -9.81,
             pierce: 0,
             kind: Projectile::Bullet,
@@ -364,10 +515,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 900.0,
             ttl: 120.0 / 900.0,
             radius: BULLET_R,
-            spread: 0.06,
-            bloom: 0.0,
-            spread_max: 0.06,
-            ads_spread: 0.0,
+            spread: 0.075,
+            bloom: 0.025,
+            spread_max: 0.10,
+            ads_spread: 0.025,
             gravity: -9.81,
             pierce: 1,
             kind: Projectile::Bullet,
@@ -389,10 +540,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: 300.0,
             ttl: 5.0,
             radius: 0.35,
-            spread: 0.0,
-            bloom: 0.0,
-            spread_max: 0.0,
-            ads_spread: 1.0,
+            spread: 0.027,
+            bloom: 0.020,
+            spread_max: 0.050,
+            ads_spread: 0.40,
             gravity: -3.0,
             pierce: 0,
             kind: Projectile::Rocket,
@@ -403,8 +554,8 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
         // pre-v18 shot tests read.
         _ => WeaponStats {
             name: "Sidearm",
-            cooldown: 0.18,
-            mag: 8,
+            cooldown: 0.32,
+            mag: 6,
             reserve: RESERVE_INFINITE,
             damage: 1,
             speed: BULLET_SPEED,
@@ -412,10 +563,10 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             speed_max: BULLET_SPEED,
             ttl: BULLET_TTL,
             radius: BULLET_R,
-            spread: 0.0,
-            bloom: 0.0,
-            spread_max: 0.0,
-            ads_spread: 1.0,
+            spread: 0.026,
+            bloom: 0.010,
+            spread_max: 0.055,
+            ads_spread: 0.42,
             gravity: 0.0,
             pierce: 0,
             kind: Projectile::Bullet,
@@ -878,6 +1029,40 @@ fn spawn_from(spawns: &[[f32; 2]], slot: u32) -> [f32; 2] {
     spawns[slot as usize % spawns.len()]
 }
 
+/// Prefer the requested slot, then a free pocket in stable cyclic order.
+/// Custom levels with too few pockets fall back to the greatest clearance.
+fn available_spawn(
+    spawns: &[[f32; 2]],
+    slot: u32,
+    players: &[PlayerSt],
+    exclude: Option<u8>,
+) -> [f32; 2] {
+    let count = if spawns.is_empty() {
+        MAX_PLAYERS
+    } else {
+        spawns.len()
+    };
+    let mut best = spawn_from(spawns, slot);
+    let mut clearance = -1.0_f32;
+    for offset in 0..count {
+        #[allow(clippy::cast_possible_truncation)]
+        let candidate = spawn_from(spawns, slot.wrapping_add(offset as u32));
+        let nearest = players
+            .iter()
+            .filter(|p| p.alive && Some(p.id) != exclude && p.y < BODY_H_STAND)
+            .map(|p| (p.pos[0] - candidate[0]).powi(2) + (p.pos[1] - candidate[1]).powi(2))
+            .fold(f32::INFINITY, f32::min);
+        if nearest >= (2.0 * PLAYER_R + 0.1).powi(2) {
+            return candidate;
+        }
+        if nearest > clearance {
+            best = candidate;
+            clearance = nearest;
+        }
+    }
+    best
+}
+
 /// A client-only prop the level lists so every client draws the same city.
 ///
 /// Nothing in the sim reads these; they are here because the level is the
@@ -919,6 +1104,8 @@ pub const MAP_TRENCH_CITY: &str = "trench-city";
 /// The name of the authored v18 arena, `Level::freight_yard()` in
 /// `freight_yard.rs`, and what an empty `CreateLobby.map` resolves to.
 pub const MAP_FREIGHT_YARD: &str = "freight-yard";
+/// Breakwater Harbor: the hand-authored 96 m port arena.
+pub const MAP_HARBOR: &str = "harbor";
 
 /// The rules a lobby plays by: who a round may hit, how a point is earned
 /// and when the round ends (`docs/plans/arena-v19-modes.md`).
@@ -1220,6 +1407,8 @@ impl Level {
             Self::trench_city()
         } else if map == MAP_FREIGHT_YARD {
             Self::freight_yard()
+        } else if map == MAP_HARBOR {
+            Self::harbor()
         } else {
             Self::from_seed(seed)
         }
@@ -1379,18 +1568,38 @@ const fn grant(p: &mut PlayerSt, id: u8) {
     p.fired = 0;
     p.reload_t = 0.0;
     p.cooldown = 0.2;
+    reset_handling(p);
 }
 
-/// Is this spot blocked for a player whose feet are at `y`? The arena wall
-/// always blocks; a box only blocks while the player's feet are below its
+const fn reset_handling(p: &mut PlayerSt) {
+    p.ads_fraction = 0.0;
+    p.bloom = 0.0;
+    p.spread = weapon_stats(p.weapon).spread;
+}
+
+/// Is this spot blocked for a player whose feet are at `y`?
+///
+/// The legacy arena wall always blocks; a box only blocks while the player's feet are below its
 /// top (by more than a step), so you can walk across boxes you have jumped
 /// onto - AND while their head is above its bottom, so you can walk under a
 /// box that starts above you. The head is always the standing one: crouch
 /// is cosmetic to movement here as everywhere, and a rule that let a
 /// crouched player under a lower roof would need `move_circle` to know the
 /// stance on both peers. For `base == 0` the head clause is always true.
-fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
-    if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
+#[must_use]
+pub fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
+    blocked_in(pos, y, r, obstacles, ARENA_HALF)
+}
+
+/// The same body/cover rule inside the supplied level boundary.
+#[must_use]
+pub fn blocked_in(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle], arena_half: f32) -> bool {
+    let arena_half = valid_arena_half(arena_half);
+    if !pos[0].is_finite()
+        || !pos[1].is_finite()
+        || pos[0].abs() > arena_half - r
+        || pos[1].abs() > arena_half - r
+    {
         return true;
     }
     obstacles.iter().any(|o| {
@@ -1407,16 +1616,51 @@ fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
 /// the client's prediction: a rule applied at one call site and not the
 /// other is a desync, and a signature change is the only way to make the
 /// compiler say so.
+fn speed_at(base: f32, sprint: bool, crouch: bool, shield: bool) -> f32 {
+    base * if crouch {
+        CROUCH_MULT
+    } else if sprint && !shield {
+        SPRINT_MULT
+    } else {
+        1.0
+    }
+}
+
 #[must_use]
 pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
-    MOVE_SPEED
-        * if crouch {
-            CROUCH_MULT
-        } else if sprint && !shield {
-            SPRINT_MULT
-        } else {
-            1.0
-        }
+    speed_at(MOVE_SPEED, sprint, crouch, shield)
+}
+
+/// The horizontal speed to use before this movement step.
+///
+/// Grounded players use the current walking speed. A jump launches at the
+/// legacy air speed on its very first tick, and stays there until landing, so
+/// authored routes keep their horizontal jump reach while ordinary movement
+/// slows down. This is shared by the server and client prediction.
+// These independent input flags and body fields mirror shared prediction;
+// grouping them would obscure which pre-step state controls jump reach.
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[must_use]
+pub fn movement_speed(
+    pos: [f32; 2],
+    y: f32,
+    vy: f32,
+    jump: bool,
+    sprint: bool,
+    crouch: bool,
+    shield: bool,
+    obstacles: &[Obstacle],
+) -> f32 {
+    // A body can overlap the edge of a roof while still rising or falling.
+    // It is not standing there until the vertical step has resolved its
+    // velocity to zero, so keep its full air speed through that landing.
+    let grounded = vy == 0.0 && y <= support_height(pos, PLAYER_R, y, obstacles) + 1e-3;
+    let base = if grounded && !jump {
+        MOVE_SPEED
+    } else {
+        AIR_MOVE_SPEED
+    };
+    speed_at(base, sprint, crouch, shield)
 }
 
 /// Player movement: sanitize the intent, then integrate one axis at a time
@@ -1431,6 +1675,20 @@ pub fn move_circle(
     dt: f32,
     obstacles: &[Obstacle],
 ) -> [f32; 2] {
+    move_circle_in(pos, y, mv, speed, dt, obstacles, ARENA_HALF)
+}
+
+/// Body movement inside a level's walls, shared by prediction and authority.
+#[must_use]
+pub fn move_circle_in(
+    pos: [f32; 2],
+    y: f32,
+    mv: [f32; 2],
+    speed: f32,
+    dt: f32,
+    obstacles: &[Obstacle],
+    arena_half: f32,
+) -> [f32; 2] {
     let mut mv = mv;
     if !mv[0].is_finite() || !mv[1].is_finite() {
         mv = [0.0, 0.0];
@@ -1441,13 +1699,13 @@ pub fn move_circle(
         mv = [mv[0] / len, mv[1] / len];
     }
     let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-    let pos = if blocked(try_x, y, PLAYER_R, obstacles) {
+    let pos = if blocked_in(try_x, y, PLAYER_R, obstacles, arena_half) {
         pos
     } else {
         try_x
     };
     let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
-    if blocked(try_z, y, PLAYER_R, obstacles) {
+    if blocked_in(try_z, y, PLAYER_R, obstacles, arena_half) {
         pos
     } else {
         try_z
@@ -1575,8 +1833,8 @@ pub struct PlayerIn {
     /// the server keeps applying the last input it received, and at one kill
     /// per connect that is not a weapon, it is a proximity field.
     pub melee: bool,
-    /// Aiming down the sights (RMB or LT). HELD, like `shield`: it scales
-    /// the spread cone of the round fired this tick and nothing else.
+    /// Aiming down the sights (RMB or LT). HELD, like `shield`: requests a
+    /// timed authoritative sight raise, not instant precision on this tick.
     pub ads: bool,
     /// How many ticks behind the present this player's view is (derived by
     /// the server from the client's reported view tick, clamped). Bullets
@@ -1618,13 +1876,16 @@ pub struct PlayerSt {
     /// When both this and `ammo` reach zero the gun is gone and the sidearm
     /// is back, which is what makes a looted gun a loan.
     pub reserve: u8,
-    /// Rounds fired since the magazine was last filled: the bloom's input.
-    /// Counted rather than derived from `mag - ammo` because a reserve-short
-    /// refill fills the magazine only partly, and the difference would then
-    /// read a fresh magazine as twenty rounds into a spray. Server-only: the
-    /// wire carries `ammo`, never this, and it resets on every event that
-    /// fills the magazine (reload, grant, respawn, the dry swap).
+    /// Rounds fired since the magazine was last filled, for bookkeeping.
+    /// Server-only; resets on reload, grant, respawn and the dry swap.
+    /// Accuracy uses recovering `bloom`, never this lifetime shot count.
     fired: u8,
+    /// Authoritative sight raise, 0 = hip and 1 = fully sighted.
+    pub ads_fraction: f32,
+    /// Current effective shot half-cone in radians, broadcast for the reticle.
+    pub spread: f32,
+    /// Recoverable recoil cone radians. Independent of ammunition spent.
+    bloom: f32,
     /// Counting down while reloading; 0 = ready.
     pub reload_t: f32,
     /// Authoritative death count (the scoreboard's DEATHS column).
@@ -1634,6 +1895,15 @@ pub struct PlayerSt {
     /// Counting down between melee swings; 0 = ready.
     pub melee_cd: f32,
     deaths: u32,
+}
+
+impl PlayerSt {
+    /// Recoverable recoil radians before ADS/stance multipliers, for state
+    /// reporting. Reading it does not advance recovery or change shot rules.
+    #[must_use]
+    pub const fn recoil_bloom(&self) -> f32 {
+        self.bloom
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1722,7 +1992,7 @@ struct WorldEnd {
 ///
 /// The round is a point against the world: a box is met where the segment
 /// enters it, the floor where the height crosses zero, and the wall where
-/// the position crosses `ARENA_HALF - radius` on either axis (the radius
+/// the position crosses `arena_half - radius` on either axis (the radius
 /// keeps a rocket's blast drawn inside the wall, as it always was). The
 /// smallest parameter wins; a tie keeps the earlier of floor, wall, boxes
 /// in list order, so the answer is the same on every peer. The wall
@@ -1736,6 +2006,7 @@ fn world_end(
     y1: f32,
     radius: f32,
     obstacles: &[Obstacle],
+    arena_half: f32,
 ) -> Option<WorldEnd> {
     let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
     let at = |t: f32| [p0[0] + sx * t, y0 + (y1 - y0) * t, p0[1] + sz * t];
@@ -1758,7 +2029,7 @@ fn world_end(
         let p = at(t);
         consider(t, [p[0], 0.0, p[2]], SHOT_FLOOR, SHOT_NONE, [0, 1, 0]);
     }
-    let lim = ARENA_HALF - radius;
+    let lim = arena_half - radius;
     for axis in 0..2 {
         let (a, b) = (p0[axis], p1[axis]);
         let wall = if b > lim {
@@ -1791,18 +2062,13 @@ fn world_end(
 ///
 /// Pure so a test can hand it any table row, and because everything that
 /// decides where the round goes is an argument: the shooter's state, the
-/// row, whether the sights are up, whether the feet are planted, and the
-/// (seed, tick) the cone is rolled from. The caller charges the cooldown,
-/// the magazine and the shooter's `fired` count; `fired` is read here BEFORE
-/// that increment, so the first round after a reload is round zero of the
-/// bloom (the Vityaz starts tight and opens up; the AK's climb reads as the
-/// cone). It is the count, not `mag - ammo`: a reserve-short refill leaves
-/// the magazine part-full, and the difference would open the first round of
-/// a fresh magazine to the cap.
+/// row, actual movement, whether the feet are planted, and the (seed, tick)
+/// the cone is rolled from. The player's timed ADS fraction and recovering
+/// bloom are read BEFORE this shot adds recoil. Magazine fill never stands
+/// in for recoil: pausing a burst restores precision without reloading.
 ///
 /// When the effective cone is zero the aim is used exactly as it was before
-/// v18 and no rotation happens at all: the sidearm's ray is bit-identical
-/// to v17, which is what keeps every pre-v18 shot test's world untouched. A
+/// v18 and no rotation happens at all (useful for pure collision tests). A
 /// non-zero cone is a uniform draw over the disc (`sqrt` on the radius),
 /// rolled from `roll(seed, tick, id, 0)` with no RNG state anywhere. The
 /// `sin_cos` and `tan` here are transcendentals in the launch, sound for the
@@ -1813,17 +2079,22 @@ fn world_end(
 pub fn launch(
     p: &PlayerSt,
     stats: &WeaponStats,
-    ads: bool,
+    moving: bool,
     grounded: bool,
     seed: u64,
     tick: u64,
     delay: u16,
     out: &mut Vec<Bullet>,
 ) {
-    let fired = f32::from(p.fired);
-    let cone = (stats.spread + stats.bloom * fired).min(stats.spread_max)
-        * if ads { stats.ads_spread } else { 1.0 }
-        * if grounded { 1.0 } else { ADS_SPREAD_AIR_MULT };
+    let cone = spread_with_stats(
+        stats,
+        &weapon_handling(p.weapon),
+        p.ads_fraction,
+        p.bloom,
+        p.crouch,
+        moving,
+        grounded,
+    );
     let (aim, pitch) = if cone == 0.0 {
         (p.aim, p.pitch)
     } else {
@@ -1882,6 +2153,8 @@ pub struct LootBlock {
 }
 
 pub struct Sim {
+    /// Authoritative half-width of this level, shared by body and bullet walls.
+    pub arena_half: f32,
     /// The rules this sim plays by, resolved once from the lobby's mode
     /// name in `from_level`.
     pub mode: GameMode,
@@ -1967,12 +2240,9 @@ fn spawns_of<'a>(
 /// respawn path, shared by the death timer and the round restart so the
 /// two cannot drift. The spawn slot advances every time so consecutive
 /// spawns walk the list.
-fn respawn(p: &mut PlayerSt, spawns: &[[f32; 2]]) {
+const fn respawn(p: &mut PlayerSt, position: [f32; 2]) {
     p.deaths = p.deaths.wrapping_add(1);
-    p.pos = spawn_from(
-        spawns,
-        p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)),
-    );
+    p.pos = position;
     p.y = 0.0;
     p.vy = 0.0;
     p.hp = MAX_HP;
@@ -1984,9 +2254,26 @@ fn respawn(p: &mut PlayerSt, spawns: &[[f32; 2]]) {
     p.reserve = RESERVE_INFINITE;
     p.fired = 0;
     p.reload_t = 0.0;
+    reset_handling(p);
 }
 
 impl Sim {
+    fn respawn_player(&mut self, index: usize) {
+        let p = &self.players[index];
+        let preferred = p
+            .deaths
+            .wrapping_add(1)
+            .wrapping_mul(3)
+            .wrapping_add(u32::from(p.id));
+        let position = available_spawn(
+            spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
+            preferred,
+            &self.players,
+            Some(p.id),
+        );
+        respawn(&mut self.players[index], position);
+    }
+
     /// The seeded arena in free for all: exactly
     /// `from_level(&Level::from_seed(seed), seed, GameMode::Ffa)`, kept as
     /// the short spelling every existing test uses.
@@ -1996,10 +2283,8 @@ impl Sim {
     }
 
     /// A sim on an authored level: its obstacles, its pads (all active), its
-    /// loot blocks (all armed), its spawns, its hill. `arena_half` is NOT
-    /// read - the wall is `ARENA_HALF` in the shared `blocked`, and making
-    /// it per-level is a `move_circle` signature change on both peers that
-    /// eight players did not need. `seed` is the lobby's, which the server
+    /// loot blocks (all armed), its spawns, its hill and its boundary.
+    /// `seed` is the lobby's, which the server
     /// already mints and sends in `GameJoined`; every spread and loot roll
     /// hashes it. `mode` is the lobby's rules; king of the hill on a level
     /// with no hill plays as free for all, which the server refuses to
@@ -2013,6 +2298,7 @@ impl Sim {
             mode
         };
         Self {
+            arena_half: valid_arena_half(level.arena_half),
             mode,
             team_score: [0; 2],
             hill_holder: HILL_FREE,
@@ -2062,7 +2348,7 @@ impl Sim {
     pub fn add_player(&mut self, id: u8) {
         // Player count is capped at eight by the public protocol.
         #[allow(clippy::cast_possible_truncation)]
-        let slot = self.players.len() as u32;
+        let mut slot = self.players.len() as u32;
         let team = if self.mode == GameMode::Tdm {
             let count = |t: u8| self.players.iter().filter(|p| p.team == t).count();
             match count(0).cmp(&count(1)) {
@@ -2073,12 +2359,21 @@ impl Sim {
         } else {
             0
         };
+        if self.mode == GameMode::Tdm {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                slot = self.players.iter().filter(|p| p.team == team).count() as u32;
+            }
+        }
+        let position = available_spawn(
+            spawns_of(self.mode, &self.spawns, &self.team_spawns, team),
+            slot,
+            &self.players,
+            None,
+        );
         self.players.push(PlayerSt {
             id,
-            pos: spawn_from(
-                spawns_of(self.mode, &self.spawns, &self.team_spawns, team),
-                slot,
-            ),
+            pos: position,
             y: 0.0,
             vy: 0.0,
             aim: [1.0, 0.0],
@@ -2094,6 +2389,9 @@ impl Sim {
             ammo: weapon_stats(SIDEARM).mag,
             reserve: RESERVE_INFINITE,
             fired: 0,
+            ads_fraction: 0.0,
+            spread: weapon_stats(SIDEARM).spread,
+            bloom: 0.0,
             reload_t: 0.0,
             death_count: 0,
             respawn_in: 0.0,
@@ -2146,17 +2444,20 @@ impl Sim {
         for pad in &mut self.pads {
             pad.respawn_t = 0.0;
         }
+        // Reserve the new placements in player order, not against old-round
+        // bodies. This keeps all eight pockets distinct on team restarts.
         for p in &mut self.players {
+            p.alive = false;
+        }
+        for index in 0..self.players.len() {
+            let p = &mut self.players[index];
             p.score = 0;
             p.frags = 0;
             p.death_count = 0;
             p.respawn_in = 0.0;
             p.melee_cd = 0.0;
             p.shield = false;
-            respawn(
-                p,
-                spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
-            );
+            self.respawn_player(index);
         }
     }
 
@@ -2248,14 +2549,22 @@ impl Sim {
         blasts.push(([blast[0], blast[1].max(0.05), blast[2]], b.owner));
     }
 
-    // Splitting or rewriting the simulation loop or its casts could alter deterministic ordering.
+    pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
+        self.step_using(inputs, launch);
+    }
+
+    // The production caller always supplies `launch`. Collision-only tests
+    // inject a zero-cone row without changing movement, fire, or hit ordering.
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
         clippy::cast_sign_loss,
         clippy::too_many_lines
     )]
-    pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
+    fn step_using<F>(&mut self, inputs: &dyn Fn(u8) -> PlayerIn, launch_round: F)
+    where
+        F: Fn(&PlayerSt, &WeaponStats, bool, bool, u64, u64, u16, &mut Vec<Bullet>),
+    {
         self.events.clear();
         self.hits.clear();
         self.blasts.clear();
@@ -2281,22 +2590,38 @@ impl Sim {
                 // their first live tick after respawning, and remote clients
                 // draw it.
                 p.shield = false;
+                reset_handling(p);
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
-                    respawn(
-                        p,
-                        spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
-                    );
+                    self.respawn_player(i);
                 }
                 continue;
             }
 
-            // Shared movement code (also used by client prediction);
-            // stance speed is server-authoritative — no speed cheats.
-            let speed = stance_speed(input.sprint, input.crouch, input.shield);
             let (old_pos, feet_height, vertical_speed) =
                 (self.players[i].pos, self.players[i].y, self.players[i].vy);
-            let pos = move_circle(old_pos, feet_height, input.mv, speed, dt, &self.obstacles);
+            // Shared movement code (also used by client prediction).
+            // A jump keeps its authored air reach while the ground speed is
+            // server-authoritative, so no client can claim a faster walk.
+            let speed = movement_speed(
+                old_pos,
+                feet_height,
+                vertical_speed,
+                input.jump,
+                input.sprint,
+                input.crouch,
+                input.shield,
+                &self.obstacles,
+            );
+            let pos = move_circle_in(
+                old_pos,
+                feet_height,
+                input.mv,
+                speed,
+                dt,
+                &self.obstacles,
+                self.arena_half,
+            );
             let v = step_vertical(
                 pos,
                 feet_height,
@@ -2342,6 +2667,19 @@ impl Sim {
 
             // Weapon handling: reload, then fire.
             let stats = weapon_stats(p.weapon);
+            let handling = weapon_handling(p.weapon);
+            let moving = (pos[0] - old_pos[0]).abs() + (pos[1] - old_pos[1]).abs() > 1e-5;
+            p.bloom = (p.bloom - handling.bloom_recovery * dt).max(0.0);
+            p.ads_fraction = if p.reload_t > 0.0
+                || p.shield
+                || input.melee
+                || p.melee_cd > 0.0
+                || self.round_pause > 0.0
+            {
+                0.0
+            } else {
+                advance_ads(p.ads_fraction, input.ads, p.weapon, dt)
+            };
             p.cooldown = (p.cooldown - dt).max(0.0);
             p.melee_cd = (p.melee_cd - dt).max(0.0);
             if p.reload_t > 0.0 {
@@ -2365,6 +2703,7 @@ impl Sim {
                     }
                     // A short refill is still a fresh magazine to the bloom.
                     p.fired = 0;
+                    reset_handling(p);
                 }
             } else if p.ammo == 0 && p.reserve == 0 {
                 // Dry: the loot gun is gone and the sidearm is back, this
@@ -2375,8 +2714,10 @@ impl Sim {
                 p.fired = 0;
                 p.reload_t = 0.0;
                 p.cooldown = 0.25;
+                reset_handling(p);
             } else if (input.reload && p.ammo < stats.mag && p.reserve > 0) || p.ammo == 0 {
                 p.reload_t = stats.reload;
+                reset_handling(p);
             } else if input.fire && !input.shield && p.cooldown == 0.0 && p.ammo > 0 {
                 // Raising the shield blocks your own trigger — the price of
                 // cover, and the reason the whole match does not degenerate
@@ -2390,15 +2731,14 @@ impl Sim {
                     + new_bullets.iter().filter(|b| b.owner == owner).count();
                 if active < MAX_BULLETS_PER_PLAYER {
                     let p = &mut self.players[i];
-                    // The round reads `fired` before it is counted, so
-                    // the first round after a refill is round zero of the
-                    // bloom. `v.grounded` is this tick's own vertical step,
+                    // The round reads recovering bloom before adding this
+                    // shot's recoil. `v.grounded` is this tick's vertical step,
                     // so a jumping spray is judged airborne on the tick it
                     // leaves the ground.
-                    launch(
+                    launch_round(
                         p,
                         &stats,
-                        input.ads,
+                        moving,
                         v.grounded,
                         roll_seed,
                         roll_tick,
@@ -2410,8 +2750,19 @@ impl Sim {
                     // Saturating because a hand-built test can fire past
                     // any magazine; the cone is capped long before 255.
                     p.fired = p.fired.saturating_add(1);
+                    p.bloom =
+                        (p.bloom + stats.bloom).min((stats.spread_max - stats.spread).max(0.0));
                 }
             }
+            let p = &mut self.players[i];
+            p.spread = weapon_spread(
+                p.weapon,
+                p.ads_fraction,
+                p.bloom,
+                p.crouch,
+                moving,
+                v.grounded,
+            );
         }
         self.bullets.extend(new_bullets);
 
@@ -2672,7 +3023,7 @@ impl Sim {
             // simulated server-side exclusively, and if client-side shot
             // prediction is ever added, every f32 transcendental on the
             // shot's path (the tan() at launch) becomes a desync source.
-            let world = world_end(p0, p1, y0, y1, radius, &obstacles);
+            let world = world_end(p0, p1, y0, y1, radius, &obstacles, self.arena_half);
             let t_world = world.map_or(f32::INFINITY, |w| w.t);
 
             // ---- the bodies ----
@@ -2961,6 +3312,7 @@ impl Sim {
             v.hp = v.hp.saturating_sub(dmg);
             if v.hp == 0 {
                 v.alive = false;
+                reset_handling(v);
                 v.respawn_in = RESPAWN_SECS;
                 v.death_count += 1;
                 // The kill event is pushed whoever did it, so a self-kill
@@ -3022,6 +3374,14 @@ impl Sim {
                 self.round_pause = ROUND_PAUSE_SECS;
             }
         }
+        // No stored scope/bloom crosses a round boundary, including the
+        // exact tick that reaches the limit. Paused rounds retain the old
+        // firing/movement rules, but cannot build a ready scope for restart.
+        if self.round_pause > 0.0 {
+            for p in &mut self.players {
+                reset_handling(p);
+            }
+        }
     }
 }
 
@@ -3043,6 +3403,22 @@ mod tests {
 
     fn step_with(sim: &mut Sim, inputs: &HashMap<u8, PlayerIn>) {
         sim.step(&|id| inputs.get(&id).copied().unwrap_or_default());
+    }
+
+    /// Explicit collision/trajectory fixture: real sim ordering and weapon
+    /// ballistics, but no aim dispersion. Gameplay/handling tests use `step_with`.
+    fn step_geometry(sim: &mut Sim, inputs: &HashMap<u8, PlayerIn>) {
+        sim.step_using(
+            &|id| inputs.get(&id).copied().unwrap_or_default(),
+            |p, stats, moving, _grounded, seed, tick, delay, out| {
+                let mut exact = *stats;
+                exact.spread = 0.0;
+                exact.spread_max = 0.0;
+                // Grounding affects dispersion only in launch; suppress its
+                // minimum cone while retaining p.y/vy from the real step.
+                launch(p, &exact, moving, true, seed, tick, delay, out);
+            },
+        );
     }
 
     #[test]
@@ -3112,6 +3488,35 @@ mod tests {
         // Crouch wins if both are held.
         let both = run(true, true);
         assert!((both - crouch).abs() < 0.2);
+    }
+
+    #[test]
+    fn jump_reach_is_independent_of_ground_speed() {
+        let jump_distance = |sprint: bool| -> f32 {
+            let mut sim = Sim::new(9);
+            sim.obstacles.clear();
+            sim.add_player(0);
+            sim.players[0].pos = [-20.0, 0.0];
+            let start = sim.players[0].pos[0];
+            let mut was_airborne = false;
+            for tick in 0..180 {
+                sim.step(&|_| PlayerIn {
+                    mv: [1.0, 0.0],
+                    sprint,
+                    jump: tick == 0,
+                    ..Default::default()
+                });
+                let p = &sim.players[0];
+                was_airborne |= p.vy != 0.0;
+                if was_airborne && p.vy == 0.0 {
+                    return p.pos[0] - start;
+                }
+            }
+            panic!("jump did not land");
+        };
+
+        assert!((jump_distance(false) - 6.75).abs() < 1e-3);
+        assert!((jump_distance(true) - 10.8).abs() < 1e-3);
     }
 
     #[test]
@@ -3289,20 +3694,23 @@ mod tests {
         let mag = weapon_stats(1).mag;
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
-        let mut prev_bullets = 0usize;
-        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * (u32::from(mag) + 4) {
+        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * u32::from(mag) {
+            let before = sim.players[0].ammo;
             step_with(&mut sim, &inputs);
-            // Bullets fly off and expire; count spawns via ammo drops.
-            let b = sim.bullets.len();
-            if b > prev_bullets {
-                fired += (b - prev_bullets) as u32;
+            fired += u32::from(before.saturating_sub(sim.players[0].ammo));
+            if sim.players[0].ammo == 0 {
+                break;
             }
-            prev_bullets = b;
         }
         assert_eq!(
             fired,
             u32::from(mag),
             "exactly one magazine before auto-reload gates fire"
+        );
+        step_with(&mut sim, &inputs);
+        assert!(
+            sim.players[0].reload_t > 0.0,
+            "empty gun starts auto-reload"
         );
         // Let the auto-reload finish: ammo must be full again.
         let idle = HashMap::new();
@@ -3527,7 +3935,7 @@ mod tests {
         assert_eq!(weapon_stats(SIDEARM).name, "Sidearm");
         // The sidearm row IS today's pistol.
         let s = weapon_stats(SIDEARM);
-        assert_eq!((s.cooldown, s.mag, s.damage), (0.18, 8, 1));
+        assert_eq!((s.cooldown, s.mag, s.damage), (0.32, 6, 1));
         assert_eq!(
             (s.speed, s.ttl, s.reload),
             (BULLET_SPEED, BULLET_TTL, RELOAD_SECS)
@@ -4048,14 +4456,24 @@ mod tests {
     fn a_box_blocks_on_the_ground_but_not_from_above() {
         let obs = one_box();
         let top = obstacle_height(&obs[0]);
+        // Keep the 4.5 m travel distance independent of the ground-speed
+        // tuning: collision should be what decides the result here.
+        let walk_time = 4.5 / MOVE_SPEED;
         // Walking into the crate from outside gets stopped.
-        let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, walk_time, &obs);
         assert!(
             walked[0] < -1.5 - PLAYER_R + 0.01,
             "walked into box: {walked:?}"
         );
         // The same move with the feet above the crate's top goes through.
-        let over = move_circle([-3.0, 0.0], top + 0.1, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        let over = move_circle(
+            [-3.0, 0.0],
+            top + 0.1,
+            [1.0, 0.0],
+            MOVE_SPEED,
+            walk_time,
+            &obs,
+        );
         assert!(over[0] > -1.0, "could not walk over the box: {over:?}");
     }
 
@@ -4252,7 +4670,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             let b = sim.bullets.first().expect("a shot must spawn a bullet");
             let h_speed = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
             assert!(
@@ -4417,7 +4835,7 @@ mod tests {
             let mut inputs = HashMap::new();
             inputs.insert(0, shooter);
             inputs.insert(1, defender);
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
         }
         sim
     }
@@ -4973,8 +5391,8 @@ mod tests {
         one_shot_kills_with(SIDEARM, from_y, gap, pitch, target_crouch)
     }
 
-    /// `one_shot_kills` with the shooter holding `weapon`, sights up so a
-    /// weapon with a hip cone fires its exact line.
+    /// Real gameplay shots with `weapon`: allow its actual sights to settle
+    /// before firing, retaining the shipped nonzero cone and seeded roll.
     fn one_shot_kills_with(
         weapon: u8,
         from_y: f32,
@@ -5006,7 +5424,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        for _ in 0..240 {
+        let settle_ticks = (weapon_handling(weapon).ads_in_secs / FIXED_DT).ceil() as usize + 1;
+        for tick in 0..240 {
+            inputs.get_mut(&0).unwrap().fire = tick >= settle_ticks;
             sim.players.iter_mut().for_each(|p| match p.id {
                 0 if p.alive => {
                     p.pos = [0.0, 0.0];
@@ -5033,11 +5453,11 @@ mod tests {
 
     #[test]
     fn a_headshot_kills_outright() {
-        // Standing target: head band is [1.48, 1.70]. A round leaves at 1.45
-        // and climbs tan(pitch) per unit travelled, so over 5 units a pitch of
-        // 0.03 arrives at ~1.60 - the middle of the head.
+        // Standing head band is [1.56, 1.86]. At the swept body's near
+        // edge (4.18 m), pitch .06 puts a settled shot near 1.70 m, with
+        // margin for its real nonzero cone instead of aiming at the edge.
         assert!(
-            one_shot_kills(0.0, 5.0, 0.03, false),
+            one_shot_kills(0.0, 5.0, 0.06, false),
             "a round arriving in the head band must kill from full health"
         );
     }
@@ -5141,7 +5561,7 @@ mod tests {
                 },
             );
             hold(&mut sim, &[(0, [0.0, 0.0], from_y), (1, [gap, 0.0], 0.0)]);
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             assert_eq!(
                 sim.hits,
                 vec![(0, 1, MAX_HP, true)],
@@ -5171,9 +5591,10 @@ mod tests {
         )]
     }
 
-    /// Walks +x for `ticks` at `y`, one sim tick at a time, so a box in the
+    /// Walks +x for `distance` at `y`, one sim tick at a time, so a box in the
     /// way is met at its face rather than jumped over by a long dt.
-    fn walk(mut pos: [f32; 2], y: f32, ticks: u32, obs: &[Obstacle]) -> [f32; 2] {
+    fn walk(mut pos: [f32; 2], y: f32, distance: f32, obs: &[Obstacle]) -> [f32; 2] {
+        let ticks = (distance / (MOVE_SPEED * FIXED_DT)).ceil() as u32;
         for _ in 0..ticks {
             pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
         }
@@ -5184,25 +5605,25 @@ mod tests {
     fn a_raised_box_blocks_only_a_body_that_reaches_it() {
         let obs = roof();
         // On the floor the head (1.86) is under the bottom (2.5): walk
-        // straight through, 60 ticks = 9 units, from -4 to 5.
-        let under = walk([-4.0, 0.0], 0.0, 60, &obs);
+        // straight through, 9 units from -4 to 5.
+        let under = walk([-4.0, 0.0], 0.0, 9.0, &obs);
         assert!(
             under[0] > 4.0,
             "blocked by a roof from the floor: {under:?}"
         );
         // Feet at 1.0: head 2.86 is inside the box and the feet are more
         // than a step below its top, so its side is a wall.
-        let mid = walk([-4.0, 0.0], 1.0, 60, &obs);
+        let mid = walk([-4.0, 0.0], 1.0, 9.0, &obs);
         assert!(
             mid[0] <= -2.0 - PLAYER_R + 1e-3,
             "walked through the roof's side: {mid:?}"
         );
         // Standing on it: walk across.
-        let over = walk([-4.0, 0.0], 2.9, 60, &obs);
+        let over = walk([-4.0, 0.0], 2.9, 9.0, &obs);
         assert!(over[0] > 4.0, "could not walk across the roof: {over:?}");
         // And a floor box is exactly what it was: a wall from the floor.
         let floor_box = one_box();
-        let walked = walk([-3.0, 0.0], 0.0, 60, &floor_box);
+        let walked = walk([-3.0, 0.0], 0.0, 9.0, &floor_box);
         assert!(
             walked[0] <= -1.5 - PLAYER_R + 1e-3,
             "a floor box stopped blocking: {walked:?}"
@@ -5574,7 +5995,8 @@ mod tests {
         shot_over_at(obs, from, from_y, pitch, to, 0.0)
     }
 
-    /// `shot_over` with the target's feet pinned at `to_y` - on a roof, say.
+    /// Exact level sight-ray fixture, with feet pinned at `to_y` (a roof).
+    /// Dispersion is isolated out: this tests cover visibility, not handling.
     fn shot_over_at(
         obs: &[Obstacle],
         from: [f32; 2],
@@ -5614,7 +6036,7 @@ mod tests {
                 }
                 _ => {}
             });
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
                 return true;
             }
@@ -5645,7 +6067,9 @@ mod tests {
         );
         let (mut y, mut vy) = (0.0f32, 0.0f32);
         let mut reached = false;
-        for _ in 0..200 {
+        let distance_to_exit = roof.max[0] + 1.0 - pos[0];
+        let max_ticks = (distance_to_exit / (MOVE_SPEED * FIXED_DT)).ceil() as u32 + 1;
+        for _ in 0..max_ticks {
             pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
             let VStep { y: ny, vy: nvy, .. } = step_vertical(pos, y, vy, false, FIXED_DT, obs);
             y = ny;
@@ -6277,6 +6701,9 @@ mod tests {
             u64::from(p.respawn_in.to_bits()),
             u64::from(p.cooldown.to_bits()),
             u64::from(p.melee_cd.to_bits()),
+            u64::from(p.ads_fraction.to_bits()),
+            u64::from(p.bloom.to_bits()),
+            u64::from(p.spread.to_bits()),
         ]
     }
 
@@ -6427,19 +6854,20 @@ mod tests {
 
     #[test]
     fn a_zero_spread_weapon_fires_exactly_along_the_aim() {
-        // The sidearm and the revolver have no cone, so their ray is the
-        // v17 ray bit for bit: no rotation ran at all, whatever the sights,
-        // the feet or the roll would have said.
+        // Collision/ballistic fixture, not a shipped weapon: explicitly
+        // remove its cone to test the launch geometry in isolation.
         for weapon in [SIDEARM, 5] {
             let mut sim = open_sim(1, 1);
             grant(&mut sim.players[0], weapon);
             let p = &mut sim.players[0];
             p.aim = [0.6, 0.8];
             p.pitch = 0.3;
-            let stats = weapon_stats(weapon);
-            for (ads, grounded) in [(false, true), (true, false), (false, false)] {
+            let mut stats = weapon_stats(weapon);
+            stats.spread = 0.0;
+            stats.spread_max = 0.0;
+            for moving in [false, true] {
                 let mut out = Vec::new();
-                launch(p, &stats, ads, grounded, 7, 100, 0, &mut out);
+                launch(p, &stats, moving, true, 7, 100, 0, &mut out);
                 let b = &out[0];
                 assert_eq!(b.vel[0].to_bits(), (0.6f32 * stats.speed).to_bits());
                 assert_eq!(b.vel[1].to_bits(), (0.8f32 * stats.speed).to_bits());
@@ -6463,8 +6891,8 @@ mod tests {
             let p = &mut sim.players[0];
             p.aim = aim;
             p.pitch = pitch;
-            p.fired = stats.mag;
-            let cone = f64::from(stats.spread_max * ADS_SPREAD_AIR_MULT);
+            p.bloom = stats.spread_max;
+            let cone = f64::from(stats.spread_max * weapon_handling(2).air_spread);
             let mut widest: f64 = 0.0;
             for tick in 0..10_000u64 {
                 let mut out = Vec::new();
@@ -6482,7 +6910,7 @@ mod tests {
     }
 
     #[test]
-    fn bloom_widens_the_cone_as_the_magazine_empties() {
+    fn added_bloom_widens_the_seeded_shot_cone() {
         // The Vityaz starts tight and opens up: the widest offset over the
         // first five rounds is smaller than over the last five.
         let mut sim = open_sim(1, 1);
@@ -6491,7 +6919,7 @@ mod tests {
         let mut widest = |rounds: std::ops::Range<u8>| -> f64 {
             let mut w: f64 = 0.0;
             for fired in rounds {
-                sim.players[0].fired = fired;
+                sim.players[0].bloom = f32::from(fired) * stats.bloom;
                 for tick in 0..300u64 {
                     let mut out = Vec::new();
                     launch(&sim.players[0], &stats, false, true, 7, tick, 0, &mut out);
@@ -6597,23 +7025,22 @@ mod tests {
 
     #[test]
     fn ads_and_air_scale_the_cone() {
-        // The sniper's sights are a line: ads_spread 0 makes the cone zero
-        // and the ray exact. The AK in the air is the grounded AK times
-        // ADS_SPREAD_AIR_MULT, roll for roll, so its widest round is wider.
+        // A settled sniper is precise but never a perfect mathematical ray.
+        // Identical seeds let us compare stance without comparing luck.
         let mut sim = open_sim(1, 1);
         grant(&mut sim.players[0], 6);
         let sniper = weapon_stats(6);
         sim.players[0].pitch = 0.2;
+        sim.players[0].ads_fraction = 1.0;
         for tick in 0..200u64 {
             let mut out = Vec::new();
-            launch(&sim.players[0], &sniper, true, true, 7, tick, 0, &mut out);
-            assert_eq!(out[0].vel[0].to_bits(), sniper.speed.to_bits());
-            assert_eq!(out[0].vel[1].to_bits(), 0.0f32.to_bits());
-            assert_eq!(out[0].vy.to_bits(), (0.2f32.tan() * sniper.speed).to_bits());
+            launch(&sim.players[0], &sniper, false, true, 7, tick, 0, &mut out);
+            let offset = offset_angle(&out[0], [1.0, 0.0], 0.2, sniper.speed);
+            assert!(offset > 0.0 && offset <= f64::from(sniper.spread * sniper.ads_spread));
         }
         grant(&mut sim.players[0], 3);
         sim.players[0].pitch = 0.0;
-        sim.players[0].fired = 15;
+        sim.players[0].bloom = weapon_stats(3).spread_max;
         let ak = weapon_stats(3);
         let widest = |grounded: bool| -> f64 {
             let mut w: f64 = 0.0;
@@ -6629,12 +7056,324 @@ mod tests {
             airborne > planted,
             "airborne {airborne} vs planted {planted}"
         );
-        // Same rolls, one multiplier: the ratio is the constant.
+        // The scalar cone has the exact multiplier. The resulting angular
+        // offsets are not linear (yaw/elevation are projected through tan).
+        let ground_cone = weapon_spread(3, 0.0, ak.spread_max, false, false, true);
+        let air_cone = weapon_spread(3, 0.0, ak.spread_max, false, false, false);
+        assert_eq!(air_cone, ground_cone * weapon_handling(3).air_spread);
+        assert!(airborne <= f64::from(air_cone));
+    }
+
+    #[test]
+    fn every_weapon_has_real_hip_ads_and_crouched_ads_shot_clouds() {
+        // Launch the actual shipped rows with matched seeded samples. Compare
+        // directions, never bullet height (crouching lowers the muzzle).
+        for id in 1..=WEAPON_COUNT {
+            let mut sim = open_sim(7, 1);
+            arm(&mut sim.players[0], id);
+            let stats = weapon_stats(id);
+            let mut clouds = Vec::new();
+            for (ads, crouch, moving, grounded) in [
+                (0.0, false, false, true),
+                (1.0, false, false, true),
+                (1.0, true, false, true),
+                (1.0, false, true, true),
+                (1.0, true, false, false),
+            ] {
+                let p = &mut sim.players[0];
+                p.aim = [1.0, 0.0];
+                p.pitch = 0.2;
+                p.ads_fraction = ads;
+                p.crouch = crouch;
+                let cone = weapon_spread(id, ads, 0.0, crouch, moving, grounded);
+                let mut sum = 0.0;
+                for tick in 0..256 {
+                    let mut out = Vec::new();
+                    launch(p, &stats, moving, grounded, 37, tick, 0, &mut out);
+                    let angle = offset_angle(&out[0], p.aim, p.pitch, stats.speed);
+                    assert!(
+                        angle > 0.0 && angle <= f64::from(cone),
+                        "weapon {id}: {angle}/{cone}"
+                    );
+                    sum += angle * angle;
+                }
+                clouds.push((sum / 256.0).sqrt());
+            }
+            assert!(
+                clouds[1] < clouds[0] * 0.5,
+                "weapon {id}: hip/ads {clouds:?}"
+            );
+            assert!(
+                clouds[2] < clouds[1] * 0.8,
+                "weapon {id}: crouch {clouds:?}"
+            );
+            assert!(
+                clouds[3] > clouds[1] * 1.5,
+                "weapon {id}: moving {clouds:?}"
+            );
+            assert!(clouds[4] > clouds[1] * 1.5, "weapon {id}: air {clouds:?}");
+        }
+    }
+
+    #[test]
+    fn sights_take_weapon_specific_time_and_do_not_quickscope() {
+        for id in 1..=WEAPON_COUNT {
+            let mut sim = open_sim(8, 1);
+            arm(&mut sim.players[0], id);
+            sim.players[0].pos = [0.0, 0.0];
+            let input = PlayerIn {
+                ads: true,
+                ..Default::default()
+            };
+            sim.step(&|_| input);
+            let first = sim.players[0].ads_fraction;
+            assert!(first > 0.0 && first < 0.13, "weapon {id}: {first}");
+            assert!(sim.players[0].spread > weapon_spread(id, 1.0, 0.0, false, false, true) * 1.5);
+            let in_ticks = (weapon_handling(id).ads_in_secs / FIXED_DT).ceil() as usize;
+            for _ in 1..=in_ticks {
+                sim.step(&|_| input);
+            }
+            assert_eq!(sim.players[0].ads_fraction, 1.0, "weapon {id}");
+            sim.step(&|_| PlayerIn::default());
+            assert!(sim.players[0].ads_fraction > 0.0 && sim.players[0].ads_fraction < 1.0);
+            for _ in 0..(weapon_handling(id).ads_out_secs / FIXED_DT).ceil() as usize {
+                sim.step(&|_| PlayerIn::default());
+            }
+            assert_eq!(sim.players[0].ads_fraction, 0.0, "weapon {id}");
+        }
+        // Firing on the first requested scope tick uses the partial raise,
+        // not the final sniper cone. This is the authoritative bullet path.
+        let mut sim = open_sim(9, 1);
+        arm(&mut sim.players[0], 6);
+        sim.players[0].pos = [0.0, 0.0];
+        sim.step(&|_| PlayerIn {
+            ads: true,
+            fire: true,
+            ..Default::default()
+        });
+        let bullet = sim
+            .bullets
+            .first()
+            .expect("sniper crosses 15 m, inside arena");
+        let angle = offset_angle(bullet, [1.0, 0.0], 0.0, weapon_stats(6).speed);
+        // Subtract this tick's gravity before comparing launch elevation.
+        let mut launch_bullet = *bullet;
+        launch_bullet.vy -= weapon_stats(6).gravity * FIXED_DT;
         assert!(
-            (airborne / planted - f64::from(ADS_SPREAD_AIR_MULT)).abs() < 1e-3,
-            "ratio {}",
-            airborne / planted
+            offset_angle(&launch_bullet, [1.0, 0.0], 0.0, weapon_stats(6).speed)
+                > f64::from(weapon_spread(6, 1.0, 0.0, false, false, true))
         );
+        assert!(angle.is_finite());
+    }
+
+    #[test]
+    fn handling_uses_real_displacement_and_jumps_keep_an_air_cone() {
+        for id in 1..=WEAPON_COUNT {
+            let mut sim = open_sim(10, 1);
+            arm(&mut sim.players[0], id);
+            sim.players[0].pos = [ARENA_HALF - PLAYER_R, 0.0];
+            sim.players[0].ads_fraction = 1.0;
+            // Holding against the arena edge is not movement.
+            sim.step(&|_| PlayerIn {
+                mv: [1.0, 0.0],
+                ads: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                sim.players[0].spread,
+                weapon_spread(id, 1.0, 0.0, false, false, true)
+            );
+            sim.step(&|_| PlayerIn {
+                mv: [-1.0, 0.0],
+                ads: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                sim.players[0].spread,
+                weapon_spread(id, 1.0, 0.0, false, true, true)
+            );
+            sim.step(&|_| PlayerIn {
+                jump: true,
+                crouch: true,
+                ads: true,
+                ..Default::default()
+            });
+            assert!(sim.players[0].y > 0.0, "weapon {id}: unchanged jump");
+            assert!(sim.players[0].spread >= weapon_handling(id).air_floor);
+            assert_eq!(
+                sim.players[0].spread,
+                weapon_spread(id, 1.0, 0.0, true, false, false)
+            );
+        }
+    }
+
+    #[test]
+    fn bloom_recovers_without_a_reload_and_state_reports_next_shot() {
+        let mut sim = open_sim(11, 1);
+        arm(&mut sim.players[0], 3);
+        sim.players[0].pos = [0.0, 0.0];
+        for _ in 0..100 {
+            sim.step(&|_| PlayerIn {
+                fire: true,
+                ads: true,
+                ..Default::default()
+            });
+            let p = &sim.players[0];
+            assert_eq!(p.recoil_bloom(), p.bloom);
+            assert_eq!(
+                p.spread,
+                weapon_spread(3, p.ads_fraction, p.bloom, false, false, true)
+            );
+        }
+        assert!(sim.players[0].bloom > 0.0);
+        let ammo = sim.players[0].ammo;
+        assert!(ammo > 0 && ammo < weapon_stats(3).mag);
+        let mut previous = sim.players[0].bloom;
+        for _ in 0..240 {
+            sim.step(&|_| PlayerIn {
+                ads: true,
+                ..Default::default()
+            });
+            assert!(sim.players[0].bloom <= previous);
+            previous = sim.players[0].bloom;
+        }
+        let p = &sim.players[0];
+        assert_eq!(p.ammo, ammo, "recovery did not refill or spend ammunition");
+        assert!(
+            p.fired > 0,
+            "lifetime magazine count remains, but accuracy recovers"
+        );
+        assert_eq!(p.bloom, 0.0);
+        assert_eq!(p.recoil_bloom(), 0.0);
+        assert_eq!(p.spread, weapon_spread(3, 1.0, 0.0, false, false, true));
+    }
+
+    #[test]
+    fn scope_cannot_survive_reload_shield_melee_death_or_round_pause() {
+        for cause in 0..7 {
+            let mut sim = open_sim(12, 1);
+            arm(&mut sim.players[0], 3);
+            sim.players[0].pos = [0.0, 0.0];
+            sim.players[0].ammo -= 1;
+            sim.players[0].ads_fraction = 1.0;
+            sim.players[0].bloom = 0.02;
+            let mut input = PlayerIn {
+                ads: true,
+                ..Default::default()
+            };
+            match cause {
+                0 => input.reload = true,
+                1 => input.shield = true,
+                2 => input.melee = true,
+                3 => sim.players[0].melee_cd = 0.4,
+                4 => {
+                    sim.players[0].alive = false;
+                    sim.players[0].respawn_in = 1.0;
+                }
+                5 => sim.round_pause = 1.0,
+                6 => sim.players[0].score = FFA_FRAG_LIMIT,
+                _ => unreachable!(),
+            }
+            sim.step(&|_| input);
+            assert_eq!(sim.players[0].ads_fraction, 0.0, "cause {cause}");
+            if matches!(cause, 0 | 4 | 5 | 6) {
+                assert_eq!(sim.players[0].bloom, 0.0, "cause {cause}");
+            }
+        }
+        let mut sim = open_sim(12, 1);
+        sim.players[0].ads_fraction = 1.0;
+        sim.players[0].bloom = 0.03;
+        grant(&mut sim.players[0], 6);
+        assert_eq!(
+            (sim.players[0].ads_fraction, sim.players[0].bloom),
+            (0.0, 0.0)
+        );
+        sim.players[0].ammo = 0;
+        sim.players[0].reserve = 0;
+        sim.players[0].ads_fraction = 1.0;
+        sim.players[0].bloom = 0.02;
+        sim.step(&|_| PlayerIn {
+            ads: true,
+            ..Default::default()
+        });
+        assert_eq!(sim.players[0].weapon, SIDEARM);
+        assert_eq!(
+            (sim.players[0].ads_fraction, sim.players[0].bloom),
+            (0.0, 0.0)
+        );
+
+        // A genuine lethal bullet clears the victim in the damage pass,
+        // not just when the next tick notices an already-dead body.
+        let mut sim = open_sim(13, 2);
+        sim.players[0].pos = [0.0, 0.0];
+        sim.players[1].pos = [3.0, 0.0];
+        sim.players[1].hp = 1;
+        sim.players[1].ads_fraction = 1.0;
+        sim.players[1].bloom = 0.02;
+        sim.step(&|id| PlayerIn {
+            fire: id == 0,
+            ads: id == 1,
+            ..Default::default()
+        });
+        assert!(!sim.players[1].alive);
+        assert_eq!(
+            (sim.players[1].ads_fraction, sim.players[1].bloom),
+            (0.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn raising_sights_does_not_change_ground_speed_or_jump_reach() {
+        let mut hip = open_sim(14, 1);
+        let mut aimed = open_sim(14, 1);
+        for sim in [&mut hip, &mut aimed] {
+            sim.players[0].pos = [-10.0, 0.0];
+        }
+        for tick in 0..120 {
+            let input = PlayerIn {
+                mv: [1.0, 0.0],
+                jump: tick == 30,
+                crouch: tick >= 90,
+                ..Default::default()
+            };
+            hip.step(&|_| input);
+            aimed.step(&|_| PlayerIn { ads: true, ..input });
+            let (h, a) = (&hip.players[0], &aimed.players[0]);
+            assert_eq!(h.pos, a.pos, "tick {tick}");
+            assert_eq!(
+                (h.y.to_bits(), h.vy.to_bits()),
+                (a.y.to_bits(), a.vy.to_bits()),
+                "tick {tick}"
+            );
+        }
+    }
+
+    #[test]
+    fn handling_helpers_reject_nonfinite_inputs_and_spawn_is_a_weak_pistol() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(advance_ads(bad, false, 6, FIXED_DT), 0.0);
+            assert_eq!(advance_ads(0.4, true, 6, bad), 0.4);
+            assert_eq!(
+                weapon_spread(6, bad, bad, false, false, true),
+                weapon_stats(6).spread
+            );
+        }
+        let sim = open_sim(13, 1);
+        let p = &sim.players[0];
+        let s = weapon_stats(SIDEARM);
+        assert_eq!(
+            (p.weapon, p.ammo, p.reserve),
+            (SIDEARM, 6, RESERVE_INFINITE)
+        );
+        assert_eq!(p.ads_fraction, 0.0);
+        assert_eq!(p.spread, s.spread);
+        assert_eq!(s.damage, 1, "head/body damage rules are unchanged");
+        assert!((s.ttl * s.speed - 30.0).abs() < 1e-5);
+        for id in [2, 3, 4] {
+            let loot = weapon_stats(id);
+            assert!(s.cooldown > loot.cooldown * 2.0 && s.mag < loot.mag);
+            assert!(s.ttl * s.speed < loot.ttl * loot.speed);
+        }
     }
 
     #[test]
@@ -6653,7 +7392,7 @@ mod tests {
         for t in 0..ticks {
             hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             if t == 0 {
                 // The held shooter falls one tick of gravity before the
                 // launch: the eye is where the player ended this tick.
@@ -6677,17 +7416,17 @@ mod tests {
     #[test]
     fn a_zero_gravity_round_flies_the_old_straight_line() {
         // A sidearm round's height each tick is the v17 formula, `y += vy
-        // dt`, bit for bit: a zero gravity row adds exactly zero. Eight
-        // ticks from the west wall: the ninth would meet the east wall.
+        // dt`, bit for bit: a zero gravity row adds exactly zero. Six
+        // ticks from the west wall: the seventh expires the 30 m pistol.
         let mut sim = open_sim(1, 1);
         let pitch = 0.3f32;
         let vy = pitch.tan() * BULLET_SPEED;
         let mut inputs = HashMap::new();
         let mut y = 0.0f32;
-        for t in 0..8u32 {
+        for t in 0..6u32 {
             hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], pitch));
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             let b = sim.bullets.first().expect("the round is in flight");
             assert_eq!(b.vy.to_bits(), vy.to_bits());
             if t == 0 {
@@ -6725,7 +7464,7 @@ mod tests {
                     ..shot(t, [1.0, 0.0], 0.0)
                 },
             );
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
         }
         let hp = (1..=xs.len() as u8).map(|id| player(&sim, id).hp).collect();
         (sim, hp)
@@ -6779,7 +7518,7 @@ mod tests {
                     ..shot(t, [1.0, 0.0], 0.0)
                 },
             );
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             if sim.hits.len() == 2 {
                 both_on_one_tick = true;
                 let victims: Vec<u8> = sim.hits.iter().map(|h| h.1).collect();
@@ -6929,7 +7668,7 @@ mod tests {
         // Fifteen ticks of history where the targets stand now.
         for _ in 0..15 {
             hold(&mut sim, &spots);
-            step_with(&mut sim, &idle);
+            step_geometry(&mut sim, &idle);
         }
         // The first target may dodge after the shooter has taken aim.
         if let Some(to) = dodge_to {
@@ -6945,7 +7684,7 @@ mod tests {
                     ..shot(t, [1.0, 0.0], 0.0)
                 },
             );
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             if !sim.blasts.is_empty() {
                 assert_eq!(sim.blasts.len(), 1);
                 let ([x, y, z], owner) = sim.blasts[0];
@@ -7156,7 +7895,7 @@ mod tests {
         for t in 0..40u32 {
             hold(&mut sim, &[(0, [0.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             let b = sim.bullets.first_mut().expect("the rocket is in flight");
             speeds.push((b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt());
             assert_eq!(b.vel[1], 0.0, "tick {t}: the direction is kept");
@@ -7186,7 +7925,7 @@ mod tests {
         for t in 0..5u32 {
             hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             let b = sim.bullets.first().expect("in flight");
             assert_eq!(b.vel[0].to_bits(), BULLET_SPEED.to_bits(), "tick {t}");
         }
@@ -7212,7 +7951,7 @@ mod tests {
         }
         let mut segments = 0usize;
         let mut kinds = [0usize; 6];
-        for tick in 0..400u64 {
+        for tick in 0..600u64 {
             let before = sim.bullets.len();
             let ammo: Vec<u8> = sim.players.iter().map(|p| p.ammo).collect();
             sim.step(&|id| PlayerIn {
@@ -7315,7 +8054,7 @@ mod tests {
         // cap. These are the numbers that ship; a retune is a deliberate
         // edit here and in the plan, never a drift.
         let rows: [(u8, f32, f32, f32, u8); 6] = [
-            (SIDEARM, 280.0, 60.0, 0.0, 0),
+            (SIDEARM, 280.0, 30.0, 0.0, 0),
             (2, 380.0, 40.0, 0.0, 0),
             (3, 715.0, 80.0, 0.0, 0),
             (4, 880.0, 80.0, 0.0, 0),
@@ -7353,12 +8092,12 @@ mod tests {
             "the sustainer takes half a second to reach the cap"
         );
         // The sidearm's constants are the sidearm's row, and a round flies
-        // twelve full segments of 4.67 m before its thirteenth charge of
-        // ttl ends it: 56 m in the sim against 60 m in the table, the
+        // six full segments of 4.67 m before its seventh charge of
+        // ttl ends it: 28 m in the sim against 30 m in the table, the
         // tick's worth the expiry charge takes, as it always has.
-        assert_eq!(BULLET_TTL.to_bits(), (60.0f32 / BULLET_SPEED).to_bits());
+        assert_eq!(BULLET_TTL.to_bits(), (30.0f32 / BULLET_SPEED).to_bits());
         assert!((BULLET_SPEED * FIXED_DT - 4.6667).abs() < 1e-3);
-        assert_eq!((BULLET_TTL / FIXED_DT).ceil() as u32, 13);
+        assert_eq!((BULLET_TTL / FIXED_DT).ceil() as u32, 7);
         assert!((weapon_stats(6).speed * FIXED_DT - 15.0).abs() < 1e-4);
         // The bullet cap: rounds in flight from a held trigger is the ttl
         // over the cooldown, rounded up, per row. Every row is inside the
@@ -7370,7 +8109,7 @@ mod tests {
                 (s.ttl / s.cooldown).ceil() as usize
             })
             .collect();
-        assert_eq!(in_flight, vec![2, 2, 1, 2, 1, 1, 5]);
+        assert_eq!(in_flight, vec![1, 2, 1, 2, 1, 1, 5]);
         assert!(in_flight.iter().all(|&n| n <= MAX_BULLETS_PER_PLAYER));
     }
 
@@ -7392,7 +8131,7 @@ mod tests {
         for t in 0..ticks {
             hold(&mut sim, &[(0, spot, y)]);
             inputs.insert(0, shot(t, aim, pitch));
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             out.extend(sim.shots.iter().map(|&s| (t, s)));
         }
         assert!(sim.bullets.is_empty(), "the round is still in flight");
@@ -7478,13 +8217,13 @@ mod tests {
             );
         }
         // Along the diagonal from a corner the wall is 61 m off and the
-        // round runs out of flight time first: twelve segments of 4.67 m,
-        // the event on the thirteenth tick, where the round faded.
+        // round runs out of flight time first: six segments of 4.67 m,
+        // the event on the seventh tick, where the round faded.
         let d = std::f32::consts::FRAC_1_SQRT_2;
         let shots = one_shot(Vec::new(), [-20.0, -20.0], 8.0, [d, d], 0.0, 20);
         assert_eq!(shots.len(), 1, "{shots:?}");
         let (t, s) = shots[0];
-        assert_eq!(t, 12);
+        assert_eq!(t, 6);
         assert_eq!(
             (s.hit, s.cover, s.victim),
             (SHOT_EXPIRED, SHOT_NONE, SHOT_NONE)
@@ -7492,7 +8231,7 @@ mod tests {
         assert_eq!(s.normal, [0, 0, 0]);
         let flown = ((s.to[0] - s.from[0]).powi(2) + (s.to[2] - s.from[2]).powi(2)).sqrt();
         assert!(
-            (flown - 12.0 * BULLET_SPEED * FIXED_DT).abs() < 0.02,
+            (flown - 6.0 * BULLET_SPEED * FIXED_DT).abs() < 0.02,
             "{flown}"
         );
         assert_eq!(s.to[1].to_bits(), s.from[1].to_bits());
@@ -7525,7 +8264,7 @@ mod tests {
                 },
             );
             hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [3.0, 0.0], 0.0)]);
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             assert_eq!(sim.hits.len(), 1, "{}: {:?}", stats.name, sim.hits);
             let s = sim.shots.first().expect("the body event");
             assert_eq!(
@@ -7574,7 +8313,7 @@ mod tests {
                 },
             );
             hold(&mut sim, &[(0, [0.0, 0.0], from_y), (1, [gap, 0.0], 0.0)]);
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             assert_eq!(sim.hits, vec![(0, 1, MAX_HP, true)], "weapon {weapon}");
             let s = sim.shots.first().expect("the body event");
             assert_eq!((s.hit, s.victim), (SHOT_BODY, 1), "weapon {weapon}");
@@ -7700,7 +8439,8 @@ mod tests {
         let mut shots = Vec::new();
         let mut hits = Vec::new();
         for t in 0..12u32 {
-            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [20.0, 0.0], 0.0)]);
+            // A 12 m duel keeps both legs within the 30 m starter range.
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [12.0, 0.0], 0.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
             inputs.insert(
                 1,
@@ -7710,7 +8450,7 @@ mod tests {
                     ..Default::default()
                 },
             );
-            step_with(&mut sim, &inputs);
+            step_geometry(&mut sim, &inputs);
             shots.extend(sim.shots.iter().map(|&s| (t, s)));
             hits.extend(sim.hits.iter().copied());
         }
@@ -7723,7 +8463,7 @@ mod tests {
             (0, SIDEARM, SHOT_SHIELD, 1)
         );
         assert_eq!((out.cover, out.normal), (SHOT_NONE, [0, 0, 0]));
-        let plate = 20.0 - hit_radius(false) - BULLET_R;
+        let plate = 12.0 - hit_radius(false) - BULLET_R;
         assert!((out.to[0] - plate).abs() < 1e-3, "{:?}", out.to);
         assert!((out.from[0] - 0.2).abs() < 1e-6, "{:?}", out.from);
         assert_eq!(
@@ -7908,25 +8648,25 @@ mod tests {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
     /// `fold_tick` of the driver after ticks 99, 199, ... 599, computed
-    /// once from THIS tree on this machine, the Windows workstation that
-    /// hosts the arena, and pinned. It was the v18 sim's fingerprint until
-    /// v20 (commit `1d8d51b` made it; the v19 sim matched it bit for bit,
-    /// which proved the modes changed nothing in free for all). v20 gave
-    /// every round its real speed and made the sweep exact, so the v18
-    /// fingerprint could not hold and the pin was regenerated from the
-    /// v20 tree; from here on its purpose is regression, not v18
-    /// identity. The script and the launch go through `cos`, `sin` and
+    /// from the protocol-20 four-metre walking tree on the Windows workstation,
+    /// after independently replaying two simulations and checking every
+    /// player's ADS fraction, recoverable bloom and effective cone as well
+    /// as movement, bullets and events. The protocol-19 handling pin changed
+    /// deliberately because the requested walking speed is now 4 m/s;
+    /// the jump speed and handling rules remain unchanged. This is
+    /// a regression fingerprint, not identity with old gameplay.
+    /// The script and the launch go through `cos`, `sin` and
     /// `tan`, which are the platform's, so a toolchain on another libm
     /// could legitimately differ in the last bit; the tests have only ever
     /// run here, and if that changes the pin is regenerated the same way,
     /// from the tree that is being pinned.
     const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
-        0x62b2_7bcc_b997_35fc,
-        0x0f6b_fe48_debd_f47e,
-        0x892d_dc01_c008_1454,
-        0x0a98_bd84_cf17_ed5c,
-        0x81b9_c2bf_38b9_453c,
-        0xb5a5_3150_6c66_2954,
+        0x55b7_e8cb_e70f_813b,
+        0xdbe5_d977_bf15_e020,
+        0xab42_b94a_f87c_740a,
+        0xde2d_5013_d138_b096,
+        0x13d4_88f8_da66_bdbd,
+        0x9be6_5b95_a1b8_b22d,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a
@@ -7937,10 +8677,8 @@ mod tests {
     const FINGERPRINT_SCORES: [u32; 4] = [0, 0, 0, 0];
 
     #[test]
-    fn free_for_all_is_bit_identical_to_v18_until_the_limit() {
-        // The name is the v19 test's, kept so the docs that cite it still
-        // find it; what it pins since v20 is the fingerprint above. The
-        // sim in free for all must BE the pinned sim until a round ends:
+    fn free_for_all_handling_fingerprint_and_mode_equivalence() {
+        // Free for all must match the handling pin until a round ends:
         // the same players, rounds, kills, hits, blasts, payouts and shot
         // events bit for bit, tick for tick. The frag limit is nowhere
         // near in 600 ticks, which is what "until the limit" means here:
@@ -8109,7 +8847,16 @@ mod tests {
                 sim.loot.iter().map(|l| l.respawn_t <= FIXED_DT).collect();
             sim.step(&|_| input);
             // The client's replay of the same tick.
-            let speed = stance_speed(input.sprint, input.crouch, input.shield);
+            let speed = movement_speed(
+                pos,
+                y,
+                vy,
+                input.jump,
+                input.sprint,
+                input.crouch,
+                input.shield,
+                &sim.obstacles,
+            );
             let npos = move_circle(pos, y, input.mv, speed, FIXED_DT, &sim.obstacles);
             let v = step_vertical(npos, y, vy, input.jump, FIXED_DT, &sim.obstacles);
             let predicted = v
@@ -8205,7 +8952,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        for _ in 0..60 {
+        let ticks = (9.0 / (MOVE_SPEED * FIXED_DT)).ceil() as u32;
+        for _ in 0..ticks {
             step_with(&mut sim, &inputs);
             assert!(sim.loot_events.is_empty(), "walking under the block paid");
             assert_eq!(sim.players[0].y, 0.0);
@@ -8531,6 +9279,110 @@ mod tests {
         ffa.add_player(1);
         assert_eq!(ffa.players[0].pos, level.spawn(0));
         assert_eq!(ffa.players[1].pos, level.spawn(1));
+    }
+
+    #[test]
+    fn eight_players_get_distinct_spawns_on_join_respawn_rejoin_and_round_reset() {
+        let unique = |sim: &Sim| {
+            assert_eq!(sim.players.len(), 8);
+            for (i, a) in sim.players.iter().enumerate() {
+                assert!(a.alive);
+                if sim.mode == GameMode::Tdm {
+                    assert_eq!(a.pos[1] > 0.0, a.team == 0);
+                }
+                for b in &sim.players[i + 1..] {
+                    let distance2 = (a.pos[0] - b.pos[0]).powi(2) + (a.pos[1] - b.pos[1]).powi(2);
+                    assert!(
+                        distance2 > (2.0 * PLAYER_R).powi(2),
+                        "players {} and {} share {:?}",
+                        a.id,
+                        b.id,
+                        a.pos
+                    );
+                }
+            }
+        };
+        for level in [Level::freight_yard(), Level::trench_city(), Level::harbor()] {
+            for mode in [GameMode::Ffa, GameMode::Tdm, GameMode::Hill] {
+                let mut sim = Sim::from_level(&level, 22, mode);
+                for id in 0..8 {
+                    sim.add_player(id);
+                }
+                unique(&sim);
+                sim.remove_player(2);
+                sim.add_player(2);
+                unique(&sim);
+                // All dying together reserves each new spot before the next
+                // body respawns, even when global ids alias a team's four slots.
+                for _ in 0..4 {
+                    for p in &mut sim.players {
+                        p.alive = false;
+                        p.respawn_in = 0.0;
+                    }
+                    sim.step(&|_| PlayerIn::default());
+                    unique(&sim);
+                }
+                for _ in 0..4 {
+                    sim.restart_round();
+                    unique(&sim);
+                }
+                // A single respawn while seven living players occupy pockets.
+                sim.players[0].alive = false;
+                sim.players[0].respawn_in = 0.0;
+                sim.step(&|_| PlayerIn::default());
+                unique(&sim);
+            }
+        }
+    }
+
+    #[test]
+    fn level_bounds_are_finite_and_legacy_movement_is_the_24_metre_wrapper() {
+        for bad in [f32::NAN, f32::INFINITY, -1.0, 0.0, 512.0] {
+            let mut level = Level::from_seed(0);
+            level.arena_half = bad;
+            assert_eq!(
+                Sim::from_level(&level, 0, GameMode::Ffa).arena_half,
+                ARENA_HALF
+            );
+            assert!(blocked_in([25.0, 0.0], 0.0, PLAYER_R, &[], bad));
+        }
+        for pos in [[0.0, 0.0], [23.0, 1.0], [-23.0, -5.0]] {
+            for mv in [[0.0, 1.0], [1.0, 1.0], [-1.0, 0.0]] {
+                assert_eq!(
+                    move_circle(pos, 0.0, mv, 4.0, FIXED_DT, &[]),
+                    move_circle_in(pos, 0.0, mv, 4.0, FIXED_DT, &[], ARENA_HALF)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn harbor_eight_player_replay_matches_every_tick() {
+        let level = Level::harbor();
+        let mut a = Sim::from_level(&level, 27, GameMode::Ffa);
+        let mut b = Sim::from_level(&level, 27, GameMode::Ffa);
+        for id in 0..8 {
+            a.add_player(id);
+            b.add_player(id);
+        }
+        let (mut ah, mut bh) = (FNV_OFFSET, FNV_OFFSET);
+        for tick in 0..900 {
+            v18_grants(&mut a, tick);
+            v18_grants(&mut b, tick);
+            a.step(&|id| v18_script(tick, id));
+            b.step(&|id| v18_script(tick, id));
+            fold_tick(&mut ah, &a);
+            fold_tick(&mut bh, &b);
+            assert_eq!(ah, bh, "tick {tick}");
+            assert_eq!(a.arena_half, 48.0);
+            for p in &a.players {
+                assert!(
+                    p.pos
+                        .iter()
+                        .all(|v| v.abs() <= a.arena_half - PLAYER_R + 1e-4)
+                );
+            }
+        }
     }
 
     #[test]

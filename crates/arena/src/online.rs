@@ -9,9 +9,10 @@ use std::fmt::Write as _;
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
-    HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, Projectile,
-    RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, move_circle,
-    stance_speed, step_vertical, weapon_name, weapon_stats,
+    HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, PLAYER_R,
+    Projectile, RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT,
+    advance_ads, move_circle_in, movement_speed, step_vertical, support_height, weapon_name,
+    weapon_spread, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{
@@ -22,6 +23,7 @@ use serde::Deserialize;
 
 use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
 use crate::grips;
+use crate::harbor::HarborArt;
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
 use crate::script;
@@ -464,49 +466,61 @@ const fn weapon_accent(id: u8) -> Vec3 {
     weapon_feel(id).accent
 }
 
-/// The native crosshair: how far ahead of the eye it sits, how long each
-/// of its two bars is and how thick, metres at hip field of view. The
-/// same 1.2 m as the hit markers, so a wall closer than that occludes
-/// both the same way. At 1.2 m under a 70 degree field a metre is 0.60
-/// screen heights, so 16 mm is ten pixels on a 1080-line screen (six on
-/// 600, twenty on 2160) and 3 mm is two (one on 600, four on 2160): a
-/// fine "+" at every size. The thickness must be over one pixel: the
-/// screen's centre is a pixel boundary on any even height, and a bar
-/// thinner than a pixel there straddles two pixel centres without
-/// covering either, so the first cut's 1.5 mm (0.66 px at 600 lines,
-/// 0.96 at 1080) drew nothing at all in the first capture. The web page
-/// has no use for it: its `div#crosshair` is the crosshair there.
-#[cfg(not(target_arch = "wasm32"))]
-const CROSSHAIR_DIST: f32 = 1.2;
-#[cfg(not(target_arch = "wasm32"))]
-const CROSSHAIR_LEN: f32 = 0.016;
-#[cfg(not(target_arch = "wasm32"))]
-const CROSSHAIR_THICK: f32 = 0.003;
-#[cfg(not(target_arch = "wasm32"))]
+/// One reticle path on native and web. Its four inner edges enclose the
+/// server's angular cone; only line length/thickness retain a screen size.
+/// The 0.30 m HUD plane stays ahead of the viewmodel and beyond the near plane.
+const CROSSHAIR_DIST: f32 = 0.30;
+const CROSSHAIR_LEN: f32 = 0.004;
+const CROSSHAIR_THICK: f32 = 0.00075;
 const CROSSHAIR_COLOR: Vec3 = Vec3::ONE;
 
-/// Push the two white hairline bars of a "+" at the centre of the view:
-/// one along the camera's right, one along its up, both scaled by
-/// `view_scale` like the hit markers so the cross keeps its size on
-/// screen as the field narrows. The up is the camera's own (the right
-/// crossed with the look), the same basis the hit markers use, so neither
-/// overlay foreshortens as the aim pitches. Scale applies before rotation:
-/// a cube long in X is turned onto the right, one long in Y onto the up.
-#[cfg(not(target_arch = "wasm32"))]
-fn push_crosshair(frame: &mut Frame, eye: Vec3, look: Vec3, right: Vec3, view_scale: f32) {
+fn push_crosshair(
+    frame: &mut Frame,
+    eye: Vec3,
+    look: Vec3,
+    right: Vec3,
+    view_scale: f32,
+    cone: f32,
+) {
     let up = right.cross(look).normalize();
     let center = eye + look * CROSSHAIR_DIST;
     let len = CROSSHAIR_LEN * view_scale;
     let thick = CROSSHAIR_THICK * view_scale;
-    frame.instances.push(
-        Instance::new(center, Vec3::new(len, thick, thick), CROSSHAIR_COLOR)
-            .with_rot(Quat::from_rotation_arc(Vec3::X, right)),
-    );
-    frame.instances.push(
-        Instance::new(center, Vec3::new(thick, len, thick), CROSSHAIR_COLOR)
-            .with_rot(Quat::from_rotation_arc(Vec3::Y, up)),
-    );
+    let cone = if cone.is_finite() {
+        cone.clamp(0.0, 1.5)
+    } else {
+        0.0
+    };
+    let gap = CROSSHAIR_DIST * cone.tan();
+    for axis in [right, up] {
+        for sign in [-1.0, 1.0] {
+            frame.instances.push(
+                Instance::new(
+                    center + axis * (sign * (gap + len * 0.5)),
+                    Vec3::new(len, thick, thick),
+                    CROSSHAIR_COLOR,
+                )
+                .with_rot(Quat::from_rotation_arc(Vec3::X, axis))
+                .without_shadow(),
+            );
+        }
+    }
 }
+
+/// Retained pages may still contain the old fixed "+"; remove it once at
+/// client creation so the rendered cone/scope is the only aiming indicator.
+#[cfg(target_arch = "wasm32")]
+fn hide_page_crosshair() {
+    if let Some(element) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("crosshair"))
+    {
+        drop(element.set_attribute("style", "display:none"));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn hide_page_crosshair() {}
 
 /// The mechanical state of the weapon, for the parts that move.
 ///
@@ -869,10 +883,14 @@ struct PSnap {
 
 /// One sent input command, kept until the server acks it — the base of
 /// client-side movement prediction.
+// Independent held input bits must survive reconciliation exactly as sent.
+#[allow(clippy::struct_excessive_bools)]
 struct Cmd {
     seq: u32,
     mv: [f32; 2],
-    speed: f32,
+    sprint: bool,
+    crouch: bool,
+    shield: bool,
     jump: bool,
     sent_at: f32,
 }
@@ -1401,6 +1419,8 @@ pub struct ShooterGame {
     /// one-frame status event still learns who won.
     round_line: Option<String>,
     arena_half: f32,
+    /// Select the authored port scenery only for the matching authoritative level.
+    is_harbor: bool,
     /// Presentation only: the map's daylight and native capture override.
     climate: weather::Climate,
     weather_override: Option<ember_engine::Weather>,
@@ -1456,6 +1476,8 @@ pub struct ShooterGame {
     pads_active: Vec<bool>,
     /// ADS: 0 = hip, 1 = fully zoomed (RMB).
     zoom: f32,
+    /// A newly equipped gun must complete its own raise, not inherit a scope.
+    ads_weapon: u8,
     /// Eased 0..1 raise of MY own shield. Driven by local input rather than
     /// by the acked state, like the bob and the zoom: it is cosmetic, and
     /// the sim is still the only thing that reflects a round.
@@ -1488,6 +1510,7 @@ pub struct ShooterGame {
     /// The v13 prop set (cover by kind, city, sky, ground) and where it got
     /// registered; None = plain coloured boxes and no city.
     props: Option<Props>,
+    harbor: Option<HarborArt>,
     /// The round meshes, the streak and the core (v20) and where they got
     /// registered. `run_online` always sets it; None (a frame built by a
     /// test that did not ask) draws no tracer at all, since the box rods
@@ -1619,6 +1642,7 @@ impl ShooterGame {
     /// build one here so the field list lives in one place.
     #[allow(clippy::too_many_lines)] // One initialization literal keeps all client state visible.
     fn with_chan(chan: net::NetChan, assets: Option<Assets>, audio: Option<Audio>) -> Self {
+        hide_page_crosshair();
         Self {
             chan,
             my_id: None,
@@ -1629,6 +1653,7 @@ impl ShooterGame {
             hill: None,
             round_line: None,
             arena_half: 24.0,
+            is_harbor: false,
             climate: weather::Climate::Yard,
             weather_override: weather::capture_override(),
             obstacles: Vec::new(),
@@ -1660,6 +1685,7 @@ impl ShooterGame {
             pads_pos: Vec::new(),
             pads_active: Vec::new(),
             zoom: 0.0,
+            ads_weapon: 0,
             shield_raise: 0.0,
             reload_started: None,
             shot_started: None,
@@ -1678,6 +1704,7 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             props: None,
+            harbor: None,
             rounds: None,
             decor: Vec::new(),
             env_base: 0,
@@ -2003,6 +2030,11 @@ impl ShooterGame {
         self.rounds = Some(Rounds { base });
     }
 
+    /// Harbor scenery is registered after all older mesh groups.
+    pub const fn set_harbor(&mut self, base: u32) {
+        self.harbor = Some(HarborArt::new(base));
+    }
+
     /// Install the jointed character (set by `run_online` after load).
     pub fn set_parts(&mut self, rc: Option<ember_engine::rig::RigCharacter>) {
         self.grip_body_parts.clear();
@@ -2031,6 +2063,34 @@ impl ShooterGame {
         let f = self.from.get(&id).copied().unwrap_or_default();
         let to = self.to.get(&id).copied().unwrap_or_default();
         f.y + (to.y - f.y) * a
+    }
+
+    /// Conservative cone envelope: local movement/stance can widen it at once,
+    /// but it never promises less dispersion than the latest server report.
+    /// The reported bloom is held until the next snapshot, so movement and
+    /// jump apply to existing recoil immediately; recovery may wait a snapshot.
+    /// Never infer bloom from interpolated movement or invert an airborne floor.
+    fn hud_spread(&self, weapon: u8, crouch: bool, moving: bool) -> f32 {
+        let grounded = self.pred_vy.abs() < 1e-5
+            && self.pred_y
+                <= support_height(
+                    self.pred_pos.to_array(),
+                    PLAYER_R,
+                    self.pred_y,
+                    &self.obstacles,
+                ) + 1e-3;
+        let reported = self
+            .my_id
+            .and_then(|id| self.latest.get(&id))
+            .filter(|p| p.weapon == weapon);
+        let bloom = reported
+            .filter(|p| p.recoil_bloom.is_finite() && p.recoil_bloom > 0.0)
+            .map_or(0.0, |p| p.recoil_bloom);
+        let predicted = weapon_spread(weapon, self.zoom, bloom, crouch, moving, grounded);
+        let authoritative = reported
+            .filter(|p| p.spread.is_finite() && p.spread > 0.0)
+            .map_or(0.0, |p| p.spread);
+        predicted.max(authoritative).min(1.5)
     }
 
     /// The tip of the gun player `id` is drawn holding, in the world, or
@@ -2344,6 +2404,7 @@ impl EmberGame for ShooterGame {
                     self.my_id = Some(id);
                     self.mode = GameMode::from_name(&mode).unwrap_or_default();
                     self.arena_half = arena_half;
+                    self.is_harbor = map == arena_core::shooter::MAP_HARBOR;
                     // The same level the server built its lobby from, so
                     // prediction and authority resolve against identical
                     // cover; the seed is only what an unknown name falls
@@ -2375,6 +2436,8 @@ impl EmberGame for ShooterGame {
                     self.history.clear();
                     self.reload_started = None;
                     self.was_alive = false; // first State snaps the prediction
+                    self.zoom = 0.0;
+                    self.ads_weapon = 0;
                     for m in players {
                         self.metas.insert(m.id, m);
                     }
@@ -2419,6 +2482,7 @@ impl EmberGame for ShooterGame {
                     let restarted = self.round_pause > 0.0 && round_pause <= 0.0;
                     if restarted {
                         self.round_line = None;
+                        self.zoom = 0.0;
                     }
                     self.team_score = team_score;
                     self.hill_holder = hill;
@@ -2668,7 +2732,25 @@ impl EmberGame for ShooterGame {
                                 let mut left = dur;
                                 while left > 1e-6 {
                                     let step = left.min(FIXED_DT);
-                                    p = move_circle(p, y, c.mv, c.speed, step, &self.obstacles);
+                                    let speed = movement_speed(
+                                        p,
+                                        y,
+                                        vy,
+                                        press,
+                                        c.sprint,
+                                        c.crouch,
+                                        c.shield,
+                                        &self.obstacles,
+                                    );
+                                    p = move_circle_in(
+                                        p,
+                                        y,
+                                        c.mv,
+                                        speed,
+                                        step,
+                                        &self.obstacles,
+                                        self.arena_half,
+                                    );
                                     let stepped =
                                         step_vertical(p, y, vy, press, step, &self.obstacles);
                                     press = false;
@@ -2905,12 +2987,10 @@ impl EmberGame for ShooterGame {
         let stick_r = pad.map_or([0.0, 0.0], |p| p.right);
 
         // ---- ADS (RMB or LT): tighter FOV, the look slowed to match ----
-        let aiming = tick.as_ref().map_or_else(
+        let aim_held = tick.as_ref().map_or_else(
             || input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5),
             |t| t.held.down(script::Hold::Ads),
         );
-        let zoom_target = if aiming { 1.0 } else { 0.0 };
-        self.zoom += (zoom_target - self.zoom) * (1.0 - (-dt * 14.0).exp());
         // The gun I am drawn with decides the field of view, and the field
         // of view decides the sensitivity, so it is read here, before the
         // look, and reused by the frame below (nothing between rewrites
@@ -2918,9 +2998,41 @@ impl EmberGame for ShooterGame {
         let me_latest = self.my_id.and_then(|id| self.latest.get(&id)).copied();
         let my_weapon = shown_weapon(me_latest.map_or(SIDEARM, |p| p.weapon));
         let my_feel = weapon_feel(my_weapon);
+        let reload_held = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyR) || pad_down(PadButton::West),
+            |t| t.held.down(script::Hold::Reload),
+        );
+        let shield_held = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyQ) || pad_down(PadButton::LB),
+            |t| t.held.down(script::Hold::Shield),
+        );
+        let melee_held = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyE) || pad_down(PadButton::RB),
+            |t| t.held.down(script::Hold::Melee),
+        );
+        let melee_active = self
+            .melee_started
+            .is_some_and(|start| self.time - start < MELEE_COOLDOWN);
+        let ads_blocked = !me_latest.is_some_and(|p| p.alive && !p.reloading)
+            || self.round_pause > 0.0
+            || reload_held
+            || shield_held
+            || melee_held
+            || melee_active;
+        let aiming = aim_held && !ads_blocked;
+        let swapped = self.ads_weapon != 0 && self.ads_weapon != my_weapon;
+        if swapped || ads_blocked {
+            // The authoritative handling resets immediately on these
+            // interruptions. A brief Q tap cannot retain nearly-full optics
+            // while the server starts a new zero-to-one raise.
+            self.zoom = 0.0;
+        } else {
+            self.zoom = advance_ads(self.zoom, aiming, my_weapon, dt);
+        }
+        self.ads_weapon = my_weapon;
         let fov_now = my_feel.fov(self.zoom);
-        // A narrower view turns slower in the same ratio (a 20x scope turns
-        // twenty times slower), so a target crossing the screen costs the
+        // A narrower view turns slower in its optical ratio (a 6x scope turns
+        // six times slower), so a target crossing the screen costs the
         // same hand travel at every zoom. Mouse and stick alike.
         let look_scale = feel::look_scale(fov_now);
 
@@ -2980,10 +3092,7 @@ impl EmberGame for ShooterGame {
         );
         // Held, like every other intent: there is no local toggle state that
         // a dropped input packet could leave disagreeing with the server.
-        let shield = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyQ) || pad_down(PadButton::LB),
-            |t| t.held.down(script::Hold::Shield),
-        );
+        let shield = shield_held;
         self.shield_raise +=
             ((if shield { 1.0 } else { 0.0 }) - self.shield_raise) * (1.0 - (-dt * 16.0).exp());
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
@@ -3049,10 +3158,7 @@ impl EmberGame for ShooterGame {
         // exactly the reason it resolves bullets there, and a client that
         // guessed a kill would have to un-kill someone when the server
         // disagreed. The swing is sent; the outcome comes back.
-        let e_down = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyE) || pad_down(PadButton::RB),
-            |t| t.held.down(script::Hold::Melee),
-        );
+        let e_down = melee_held;
         let melee = e_down && !self.prev_e;
         self.prev_e = e_down;
         self.melee_pending |= melee;
@@ -3085,11 +3191,6 @@ impl EmberGame for ShooterGame {
             .my_id
             .and_then(|id| self.latest.get(&id))
             .is_some_and(|p| p.alive);
-        // Prediction reads the same rule the server applies, shield included
-        // — a raised shield cancels sprint, and predicting otherwise would
-        // rubber-band anyone who raised one while running.
-        let speed = stance_speed(sprint, crouch, shield);
-
         // Send intents at a fixed cadence (also the keepalive), remembering
         // each command until the server acks it.
         if self.my_id.is_some() && !self.lost && self.since_input >= 0.05 {
@@ -3107,7 +3208,9 @@ impl EmberGame for ShooterGame {
                 self.history.push_back(Cmd {
                     seq,
                     mv: [mv.x, mv.y],
-                    speed,
+                    sprint,
+                    crouch,
+                    shield,
                     jump: jump_press,
                     sent_at: self.time,
                 });
@@ -3133,10 +3236,7 @@ impl EmberGame for ShooterGame {
                 fire,
                 sprint,
                 crouch,
-                reload: tick.as_ref().map_or_else(
-                    || input.down(KeyCode::KeyR) || pad_down(PadButton::West),
-                    |t| t.held.down(script::Hold::Reload),
-                ),
+                reload: reload_held,
                 jump: jump_press,
                 // Sent raw: the trigger gate lives in the sim, so `fire` is
                 // reported honestly even while Q is down and the server is
@@ -3156,17 +3256,32 @@ impl EmberGame for ShooterGame {
             });
         }
 
+        let mut moved_for_spread = false;
         // Predict my own movement locally — instant response; the State
         // handler above rebases this on the server's authority.
         if me_alive {
             let was = self.pred_pos;
-            let p = move_circle(
+            // Prediction reads the same ground/air rule the server applies,
+            // shield included — otherwise a jump or raised shield would
+            // rubber-band.
+            let speed = movement_speed(
+                self.pred_pos.to_array(),
+                self.pred_y,
+                self.pred_vy,
+                self.pred_jump,
+                sprint,
+                crouch,
+                shield,
+                &self.obstacles,
+            );
+            let p = move_circle_in(
                 self.pred_pos.to_array(),
                 self.pred_y,
                 [mv.x, mv.y],
                 speed,
                 dt,
                 &self.obstacles,
+                self.arena_half,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
             let stepped = step_vertical(
@@ -3230,6 +3345,7 @@ impl EmberGame for ShooterGame {
             } else {
                 Vec2::ZERO
             };
+            moved_for_spread = (self.pred_pos - was).length_squared() > 1e-10;
             let prev_phase = self.own_anim.1;
             ember_engine::puppet::advance_anim(&mut self.own_anim, moved, dt);
             let mine = feel::Stepper {
@@ -3386,10 +3502,10 @@ impl EmberGame for ShooterGame {
         // Screen-space furniture (the hit markers, the native crosshair) is
         // a world-space cube a fixed distance ahead, so it grows as the view
         // narrows; scaled by the narrowing it keeps its size on screen, and
-        // through the 20x scope it stays a marker rather than a wall.
-        let view_scale = fov_now / feel::HIP_FOV;
+        // through the 6x scope it stays a marker rather than a wall.
+        let view_scale = feel::look_scale(fov_now);
         // The scope view: the sniper mostly zoomed. The held gun is not
-        // drawn (at 0.6 m it would fill a 3.5 degree view) and the tube's
+        // drawn (the optic replaces its close geometry) and the tube's
         // mask stands in front of the eye instead.
         let scoped = feel::scoped(my_weapon, self.zoom);
 
@@ -3418,61 +3534,67 @@ impl EmberGame for ShooterGame {
         // box-body players; the props carry every other picture.
         let env = self.env_base;
         let props = self.props;
-        if let Some(pr) = &props {
-            pr.push_ground(&mut frame);
-        }
-        // The floor slab: what the arena stands on, and what closes the gap
-        // between the cobble plane and the far ground.
-        frame.instances.push(
-            Instance::new(
-                Vec3::new(0.0, -0.5, 0.0),
-                Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-                Vec3::new(0.12, 0.13, 0.17),
-            )
-            .with_wetness(),
-        );
-        if let Some(pr) = &props {
+        let harbor = if self.is_harbor { self.harbor } else { None };
+        if let Some(port) = &harbor {
+            port.push_ground(&mut frame);
+            port.push_decor(&mut frame);
+        } else {
+            if let Some(pr) = &props {
+                pr.push_ground(&mut frame);
+            }
+            // The floor slab: what the arena stands on, and what closes the gap
+            // between the cobble plane and the far ground.
             frame.instances.push(
                 Instance::new(
-                    Vec3::new(0.0, 0.004, 0.0),
+                    Vec3::new(0.0, -0.5, 0.0),
                     Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-                    Vec3::ONE,
+                    Vec3::new(0.12, 0.13, 0.17),
                 )
-                .with_mesh(pr.mesh(Prop::Floor))
                 .with_wetness(),
             );
-        }
-        for (px, pz, sx, sz) in [
-            (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
-            (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
-            (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
-            (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
-        ] {
             if let Some(pr) = &props {
-                // The balustrade picture, one tile per wall height; the
-                // fit turns the east and west walls so the long faces
-                // carry it whichever way the wall runs.
-                pr.push_fitted(
-                    &mut frame,
-                    Prop::CityWall,
-                    Vec3::new(px, 1.75, pz),
-                    Vec3::new(sx, 3.5, sz),
-                    Vec3::ONE,
-                );
-            } else {
-                inst(
-                    &mut frame,
-                    Vec3::new(px, 1.75, pz),
-                    Vec3::new(sx, 3.5, sz),
-                    Vec3::new(0.26, 0.28, 0.34),
+                frame.instances.push(
+                    Instance::new(
+                        Vec3::new(0.0, 0.004, 0.0),
+                        Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
+                        Vec3::ONE,
+                    )
+                    .with_mesh(pr.mesh(Prop::Floor))
+                    .with_wetness(),
                 );
             }
-        }
-        // The listed decor: statue, cathedral, the façade ring, lamps and
-        // wrecks, each scaled to the height the level gives it.
-        if let Some(pr) = &props {
-            for d in &self.decor {
-                pr.push_decor(&mut frame, d);
+            for (px, pz, sx, sz) in [
+                (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+                (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+                (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
+                (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
+            ] {
+                if let Some(pr) = &props {
+                    // The balustrade picture, one tile per wall height; the
+                    // fit turns the east and west walls so the long faces
+                    // carry it whichever way the wall runs.
+                    pr.push_fitted(
+                        &mut frame,
+                        Prop::CityWall,
+                        Vec3::new(px, 1.75, pz),
+                        Vec3::new(sx, 3.5, sz),
+                        Vec3::ONE,
+                    );
+                } else {
+                    inst(
+                        &mut frame,
+                        Vec3::new(px, 1.75, pz),
+                        Vec3::new(sx, 3.5, sz),
+                        Vec3::new(0.26, 0.28, 0.34),
+                    );
+                }
+            }
+            // The listed decor: statue, cathedral, the façade ring, lamps and
+            // wrecks, each scaled to the height the level gives it.
+            if let Some(pr) = &props {
+                for d in &self.decor {
+                    pr.push_decor(&mut frame, d);
+                }
             }
         }
         // Weapon-upgrade pads: base slab always, a spinning pickup while
@@ -3532,7 +3654,9 @@ impl EmberGame for ShooterGame {
                 // Drawn below with their own state.
                 continue;
             }
-            if let Some(pr) = &props {
+            if let Some(port) = &harbor {
+                port.push_cover(&mut frame, o);
+            } else if let Some(pr) = &props {
                 pr.push_obstacle(&mut frame, o);
             } else {
                 let height = o.h - o.base;
@@ -4064,23 +4188,27 @@ impl EmberGame for ShooterGame {
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
             // `pitch * 0.10` nudge, so the gun and the bullet disagreed.
-            // Offsets tuned for the v16 rifle, whose hold point is the top of
-            // the pistol grip at the trigger: every weapon is fitted to that
-            // same hold by the build, so the one set of offsets serves all.
-            let base = eye
-                + look * (0.60 + 0.08 * self.zoom - 0.06 * recoil - my_feel.push * recoil)
-                + right3 * (0.20 * (1.0 - self.zoom) + 0.012)
-                + Vec3::Y
-                    * (-0.24 + 0.07 * self.zoom + bob * 0.4 * (1.0 - self.zoom)
-                        - reload_dip
-                        - holster_drop
-                        + 0.03 * recoil);
             let yaw = -forward2.y.atan2(forward2.x);
+            let own_mesh = self
+                .assets
+                .as_ref()
+                .is_some_and(|a| a.weapon_parts(my_weapon).1);
+            let sight = crate::ads::sight(my_weapon, own_mesh);
+            let raised = crate::ads::blend(self.zoom);
+            let settle = crate::ads::settle(self.zoom);
+            let aim_rotation = weapon_rot(yaw, self.pitch);
+            let hip_offset = look * 0.60 + right3 * 0.212 - Vec3::Y * 0.24;
+            let ads_offset = look * sight.distance - aim_rotation * sight.point;
+            let base = eye + hip_offset.lerp(ads_offset, raised)
+                - look * (0.06 * recoil + my_feel.push * recoil)
+                + Vec3::Y
+                    * (bob * 0.4 * (1.0 - raised) - reload_dip - holster_drop + 0.03 * recoil);
             // Tilts with aim elevation, plus the muzzle-up kick and the
             // alternating sideways kick per shot.
             let kick_yaw = yaw + my_feel.yaw_alt * kick_side * recoil;
             let kick_pitch = self.pitch + my_feel.kick_model * recoil;
-            let rot = weapon_rot(kick_yaw, kick_pitch);
+            let rot = weapon_rot(kick_yaw, kick_pitch + sight.raise_pitch * settle)
+                * Quat::from_rotation_x(sight.raise_roll * settle);
             // The melee drops the rifle out of the frame, in the weapon's
             // own frame, and the sword comes out in its place.
             let melee_since = self.melee_started.map(|t0| self.time - t0);
@@ -4283,16 +4411,17 @@ impl EmberGame for ShooterGame {
             {
                 push_flash(&mut frame, rs, muzzle, look, shot_flash(&my_feel));
             }
-            // The crosshair. What stood here was an aim dot: an opaque
-            // cube in the weapon's accent 4 m down the sight line, which
-            // on the web sat as a coloured square under the page's own "+"
-            // (`div#crosshair`) and down the sights was a block. The page
-            // is the crosshair on the web; the native client, which has no
-            // page, gets a hairline here. Not through the scope, which has
-            // its own reticle.
-            #[cfg(not(target_arch = "wasm32"))]
+            // Native and web share the same dynamic angular-cone reticle.
+            // The actual sniper optic supplies its own cross instead.
             if !scoped {
-                push_crosshair(&mut frame, eye, look, right3, view_scale);
+                push_crosshair(
+                    &mut frame,
+                    eye,
+                    look,
+                    right3,
+                    view_scale,
+                    self.hud_spread(my_weapon, crouch, moved_for_spread),
+                );
             }
             // The round showcase, a review aid: see `push_showcase`.
             #[cfg(not(target_arch = "wasm32"))]
@@ -4957,11 +5086,119 @@ mod wire_tests {
             ammo: 20,
             reserve: 30,
             reloading: false,
+            ads_fraction: 0.0,
+            spread: 0.0,
+            recoil_bloom: 0.0,
             deaths: 0,
             ack: 0,
             ack_age_ticks: 0,
             team: 0,
         }
+    }
+
+    #[test]
+    fn harbor_join_selects_port_art_and_prediction_replays_outside_old_bounds() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.set_harbor(1000);
+        inbox
+            .send(S2C::GameJoined {
+                id: 2,
+                seed: 37,
+                arena_half: 48.0,
+                players: Vec::new(),
+                map: arena_core::shooter::MAP_HARBOR.into(),
+                mode: "tdm".into(),
+            })
+            .unwrap();
+        let frame = game.update(&InputState::default(), 0.0);
+        assert!(game.is_harbor);
+        assert_eq!(game.arena_half, 48.0);
+        assert_eq!(game.climate, weather::Climate::Harbor);
+        assert_eq!(game.obstacles, Level::harbor().obstacles);
+        assert!(
+            frame.instances.iter().any(|i| i.mesh >= 1000),
+            "port art is selected"
+        );
+        assert!(
+            !frame
+                .instances
+                .iter()
+                .any(|i| i.scale == Vec3::new(0.9, 3.5, 98.7)),
+            "no old city balustrade"
+        );
+
+        // A clear real quay position, with no teleport or invented bigger fixture world.
+        let mut p = me(2);
+        p.x = 38.0;
+        p.z = 0.0;
+        game.latest.insert(2, p);
+        game.was_alive = true;
+        game.pred_pos = Vec2::new(38.0, 0.0);
+        game.own_render = game.pred_pos;
+        let walk = InputState::from_parts(&[KeyCode::KeyW], &[], (0.0, 0.0), None);
+        for _ in 0..30 {
+            game.update(&walk, FIXED_DT);
+        }
+        assert!(
+            (game.pred_pos.x - 40.0).abs() < 0.01,
+            "4 m/s prediction past x24: {:?}",
+            game.pred_pos
+        );
+
+        game.time = 5.0;
+        game.pred_pos = Vec2::new(38.4, 0.0);
+        game.own_render = game.pred_pos;
+        game.history.clear();
+        game.history.push_back(Cmd {
+            seq: 7,
+            mv: [1.0, 0.0],
+            sprint: false,
+            crouch: false,
+            shield: false,
+            jump: false,
+            sent_at: 4.9,
+        });
+        p.ack = 7;
+        inbox
+            .send(S2C::State {
+                tick: 30,
+                players: vec![p],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&InputState::default(), 0.0);
+        assert!(
+            (game.pred_pos.x - 38.4).abs() < 0.01,
+            "reconciliation must use the same 48 m bounds: {:?}",
+            game.pred_pos
+        );
+
+        // Joining an old map must also switch the art and movement bound back.
+        inbox
+            .send(S2C::GameJoined {
+                id: 2,
+                seed: 37,
+                arena_half: 24.0,
+                players: Vec::new(),
+                map: arena_core::shooter::MAP_TRENCH_CITY.into(),
+                mode: "ffa".into(),
+            })
+            .unwrap();
+        let frame = game.update(&InputState::default(), 0.0);
+        assert!(!game.is_harbor);
+        assert_eq!(game.arena_half, 24.0);
+        assert_eq!(game.climate, weather::Climate::City);
+        assert!(
+            !frame.instances.iter().any(|i| i.mesh >= 1000),
+            "old maps do not inherit harbor scenery"
+        );
     }
 
     /// Weather differs between clients' presentation clocks; the same input
@@ -5215,7 +5452,7 @@ mod wire_tests {
     }
 
     /// The same device with no script: proof the assertions above are not
-    /// vacuous — every one of them flips.
+    /// vacuous — device intents arrive, with shield/reload taking ADS priority.
     #[test]
     fn without_a_script_that_same_device_does_all_of_it() {
         let (game, sent) = run_against_device(None);
@@ -5229,7 +5466,10 @@ mod wire_tests {
             "unscripted, the mouse tilts it: {}",
             game.pitch
         );
-        assert!(game.zoom > 0.1, "unscripted, the right button scopes");
+        assert_eq!(
+            game.zoom, 0.0,
+            "held shield/reload prevents a simultaneous ADS raise"
+        );
         assert!(game.score_shown, "unscripted, Tab shows the scoreboard");
         let held = |f: fn(&C2S) -> bool| sent.iter().any(f);
         // Jump and melee are edge-latched, so they land in one packet, not
@@ -5259,7 +5499,7 @@ mod wire_tests {
             "unscripted, W walks: ({mx}, {my})"
         );
         assert!(fire && sprint && reload, "unscripted: fire/sprint/reload");
-        assert!(shield && ads, "unscripted: shield/ads");
+        assert!(shield && !ads, "unscripted: shield takes priority over ADS");
         assert!(!crouch, "unscripted, nothing crouches");
     }
 
@@ -5278,6 +5518,7 @@ mod wire_tests {
             game.latest.insert(2, p);
             game.was_alive = true;
             game.zoom = zoom;
+            game.ads_weapon = weapon;
             game.time = 5.0;
             // A short frame: the eased zoom moves by well under 0.02.
             game.update(&InputState::default(), 0.001)
@@ -5302,10 +5543,9 @@ mod wire_tests {
         // that colour at that distance.
         assert_eq!(slabs_in(&sniper), feel::SCOPE_SIDES + 2);
         if debug_camera().is_none() {
-            // The zoom eased back a little over the frame (1.4 percent at
-            // this dt), so the field is the scope's, not exactly 3.5.
+            // A millisecond of lowering is still near the 6x endpoint.
             let fov = sniper.camera.fov_y_deg;
-            assert!(fov < 5.0 && fov > 3.4, "scope field {fov}");
+            assert!(fov < 14.0 && fov > 12.0, "scope field {fov}");
         }
         assert_eq!(
             slabs_in(&frame_for(feel::SCOPED_WEAPON, 0.5)),
@@ -6254,9 +6494,7 @@ mod wire_tests {
                     .any(|i| i.mesh == 0 && (i.position - dot).length() < 1e-3),
                 "the aim dot"
             );
-            // The native crosshair: two white hairlines 1.2 m ahead, one
-            // along the right and one along the up, never thicker than a
-            // hairline.
+            // Four hairlines enclose the angular cone on the HUD plane.
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let at = frame.camera.eye + look * CROSSHAIR_DIST;
@@ -6264,9 +6502,12 @@ mod wire_tests {
                     .instances
                     .iter()
                     .filter(|i| i.mesh == 0 && i.color == CROSSHAIR_COLOR)
-                    .filter(|i| (i.position - at).length() < 1e-4)
+                    .filter(|i| {
+                        (i.position - at).dot(look).abs() < 1e-4
+                            && (i.position - at).length() < 0.10
+                    })
                     .collect();
-                assert_eq!(hair.len(), 2, "two bars");
+                assert_eq!(hair.len(), 4, "four cone-edge bars");
                 for h in &hair {
                     assert!(h.scale.max_element() <= CROSSHAIR_LEN + 1e-6, "{}", h.scale);
                     assert!(h.scale.min_element() <= CROSSHAIR_THICK + 1e-6);
@@ -6283,7 +6524,7 @@ mod wire_tests {
                     })
                     .collect();
                 assert!(along[0].dot(look).abs() < 1e-4 && along[1].dot(look).abs() < 1e-4);
-                assert!(along[0].dot(along[1]).abs() < 1e-4, "a cross");
+                assert!(along[0].dot(along[2]).abs() < 1e-4, "perpendicular pairs");
             }
         }
     }
@@ -6800,6 +7041,9 @@ mod grip_muzzle_tests {
             ammo: 1,
             reserve: 30,
             reloading: false,
+            ads_fraction: 0.0,
+            spread: 0.0,
+            recoil_bloom: 0.0,
             deaths: 0,
             ack: 0,
             ack_age_ticks: 0,
@@ -7215,5 +7459,327 @@ mod grip_muzzle_tests {
                 "old relaxed hand {mesh} still drawn"
             );
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod ads_tests {
+    use super::*;
+    use arena_core::shooter::weapon_handling;
+    use ember_engine::PadState;
+
+    const fn player(weapon: u8) -> PState {
+        PState {
+            id: 2,
+            x: 0.0,
+            z: 0.0,
+            y: 0.0,
+            vy: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            pitch: 0.0,
+            hp: MAX_HP,
+            score: 0,
+            alive: true,
+            crouch: false,
+            shield: false,
+            weapon,
+            ammo: 20,
+            reserve: 30,
+            reloading: false,
+            ads_fraction: 0.0,
+            spread: 0.0,
+            recoil_bloom: 0.0,
+            deaths: 0,
+            ack: 0,
+            ack_age_ticks: 0,
+            team: 0,
+        }
+    }
+
+    fn prepare(game: &mut ShooterGame, weapon: u8) {
+        game.my_id = Some(2);
+        game.latest.insert(2, player(weapon));
+        game.was_alive = true;
+        game.script = None;
+        game.weather_override = Some(ember_engine::Weather::Clear);
+        game.ads_weapon = weapon;
+        game.zoom = 0.0;
+        game.time = 5.0;
+    }
+
+    fn one(frame: &Frame, mesh: u32) -> &Instance {
+        let mut found = frame.instances.iter().filter(|part| part.mesh == mesh);
+        let instance = found.next().expect("drawn part");
+        assert!(found.next().is_none(), "mesh {mesh} drawn twice");
+        instance
+    }
+
+    /// Intersect the actual opaque triangle list with the +X optical ray.
+    /// This catches a mathematically aligned point that still sits inside a
+    /// sight housing, without accepting transparency that the shader ignores.
+    fn sight_is_clear(mesh: &ember_engine::MeshData, sight: crate::ads::Sight) -> bool {
+        !mesh.vertices.as_chunks::<3>().0.iter().any(|triangle| {
+            let [origin, second, third] = triangle.map(|vertex| Vec3::from_array(vertex.pos));
+            let edge_b = second - origin;
+            let edge_c = third - origin;
+            let det = edge_b.y * edge_c.z - edge_c.y * edge_b.z;
+            if det.abs() < 1e-10 {
+                return false;
+            }
+            let offset_y = sight.point.y - origin.y;
+            let offset_z = sight.point.z - origin.z;
+            let weight_b = (offset_y * edge_c.z - offset_z * edge_c.y) / det;
+            let weight_c = (edge_b.y * offset_z - edge_b.z * offset_y) / det;
+            weight_b >= 0.0
+                && weight_c >= 0.0
+                && weight_b + weight_c <= 1.0
+                && origin.x + weight_b * edge_b.x + weight_c * edge_c.x > -sight.distance
+        })
+    }
+
+    #[test]
+    fn every_weapon_raises_its_sight_with_rigid_gloves_and_true_optical_zoom() {
+        let (meshes, assets) = load_assets();
+        let (_, character) = part_meshes(u32::try_from(meshes.len() + 1).unwrap());
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, Some(assets.expect("weapons load")), None);
+        game.set_parts(character);
+        let aim = InputState::from_parts(&[], &[MouseButton::Right], (0.0, 0.0), None);
+        for weapon in 1..=WEAPON_COUNT {
+            prepare(&mut game, weapon);
+            let assets = game.assets.as_ref().unwrap();
+            let (parts, own_mesh) = assets.weapon_parts(weapon);
+            if weapon != feel::SCOPED_WEAPON {
+                let sight = crate::ads::sight(weapon, own_mesh);
+                for part in parts {
+                    assert!(
+                        sight_is_clear(&meshes[part.mesh as usize - 1], sight),
+                        "weapon {weapon}: opaque mesh {} blocks its actual aim ray",
+                        part.mesh
+                    );
+                }
+            }
+            let mesh = parts
+                .iter()
+                .find(|part| part.anim == PartAnim::Fixed && !part.is_strip)
+                .unwrap()
+                .mesh;
+            let grip = *assets.grip_of(weapon).unwrap();
+            let hip = game.update(&InputState::default(), 0.0);
+            let timing = weapon_handling(weapon);
+            let mid = game.update(&aim, timing.ads_in_secs * 0.5);
+            assert!((game.zoom - 0.5).abs() < 1e-5);
+            let full = game.update(&aim, timing.ads_in_secs * 0.5 + 1e-5);
+            assert_eq!(game.zoom, 1.0);
+            let actual_zoom = (hip.camera.fov_y_deg * 0.5).to_radians().tan()
+                / (full.camera.fov_y_deg * 0.5).to_radians().tan();
+            assert!(
+                (actual_zoom - timing.optical_zoom).abs() < 1e-4,
+                "weapon {weapon}: {actual_zoom}x"
+            );
+            assert!(
+                full.camera.fov_y_deg < mid.camera.fov_y_deg
+                    && mid.camera.fov_y_deg < hip.camera.fov_y_deg
+            );
+            assert!(one(&hip, mesh).position.distance(one(&mid, mesh).position) > 0.04);
+            for frame in [&hip, &mid] {
+                let gun = one(frame, mesh);
+                for hand in [grip.right, grip.left] {
+                    let glove = one(frame, hand.mesh);
+                    assert_eq!(glove.position, gun.position);
+                    assert_eq!(glove.rot, gun.rot);
+                    assert_eq!(glove.scale, gun.scale);
+                    assert!(!glove.casts_shadow);
+                }
+            }
+            if weapon == feel::SCOPED_WEAPON {
+                assert!(full.instances.iter().all(|part| part.mesh != mesh));
+                assert_eq!(
+                    full.instances
+                        .iter()
+                        .filter(|part| part.color == feel::SCOPE_BLACK)
+                        .count(),
+                    feel::SCOPE_SIDES + 2
+                );
+            } else {
+                let gun = one(&full, mesh);
+                let sight = crate::ads::sight(weapon, own_mesh);
+                let sight_world = gun.position + gun.rot * sight.point;
+                let look = (full.camera.target - full.camera.eye).normalize();
+                assert!(
+                    sight_world.distance(full.camera.eye + look * sight.distance) < 1e-4,
+                    "weapon {weapon}: full raise must put its sight on the camera line"
+                );
+                assert_eq!(one(&full, grip.right.mesh).position, gun.position);
+                assert_eq!(one(&full, grip.left.mesh).rot, gun.rot);
+            }
+            let standing = game.hud_spread(weapon, false, false);
+            let crouched = game.hud_spread(weapon, true, false);
+            assert!(
+                crouched < standing,
+                "weapon {weapon}: crouch tightens shared cone"
+            );
+        }
+    }
+
+    #[test]
+    fn ads_restarts_on_weapon_reload_death_round_and_accepts_mouse_pad_and_script() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        prepare(&mut game, 6);
+        let aim = InputState::from_parts(&[], &[MouseButton::Right], (0.0, 0.0), None);
+        game.update(&aim, weapon_handling(6).ads_in_secs);
+        assert_eq!(game.zoom, 1.0);
+        game.update(
+            &InputState::default(),
+            weapon_handling(6).ads_out_secs * 0.5,
+        );
+        assert!((game.zoom - 0.5).abs() < 1e-5);
+        let pad = InputState::from_parts(
+            &[],
+            &[],
+            (0.0, 0.0),
+            Some(PadState {
+                lt: 1.0,
+                ..PadState::default()
+            }),
+        );
+        game.update(&pad, weapon_handling(6).ads_in_secs);
+        assert_eq!(game.zoom, 1.0, "LT raises the same ADS state");
+        let shield =
+            InputState::from_parts(&[KeyCode::KeyQ], &[MouseButton::Right], (0.0, 0.0), None);
+        game.update(&shield, 0.05);
+        assert_eq!(
+            game.zoom, 0.0,
+            "brief shield interruption resets shared ADS progress"
+        );
+        game.update(&aim, 0.01);
+        assert!(
+            (game.zoom - 0.01 / weapon_handling(6).ads_in_secs).abs() < 1e-5,
+            "releasing Q starts a fresh raise, not the old almost-full scope"
+        );
+        game.update(&aim, weapon_handling(6).ads_in_secs);
+        let reload =
+            InputState::from_parts(&[KeyCode::KeyR], &[MouseButton::Right], (0.0, 0.0), None);
+        game.update(&reload, 0.1);
+        assert!(
+            game.zoom < 1.0,
+            "reload press lowers before its network acknowledgment"
+        );
+        game.latest.get_mut(&2).unwrap().reloading = true;
+        game.update(&aim, 0.3);
+        assert_eq!(game.zoom, 0.0);
+        game.latest.get_mut(&2).unwrap().reloading = false;
+        game.update(&aim, weapon_handling(6).ads_in_secs);
+        assert_eq!(game.zoom, 1.0);
+        game.latest.get_mut(&2).unwrap().weapon = 3;
+        let swap = game.update(&aim, 0.01);
+        assert_eq!(game.zoom, 0.0, "AK cannot inherit sniper zoom");
+        assert!((swap.camera.fov_y_deg - feel::HIP_FOV).abs() < 1e-5);
+        game.update(&aim, weapon_handling(3).ads_in_secs);
+        assert_eq!(game.zoom, 1.0);
+        game.latest.get_mut(&2).unwrap().alive = false;
+        game.update(&aim, 0.01);
+        assert_eq!(game.zoom, 0.0);
+        game.latest.get_mut(&2).unwrap().alive = true;
+        game.update(&aim, 0.01);
+        assert!(
+            game.zoom > 0.0 && game.zoom < 0.1,
+            "respawn starts a fresh raise"
+        );
+        game.zoom = 1.0;
+        game.round_pause = 0.5;
+        inbox
+            .send(S2C::State {
+                tick: 10,
+                players: vec![player(3)],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&aim, 0.01);
+        assert!(
+            game.zoom < 0.1,
+            "round restart cannot retain the old ADS fraction"
+        );
+        game.zoom = 0.0;
+        game.script = Some(script::Timeline::parse("ads 1.0").unwrap());
+        game.update(&InputState::default(), weapon_handling(3).ads_in_secs);
+        assert_eq!(game.zoom, 1.0, "hands-off script drives the same ADS state");
+    }
+
+    #[test]
+    fn reticle_edges_enclose_the_angular_cone_on_both_stances() {
+        let weapon = 3;
+        for crouch in [false, true] {
+            let cone = weapon_spread(weapon, 1.0, 0.0, crouch, false, true);
+            let mut frame = Frame::default();
+            let view_scale = feel::look_scale(weapon_feel(weapon).fov(1.0));
+            push_crosshair(&mut frame, Vec3::ZERO, Vec3::X, Vec3::Z, view_scale, cone);
+            assert_eq!(frame.instances.len(), 4);
+            for line in frame.instances {
+                let radial = (line.position - Vec3::X * CROSSHAIR_DIST).length();
+                let inner = radial - line.scale.x * 0.5;
+                assert!((inner - CROSSHAIR_DIST * cone.tan()).abs() < 1e-6);
+                assert!(!line.casts_shadow);
+            }
+        }
+    }
+
+    #[test]
+    fn reticle_preserves_authoritative_bloom_while_stop_interpolation_catches_up() {
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        prepare(&mut game, 3);
+        game.zoom = 1.0;
+        let reported = weapon_spread(3, 1.0, 0.03, false, false, true);
+        let p = game.latest.get_mut(&2).unwrap();
+        p.ads_fraction = 1.0;
+        p.spread = reported;
+        p.recoil_bloom = 0.03;
+        game.from.insert(
+            2,
+            PSnap {
+                x: -0.1,
+                z: 0.0,
+                y: 0.0,
+            },
+        );
+        game.to.insert(2, PSnap::default());
+        assert_eq!(
+            game.hud_spread(3, false, false),
+            reported,
+            "visual interpolation is not authoritative movement and cannot divide out bloom"
+        );
+        assert_eq!(
+            game.hud_spread(3, true, false),
+            reported,
+            "new crouch precision waits for the server to confirm its tighter envelope"
+        );
+        assert_eq!(
+            game.hud_spread(3, false, true),
+            weapon_spread(3, 1.0, 0.03, false, true, true),
+            "new movement must apply its multiplier to the existing reported recoil bloom"
+        );
+        let settled = weapon_spread(3, 1.0, 0.0, true, false, true);
+        let p = game.latest.get_mut(&2).unwrap();
+        p.spread = settled;
+        p.recoil_bloom = 0.0;
+        assert_eq!(game.hud_spread(3, true, false), settled);
+        game.pred_vy = 1.0;
+        assert!(
+            game.hud_spread(3, true, false) >= weapon_handling(3).air_floor,
+            "jump widens immediately before the next snapshot"
+        );
+        game.zoom = 0.0;
+        assert!(
+            game.hud_spread(6, false, true) >= weapon_spread(6, 0.0, 0.0, false, true, false),
+            "the very wide jumping sniper cone must not be clamped to a falsely precise HUD"
+        );
     }
 }

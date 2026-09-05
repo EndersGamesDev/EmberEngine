@@ -8,6 +8,7 @@
 //! headless matchmaking server build on this.
 
 pub mod freight_yard;
+pub mod harbor;
 pub mod proto;
 pub mod shooter;
 pub mod sim;

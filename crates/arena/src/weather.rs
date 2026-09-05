@@ -7,16 +7,19 @@ use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Environment, Fog, Particle, Weather};
 
 /// An authored map's lighting and rain, selected from the server's map name.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Climate {
     Yard,
     City,
+    Harbor,
 }
 
 impl Climate {
     pub fn for_map(map: &str) -> Self {
         if map == "trench-city" {
             Self::City
+        } else if map == "harbor" {
+            Self::Harbor
         } else {
             Self::Yard
         }
@@ -29,6 +32,7 @@ impl Climate {
         let weather = forced.unwrap_or(match self {
             Self::Yard => Weather::Clear,
             Self::City => Weather::Rain,
+            Self::Harbor => Weather::Cloudy,
         });
         let mut environment = Environment::outdoor(weather, time);
         let passing = (time * 0.025).sin() * 0.5 + 0.5;
@@ -51,6 +55,7 @@ impl Climate {
             environment.cloud_coverage = match self {
                 Self::Yard => 0.28 + passing * 0.16,
                 Self::City => 0.58 + passing * 0.16,
+                Self::Harbor => 0.43 + passing * 0.12,
             };
         }
         match self {
@@ -62,12 +67,24 @@ impl Climate {
                 environment.sun_direction = Vec3::new(-0.48, 0.72, -0.50).normalize();
                 environment.sun_color = Vec3::new(1.0, 0.92, 0.80);
             }
+            Self::Harbor => {
+                environment.sun_direction = Vec3::new(-0.48, 0.76, -0.30).normalize();
+                environment.sun_color = Vec3::new(1.0, 0.96, 0.87);
+                environment.wind = Vec2::new(2.1, 0.65);
+                // Include the full terminal and the taller quay cranes.
+                environment.shadow_extent = 75.0;
+            }
         }
         // Fog is post-tonemap, unlike the environment's linear sky colors.
         let fog = if rain > 0.0 {
             Fog {
                 color: [0.47, 0.54, 0.60],
                 density: 0.009,
+            }
+        } else if self == Self::Harbor {
+            Fog {
+                color: [0.60, 0.69, 0.74],
+                density: 0.0028,
             }
         } else {
             Fog {
@@ -195,7 +212,11 @@ mod tests {
             assert!(yard_rain.abs() < f32::EPSILON);
             assert!(city_rain > 0.5);
             assert!(city.cloud_coverage > yard.cloud_coverage);
-            for climate in [Climate::Yard, Climate::City] {
+            let (harbor, fog, harbor_rain) = Climate::for_map("harbor").conditions(time, None);
+            assert!(harbor.enabled && harbor.sun_direction.y > 0.5);
+            assert_eq!(harbor_rain, 0.0);
+            assert!(fog.density < 0.004, "keep long harbor routes readable");
+            for climate in [Climate::Yard, Climate::City, Climate::Harbor] {
                 assert!(climate.conditions(time, Some(Weather::Clear)).2.abs() < f32::EPSILON);
                 assert!(climate.conditions(time, Some(Weather::Rain)).2 > 0.8);
             }
