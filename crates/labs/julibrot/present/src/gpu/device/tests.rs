@@ -909,7 +909,7 @@ fn warp_source_uv(
 /// A held picture drawn at a reduced extent must fill the destination, not sit in its centre.
 ///
 /// A morph across slices sends the completed picture to the held slot and the app asks for a hold
-/// while the next scene is in flight. The held picture was drawn at the PictureFast Preview
+/// while the next scene is in flight. The held picture was drawn at the `PictureFast` Preview
 /// extent (a 960 by 540 surface at divisor 8), and the destination lattice is the full surface.
 /// The fragment normalises the mapped source pixel by the source texture's dimensions, so rows
 /// that carry no extent ratio place the whole picture inside the central 120 by 68 pixels and
