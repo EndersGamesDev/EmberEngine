@@ -1,6 +1,6 @@
 {
   "ws": "wss://minds-cleared-das-bucks.trycloudflare.com",
-  "v": "1788714863",
+  "v": "1788716363",
   "proto": 23,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -27,11 +27,11 @@
     {
       "name": "dusky-osprey",
       "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-      "proto": 23,
-      "version": "r1500",
-      "commit": "374a8548",
+      "proto": 24,
+      "version": "r1511",
+      "commit": "05aeea2b",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-06T16:55:09Z",
+      "updated": "2026-09-06T17:39:23Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
