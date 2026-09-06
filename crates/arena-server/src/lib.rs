@@ -813,7 +813,7 @@ fn handle_event(
                         id,
                         &S2C::Welcome {
                             proto: PROTO_VERSION,
-                            motd: "Killshot v30 — powered by Ember".into(),
+                            motd: "Killshot v31 — Breach-12 — powered by Ember".into(),
                             host: cfg.host_name.clone(),
                             version: version.to_owned(),
                             commit: commit.to_owned(),

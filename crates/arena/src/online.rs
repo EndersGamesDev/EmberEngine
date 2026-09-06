@@ -1797,6 +1797,9 @@ pub struct ShooterGame {
     /// One muzzle/audio event per shotgun shell, even when its pellet endpoints
     /// arrive on different frames. Pellet tracers and impact events remain separate.
     shotgun_volleys: Vec<(u64, f32)>,
+    /// One near-miss crack per shotgun shell, remembered only after a pellet
+    /// passes close enough to hear. Muzzle events never consume this cue.
+    shotgun_cracks: Vec<(u64, f32)>,
     /// A shot of mine was confirmed this frame: the render pass spawns the
     /// plume and the casing at the muzzle, which only it knows.
     own_plume: bool,
@@ -1948,6 +1951,7 @@ impl ShooterGame {
             pending_remote_shots: Vec::new(),
             continuations: Vec::new(),
             shotgun_volleys: Vec::new(),
+            shotgun_cracks: Vec::new(),
             own_plume: false,
             own_anim: (0.0, 0.0, 0.0),
             script: script::from_env(),
@@ -2019,6 +2023,7 @@ impl ShooterGame {
             (projectile_id == 0 || *id == projectile_id) && (*p - from).length() < CONTINUATION_EPS
         });
         self.shotgun_volleys.retain(|(_, t0)| now - t0 < 2.0);
+        self.shotgun_cracks.retain(|(_, t0)| now - t0 < 2.0);
         let mut muzzle_effects = !continuation;
         if weapon == arena_core::shooter::SHOTGUN && projectile_id != 0 && !continuation {
             let shell = projectile_id >> 4;
@@ -2068,13 +2073,18 @@ impl ShooterGame {
                 born: now,
             });
         }
-        // The crack of a round passing my head: mine never do, and it is
-        // never late, because it arrives with the round.
-        if !mine
-            && muzzle_effects
-            && let Some(vol) = feel::crack(from, to, ear.at, stats.speed_max)
-        {
-            sfx.push(Play::centre(Sfx::Crack, vol));
+        // Every segment can pass my head, including one reflected or pierced
+        // after its muzzle event. Only a qualifying near miss consumes a shell's
+        // crack: the first pellet may be far away while a later one grazes me.
+        if !mine && let Some(vol) = feel::crack(from, to, ear.at, stats.speed_max) {
+            let shotgun = weapon == arena_core::shooter::SHOTGUN && projectile_id != 0;
+            let shell = projectile_id >> 4;
+            if !shotgun || !self.shotgun_cracks.iter().any(|(id, _)| *id == shell) {
+                if shotgun {
+                    self.shotgun_cracks.push((shell, now));
+                }
+                sfx.push(Play::centre(Sfx::Crack, vol));
+            }
         }
         let d = (to - ear.at).length();
         let n = feel::mark_normal(normal);
@@ -2700,6 +2710,12 @@ impl EmberGame for ShooterGame {
                     self.last_bonk_at = vec![None; self.loot_index.len()];
                     self.pops.clear();
                     self.history.clear();
+                    // Projectile identities are local to a lobby's tick clock.
+                    // Old endpoints and queued muzzles cannot cross that boundary.
+                    self.continuations.clear();
+                    self.shotgun_volleys.clear();
+                    self.shotgun_cracks.clear();
+                    self.pending_remote_shots.clear();
                     self.pred_shield = arena_core::shooter::ShieldState::default();
                     self.pred_shield_released = false;
                     self.pred_parkour = ParkourState::READY;
@@ -7086,6 +7102,202 @@ mod wire_tests {
         game.finish_remote_shots();
         assert_eq!(game.tracers.len(), 3);
         assert_eq!(game.flashes.len(), 1);
+    }
+
+    #[test]
+    fn reflected_ak_near_miss_cracks_without_a_second_muzzle_or_gunshot() {
+        use arena_core::shooter::{SHOT_EXPIRED, projectile_id};
+        let (chan, _, _) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        let ear = Ear {
+            at: Vec3::ZERO,
+            right: Vec3::Z,
+        };
+        let mut audio = Vec::new();
+        let origin = Vec3::new(10.0, 0.0, 10.0);
+        let contact = Vec3::new(10.0, 0.0, 0.0);
+        let id = projectile_id(100, 3, 0);
+        game.on_shot(
+            id,
+            3,
+            3,
+            origin,
+            contact,
+            SHOT_SHIELD,
+            0,
+            [0, 0, 1],
+            ear,
+            &mut audio,
+        );
+        assert!(!audio.iter().any(|play| play.sfx == Sfx::Crack));
+        game.time += 0.02;
+        game.on_shot(
+            id,
+            4,
+            3,
+            contact,
+            Vec3::new(-10.0, 0.0, 0.0),
+            SHOT_EXPIRED,
+            0,
+            [0; 3],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(game.pending_remote_shots[1].owner, None);
+        game.finish_remote_shots();
+        assert_eq!(
+            audio.iter().filter(|play| play.sfx == Sfx::Crack).count(),
+            1
+        );
+        let gunshot = feel::shot_sfx(3, Dist::at(origin.length()));
+        assert_eq!(audio.iter().filter(|play| play.sfx == gunshot).count(), 1);
+        assert_eq!(game.tracers.len(), 2);
+        assert_eq!(game.tracers[1].muzzle, contact);
+        assert_eq!(game.flashes.len(), 1);
+    }
+
+    #[test]
+    fn later_shotgun_pellet_can_crack_once_after_the_first_misses_the_ear() {
+        use arena_core::shooter::{SHOT_EXPIRED, SHOTGUN, projectile_id};
+        let (chan, _, _) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        let ear = Ear {
+            at: Vec3::ZERO,
+            right: Vec3::Z,
+        };
+        let mut audio = Vec::new();
+        let origin = Vec3::new(-10.0, 0.0, 3.2);
+        for pellet in 0..8 {
+            let to = Vec3::new(10.0, 0.0, if pellet == 0 { 3.2 } else { 1.8 });
+            game.time += 0.01;
+            game.on_shot(
+                projectile_id(100, 3, pellet),
+                3,
+                SHOTGUN,
+                origin,
+                to,
+                SHOT_EXPIRED,
+                0,
+                [0; 3],
+                ear,
+                &mut audio,
+            );
+            game.finish_remote_shots();
+            if pellet == 0 {
+                assert!(!audio.iter().any(|play| play.sfx == Sfx::Crack));
+                assert_eq!(game.shotgun_cracks, [] as [(u64, f32); 0]);
+            }
+        }
+        assert_eq!(
+            audio.iter().filter(|play| play.sfx == Sfx::Crack).count(),
+            1
+        );
+        assert_eq!(game.shotgun_cracks.len(), 1);
+        assert_eq!(game.shotgun_volleys.len(), 1);
+        let gunshot = feel::shot_sfx(SHOTGUN, Dist::at(origin.length()));
+        assert_eq!(audio.iter().filter(|play| play.sfx == gunshot).count(), 1);
+        assert_eq!(game.tracers.len(), 8);
+        assert_eq!(game.flashes.len(), 1);
+
+        // Another shell can warn immediately; the cache is identity-based.
+        game.on_shot(
+            projectile_id(151, 3, 0),
+            3,
+            SHOTGUN,
+            origin,
+            Vec3::new(10.0, 0.0, 1.8),
+            SHOT_EXPIRED,
+            0,
+            [0; 3],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(
+            audio.iter().filter(|play| play.sfx == Sfx::Crack).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn game_joined_resets_projectile_caches_and_pending_remote_shots() {
+        use arena_core::shooter::{SHOT_EXPIRED, SHOTGUN, projectile_id};
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.my_id = Some(2);
+        let ear = Ear {
+            at: Vec3::ZERO,
+            right: Vec3::Z,
+        };
+        let mut audio = Vec::new();
+        let contact = Vec3::new(0.0, 0.0, 1.0);
+        let id = projectile_id(100, 3, 0);
+        game.on_shot(
+            id,
+            3,
+            SHOTGUN,
+            Vec3::new(10.0, 0.0, 1.0),
+            contact,
+            SHOT_SHIELD,
+            0,
+            [1, 0, 0],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(game.continuations.len(), 1);
+        assert_eq!(game.shotgun_volleys.len(), 1);
+        assert_eq!(game.shotgun_cracks.len(), 1);
+        assert_eq!(game.pending_remote_shots.len(), 1);
+
+        inbox
+            .send(S2C::GameJoined {
+                loadout: "classic".into(),
+                starting_weapon: 1,
+                id: 2,
+                seed: 37,
+                arena_half: 24.0,
+                players: Vec::new(),
+                map: arena_core::shooter::MAP_TRENCH_CITY.into(),
+                mode: "ffa".into(),
+            })
+            .unwrap();
+        game.update(&InputState::default(), 0.0);
+        assert_eq!(game.continuations, [] as [(u64, Vec3, f32); 0]);
+        assert_eq!(game.shotgun_volleys, [] as [(u64, f32); 0]);
+        assert_eq!(game.shotgun_cracks, [] as [(u64, f32); 0]);
+        assert!(game.pending_remote_shots.is_empty());
+        assert!(
+            game.tracers.is_empty(),
+            "old queued shots must not be rendered"
+        );
+        assert!(game.flashes.is_empty());
+
+        // The new lobby can reuse both an ID and an old reflection endpoint.
+        audio.clear();
+        game.on_shot(
+            id,
+            3,
+            SHOTGUN,
+            contact,
+            Vec3::new(-10.0, 0.0, 1.0),
+            SHOT_EXPIRED,
+            0,
+            [0; 3],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(game.pending_remote_shots[0].owner, Some(3));
+        game.finish_remote_shots();
+        assert_eq!(game.tracers.len(), 1);
+        assert_eq!(game.flashes.len(), 1);
+        let gunshot = feel::shot_sfx(SHOTGUN, Dist::at(contact.length()));
+        assert_eq!(audio.iter().filter(|play| play.sfx == gunshot).count(), 1);
+        assert_eq!(
+            audio.iter().filter(|play| play.sfx == Sfx::Crack).count(),
+            1
+        );
     }
 
     /// Plant the shooter 10 m to the right of the watcher, facing and

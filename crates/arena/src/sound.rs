@@ -1557,7 +1557,7 @@ pub use platform::Audio;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
-    use super::{pan_gains, source, Sfx, ALL, SAMPLE_RATE};
+    use super::{ALL, SAMPLE_RATE, Sfx, pan_gains, source};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1618,13 +1618,13 @@ mod platform {
 
 #[cfg(target_arch = "wasm32")]
 mod platform {
-    use super::{source, Sfx, ALL, SAMPLE_RATE};
+    use super::{ALL, SAMPLE_RATE, Sfx, source};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     struct Inner {
         ctx: RefCell<Option<web_sys::AudioContext>>,
@@ -1762,11 +1762,7 @@ mod tests {
             .iter()
             .enumerate()
             .fold((0, 0.0f32), |(bi, bv), (i, &v)| {
-                if v.abs() > bv {
-                    (i, v.abs())
-                } else {
-                    (bi, bv)
-                }
+                if v.abs() > bv { (i, v.abs()) } else { (bi, bv) }
             });
         secs(i) * 1000.0
     }
