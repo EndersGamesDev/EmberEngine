@@ -1192,14 +1192,20 @@ fn measured_relief_zoom_redraw_reports_the_native_pixel_oracle() {
     for zoom_delta in [0.1, 0.5] {
         let to = screen_centred_zoom_destination(&from, zoom_delta);
         if zoom_delta == 0.1 {
-            for (actual, pinned) in to
+            for ((actual, full_grid), coverage_grid) in to
                 .centre_from_reference_px
                 .into_iter()
+                .zip([33.309_466, -6.635_800])
                 .zip([16.654_733, -3.317_900])
             {
                 assert!(
-                    (actual - pinned).abs() < 1.0e-6,
-                    "the 960 by 540 browser displacement changed: {actual} != {pinned}"
+                    (actual - full_grid).abs() < 1.0e-6,
+                    "the 960 by 540 displacement changed: {actual} != {full_grid}"
+                );
+                assert!(
+                    (actual * 0.5 - coverage_grid).abs() < 1.0e-6,
+                    "the 480 by 270 coverage displacement changed: {} != {coverage_grid}",
+                    actual * 0.5
                 );
             }
         }
