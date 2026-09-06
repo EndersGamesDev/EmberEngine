@@ -1,0 +1,36 @@
+{
+  "name": "obelisk",
+  "pivot": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "forward": "+x",
+  "up": "+y",
+  "height": 5.0,
+  "extents": {
+    "min": [
+      -2.5932662870120833,
+      0.0,
+      -2.960446699292692
+    ],
+    "max": [
+      2.5932662870120833,
+      5.0,
+      2.960446699292692
+    ]
+  },
+  "faces": {
+    "source": 139826,
+    "shipped": 4000
+  },
+  "atlas": {
+    "size": 512,
+    "png_bytes": 320071
+  },
+  "glb_bytes": 460632,
+  "bake_wall_seconds": 5.5,
+  "part_order": [
+    "obelisk"
+  ]
+}
