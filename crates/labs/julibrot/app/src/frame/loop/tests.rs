@@ -3033,3 +3033,84 @@ fn accepted_reference_facts_keep_verification_separate_from_escalations() {
     assert_eq!(deferred_after_escalation.consumed_word_error_ulps, None);
     assert_eq!(deferred_after_escalation.precision_escalations, 2);
 }
+
+/// Reproduces the escaped-reference deadlock: a discarded census correction leaves the loop with
+/// no reference any later dispatch will accept.
+///
+/// At a centre outside the set the reference orbit escapes after a handful of iterations, so the
+/// census asks for a correction at another orbit point. That request is a navigation: it moves
+/// only the orbit point, and its delta is zero, but the owner's exact-edit path still advances
+/// both the requested generation and the staged centre revision. When the arrival does not
+/// outlive the accepted orbit the loop discards it and returns, leaving the accepted lease naming
+/// the generation and centre revision from before the correction. Every later dispatch tests that
+/// lease against the correction's own navigation and reads it as out of date, so the scene gate
+/// refuses for ever: the schedule keeps its due level with nothing in flight, refinement stays
+/// pending, and the presenter holds the previous picture under the pending-work hold.
+#[test]
+fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() {
+    const CAP: u32 = 512;
+    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    const ESCAPED_AT: u32 = 4;
+    const ACCEPTED_GENERATION: u32 = 42;
+    const ACCEPTED_CENTRE_REVISION: u32 = 316;
+    const PRECISION_BITS: u32 = 110;
+
+    let plane = Plane {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+    let accepted = ReferenceLeaseIdentity {
+        main_generation: ACCEPTED_GENERATION,
+        source_generation: ACCEPTED_GENERATION,
+        centre_revision: ACCEPTED_CENTRE_REVISION,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: PRECISION_BITS,
+        orbit_length: ESCAPED_AT,
+    };
+    // A short orbit does serve the generation it was fetched for, which is why exactly one level
+    // is drawn before the ladder stops, and that level's census then asks for the correction.
+    assert!(perturbation_reference_is_current(
+        ACCEPTED_GENERATION,
+        ACCEPTED_CENTRE_REVISION,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        PRECISION_BITS,
+        CAP,
+        Some(accepted)
+    ));
+    assert!(
+        super::sampled_reference_due(true, CAP, ESCAPED_AT, 0, None),
+        "a cap that outlasts the escaped orbit asks the census for a longer reference"
+    );
+
+    // The correction's navigation: a zero delta that still advances both counters by one.
+    let correction_generation = ACCEPTED_GENERATION + 1;
+    let correction_centre_revision = ACCEPTED_CENTRE_REVISION + 1;
+
+    // The discard path keeps the accepted lease exactly as it stands and returns.
+    let after_discard = accepted;
+    assert!(
+        perturbation_reference_is_current(
+            correction_generation,
+            correction_centre_revision,
+            plane,
+            PrecisionMode::PictureFast as u32,
+            PRECISION_BITS,
+            CAP,
+            Some(after_discard)
+        ),
+        "a discarded correction must leave the accepted orbit serving the navigation the \
+         correction itself created; that navigation is the same view, so refusing it strands \
+         every later dispatch"
+    );
+
+    // The schedule the refusal strands: a level is due, nothing is in flight, and no turn can
+    // move it, so refinement reports pending for as long as the page is open.
+    let mut ladder = FrameLoop::default();
+    ladder.restart(ACCEPTED_GENERATION);
+    ladder.submitted(7, RefinementLevel::Preview);
+    assert!(ladder.completed(7, ACCEPTED_GENERATION, RefinementLevel::Preview));
+    assert_eq!(ladder.due(), Some(RefinementLevel::Interactive));
+    assert!(ladder.refinement_pending());
+}
