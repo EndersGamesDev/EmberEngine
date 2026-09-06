@@ -134,9 +134,9 @@ def main():
               "elapsed_seconds": round(time.time() - started, 2), "review": "pending"}
     manifest = ROOT / "assets/models/league/v2/art-provenance.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    records = json.loads(manifest.read_text()) if manifest.exists() else []
+    records = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else []
     records = [r for r in records if r["name"] != args.name] + [record]
-    manifest.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+    manifest.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(record), flush=True)
 
 
