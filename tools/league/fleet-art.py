@@ -13,12 +13,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 STYLE = (
-    "Original premium fantasy strategy game character design, Crystalforge world, "
-    "hand painted game art, weathered ivory ceramic and dark aged bronze, "
-    "beautifully sculpted broad readable forms, intricate but restrained carved geometric ornament, "
-    "strong distinctive silhouette, full body centered and entirely visible, "
-    "three quarter front view, plain warm light gray studio background, "
-    "soft even lighting, detailed material painting, high quality collectible character model. "
+    "Full body fantasy game character, centered single figure, three quarter front view, "
+    "plain gray background, hand painted 3D game model, strong silhouette. "
 )
 PROMPTS = {
     "swarm": (
@@ -51,8 +47,8 @@ PROMPTS = {
     "tessera": STYLE + (
         "One adult female clockmaker battle mage, athletic poised figure, dark plum coat with ivory "
         "and bronze segmented armor, short silver hair, amber goggles pushed onto her forehead, "
-        "a large ornate bronze clockwork gear mounted on her back, one mechanical gauntlet "
-        "holding a glowing violet hourglass, fitted boots, two arms two legs, intelligent confident face, "
+        "one compact bronze clockwork backpack, both hands in mechanical gauntlets, "
+        "violet hourglass pendant on her chest, fitted boots, two arms two legs, intelligent confident face, "
         "unique elegant chronomancer silhouette."
     ),
     "lane": (
@@ -110,7 +106,7 @@ def main():
         raise SystemExit("Image worker has an existing job. Wait for its owner; no parallel submission.")
     seed = args.seed if args.seed is not None else 6090600 + ORDER.index(args.name)
     job = dict(prompt=PROMPTS[args.name], seed=seed, steps=32, cfg=7,
-               negative="text, watermark, logo, blurry, low quality, cropped, duplicate character, multiple views, photograph, modern gun, display stand, pedestal" + (", legs, arms, hands, feet, human, humanoid" if args.name == "swarm" else ""),
+               negative="text, watermark, logo, blurry, low quality, cropped, duplicate character, multiple views, photograph, modern gun, display stand, pedestal, decorative frame, border, picture frame, character sheet, design sheet, detached props, floating objects, accessories sheet" + (", legs, arms, hands, feet, human, humanoid" if args.name == "swarm" else ""),
                width=1344 if args.name == "arena" else 1024,
                height=768 if args.name == "arena" else 1024, local_dir=str(raw))
     started = time.time()
