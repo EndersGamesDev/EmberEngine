@@ -6,7 +6,7 @@
 use ember_engine::{EmberGame, Frame, InputState};
 use league_core::proto::{C2S, Cmd, Phase, S2C};
 
-use crate::game::{read_input, uiq, Prev};
+use crate::game::{read_input, ui_command, uiq, Prev};
 use crate::net::{Inbox, Net, Status};
 use crate::world::{feed_line, FxLite, World};
 
@@ -59,7 +59,7 @@ impl Config {
             create: v
                 .get("create")
                 .is_some_and(|value| value.as_bool() == Some(true)),
-            mode: u8::try_from(mode).unwrap_or(3).min(3),
+            mode: if mode == 1 { 1 } else { 3 },
         })
     }
 }
@@ -114,7 +114,10 @@ impl OnlineGame {
                 self.world.cam = (if id < mode { -40.0 } else { 40.0 }, 0.0);
                 tracing::info!(lobby, id, "joined lobby");
             }
-            S2C::Roster { roster } => self.world.roster = roster,
+            S2C::Roster { roster } => {
+                self.world.roster = roster;
+                self.world.notice = None;
+            }
             S2C::PlayerJoined { slot } => {
                 if let Some(i) = self
                     .world
@@ -132,6 +135,18 @@ impl OnlineGame {
                 }
             }
             S2C::Phase { phase, left } => {
+                if phase == Phase::Select && self.world.phase != Phase::Select {
+                    self.world.units.clear();
+                    self.world.champs.clear();
+                    self.world.buffs.clear();
+                    self.world.fx.clear();
+                    self.world.zones.clear();
+                    self.world.projs.clear();
+                    self.world.feed.clear();
+                    self.world.shop_open = false;
+                    self.world.winner = 0;
+                    self.prev = Prev::default();
+                }
                 self.world.phase = phase;
                 self.world.left = left;
             }
@@ -147,6 +162,8 @@ impl OnlineGame {
                 court_respawn,
                 fx,
                 log,
+                projs,
+                zones,
             } => {
                 self.world.tick = tick;
                 self.world.secs = secs;
@@ -157,7 +174,8 @@ impl OnlineGame {
                 self.world.boon = boon;
                 self.world.boon_left = boon_left;
                 self.world.court_respawn = court_respawn;
-                self.world.phase = Phase::Live;
+                self.world.projs = projs;
+                self.world.set_zones(&zones);
                 for f in fx {
                     self.world.push_fx(FxLite {
                         k: f.k,
@@ -179,8 +197,9 @@ impl OnlineGame {
                     }
                 }
             }
-            S2C::Result { winner, .. } => {
+            S2C::Result { winner, kills, .. } => {
                 self.world.winner = winner;
+                self.world.kills = kills;
                 self.world.phase = Phase::Over;
             }
             S2C::Lobbies { .. } | S2C::Pong { .. } => {}
@@ -213,20 +232,14 @@ impl OnlineGame {
             if let Some(open) = v.get("shop").and_then(serde_json::Value::as_bool) {
                 self.world.shop_open = open;
             }
-            if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
-                self.send_cmd(Cmd::Buy { item: item as u16 });
-            }
-            if let Some(s) = v.get("use").and_then(serde_json::Value::as_u64) {
-                self.send_cmd(Cmd::UseItem { slot: s as u8 });
-            }
-            if let Some(s) = v.get("rank").and_then(serde_json::Value::as_u64) {
-                self.send_cmd(Cmd::Rank { slot: s as u8 });
+            if let Some(cmd) = ui_command(&v, &self.world) {
+                self.send_cmd(cmd);
             }
         }
     }
 
     fn send_cmd(&mut self, cmd: Cmd) {
-        if self.world.phase == Phase::Live {
+        if self.world.connected && self.world.phase == Phase::Live {
             self.net.send(&C2S::Cmd(cmd));
         }
     }
@@ -288,6 +301,7 @@ impl EmberGame for OnlineGame {
             &self.world.fx,
             self.world.secs,
             camera,
+            &self.world.projs,
         )
     }
 }

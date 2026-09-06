@@ -2376,6 +2376,7 @@ name = "league-server"
 version = "0.1.0"
 dependencies = [
  "league-core",
+ "rustls",
  "serde",
  "serde_json",
  "tracing",

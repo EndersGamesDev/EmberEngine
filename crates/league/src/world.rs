@@ -7,7 +7,7 @@
 //! a tunnel.
 
 use league_core::data;
-use league_core::proto::{self, BuffSnap, ChampView, Phase, SlotInfo, UnitSnap};
+use league_core::proto::{self, BuffSnap, ChampView, Phase, ProjSnap, SlotInfo, UnitSnap, ZoneSnap};
 
 /// A unit as the renderer and the page need it.
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +60,7 @@ pub struct World {
     pub champs: Vec<ChampView>,
     pub buffs: Vec<BuffSnap>,
     pub zones: Vec<ZoneLite>,
+    pub projs: Vec<ProjSnap>,
     pub fx: Vec<FxLite>,
     pub feed: Vec<FeedLine>,
     pub kills: [u16; 2],
@@ -144,6 +145,13 @@ impl World {
         }
     }
 
+    /// Persistent effects arrive in snapshots, so late joiners see fields
+    /// and projectiles already in flight as well as newly cast flashes.
+    pub fn set_zones(&mut self, zones: &[ZoneSnap]) {
+        let spin = (self.tick as f32 * 0.35) % std::f32::consts::TAU;
+        self.zones = zones.iter().map(|z| (z.k, z.x, z.z, z.r, spin)).collect();
+    }
+
     #[must_use]
     pub fn my_team(&self) -> u8 {
         self.roster
@@ -174,158 +182,50 @@ impl World {
     /// the minimap all read the same truth from here.
     #[must_use]
     pub fn state_json(&self) -> String {
-        let me = match self.champs.iter().find(|c| c.slot == self.my_slot) {
-            Some(c) => {
-                let u = self.my_unit();
-                let (hp, mh, mn, mm) = u.map_or((0.0, 0.0, 0.0, 0.0), |u| (u.hp, u.mh, u.mn, u.mm));
-                let uid = u.map_or(0, |u| u.id);
-                format!(
-                    "{{\"slot\":{},\"uid\":{},\"alive\":{},\"resp\":{:.1},\"hp\":{hp:.1},\"mh\":{mh:.1},\
-                     \"mn\":{mn:.1},\"mm\":{mm:.1},\"lv\":{},\"g\":{},\"pt\":{},\
-                     \"rk\":[{},{},{},{}],\"cd\":[{:.1},{:.1},{:.1},{:.1}],\"scd\":[{:.0},{:.0}],\
-                     \"items\":[{},{},{},{},{},{}],\"charges\":[{},{},{},{},{},{}],\
-                     \"d\":{},\"f\":{}}}",
-                    c.slot,
-                    uid,
-                    c.alive,
-                    c.resp,
-                    c.level,
-                    c.gold,
-                    c.points,
-                    c.ranks[0],
-                    c.ranks[1],
-                    c.ranks[2],
-                    c.ranks[3],
-                    c.cds[0],
-                    c.cds[1],
-                    c.cds[2],
-                    c.cds[3],
-                    c.scds[0],
-                    c.scds[1],
-                    c.items[0],
-                    c.items[1],
-                    c.items[2],
-                    c.items[3],
-                    c.items[4],
-                    c.items[5],
-                    c.charges[0],
-                    c.charges[1],
-                    c.charges[2],
-                    c.charges[3],
-                    c.charges[4],
-                    c.charges[5],
-                    c.d,
-                    c.f,
-                )
+        use serde_json::json;
+        let me = self.champs.iter().find(|c| c.slot == self.my_slot).map(|c| {
+            let u = self.my_unit();
+            let roster = self.roster.iter().find(|r| r.slot == self.my_slot);
+            let def = roster.map_or(0, |r| r.champ.min(4));
+            let mut stats = data::champ_stats(def, c.level);
+            if let Some(r) = roster {
+                stats.add(&data::rune_stats(&r.runes));
             }
-            None => "null".to_string(),
-        };
-        let roster: Vec<String> = self
-            .roster
-            .iter()
-            .map(|r| {
-                format!(
-                    "{{\"slot\":{},\"team\":{},\"handle\":\"{}\",\"bot\":{},\"champ\":{},\"picked\":{},\"d\":{},\"f\":{},\"runes\":[{},{},{}],\"connected\":{}}}",
-                    r.slot,
-                    r.team,
-                    json_escape(&r.handle),
-                    r.bot,
-                    if r.champ == u8::MAX {
-                        -1
-                    } else {
-                        i32::from(r.champ)
-                    },
-                    r.picked,
-                    r.d,
-                    r.f,
-                    rune_or(&r.runes, 0),
-                    rune_or(&r.runes, 1),
-                    rune_or(&r.runes, 2),
-                    r.connected,
-                )
+            for item in c.items.iter().filter_map(|id| data::item(*id)) {
+                stats.add(&item.flat);
+            }
+            stats.clamp_odds();
+            json!({
+                "slot": c.slot, "uid": u.map_or(0, |u| u.id), "champ": def, "team": c.team,
+                "alive": c.alive, "resp": c.resp,
+                "hp": u.map_or(0.0, |u| u.hp), "mh": u.map_or(0.0, |u| u.mh),
+                "mn": u.map_or(0.0, |u| u.mn), "mm": u.map_or(0.0, |u| u.mm),
+                "x": u.map_or(0.0, |u| u.x), "z": u.map_or(0.0, |u| u.z),
+                "lv": c.level, "g": c.gold, "pt": c.points,
+                "rk": c.ranks, "cd": c.cds, "scd": c.scds,
+                "items": c.items, "charges": c.charges, "d": c.d, "f": c.f,
+                "stats": {"ad": stats.ad, "ap": stats.ap, "haste": stats.haste,
+                    "crit": stats.crit, "critd": stats.critd,
+                    "attackSpeed": (1.0 + stats.aspd) / data::CHAMPS[usize::from(def)].atk_cd}
             })
-            .collect();
-        // the minimap needs the field too, kept tiny: kind, team, x, z,
-        // health fraction
-        let units: Vec<String> = self
-            .units
-            .iter()
-            .map(|u| {
-                let hf = if u.mh > 0.0 {
-                    (u.hp / u.mh).clamp(0.0, 1.0) * 100.0
-                } else {
-                    0.0
-                };
-                format!(
-                    "[{},{},{:.1},{:.1},{:.0}]",
-                    u.k,
-                    u.t,
-                    u.x,
-                    u.z,
-                    hf
-                )
-            })
-            .collect();
-        let feed: Vec<String> = self
-            .feed
-            .iter()
-            .map(|l| format!("\"{}\"", json_escape(&l.text)))
-            .collect();
-        let buffs: Vec<String> = self
-            .buffs
-            .iter()
-            .map(|b| format!("[{},{},{:.1}]", b.u, b.k, b.ttl))
-            .collect();
-        let core_hp: Vec<String> = self
-            .units
-            .iter()
-            .filter(|u| u.k == 6 || u.k == 7)
-            .map(|u| format!("[{:.0},{:.0}]", u.hp, u.mh))
-            .collect();
-        format!(
-            "{{\"phase\":\"{}\",\"left\":{:.1},\"mode\":{},\"me\":{},\"secs\":{:.0},\
-             \"kills\":[{},{}],\"boon\":[{},{}],\"boonLeft\":[{:.1},{:.1}],\
-             \"court\":[{:.1},{:.1}],\
-             \"winner\":{},\"connected\":{},\"notice\":{},\"shop\":{},\
-             \"me\":{me},\"roster\":[{}],\"units\":[{}],\"feed\":[{}],\"buffs\":[{}],\"cores\":[{}]}}",
-            match self.phase {
-                Phase::Select => "select",
-                Phase::Live => "live",
-                Phase::Over => "over",
-            },
-            self.left,
-            self.mode,
-            self.my_slot,
-            self.secs,
-            self.kills[0],
-            self.kills[1],
-            self.boon[0],
-            self.boon[1],
-            self.boon_left[0],
-            self.boon_left[1],
-            self.court_respawn[0],
-            self.court_respawn[1],
-            self.winner,
-            self.connected,
-            match &self.notice {
-                Some(n) => format!("\"{}\"", json_escape(n)),
-                None => "null".to_string(),
-            },
-            self.shop_open,
-            roster.join(","),
-            units.join(","),
-            feed.join(","),
-            buffs.join(","),
-            core_hp.join(","),
-        )
-    }
-}
-
-fn rune_or(runes: &[u8; 3], i: usize) -> i32 {
-    if runes[i] == u8::MAX {
-        -1
-    } else {
-        i32::from(runes[i])
+        });
+        let units: Vec<_> = self.units.iter().map(|u| {
+            let fraction = if u.mh > 0.0 { (u.hp / u.mh).clamp(0.0, 1.0) * 100.0 } else { 0.0 };
+            json!([u.k, u.t, u.x, u.z, fraction, u.slot])
+        }).collect();
+        let cores: Vec<_> = self.units.iter().filter(|u| u.k == 6 || u.k == 7)
+            .map(|u| json!({"t": u.t, "hp": u.hp, "mh": u.mh})).collect();
+        json!({
+            "phase": self.phase, "left": self.left, "mode": self.mode,
+            "slot": self.my_slot, "me": me, "secs": self.secs,
+            "kills": self.kills, "boon": self.boon, "boonLeft": self.boon_left,
+            "court": self.court_respawn, "winner": self.winner,
+            "connected": self.connected, "notice": self.notice, "shop": self.shop_open,
+            "roster": self.roster, "champs": self.champs, "units": units,
+            "feed": self.feed.iter().map(|l| &l.text).collect::<Vec<_>>(),
+            "buffs": self.buffs.iter().map(|b| json!([b.u, b.k, b.ttl])).collect::<Vec<_>>(),
+            "cores": cores
+        }).to_string()
     }
 }
 
@@ -352,87 +252,21 @@ pub fn json_escape(s: &str) -> String {
 /// from the same numbers the sim runs on.
 #[must_use]
 pub fn data_json() -> String {
-    let mut s = String::from("{\"champs\":[");
-    let champs: Vec<String> = data::CHAMPS
-        .iter()
-        .map(|c| {
-            format!(
-                "{{\"key\":\"{}\",\"name\":\"{}\",\"title\":\"{}\",\"hp\":{},\"mana\":{},\"ms\":{},\
-                 \"ad\":{},\"ap\":{},\"range\":{},\"atkCd\":{},\"style\":{},\
-                 \"colour\":[{:.2},{:.2},{:.2}],\
-                 \"q\":{{\"name\":\"{}\",\"desc\":\"{}\"}},\"w\":{{\"name\":\"{}\",\"desc\":\"{}\"}},\
-                 \"e\":{{\"name\":\"{}\",\"desc\":\"{}\"}},\"r\":{{\"name\":\"{}\",\"desc\":\"{}\"}}}}",
-                c.key,
-                json_escape(c.name),
-                json_escape(c.title),
-                c.hp0,
-                c.mn0,
-                c.ms,
-                c.ad0,
-                c.ap0,
-                c.range,
-                c.atk_cd,
-                c.atk_style,
-                c.colour[0],
-                c.colour[1],
-                c.colour[2],
-                json_escape(c.q.name),
-                json_escape(c.q.desc),
-                json_escape(c.w.name),
-                json_escape(c.w.desc),
-                json_escape(c.e.name),
-                json_escape(c.e.desc),
-                json_escape(c.r.name),
-                json_escape(c.r.desc),
-            )
-        })
-        .collect();
-    s.push_str(&champs.join(","));
-    s.push_str("],\"spells\":[");
-    let spells: Vec<String> = data::SPELLS
-        .iter()
-        .map(|sp| {
-            format!(
-                "{{\"key\":\"{}\",\"name\":\"{}\",\"desc\":\"{}\",\"cd\":{}}}",
-                sp.key,
-                json_escape(sp.name),
-                json_escape(sp.desc),
-                sp.cd
-            )
-        })
-        .collect();
-    s.push_str(&spells.join(","));
-    s.push_str("],\"runes\":[");
-    let runes: Vec<String> = data::RUNES
-        .iter()
-        .map(|r| {
-            format!(
-                "{{\"key\":\"{}\",\"name\":\"{}\",\"desc\":\"{}\"}}",
-                r.key,
-                json_escape(r.name),
-                json_escape(r.desc)
-            )
-        })
-        .collect();
-    s.push_str(&runes.join(","));
-    s.push_str("],\"items\":[");
-    let items: Vec<String> = data::ITEMS
-        .iter()
-        .map(|i| {
-            format!(
-                "{{\"id\":{},\"key\":\"{}\",\"name\":\"{}\",\"cost\":{},\"tier\":{},\"desc\":\"{}\"}}",
-                i.id,
-                i.key,
-                json_escape(i.name),
-                i.cost,
-                i.tier,
-                json_escape(i.desc)
-            )
-        })
-        .collect();
-    s.push_str(&items.join(","));
-    s.push_str("]}");
-    s
+    use serde_json::json;
+    let ability = |a: &data::Ability| json!({"name": a.name, "desc": a.desc, "mana": a.mana, "cd": a.cd});
+    json!({
+        "champs": data::CHAMPS.iter().map(|c| json!({
+            "key": c.key, "name": c.name, "title": c.title, "hp": c.hp0, "mana": c.mn0,
+            "ms": c.ms, "ad": c.ad0, "ap": c.ap0, "range": c.range, "atkCd": c.atk_cd,
+            "style": c.atk_style, "colour": c.colour,
+            "q": ability(&c.q), "w": ability(&c.w), "e": ability(&c.e), "r": ability(&c.r)
+        })).collect::<Vec<_>>(),
+        "spells": data::SPELLS.iter().map(|s| json!({"key": s.key, "name": s.name, "desc": s.desc, "cd": s.cd})).collect::<Vec<_>>(),
+        "runes": data::RUNES.iter().map(|r| json!({"key": r.key, "name": r.name, "desc": r.desc})).collect::<Vec<_>>(),
+        "items": data::ITEMS.iter().map(|i| json!({"id": i.id, "key": i.key, "name": i.name,
+            "cost": i.cost, "tier": i.tier, "desc": i.desc, "charges": i.charges})).collect::<Vec<_>>(),
+        "ultimateLevels": data::R_LEVELS
+    }).to_string()
 }
 
 /// Turn one log event into a feed line, resolving ids to names.
@@ -503,12 +337,4 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&j).expect("state_json must be valid JSON");
         assert_eq!(v["phase"].as_str(), Some("select"));
     }
-}
-#[test]
-fn debug_col() {
-    let j = crate::world::data_json();
-    let chars: Vec<char> = j.chars().collect();
-    let end = chars.len().min(6307);
-    let start = 6100usize.min(chars.len());
-    println!("LEN {} SEG [{}]", chars.len(), chars[start..end].iter().collect::<String>());
 }

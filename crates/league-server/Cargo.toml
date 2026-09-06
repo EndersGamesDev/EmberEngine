@@ -16,5 +16,6 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+rustls = { workspace = true }
 
 [build-dependencies]

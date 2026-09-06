@@ -35,6 +35,41 @@ pub mod uiq {
     }
 }
 
+/// Translate HUD controls once, so practice and online use the same commands.
+/// Clickable spells use the last cursor position on the field, or your own
+/// champion if the pointer has not yet entered the canvas.
+pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
+    if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
+        return u16::try_from(item).ok().map(|item| Cmd::Buy { item });
+    }
+    if let Some(slot) = v.get("use").and_then(serde_json::Value::as_u64).filter(|s| *s < 6) {
+        return Some(Cmd::UseItem { slot: slot as u8 });
+    }
+    if let Some(slot) = v.get("rank").and_then(serde_json::Value::as_u64).filter(|s| *s < 4) {
+        return Some(Cmd::Rank { slot: slot as u8 });
+    }
+    let aim = v.get("aim").and_then(serde_json::Value::as_array).and_then(|a| {
+        let x = a.first()?.as_f64()? as f32;
+        let y = a.get(1)?.as_f64()? as f32;
+        let aspect = v.get("aspect").and_then(serde_json::Value::as_f64).unwrap_or(16.0 / 9.0) as f32;
+        if x.is_finite() && y.is_finite() && aspect.is_finite() && aspect > 0.0 {
+            ground_point(&camera_for(world.cam), aspect, [x, y])
+        } else {
+            None
+        }
+    }).or_else(|| world.my_unit().map(|u| (u.x, u.z)));
+    if let Some(slot) = v.get("cast").and_then(serde_json::Value::as_u64).filter(|s| *s < 4) {
+        return aim.map(|(x, z)| Cmd::Cast { slot: slot as u8, x, z });
+    }
+    if let Some(slot) = v.get("spell").and_then(serde_json::Value::as_u64).filter(|s| *s < 2) {
+        return aim.map(|(x, z)| Cmd::Spell { slot: slot as u8, x, z });
+    }
+    if v.get("stop").and_then(serde_json::Value::as_bool) == Some(true) {
+        return world.my_unit().map(|u| Cmd::Move { x: u.x, z: u.z });
+    }
+    None
+}
+
 /// The shared control map: cursor and keys in, `Cmd`s out. `my_alive`
 /// gates orders that only a living champion can give.
 #[must_use]
@@ -57,6 +92,7 @@ pub fn read_input(
     prev.rmb = rmb;
     prev.rmb_was_left = lmb;
 
+    let my_alive = my_alive && world.phase == Phase::Live && !world.shop_open;
     if my_alive && (rmb_edge || lmb_edge) {
         if let Some(ndc) = cursor {
             if let Some(target) = pick_enemy(&camera, aspect, world, ndc) {
@@ -67,48 +103,36 @@ pub fn read_input(
         }
     }
 
-    // Q W E R / D F / 1-6, all casts aimed at the cursor point
-    if my_alive {
-        if let Some(ndc) = cursor {
-            let aim = ground_point(&camera, aspect, ndc);
-            for (idx, key) in [
-                (0usize, KeyCode::KeyQ),
-                (1, KeyCode::KeyW),
-                (2, KeyCode::KeyE),
-                (3, KeyCode::KeyR),
-            ] {
-                let down = input.down(key);
-                if down && !prev.abil[idx] {
-                    if let Some((x, z)) = aim {
-                        out.push(Cmd::Cast { slot: idx as u8, x, z });
-                    }
-                }
-                prev.abil[idx] = down;
-            }
-            for (idx, key) in [(0usize, KeyCode::KeyD), (1, KeyCode::KeyF)] {
-                let down = input.down(key);
-                if down && !prev.spell[idx] {
-                    if let Some((x, z)) = aim {
-                        out.push(Cmd::Spell { slot: idx as u8, x, z });
-                    }
-                }
-                prev.spell[idx] = down;
+    // Remember key releases even when dead, shopping, or off the canvas.
+    // Otherwise a held key can unexpectedly cast when play resumes.
+    let aim = cursor.and_then(|ndc| ground_point(&camera, aspect, ndc));
+    let ctrl = input.down(KeyCode::ControlLeft) || input.down(KeyCode::ControlRight);
+    for (idx, key) in [KeyCode::KeyQ, KeyCode::KeyW, KeyCode::KeyE, KeyCode::KeyR].into_iter().enumerate() {
+        let down = input.down(key);
+        if my_alive && down && !prev.abil[idx] {
+            if ctrl {
+                out.push(Cmd::Rank { slot: idx as u8 });
+            } else if let Some((x, z)) = aim {
+                out.push(Cmd::Cast { slot: idx as u8, x, z });
             }
         }
-        for (idx, key) in [
-            (0usize, KeyCode::Digit1),
-            (1, KeyCode::Digit2),
-            (2, KeyCode::Digit3),
-            (3, KeyCode::Digit4),
-            (4, KeyCode::Digit5),
-            (5, KeyCode::Digit6),
-        ] {
-            let down = input.down(key);
-            if down && !prev.item[idx] {
-                out.push(Cmd::UseItem { slot: idx as u8 });
+        prev.abil[idx] = down;
+    }
+    for (idx, key) in [KeyCode::KeyD, KeyCode::KeyF].into_iter().enumerate() {
+        let down = input.down(key);
+        if my_alive && down && !prev.spell[idx] {
+            if let Some((x, z)) = aim {
+                out.push(Cmd::Spell { slot: idx as u8, x, z });
             }
-            prev.item[idx] = down;
         }
+        prev.spell[idx] = down;
+    }
+    for (idx, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6].into_iter().enumerate() {
+        let down = input.down(key);
+        if my_alive && down && !prev.item[idx] {
+            out.push(Cmd::UseItem { slot: idx as u8 });
+        }
+        prev.item[idx] = down;
     }
     out
 }
@@ -132,7 +156,10 @@ fn pick_enemy(
             4 | 5 | 6 | 7 => 0.075,
             _ => 0.03,
         };
-        let d2 = ((sx - ndc[0]) * rx).powi(2) + ((sy - ndc[1]) / rx).powi(2);
+        // NDC x spans a wider viewport than y. Normalize both axes by
+        // the hit radius; multiplying x accidentally selected enemies
+        // almost anywhere along the same horizontal screen row.
+        let d2 = ((sx - ndc[0]) * aspect / rx).powi(2) + ((sy - ndc[1]) / rx).powi(2);
         if d2 <= 1.0 && best.is_none_or(|(_, bd)| d2 < bd) {
             best = Some((u.id, d2));
         }
@@ -204,27 +231,13 @@ impl LocalGame {
                 self.m.start();
                 self.world.phase = Phase::Live;
             }
-            if let Some(b) = self.human_cmd(&v) {
+            if let Some(b) = ui_command(&v, &self.world) {
                 self.m.command(self.human, b);
             }
             if let Some(open) = v.get("shop").and_then(serde_json::Value::as_bool) {
                 self.world.shop_open = open;
             }
         }
-    }
-
-    /// buy / use / rank, the commands that do not need a cursor.
-    fn human_cmd(&self, v: &serde_json::Value) -> Option<Cmd> {
-        if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
-            return Some(Cmd::Buy { item: item as u16 });
-        }
-        if let Some(s) = v.get("use").and_then(serde_json::Value::as_u64) {
-            return Some(Cmd::UseItem { slot: s as u8 });
-        }
-        if let Some(s) = v.get("rank").and_then(serde_json::Value::as_u64) {
-            return Some(Cmd::Rank { slot: s as u8 });
-        }
-        None
     }
 
     fn step_once(&mut self) {
@@ -267,11 +280,14 @@ impl LocalGame {
             court_respawn,
             fx,
             log,
+            projs,
+            zones,
         } = self.m.snapshot()
         else {
             return;
         };
         self.world.tick = tick;
+        self.world.roster = self.m.roster.clone();
         self.world.secs = secs;
         self.world.set_units(&units);
         self.world.champs = champs;
@@ -280,23 +296,11 @@ impl LocalGame {
         self.world.boon = boon;
         self.world.boon_left = boon_left;
         self.world.court_respawn = court_respawn;
+        self.world.projs = projs;
+        self.world.set_zones(&zones);
         self.world.phase = self.m.phase;
         self.world.left = self.m.left;
         self.world.winner = self.m.winner;
-        self.world.zones = self
-            .m
-            .zones
-            .iter()
-            .map(|z| {
-                let k = match z.zk {
-                    league_core::sim::ZoneKind::Tornado => 0,
-                    league_core::sim::ZoneKind::Trap => 1,
-                    league_core::sim::ZoneKind::Stasis => 2,
-                    league_core::sim::ZoneKind::Shroud => 3,
-                };
-                (k, z.x, z.z, z.r, (self.m.tick as f32 * 0.35) % std::f32::consts::TAU)
-            })
-            .collect();
         for f in fx {
             self.world.push_fx(FxLite {
                 k: f.k,
@@ -351,6 +355,7 @@ impl EmberGame for LocalGame {
             &self.world.fx,
             self.world.secs,
             camera_for(self.world.cam),
+            &self.world.projs,
         )
     }
 }

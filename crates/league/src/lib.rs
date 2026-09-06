@@ -53,7 +53,7 @@ pub fn run_local(mode: u8) {
         EngineConfig {
             title: "ember — ultimate league (practice)".to_string(),
             capture_mouse: false,
-            activate: true,
+            activate: cfg!(target_arch = "wasm32"),
             meshes,
         },
         game,
@@ -72,7 +72,7 @@ pub fn run_online(cfg: &online_game::Config) -> Result<(), String> {
         EngineConfig {
             title: "ember — ultimate league (online)".to_string(),
             capture_mouse: false,
-            activate: true,
+            activate: cfg!(target_arch = "wasm32"),
             meshes,
         },
         game,
