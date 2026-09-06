@@ -1,0 +1,36 @@
+{
+  "name": "hallow",
+  "pivot": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "forward": "+x",
+  "up": "+y",
+  "height": 2.2,
+  "extents": {
+    "min": [
+      -0.32960945908193945,
+      0.0,
+      -0.5090592570478697
+    ],
+    "max": [
+      0.32960945908193945,
+      2.2,
+      0.5090592570478697
+    ]
+  },
+  "faces": {
+    "source": 54400,
+    "shipped": 5500
+  },
+  "atlas": {
+    "size": 512,
+    "png_bytes": 251109
+  },
+  "glb_bytes": 448892,
+  "bake_wall_seconds": 1.9,
+  "part_order": [
+    "hallow"
+  ]
+}
