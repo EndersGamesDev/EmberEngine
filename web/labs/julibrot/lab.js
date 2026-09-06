@@ -408,10 +408,21 @@ class Lab {
     this.requestFrame();
     const deadline = performance.now() + timeoutMs;
     for (;;) {
-      const bytes = this.#api.app_take_frame_rgba();
-      if (bytes) {
-        const taken = JSON.parse(this.#api.app_frame_capture_json());
-        return { width: taken.frame_capture_width, height: taken.frame_capture_height, rgba: bytes };
+      // The extent is read before the bytes, because taking the bytes takes the copy: asking a
+      // consumed capture how big it was is asking about a copy nobody holds any more.
+      const state = JSON.parse(this.#api.app_frame_capture_json());
+      if (state.frame_capture_refusal) {
+        throw new Error(`the frame copy was refused: ${state.frame_capture_refusal}`);
+      }
+      if (state.frame_capture_ready) {
+        const bytes = this.#api.app_take_frame_rgba();
+        if (bytes) {
+          return {
+            width: state.frame_capture_width,
+            height: state.frame_capture_height,
+            rgba: bytes,
+          };
+        }
       }
       if (performance.now() > deadline) {
         throw new Error(`no frame was copied in ${timeoutMs} ms`);
