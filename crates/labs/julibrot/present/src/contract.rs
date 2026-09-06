@@ -359,7 +359,6 @@ pub struct PresentationLedger {
 
 impl PresentationLedger {
     /// Iterates over retained entries from oldest to newest.
-    #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = &PresentationLedgerEntry> {
         let start = (self.next + PRESENTATION_LEDGER_CAPACITY - self.len)
             % PRESENTATION_LEDGER_CAPACITY;

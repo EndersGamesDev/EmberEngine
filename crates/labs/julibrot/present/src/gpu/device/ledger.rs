@@ -27,7 +27,7 @@ pub(super) fn presentation_ledger_entry(
                 presented_extent,
             ),
         ]),
-        (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(destination)) => source
+        (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(_)) => source
             .and_then(|source| mapped_requested_points(plan, requested, source, presented_extent)),
         (WarpKind::ClearOnly, _) | (_, None) => None,
     };
@@ -101,10 +101,8 @@ fn presented_pixel(
     presented_extent: [u32; 2],
 ) -> [f64; 2] {
     let point = [
-        (destination[0] / f64::from(destination_extent[0]) + 0.5)
-            * f64::from(presented_extent[0]),
-        (0.5 - destination[1] / f64::from(destination_extent[1]))
-            * f64::from(presented_extent[1]),
+        (destination[0] / f64::from(destination_extent[0]) + 0.5) * f64::from(presented_extent[0]),
+        (0.5 - destination[1] / f64::from(destination_extent[1])) * f64::from(presented_extent[1]),
     ];
     point.map(|value| (value * 100.0).round() / 100.0)
 }

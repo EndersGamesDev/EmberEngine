@@ -123,9 +123,7 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
         }
     }
     if plan.refusal_reason.is_none() {
-        plan.refusal_reason = Some(WarpRefusalReason::ErrorCorpus {
-            refused_samples: 0,
-        });
+        plan.refusal_reason = Some(WarpRefusalReason::ErrorCorpus { refused_samples: 0 });
     }
     plan.source_scene_id = None;
     plan.source_texture_index = None;
@@ -315,9 +313,8 @@ fn anchor_plan(
         |samples| {
             let refused_samples = samples.refused_samples;
             let metrics = samples.maximum_and_p95();
-            let reason = (refused_samples > 0).then_some(WarpRefusalReason::ErrorCorpus {
-                refused_samples,
-            });
+            let reason =
+                (refused_samples > 0).then_some(WarpRefusalReason::ErrorCorpus { refused_samples });
             (metrics, reason)
         },
     );
@@ -974,6 +971,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the pinned 9x9 owner-row error fields are the measured regression fixture"
+    )]
     fn zoom_jump_owner_row_pins_the_partial_error_field_and_refusal() {
         let from = zoom_jump_owner_pose();
         let expected = [
@@ -1233,10 +1234,13 @@ mod tests {
             assert_eq!(plan.kind, WarpKind::ClearOnly);
             assert_eq!(plan.approx_max_error_px, Some(metrics.0));
             assert_eq!(plan.approx_p95_error_px, Some(metrics.1));
-            assert_eq!(plan.refusal_reason, Some(WarpRefusalReason::ErrorCeiling {
-                max_px: metrics.0,
-                p95_px: metrics.1,
-            }));
+            assert_eq!(
+                plan.refusal_reason,
+                Some(WarpRefusalReason::ErrorCeiling {
+                    max_px: metrics.0,
+                    p95_px: metrics.1,
+                })
+            );
             assert!(raw.source_valid);
             assert_eq!(resolved.len(), 320);
             assert_eq!(horizon_points, 5);

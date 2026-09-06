@@ -282,12 +282,7 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
         refusal_reason: Some(crate::WarpRefusalReason::Matrix),
         ..clear_warp_plan(false, true)
     };
-    let held = apply_hold_policy(
-        refused,
-        ledger.retained(),
-        true,
-        BINDING_EXTENT,
-    );
+    let held = apply_hold_policy(refused, ledger.retained(), true, BINDING_EXTENT);
     assert_eq!(held.kind, WarpKind::HoldStale);
     assert_eq!(held.source_scene_id, Some(sampled.scene_id));
     assert_eq!(held.source_texture_index, Some(sampled.texture_index));
@@ -1138,12 +1133,8 @@ fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
     let mut preview = frame_on(81, [120, 68], [120, 68]);
     preview.level = RefinementLevel::Preview;
     let preview_plan = reproject_onto(&preview, &requested);
-    let preview_entry = presentation_ledger_entry(
-        &preview_plan,
-        &requested,
-        Some(&preview),
-        presented_extent,
-    );
+    let preview_entry =
+        presentation_ledger_entry(&preview_plan, &requested, Some(&preview), presented_extent);
 
     let mut final_frame = frame_on(82, presented_extent, presented_extent);
     final_frame.level = RefinementLevel::Final;
@@ -1157,7 +1148,10 @@ fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
 
     assert_eq!(preview_entry.requested_centre_px, Some([480.0, 270.0]));
     assert_eq!(preview_entry.anchor_px, Some([0.0, 0.0]));
-    assert_eq!(final_entry.requested_centre_px, preview_entry.requested_centre_px);
+    assert_eq!(
+        final_entry.requested_centre_px,
+        preview_entry.requested_centre_px
+    );
     assert_eq!(final_entry.anchor_px, preview_entry.anchor_px);
     assert_eq!(preview_entry.level, Some(RefinementLevel::Preview));
     assert_eq!(final_entry.level, Some(RefinementLevel::Final));
@@ -1175,7 +1169,10 @@ fn a_centred_zoom_hold_keeps_the_centre_but_exposes_the_corner_correction() {
     let moved_entry = presentation_ledger_entry(&moved, &requested, Some(&source), extent);
 
     assert_eq!(held_entry.requested_centre_px, Some([480.0, 270.0]));
-    assert_eq!(moved_entry.requested_centre_px, held_entry.requested_centre_px);
+    assert_eq!(
+        moved_entry.requested_centre_px,
+        held_entry.requested_centre_px
+    );
     assert_eq!(held_entry.anchor_px, Some([32.14, 18.08]));
     assert_eq!(moved_entry.anchor_px, Some([0.0, 0.0]));
 }
