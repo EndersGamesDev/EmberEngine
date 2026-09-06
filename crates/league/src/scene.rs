@@ -62,6 +62,12 @@ pub const MESH_SPHERE: u32 = 9;
 pub const MESH_GARDEN: u32 = 10;
 pub const MESH_LANE: u32 = 11;
 pub const MESH_COURT: u32 = 12;
+/// Baked arena props from `art::props`, origin on the ground, +X forward:
+/// the three-spire obelisk (5 tall), the ruined arch (6.5 tall), the jade
+/// canopy tree (7 tall).
+pub const MESH_OBELISK: u32 = 13;
+pub const MESH_ARCH: u32 = 14;
+pub const MESH_TREE: u32 = 15;
 
 /// Camera height over the focus, its offset toward +Z and the vertical
 /// field of view. The pitch these give (56 degrees, the MOBA norm) is what
@@ -195,8 +201,11 @@ pub fn build_meshes() -> Vec<MeshData> {
         sphere_mesh(),
     ];
     meshes.extend(art::surfaces());
-    debug_assert_eq!(meshes.len() as u32, MESH_SPHERE + art::SURFACE_COUNT);
-    meshes.extend(art::meshes(MESH_SPHERE + art::SURFACE_COUNT + 1));
+    meshes.extend(art::props());
+    // the fixed ids above must agree with what the two tables return
+    assert_eq!(meshes.len() as u32, MESH_SPHERE + art::SURFACE_COUNT + art::PROP_COUNT);
+    assert_eq!(meshes.len() as u32, MESH_TREE);
+    meshes.extend(art::meshes(MESH_TREE + 1));
     meshes
 }
 
@@ -532,6 +541,10 @@ fn push_ground(frame: &mut Frame) {
     for x in [-70.0, 70.0] {
         frame.instances.push(ins(v3(x, 0.6, 0.0), v3(1.6, 1.2, 2.0 * data::FIELD_Z), wall).with_mesh(0));
     }
+    // the perimeter: arches at each plaza's back wall and at the court-yard
+    // mouths (off the lane, never in a corridor), and sparse mirrored tree
+    // clusters outside the corridors so the garden has depth
+    push_perimeter(frame);
     // scattered rocks off the lane, fixed positions, for a sense of scale
     let rock = [0.14, 0.15, 0.14];
     for (i, (x, z, s)) in [
@@ -556,6 +569,49 @@ fn push_ground(frame: &mut Frame) {
     }
 }
 
+/// A prop instance: origin on the ground, `yaw` in the sim's convention.
+fn prop(frame: &mut Frame, mesh: u32, x: f32, z: f32, yaw: f32, scale: f32, rough: f32) {
+    frame.instances.push(
+        Instance::new(v3(x, 0.0, z), Vec3::splat(scale), Vec3::ONE)
+            .with_rot(face(yaw))
+            .with_mesh(mesh)
+            .with_surface(rough, 0.05),
+    );
+}
+
+/// Arches and trees. Every position is outside the lane corridor and the
+/// court yards: the perimeter dresses the arena, it never stands in a
+/// path the sim lets a unit walk. Mirrored across x=0 and z=0 so both
+/// sides read the same.
+fn push_perimeter(frame: &mut Frame) {
+    // a portal at the back of each plaza, facing the lane
+    for (x, yaw) in [(-data::CORE_X - 6.0, 0.0), (data::CORE_X + 6.0, PI)] {
+        prop(frame, MESH_ARCH, x, 0.0, yaw, 1.0, 0.85);
+    }
+    // a smaller arch at each court-yard mouth, facing the lane
+    for c in data::COURT_POS {
+        let [cx, cz] = c;
+        let yaw = if cz > 0.0 { -PI / 2.0 } else { PI / 2.0 };
+        prop(frame, MESH_ARCH, cx, cz.signum() * (data::LANE_Z + 2.4), yaw, 0.55, 0.85);
+    }
+    // tree clusters: three per quadrant, mirrored, well off the corridors
+    for (x, z, s) in [
+        (18.0, 26.0, 1.0),
+        (24.0, 33.0, 0.8),
+        (44.0, 24.0, 0.9),
+        (52.0, 33.0, 0.75),
+        (8.0, 36.0, 0.7),
+        (34.0, 37.0, 0.85),
+    ] {
+        for sx in [-1.0, 1.0] {
+            for sz in [-1.0, 1.0] {
+                let yaw = (x * 0.37 + z * 0.61) * sx * sz;
+                prop(frame, MESH_TREE, x * sx, z * sz, yaw, s, 0.95);
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // objectives
 // ---------------------------------------------------------------------------
@@ -565,21 +621,23 @@ fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
     let stone = [0.13, 0.13, 0.19];
     let bob = if u.dead { -1.2 } else { (t * 1.4).sin() * 0.25 };
     let spin = if u.dead { 0.0 } else { t * 0.6 };
-    frame.instances.push(ins(v3(u.x, 0.4, u.z), v3(2.8, 0.4, 2.8), stone).with_mesh(MESH_FRUSTUM));
+    // the core: the obelisk trio behind the crystal (its tall spire toward
+    // the enemy), the crystal itself floating in front in the team colour
+    let toward = if u.t == 0 { 0.0 } else { PI };
+    let back = if u.t == 0 { -3.6 } else { 3.6 };
+    prop(frame, MESH_OBELISK, u.x + back, u.z, toward, 1.1, 0.8);
+    frame.instances.push(ins(v3(u.x + back * 0.2, 0.4, u.z), v3(2.4, 0.4, 2.4), stone).with_mesh(MESH_FRUSTUM).with_surface(0.85, 0.0));
     frame.instances.push(
-        ins(v3(u.x, 2.9 + bob, u.z), v3(1.6, 2.4, 1.6), col)
+        ins(v3(u.x + back * 0.2, 2.9 + bob, u.z), v3(1.6, 2.4, 1.6), col)
             .with_rot(Quat::from_rotation_y(spin))
-            .with_mesh(MESH_OCTA),
+            .with_mesh(MESH_OCTA)
+            .with_surface(0.15, 0.0),
     );
-    // the nexus frame: four pillars around the crystal
-    for i in 0..4 {
-        let a = TAU * (i as f32) / 4.0 + PI / 4.0;
-        frame.instances.push(
-            ins(v3(u.x + a.cos() * 3.6, 1.4, u.z + a.sin() * 3.6), v3(0.55, 2.8, 0.55), stone).with_mesh(0),
-        );
-        frame.instances.push(
-            ins(v3(u.x + a.cos() * 3.6, 3.1, u.z + a.sin() * 3.6), v3(0.4, 0.4, 0.4), col).with_mesh(MESH_OCTA),
-        );
+    // two marker pillars on the lane side, so the crystal has a gate
+    for side in [-1.0, 1.0] {
+        let (px, pz) = (u.x - back * 0.9, u.z + side * 3.4);
+        frame.instances.push(ins(v3(px, 1.4, pz), v3(0.55, 2.8, 0.55), stone).with_mesh(0).with_surface(0.85, 0.0));
+        frame.instances.push(ins(v3(px, 3.1, pz), v3(0.4, 0.4, 0.4), col).with_mesh(MESH_OCTA));
     }
     if !u.dead {
         frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(5.5, 1.0, 5.5), col).with_mesh(MESH_RING));
@@ -596,14 +654,17 @@ fn push_court(frame: &mut Frame, u: &UnitLite, t: f32) {
     }
     let pulse = 0.85 + 0.15 * (t * 2.0).sin();
     let gem = [0.95 * pulse, 0.88 * pulse, 0.55];
-    frame.instances.push(ins(v3(u.x, 2.6, u.z), v3(1.0, 2.6, 1.0), stone).with_mesh(MESH_FRUSTUM));
-    frame.instances.push(ins(v3(u.x, 5.35, u.z), v3(1.3, 0.15, 1.3), stone).with_mesh(MESH_FRUSTUM));
+    // the court is the fleet's three-spire obelisk, the tall spire toward
+    // the lane; the pulsing gem floats over it as the "alive" cue
+    let _ = stone;
+    prop(frame, MESH_OBELISK, u.x, u.z, if u.z > 0.0 { -PI / 2.0 } else { PI / 2.0 }, 1.0, 0.8);
     frame.instances.push(
-        ins(v3(u.x, 6.3, u.z), v3(0.8, 0.8, 0.8), gem)
+        ins(v3(u.x, 6.0 + 0.2 * (t * 1.3).sin(), u.z), v3(0.7, 0.7, 0.7), gem)
             .with_rot(Quat::from_rotation_y(t * 0.9))
-            .with_mesh(MESH_OCTA),
+            .with_mesh(MESH_OCTA)
+            .without_shadow(),
     );
-    frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(3.2, 1.0, 3.2), team_colour(2)).with_mesh(MESH_RING));
+    frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(3.4, 1.0, 3.4), team_colour(2)).with_mesh(MESH_RING).without_shadow());
 }
 
 // ---------------------------------------------------------------------------
@@ -1437,27 +1498,43 @@ fn push_showcase(frame: &mut Frame, _camera: &Camera, t: f32) {
     if !*ON.get_or_init(|| std::env::var("LEAGUE_SHOWCASE").is_ok_and(|v| v != "0" && !v.is_empty())) {
         return;
     }
+    let stand_in = |id: u32, k: u8, team: u8, def: u8, x: f32, z: f32, fa: f32| UnitLite {
+        id,
+        k,
+        t: team,
+        slot: def,
+        def,
+        x,
+        z,
+        fa,
+        hp: 80.0,
+        mh: 100.0,
+        mn: 50.0,
+        mm: 100.0,
+        dead: false,
+        colour: data::CHAMPS[usize::from(def.min(4))].colour,
+    };
     for def in 0..5u8 {
-        let x = (f32::from(def) - 2.0) * 3.2;
-        let z = 1.0;
-        let u = UnitLite {
-            id: 9000 + u32::from(def),
-            k: 0,
-            t: def % 2,
-            slot: def,
-            def,
-            x,
-            z,
-            fa: t * 0.6 + f32::from(def) * 0.4,
-            hp: 80.0,
-            mh: 100.0,
-            mn: 50.0,
-            mm: 100.0,
-            dead: false,
-            colour: data::CHAMPS[usize::from(def)].colour,
-        };
+        let u = stand_in(9000 + u32::from(def), 0, def % 2, def, (f32::from(def) - 2.0) * 3.2, 1.0, t * 0.6 + f32::from(def) * 0.4);
         push_champion(frame, &u, t, Wear::default(), false);
         push_hp_bar(frame, &u);
+    }
+    // the objectives are units too, and the draft has none: stand them in
+    // so the bases and courts can be photographed dressed
+    for (i, (k, team, x, z)) in [
+        (6u8, 0u8, -data::CORE_X, 0.0),
+        (7, 1, data::CORE_X, 0.0),
+        (4, 2, data::COURT_POS[0][0], data::COURT_POS[0][1]),
+        (5, 2, data::COURT_POS[1][0], data::COURT_POS[1][1]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let u = stand_in(9100 + i as u32, k, team, 0, x, z, 0.0);
+        match k {
+            6 | 7 => push_core(frame, &u, t),
+            _ => push_court(frame, &u, t),
+        }
     }
 }
 
@@ -1626,9 +1703,16 @@ mod tests {
             assert!(m.vertices.iter().all(|v| v.pos[1].abs() < 1e-6), "surface {i} is not on y=0");
             assert!(m.vertices.iter().any(|v| v.uv[0] > 1.5), "surface {i} has no tiled UVs");
         }
+        // the props are textured and stand on the ground at prop height
+        for i in MESH_OBELISK..=MESH_TREE {
+            let m = &meshes[(i - 1) as usize];
+            assert!(m.texture.is_some(), "prop {i} has no 8-bit texture");
+            let top = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
+            assert!((4.0..=8.0).contains(&top), "prop {i} stands {top} tall");
+        }
         // every baked part is textured (the loader's silent 16-bit failure
         // would show up here as `None`) and sized like a champion
-        for (i, m) in meshes.iter().enumerate().skip((MESH_SPHERE + art::SURFACE_COUNT) as usize) {
+        for (i, m) in meshes.iter().enumerate().skip(MESH_TREE as usize) {
             assert!(m.texture.is_some(), "baked mesh {i} has no 8-bit base-colour texture");
             let top = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
             let bottom = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min);

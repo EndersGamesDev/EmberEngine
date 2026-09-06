@@ -84,9 +84,50 @@ const SURFACES: &[(&str, &[u8])] = &[
     ("court", include_bytes!("../../../../assets/models/league/v2/surface-court.glb")),
 ];
 
-/// How many meshes [`surfaces`] returns, always, so the champion ids that
-/// follow never move.
+/// How many meshes [`surfaces`] returns, always, so the ids that follow
+/// never move.
 pub const SURFACE_COUNT: u32 = 3;
+
+/// Arena props from the fleet, baked like champions (`bake_champion.py`,
+/// origin on the ground, +X forward): the three-spire obelisk for the
+/// objectives, the ruined arch for the perimeter, the jade canopy tree
+/// for the clusters. Registered right after the surfaces, in this order
+/// (`scene::MESH_OBELISK`, `MESH_ARCH`, `MESH_TREE`).
+const PROPS: &[(&str, &[u8])] = &[
+    ("obelisk", include_bytes!("../../../../assets/models/league/v2/obelisk.glb")),
+    ("arch", include_bytes!("../../../../assets/models/league/v2/arch.glb")),
+    ("tree", include_bytes!("../../../../assets/models/league/v2/tree.glb")),
+];
+
+/// How many meshes [`props`] returns, always.
+pub const PROP_COUNT: u32 = 3;
+
+/// The props as meshes, one per `PROPS` row in order; a prop whose GLB
+/// cannot be read becomes a plain quad on the ground and a warning, so the
+/// champion ids after it stay put.
+#[must_use]
+pub fn props() -> Vec<MeshData> {
+    PROPS
+        .iter()
+        .map(|(name, bytes)| match load_glb(bytes) {
+            Ok(mut parts) if !parts.is_empty() => {
+                let part = parts.swap_remove(0);
+                if part.mesh.texture.is_none() {
+                    tracing::warn!(prop = name, "league art: prop has no 8-bit texture; it will draw flat");
+                }
+                part.mesh
+            }
+            Ok(_) => {
+                tracing::warn!(prop = name, "league art: prop glb has no primitive; drawing nothing useful");
+                plain_quad()
+            }
+            Err(e) => {
+                tracing::warn!(prop = name, "league art: prop glb unreadable ({e}); drawing nothing useful");
+                plain_quad()
+            }
+        })
+        .collect()
+}
 
 /// The ground surfaces as meshes, one per `SURFACES` row in order. A quad
 /// whose GLB cannot be read is replaced by an untextured quad and warned
