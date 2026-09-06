@@ -244,7 +244,8 @@ use crate::shooter::{HILL_FREE, ShieldState, WeaponSlot};
 /// would discard momentum and collide against a different harbor layout.
 /// v23 (Killshot v30): retained inventory, timed reload snapshots, authored
 /// supplies and lobby-selected starting loadouts change authoritative play.
-pub const PROTO_VERSION: u16 = 23;
+/// v24 (Killshot v31): an eight-pellet shotgun and stable projectile identities.
+pub const PROTO_VERSION: u16 = 24;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -343,7 +344,7 @@ pub struct PState {
     /// Seconds until the authoritative reload completes; zero when idle.
     #[serde(default)]
     pub reload_remaining: f32,
-    /// Fixed weapon-id slots: index 0 is the pistol, 7/8 are empty.
+    /// Fixed weapon-id slots: index 0 is the pistol, 7 is shotgun, 8 is empty.
     #[serde(default)]
     pub inventory: [WeaponSlot; 9],
     /// Authoritative timed sight raise, 0 = hip and 1 = fully sighted.
@@ -381,6 +382,8 @@ pub struct PState {
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct BState {
+    #[serde(default)]
+    pub projectile_id: u64,
     pub x: f32,
     pub z: f32,
     pub vx: f32,
@@ -657,6 +660,8 @@ pub enum S2C {
     /// the blast as `Blast`. Dropped by a v16 peer, which is why v17
     /// bumps (see `PROTO_VERSION`).
     Shot {
+        #[serde(default)]
+        projectile_id: u64,
         owner: u8,
         weapon: u8,
         x0: f32,
@@ -787,6 +792,7 @@ mod tests {
         );
 
         let s = serde_json::to_string(&S2C::Shot {
+            projectile_id: 123,
             owner: 1,
             weapon: 3,
             x0: -1.0,
@@ -818,6 +824,7 @@ mod tests {
             tick: 9,
             players: vec![],
             bullets: vec![BState {
+                projectile_id: 456,
                 x: 1.0,
                 z: 2.0,
                 vx: 3.0,
@@ -1098,7 +1105,7 @@ mod tests {
         assert_eq!(p.spread, 0.0, "old frames have no reported cone");
         assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
         assert_eq!(
-            PROTO_VERSION, 23,
+            PROTO_VERSION, 24,
             "retained inventory, supply rules and starting loadouts require matching peers"
         );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
@@ -1228,6 +1235,7 @@ mod tests {
             SHOT_BODY, SHOT_COVER, SHOT_EXPIRED, SHOT_FLOOR, SHOT_SHIELD, SHOT_WALL,
         };
         let ev = S2C::Shot {
+            projectile_id: 789,
             owner: 2,
             weapon: 6,
             x0: 0.2,

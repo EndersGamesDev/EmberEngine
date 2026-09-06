@@ -327,7 +327,12 @@ pub const SIDEARM: u8 = 1;
 /// Weapon ids run `1..=WEAPON_COUNT`. `weapon_stats` answers any id, so a
 /// client that reads an id it does not know still draws something, but the
 /// loot roll only ever hands out members of `LOOT_POOL`.
-pub const WEAPON_COUNT: u8 = 7;
+pub const SHOTGUN: u8 = 8;
+pub const WEAPON_COUNT: u8 = SHOTGUN;
+pub const SHOTGUN_PELLETS: u8 = 8;
+/// Physical buckshot divergence; stance improves aim without collapsing this.
+pub const SHOTGUN_PATTERN_SPREAD: f32 = 0.070;
+pub const SHOTGUN_RANGE: f32 = 25.0;
 pub const INVENTORY_SLOTS: usize = 9;
 pub const SUPPLY_RESPAWN_SECS: f32 = 30.0;
 pub const SUPPLY_RADIUS: f32 = 1.15;
@@ -373,7 +378,7 @@ pub const RESERVE_INFINITE: u8 = 255;
 /// What a block or a pad may hand out. Server-side only: clients never
 /// derive from it, so adding the M4 (id 4) when its mesh exists is not a
 /// protocol question.
-pub const LOOT_POOL: [u8; 5] = [2, 3, 5, 6, 7];
+pub const LOOT_POOL: [u8; 6] = [2, 3, 5, 6, 7, SHOTGUN];
 /// An airborne shooter's cone widens by this much, so a jumping spray is a
 /// worse spray than a planted one.
 pub const ADS_SPREAD_AIR_MULT: f32 = 2.4;
@@ -481,6 +486,7 @@ pub const fn weapon_handling(id: u8) -> WeaponHandling {
         5 => (0.19, 0.12, 1.4, 0.70, 1.85, 2.4, 0.028, 0.032),
         6 => (0.45, 0.20, 6.0, 0.60, 4.0, 3.0, 0.060, 0.040),
         7 => (0.30, 0.18, 2.0, 0.75, 1.9, 2.2, 0.035, 0.035),
+        SHOTGUN => (0.25, 0.15, 1.25, 0.75, 1.7, 2.2, 0.045, 0.050),
         _ => (
             0.14,
             0.10,
@@ -538,7 +544,7 @@ pub fn weapon_spread(
     moving: bool,
     grounded: bool,
 ) -> f32 {
-    spread_with_stats(
+    let aim_cone = spread_with_stats(
         &weapon_stats(weapon),
         &weapon_handling(weapon),
         ads_fraction,
@@ -546,7 +552,13 @@ pub fn weapon_spread(
         crouch,
         moving,
         grounded,
-    )
+    );
+    aim_cone
+        + if weapon == SHOTGUN {
+            SHOTGUN_PATTERN_SPREAD
+        } else {
+            0.0
+        }
 }
 
 fn spread_with_stats(
@@ -734,6 +746,30 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             splash_r: 3.0,
             reload: 2.4,
         },
+        // Buckshot's aggregate damage falls with physical pattern coverage,
+        // not fractional HP or random rounding. Each pellet remains one point
+        // even on a head, and only buckshot clips its final segment at 25m.
+        SHOTGUN => WeaponStats {
+            name: "Breach-12",
+            cooldown: 0.85,
+            mag: 6,
+            reserve: 24,
+            damage: 1,
+            speed: 360.0,
+            accel: 0.0,
+            speed_max: 360.0,
+            ttl: SHOTGUN_RANGE / 360.0,
+            radius: 0.055,
+            spread: 0.022,
+            bloom: 0.025,
+            spread_max: 0.060,
+            ads_spread: 0.55,
+            gravity: 0.0,
+            pierce: 0,
+            kind: Projectile::Bullet,
+            splash_r: 0.0,
+            reload: 2.8,
+        },
         // The sidearm: the pistol, through the same constants the
         // pre-v18 shot tests read.
         _ => WeaponStats {
@@ -807,15 +843,14 @@ pub fn unit_pair(h: u64) -> (f32, f32) {
 /// The gun a block or a pad hands out.
 ///
 /// Uniform over `LOOT_POOL` minus the gun in hand (when that is in the
-/// pool), indexed by the loot-salted roll. No weights: five guns of five
-/// roles, and weighting is balance tuning with no evidence yet.
+/// pool), indexed by the loot-salted roll. Every role has equal weight.
 #[must_use]
 pub fn loot_roll(seed: u64, tick: u64, who: u8, holding: u8) -> u8 {
     let mut offered = LOOT_POOL.iter().copied().filter(|&w| w != holding);
-    // Never zero: the pool has five entries and at most one is held.
+    // Never zero: the pool has six entries and at most one is held.
     let n = u64::try_from(offered.clone().count()).unwrap_or(1);
     // The top bits of the hash are the best mixed; `>> 33` leaves 31 of
-    // them, plenty for a modulus of five.
+    // them, plenty for this small pool's modulus.
     let k = (roll(seed, tick, who, SALT_LOOT) >> 33) % n;
     // `k < n`, so the nth always exists and neither fallback is taken.
     offered
@@ -926,6 +961,8 @@ pub const SHOT_NONE: u8 = 255;
 /// server forwards it as `S2C::Shot`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShotEvent {
+    /// Stable through reflection; 52-bit tick/player/pellet identity, JSON-safe.
+    pub projectile_id: u64,
     pub owner: u8,
     pub weapon: u8,
     /// The muzzle at launch, or the plate or body the previous segment
@@ -1826,7 +1863,12 @@ fn collect_weapon(p: &mut PlayerSt, id: u8) -> bool {
 const fn reset_handling(p: &mut PlayerSt) {
     p.ads_fraction = 0.0;
     p.bloom = 0.0;
-    p.spread = weapon_stats(p.weapon).spread;
+    p.spread = weapon_stats(p.weapon).spread
+        + if p.weapon == SHOTGUN {
+            SHOTGUN_PATTERN_SPREAD
+        } else {
+            0.0
+        };
 }
 
 /// Is this spot blocked for a player whose feet are at `y`?
@@ -2185,6 +2227,8 @@ impl PlayerSt {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bullet {
+    /// Stable 52-bit identity, unchanged when a shield transfers ownership.
+    pub projectile_id: u64,
     pub pos: [f32; 2],
     pub vel: [f32; 2],
     /// Height above the arena floor, and its rate of change. Height is a
@@ -2238,6 +2282,7 @@ impl Bullet {
         normal: [i8; 3],
     ) -> ShotEvent {
         ShotEvent {
+            projectile_id: self.projectile_id,
             owner: self.owner,
             weapon: self.weapon,
             from: self.from,
@@ -2388,12 +2433,59 @@ pub fn launch(
             (p.pitch + pitch_off).clamp(-MAX_PITCH, MAX_PITCH),
         )
     };
+    if p.weapon == SHOTGUN {
+        // One common aim error plus a deterministic rotated physical pattern.
+        // Two inner pellets and six outer pellets give reliable close hits;
+        // dispersion reduces aggregate damage with distance, without random HP.
+        let (_, turn) = unit_pair(roll(seed, tick, p.id, 0x7001));
+        let rotation = std::f32::consts::TAU * turn;
+        for pellet in 0..SHOTGUN_PELLETS {
+            let (ring, spoke) = if pellet < 2 {
+                (0.35, f32::from(pellet) * std::f32::consts::PI)
+            } else {
+                (1.0, f32::from(pellet - 2) * std::f32::consts::TAU / 6.0)
+            };
+            let theta = rotation + spoke;
+            let yaw_off = SHOTGUN_PATTERN_SPREAD * ring * theta.cos();
+            let pitch_off = SHOTGUN_PATTERN_SPREAD * ring * theta.sin();
+            let (sin_yaw, cos_yaw) = yaw_off.sin_cos();
+            let pellet_aim = [
+                aim[0] * cos_yaw - aim[1] * sin_yaw,
+                aim[0] * sin_yaw + aim[1] * cos_yaw,
+            ];
+            let pellet_pitch = (pitch + pitch_off).clamp(-MAX_PITCH, MAX_PITCH);
+            push_round(p, stats, pellet_aim, pellet_pitch, tick, pellet, delay, out);
+        }
+    } else {
+        push_round(p, stats, aim, pitch, tick, 0, delay, out);
+    }
+}
+
+/// Forty tick bits, eight original-owner bits and four pellet bits fit exactly
+/// inside a JavaScript Number. Wrap requires ~580 years of uninterrupted play.
+#[must_use]
+pub const fn projectile_id(tick: u64, owner: u8, pellet: u8) -> u64 {
+    ((tick & ((1_u64 << 40) - 1)) << 12) | ((owner as u64) << 4) | ((pellet as u64) & 15)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_round(
+    p: &PlayerSt,
+    stats: &WeaponStats,
+    aim: [f32; 2],
+    pitch: f32,
+    tick: u64,
+    pellet: u8,
+    delay: u16,
+    out: &mut Vec<Bullet>,
+) {
     // Spawn just in front of the centre, along the round's own line: the
     // swept collision skips the owner, and starting further out would
     // leave a point-blank dead zone.
     let muzzle = [p.pos[0] + aim[0] * 0.2, p.pos[1] + aim[1] * 0.2];
     let y = p.y + eye_h(p.crouch);
     out.push(Bullet {
+        projectile_id: projectile_id(tick, p.id, pellet),
         pos: muzzle,
         vel: [aim[0] * stats.speed, aim[1] * stats.speed],
         // Leaves at eye level and climbs or falls at the tangent of the aim
@@ -2867,6 +2959,13 @@ impl Sim {
         self.step_using(inputs, launch);
     }
 
+    fn step_using<F>(&mut self, inputs: &dyn Fn(u8) -> PlayerIn, launch_round: F)
+    where
+        F: Fn(&PlayerSt, &WeaponStats, bool, bool, u64, u64, u16, &mut Vec<Bullet>),
+    {
+        self.step_using_rules(inputs, launch_round, loot_roll);
+    }
+
     // The production caller always supplies `launch`. Collision-only tests
     // inject a zero-cone row without changing movement, fire, or hit ordering.
     #[allow(
@@ -2875,8 +2974,12 @@ impl Sim {
         clippy::cast_sign_loss,
         clippy::too_many_lines
     )]
-    fn step_using<F>(&mut self, inputs: &dyn Fn(u8) -> PlayerIn, launch_round: F)
-    where
+    fn step_using_rules<F>(
+        &mut self,
+        inputs: &dyn Fn(u8) -> PlayerIn,
+        launch_round: F,
+        loot_picker: fn(u64, u64, u8, u8) -> u8,
+    ) where
         F: Fn(&PlayerSt, &WeaponStats, bool, bool, u64, u64, u16, &mut Vec<Bullet>),
     {
         self.events.clear();
@@ -3040,7 +3143,12 @@ impl Sim {
                 let owner = p.id;
                 let active = self.bullets.iter().filter(|b| b.owner == owner).count()
                     + new_bullets.iter().filter(|b| b.owner == owner).count();
-                if active < MAX_BULLETS_PER_PLAYER {
+                let pellet_count = if p.weapon == SHOTGUN {
+                    usize::from(SHOTGUN_PELLETS)
+                } else {
+                    1
+                };
+                if active + pellet_count <= MAX_BULLETS_PER_PLAYER {
                     let p = &mut self.players[i];
                     // The round reads recovering bloom before adding this
                     // shot's recoil. `v.grounded` is this tick's vertical step,
@@ -3138,7 +3246,7 @@ impl Sim {
                 }
                 let (dx, dz) = (p.pos[0] - pad.pos[0], p.pos[1] - pad.pos[1]);
                 if p.y < PAD_PICK_H && dx * dx + dz * dz < PAD_RADIUS * PAD_RADIUS {
-                    let w = loot_roll(roll_seed, roll_tick, p.id, p.weapon);
+                    let w = loot_picker(roll_seed, roll_tick, p.id, p.weapon);
                     if collect_weapon(p, w) {
                         pad.respawn_t = PAD_RESPAWN_SECS;
                         break;
@@ -3164,7 +3272,7 @@ impl Sim {
                 continue;
             }
             let p = &mut self.players[i];
-            let w = loot_roll(roll_seed, roll_tick, p.id, p.weapon);
+            let w = loot_picker(roll_seed, roll_tick, p.id, p.weapon);
             if !collect_weapon(p, w) {
                 continue;
             }
@@ -3333,8 +3441,15 @@ impl Sim {
             let stats = weapon_stats(b.weapon);
             let rocket = stats.kind == Projectile::Rocket;
             let radius = stats.radius;
-            b.ttl -= dt;
-            if b.ttl <= 0.0 {
+            // Keep every legacy projectile's integration byte-for-byte. Buckshot
+            // alone clips its final segment so the advertised 25m cutoff is real.
+            let flight_dt = if b.weapon == SHOTGUN {
+                dt.min(b.ttl.max(0.0))
+            } else {
+                dt
+            };
+            b.ttl -= flight_dt;
+            if b.ttl <= 0.0 && (b.weapon != SHOTGUN || flight_dt == 0.0) {
                 // A rocket out of flight time goes off where it is, and
                 // every round reports the expiry, so a tracer ends where
                 // the round faded and not where the last state left it.
@@ -3349,7 +3464,7 @@ impl Sim {
             // speed is charged BEFORE the segment is formed. The horizontal
             // `vel` keeps its magnitude, so every range-per-tick invariant
             // stands, and a zero-gravity row adds exactly zero.
-            b.vy += stats.gravity * dt;
+            b.vy += stats.gravity * flight_dt;
             // The sustainer: the horizontal speed grows along its own
             // direction until the row's cap, charged before the segment
             // like gravity, so the launch tick already flies a little
@@ -3363,9 +3478,9 @@ impl Sim {
                 }
             }
             let p0 = b.pos;
-            let p1 = [p0[0] + b.vel[0] * dt, p0[1] + b.vel[1] * dt];
+            let p1 = [p0[0] + b.vel[0] * flight_dt, p0[1] + b.vel[1] * flight_dt];
             let y0 = b.y;
-            let y1 = b.y + b.vy * dt;
+            let y1 = b.y + b.vy * flight_dt;
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
             let along = |t: f32| [p0[0] + sx * t, y0 + (y1 - y0) * t, p0[1] + sz * t];
@@ -3613,11 +3728,18 @@ impl Sim {
                     shots.push(b.ended(at, SHOT_BODY, SHOT_NONE, p.id, [0; 3]));
                     return false;
                 }
-                // A head hit kills outright, whatever the weapon and
-                // whatever the remaining HP. Routed as damage rather than
+                // Legacy single-projectile head hits kill outright. Buckshot
+                // is the explicit exception below. Routed as damage rather than
                 // as a special case so respawn, scoring and the kill event
                 // all stay on the one path.
-                hits.push((b.owner, p.id, if head { MAX_HP } else { b.dmg }, head));
+                // A pellet striking the head stays one point: five-HP bodies
+                // require multiple pellets, never a single lucky pellet kill.
+                let dmg = if head && b.weapon != SHOTGUN {
+                    MAX_HP
+                } else {
+                    b.dmg
+                };
+                hits.push((b.owner, p.id, dmg, head));
                 shots.push(b.ended(at, SHOT_BODY, SHOT_NONE, p.id, [0; 3]));
                 if b.pierce == 0 {
                     return false;
@@ -3653,6 +3775,16 @@ impl Sim {
             }
             b.pos = p1;
             b.y = y1;
+            if b.weapon == SHOTGUN && b.ttl <= 0.0 {
+                shots.push(b.ended(
+                    [p1[0], y1, p1[1]],
+                    SHOT_EXPIRED,
+                    SHOT_NONE,
+                    SHOT_NONE,
+                    [0; 3],
+                ));
+                return false;
+            }
             true
         });
         self.bullets = bullets;
@@ -3754,6 +3886,10 @@ impl Sim {
 #[cfg(test)]
 #[path = "killshot_tests.rs"]
 mod killshot_tests;
+
+#[cfg(test)]
+#[path = "shotgun_tests.rs"]
+mod shotgun_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4321,7 +4457,12 @@ mod tests {
                 "{id}: base cone wider than its cap"
             );
             // No held trigger is ever throttled by the bullet cap.
-            let in_flight = (s.ttl / s.cooldown).ceil() as usize;
+            let count = if id == SHOTGUN {
+                usize::from(SHOTGUN_PELLETS)
+            } else {
+                1
+            };
+            let in_flight = (s.ttl / s.cooldown).ceil() as usize * count;
             assert!(
                 in_flight <= MAX_BULLETS_PER_PLAYER,
                 "{id}: {in_flight} rounds in flight exceed the cap"
@@ -5779,6 +5920,7 @@ mod tests {
     // spread/launch behaviour remains covered by the weapon and ADS suites.
     fn collision_probe(from: [f32; 3], to: [f32; 3], delay: u16) -> Bullet {
         Bullet {
+            projectile_id: 0,
             pos: [from[0], from[2]],
             vel: [(to[0] - from[0]) / FIXED_DT, (to[2] - from[2]) / FIXED_DT],
             y: from[1],
@@ -6489,7 +6631,8 @@ mod tests {
         let gap = 3.0;
         let drop = (from_y + EYE_STAND) - 1.60;
         let pitch = -(drop / gap).atan();
-        for weapon in 1..=WEAPON_COUNT {
+        // Historical single-projectile weapons retain instant head kills.
+        for weapon in 1..=7 {
             let stats = weapon_stats(weapon);
             if stats.kind != Projectile::Bullet {
                 continue;
@@ -8081,7 +8224,8 @@ mod tests {
     fn every_weapon_has_real_hip_ads_and_crouched_ads_shot_clouds() {
         // Launch the actual shipped rows with matched seeded samples. Compare
         // directions, never bullet height (crouching lowers the muzzle).
-        for id in 1..=WEAPON_COUNT {
+        // Buckshot has a separate intrinsic pattern, tested in shotgun_tests.
+        for id in 1..=7 {
             let mut sim = open_sim(7, 1);
             arm(&mut sim.players[0], id);
             let stats = weapon_stats(id);
@@ -8141,7 +8285,15 @@ mod tests {
             sim.step(&|_| input);
             let first = sim.players[0].ads_fraction;
             assert!(first > 0.0 && first < 0.13, "weapon {id}: {first}");
-            assert!(sim.players[0].spread > weapon_spread(id, 1.0, 0.0, false, false, true) * 1.5);
+            let intrinsic = if id == SHOTGUN {
+                SHOTGUN_PATTERN_SPREAD
+            } else {
+                0.0
+            };
+            assert!(
+                sim.players[0].spread - intrinsic
+                    > (weapon_spread(id, 1.0, 0.0, false, false, true) - intrinsic) * 1.5
+            );
             let in_ticks = (weapon_handling(id).ads_in_secs / FIXED_DT).ceil() as usize;
             for _ in 1..=in_ticks {
                 sim.step(&|_| input);
@@ -9128,9 +9280,14 @@ mod tests {
             .map(|id| {
                 let s = weapon_stats(id);
                 (s.ttl / s.cooldown).ceil() as usize
+                    * if id == SHOTGUN {
+                        usize::from(SHOTGUN_PELLETS)
+                    } else {
+                        1
+                    }
             })
             .collect();
-        assert_eq!(in_flight, vec![1, 2, 1, 2, 1, 1, 5]);
+        assert_eq!(in_flight, vec![1, 2, 1, 2, 1, 1, 5, 8]);
         assert!(in_flight.iter().all(|&n| n <= MAX_BULLETS_PER_PLAYER));
     }
 
@@ -9269,7 +9426,8 @@ mod tests {
         // is judged where its height came down into the band, so `to` sits
         // on the top of the volume and not up in the air over it.
         let rr = hit_radius(false) + BULLET_R;
-        for weapon in 1..=WEAPON_COUNT {
+        // The narrow multi-pellet shotgun has its own cover/contact gates.
+        for weapon in 1..=7 {
             let stats = weapon_stats(weapon);
             if stats.kind != Projectile::Bullet {
                 continue;
@@ -9717,6 +9875,17 @@ mod tests {
     const FINGERPRINT_KILLS: usize = 0;
     const FINGERPRINT_SCORES: [u32; 4] = [0, 0, 0, 0];
 
+    /// Freeze the historical five-gun reward distribution for old fingerprint
+    /// comparisons only; production always uses the current six-gun loot table.
+    fn legacy_loot_roll(seed: u64, tick: u64, who: u8, holding: u8) -> u8 {
+        let offered: Vec<_> = [2, 3, 5, 6, 7]
+            .into_iter()
+            .filter(|&w| w != holding)
+            .collect();
+        let k = (roll(seed, tick, who, SALT_LOOT) >> 33) % offered.len() as u64;
+        offered[k as usize]
+    }
+
     /// Counterfactual gate: restore only the three deliberately replaced v29
     /// resource rules (no supply boxes, duplicate loot refills, automatic dry
     /// pistol) and recover the exact previous protocol-22 fingerprint. Movement,
@@ -9746,8 +9915,8 @@ mod tests {
             for p in &mut legacy.players {
                 p.inventory = [WeaponSlot::EMPTY; INVENTORY_SLOTS];
             }
-            current.step(&|id| v18_script(tick, id));
-            legacy.step(&|id| v18_script(tick, id));
+            current.step_using_rules(&|id| v18_script(tick, id), launch, legacy_loot_roll);
+            legacy.step_using_rules(&|id| v18_script(tick, id), launch, legacy_loot_roll);
             for &(pid, _, _) in &legacy.loot_events {
                 if let Some(p) = legacy.players.iter_mut().find(|p| p.id == pid) {
                     p.cooldown = 0.2; // Legacy pickup reset, irrespective of the prior gun's shot.
@@ -9829,8 +9998,8 @@ mod tests {
         for tick in 0..600u64 {
             v18_grants(&mut ffa, tick);
             v18_grants(&mut hill, tick);
-            ffa.step(&|id| v18_script(tick, id));
-            hill.step(&|id| v18_script(tick, id));
+            ffa.step_using_rules(&|id| v18_script(tick, id), launch, legacy_loot_roll);
+            hill.step_using_rules(&|id| v18_script(tick, id), launch, legacy_loot_roll);
             fold_tick(&mut h, &ffa);
             if tick % 100 == 99 {
                 seen.push(h);
@@ -9898,7 +10067,7 @@ mod tests {
             a.add_player(id);
             b.add_player(id);
         }
-        let mut rounds_seen = [false; 8];
+        let mut rounds_seen = [false; 9];
         for tick in 0..600u64 {
             v18_grants(&mut a, tick);
             v18_grants(&mut b, tick);
@@ -9941,7 +10110,9 @@ mod tests {
             }
         }
         // The script really did fire every row.
-        for id in 1..=WEAPON_COUNT {
+        // This historical rotation intentionally forces only IDs1..7; shotgun
+        // replay gets its own full-pattern tests, and may also arrive as loot.
+        for id in 1_u8..=7 {
             assert!(rounds_seen[usize::from(id)], "weapon {id} never flew");
         }
     }
@@ -10177,7 +10348,7 @@ mod tests {
 
     #[test]
     fn the_roll_is_uniform_enough() {
-        let mut counts = [0u32; 8];
+        let mut counts = [0u32; WEAPON_COUNT as usize + 1];
         let n = 10_000u64;
         for tick in 0..n {
             counts[usize::from(loot_roll(11, tick, 3, SIDEARM))] += 1;

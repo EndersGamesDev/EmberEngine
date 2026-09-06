@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "space": "engine +X forward, +Y up, +Z right; metres; origin is the shared AK hold frame",
+  "muzzles": {
+    "w_shotgun_body": [
+      0.86,
+      0.105,
+      0
+    ]
+  },
+  "pivots": {
+    "w_shotgun_magazine": [
+      0.17,
+      0.015,
+      0
+    ]
+  },
+  "grip_id": 3,
+  "sight": [
+    0,
+    0.165,
+    0
+  ],
+  "part_order": [
+    "w_shotgun_body",
+    "w_shotgun_magazine"
+  ],
+  "source": "Original authored geometry and procedural RGB8 material swatches; unchanged existing AK glove meshes reused at runtime"
+}
