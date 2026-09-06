@@ -10,6 +10,10 @@ const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padSt
 const ART = ['art/swarm.webp', 'art/emberknight.webp', 'art/hallow.webp', 'art/bogmaw.webp', 'art/tessera.webp'];
 const EMBLEM = ['◈', '♜', '✦', '⚓', '⌛'];
 const CHAMP_RGB = (c) => c.colour.map((x) => Math.round(x * 255)).join(',');
+const icon = (id) => `<svg class="emblem" viewBox="0 0 64 64" aria-hidden="true"><use href="art/icons.svg#${esc(id)}"></use></svg>`;
+function paintIcon(el, id) {
+  if (el.dataset.icon !== id) { el.innerHTML = icon(id); el.dataset.icon = id; }
+}
 
 let resolveLeagueReady;
 window.leagueReady = new Promise((resolve) => { resolveLeagueReady = resolve; });
@@ -41,18 +45,17 @@ const ACTIONS = [
   ['d', 'D spell'], ['f', 'F spell'],
   ['item1', 'Item 1'], ['item2', 'Item 2'], ['item3', 'Item 3'],
   ['item4', 'Item 4'], ['item5', 'Item 5'], ['item6', 'Item 6'],
-  ['stop', 'Stop moving'],
+  ['stop', 'Stop moving'], ['shop', 'Open shop'],
 ];
 const DEFAULT_KEYS = {
   q: 'KeyQ', w: 'KeyW', e: 'KeyE', r: 'KeyR',
   d: 'KeyD', f: 'KeyF',
   item1: 'Digit1', item2: 'Digit2', item3: 'Digit3',
   item4: 'Digit4', item5: 'Digit5', item6: 'Digit6',
-  stop: 'KeyS',
+  stop: 'KeyS', shop: 'KeyB',
 };
-const RESERVED = new Set(['KeyB', 'Escape', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);
+const RESERVED = new Set(['Escape', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);
 const RESERVED_MSG = {
-  KeyB: 'B is fixed as the shop key and cannot be remapped.',
   Escape: 'Esc is fixed for menus and cannot be remapped.',
   ShiftLeft: 'Shift is the rank modifier and cannot be remapped.',
   ShiftRight: 'Shift is the rank modifier and cannot be remapped.',
@@ -96,14 +99,23 @@ const hasBindingApi = () => typeof wasm?.set_bindings_json === 'function';
 const setEnabled = (v) => { try { wasm?.set_input_enabled?.(v); } catch {} };
 
 let keysOpen = false, listening = null, conflict = null;
+let keysReturnFocus = null;
+const typingTarget = (el) => !!el?.closest?.('input, textarea, select, [contenteditable="true"]');
+const visible = (id) => !$(id).classList.contains('hidden');
+function syncInputLock() {
+  setEnabled(!(keysOpen || visible('pause') || visible('help') || typingTarget(document.activeElement)));
+}
+document.addEventListener('focusin', syncInputLock);
+document.addEventListener('focusout', () => queueMicrotask(syncInputLock));
 const setKeyStatus = (text, bad = false) => {
   const el = $('key-status');
   el.textContent = text || '';
   el.classList.toggle('bad', bad);
 };
-function applyKeys(partial) {
-  if (!hasBindingApi()) throw new Error('the engine binding update is not shipped in this build yet');
-  wasm.set_bindings_json(JSON.stringify(partial));
+function applyKeys(next) {
+  if (!hasBindingApi()) throw new Error('keybindings are unavailable');
+  wasm.set_bindings_json(JSON.stringify(next));
+  keys = JSON.parse(wasm.bindings_json());
 }
 const persistKeys = () => save('ember-league-v2-keys', keys);
 
@@ -116,7 +128,9 @@ function syncEngine() {
     applyKeys({ ...keys });
     setKeyStatus('');
   } catch (e) {
-    setKeyStatus(`Engine rejected the saved bindings: ${String(e.message ?? e)}. Defaults are active.`, true);
+    applyKeys({});
+    persistKeys();
+    setKeyStatus('The saved bindings were invalid. Default keys have been restored.', true);
   }
 }
 
@@ -154,14 +168,11 @@ function bindAction(act, code) {
     paintKeys();
     return;
   }
-  const old = keys[act];
-  keys[act] = code;
   try {
-    applyKeys({ [act]: code });
+    applyKeys({ ...keys, [act]: code });
     persistKeys();
     setKeyStatus(`${actionLabel(act)} → ${keyLabel(code)}`);
   } catch (e) {
-    keys[act] = old;
     setKeyStatus(`Engine rejected: ${String(e.message ?? e)}`, true);
   }
   listening = null;
@@ -173,14 +184,11 @@ function resolveConflict(take) {
   const { act, code, other } = conflict;
   const oldAct = keys[act];
   if (take) {
-    keys[act] = code;
-    keys[other] = oldAct;
     try {
-      applyKeys({ [act]: code, [other]: oldAct });
+      applyKeys({ ...keys, [act]: code, [other]: oldAct });
       persistKeys();
       setKeyStatus(`Swapped: ${actionLabel(act)} → ${keyLabel(code)}, ${actionLabel(other)} → ${keyLabel(oldAct)}.`);
     } catch (e) {
-      keys[act] = oldAct;
       setKeyStatus(`Engine rejected the swap: ${String(e.message ?? e)}`, true);
     }
   } else {
@@ -191,12 +199,11 @@ function resolveConflict(take) {
   paintHudKeys();
 }
 function resetKeys() {
-  keys = { ...DEFAULT_KEYS };
-  persistKeys();
   listening = null;
   conflict = null;
   try {
     applyKeys({});
+    persistKeys();
     setKeyStatus('Reset to defaults.');
   } catch (e) {
     setKeyStatus(`Engine rejected the reset: ${String(e.message ?? e)}`, true);
@@ -219,15 +226,20 @@ function paintHudKeys() {
     if (k) k.textContent = keyLabel(keys[`item${Number(el.dataset.item) + 1}`]);
   });
   renderHelpKeys();
+  document.querySelectorAll('[data-key-label]').forEach(el => { el.textContent = keyLabel(keys[el.dataset.keyLabel]); });
+  $('btn-shop').textContent = `${shopOpen ? 'Close shop' : 'Shop'} [${keyLabel(keys.shop)}]`;
+  lastShop = '';
 }
 function openKeys() {
+  keysReturnFocus = document.activeElement;
   keysOpen = true;
   listening = null;
   conflict = null;
   syncEngine();
   paintKeys();
   $('keys').classList.remove('hidden');
-  setEnabled(false);
+  syncInputLock();
+  $('btn-keys-close').focus({ preventScroll: true });
 }
 function closeKeys() {
   if (!keysOpen) return;
@@ -236,7 +248,8 @@ function closeKeys() {
   conflict = null;
   $('keys').classList.add('hidden');
   setKeyStatus(hasBindingApi() ? '' : 'The engine binding update is not in this build yet — default keys are active.');
-  setEnabled(true);
+  keysReturnFocus?.focus?.({ preventScroll: true });
+  syncInputLock();
 }
 $('btn-keys').onclick = openKeys;
 $('btn-keys2').onclick = openKeys;
@@ -248,13 +261,13 @@ $('btn-conflict-keep').onclick = () => resolveConflict(false);
 
 addEventListener('keydown', (e) => {
   if (!keysOpen) return;
-  e.preventDefault();
-  e.stopPropagation();
   if (listening) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
     if (e.code === 'Escape') { cancelListening(); return; }
-    if (RESERVED.has(e.code)) {
+    if (RESERVED.has(e.code) || !optionLabels()?.[e.code]) {
       listening = null;
-      setKeyStatus(RESERVED_MSG[e.code], true);
+      setKeyStatus(RESERVED_MSG[e.code] || 'That key is reserved by the browser or menus. Choose another key.', true);
       paintKeys();
       return;
     }
@@ -269,18 +282,24 @@ addEventListener('keydown', (e) => {
     bindAction(listening, e.code);
     return;
   }
-  if (e.code === 'Escape') closeKeys();
+  if (e.code === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeKeys(); }
+  if (e.code === 'Tab') {
+    const buttons = [...$('keys').querySelectorAll('button:not(:disabled)')].filter(el => el.getClientRects().length);
+    const i = buttons.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); buttons.at(-1)?.focus(); }
+    else if (!e.shiftKey && (i < 0 || i === buttons.length - 1)) { e.preventDefault(); buttons[0]?.focus(); }
+  }
 }, { capture: true });
 
 // ---- page keys (shop, menus, scroll) ---------------------------------------
 
-const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT');
+const typing = (e) => typingTarget(e.target);
 addEventListener('keydown', (e) => {
   if (keysOpen) return;
   if (typing(e)) return;
-  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  if (launched && Object.values(keys).includes(e.code)) e.preventDefault();
   if (e.repeat || !launched) return;
-  if (e.code === 'KeyB') { e.preventDefault(); setShop(!shopOpen); return; }
+  if (e.code === keys.shop && !visible('pause') && !visible('help')) { e.preventDefault(); setShop(!shopOpen); return; }
   if (e.code === 'Escape') {
     if (!$('help').classList.contains('hidden')) { closeOverlay('help'); return; }
     if (!$('pause').classList.contains('hidden')) { closePause(); return; }
@@ -304,10 +323,10 @@ const fail = (msg) => showStatus('Unable to start the game: ' + (msg || 'see bro
 window.addEventListener('error', (e) => fail(e.message));
 window.addEventListener('unhandledrejection', (e) => fail(e.reason));
 
-function openPause() { $('pause').classList.remove('hidden'); setEnabled(false); }
-function closePause() { $('pause').classList.add('hidden'); setEnabled(true); }
-function openOverlay(id) { $(id).classList.remove('hidden'); setEnabled(false); }
-function closeOverlay(id) { $(id).classList.add('hidden'); setEnabled(true); }
+function openPause() { $('pause').classList.remove('hidden'); syncInputLock(); }
+function closePause() { $('pause').classList.add('hidden'); syncInputLock(); }
+function openOverlay(id) { $(id).classList.remove('hidden'); syncInputLock(); }
+function closeOverlay(id) { $(id).classList.add('hidden'); syncInputLock(); }
 $('btn-resume').onclick = closePause;
 $('btn-help').onclick = () => openOverlay('help');
 $('btn-help-close').onclick = () => closeOverlay('help');
@@ -321,7 +340,7 @@ function renderHelpKeys() {
     <li>${k('item1')}–${k('item6')} use item slots (potions drink).</li>
     <li>${k('stop')} stops moving.</li>
     <li><b>Shift</b>/<b>Ctrl</b> + ability key ranks it up; the <b>+</b> on a slot does the same.</li>
-    <li><b>B</b> opens the shop (fixed). <b>Esc</b> closes the shop or opens this menu.</li>`;
+    <li>${k('shop')} opens the shop. <b>Esc</b> closes the shop or opens this menu.</li>`;
 }
 
 // ---- shop -------------------------------------------------------------------
@@ -329,7 +348,7 @@ function renderHelpKeys() {
 function setShop(open) {
   shopOpen = !!open && latest?.phase === 'live';
   $('shop').classList.toggle('hidden', !shopOpen);
-  $('btn-shop').textContent = shopOpen ? 'Close shop [B]' : 'Shop [B]';
+  $('btn-shop').textContent = `${shopOpen ? 'Close shop' : 'Shop'} [${keyLabel(keys.shop)}]`;
   wasm_cmd({ shop: shopOpen });
   if (shopOpen) renderShop(latest?.me);
 }
@@ -554,7 +573,7 @@ function buildDetail() {
     return;
   }
   const c = DATA.champs[picked];
-  const row = (k, a) => `<div><b>${k}</b> ${a.name} <span class="cd">${a.cd.join(' / ')}s</span> — ${a.desc}</div>`;
+  const row = (k, a) => `<div>${icon(`${c.key}-${k.toLowerCase()}`)}<span><b>${esc(keyLabel(keys[k.toLowerCase()]))}</b> ${a.name} <span class="cd">${a.cd.join(' / ')}s</span> — ${a.desc}</span></div>`;
   box.innerHTML = `
     <div class="dport"><span class="emb" style="color:rgb(${CHAMP_RGB(c)})" aria-hidden="true">${EMBLEM[picked]}</span>
       <img src="${ART[picked]}" alt="" onerror="this.style.display='none'"></div>
@@ -609,10 +628,12 @@ function render(h) {
       return `<div><b style="color:${t ? 'var(--red)' : 'var(--blue)'}">${t ? 'RED' : 'BLUE'}</b><ul>${row}</ul></div>`;
     }).join('');
     const host = roster.filter((r) => !r.bot && r.connected).reduce((min, r) => Math.min(min, r.slot), Infinity);
-    $('btn-start').disabled = !me || mySlot !== host || picked === null || runes.length !== 3 || (!local && !h.connected);
+    const waiting = roster.some(r => !r.bot && !r.picked);
+    $('btn-start').disabled = !me || mySlot !== host || picked === null || runes.length !== 3 || waiting || (!local && !h.connected);
     $('draft-note').textContent = h.notice || (runes.length !== 3 ? `Choose ${3 - runes.length} more runes.`
       : picked === null ? 'Pick a champion. Each team may pick a champion once; rivals may mirror picks.'
       : mySlot !== host ? 'Ready. The lobby host can start; empty seats become bots.'
+      : waiting ? 'Waiting for every player to choose a champion.'
       : 'Ready to start. Empty seats become bots; the countdown starts automatically.');
     buildCardsSel();
     paintRunes();
@@ -665,8 +686,9 @@ function render(h) {
       const i = Number(el.dataset.abil);
       const rank = me.rk[i];
       const ability = DATA.champs[champ]?.[['q', 'w', 'e', 'r'][i]];
+      paintIcon(el.querySelector('.face'), `${DATA.champs[champ].key}-${['q','w','e','r'][i]}`);
       el.classList.toggle('unlearned', !rank);
-      el.title = `${['Q', 'W', 'E', 'R'][i]} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0, rank - 1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or rank-modifier + key ranks up.`;
+      el.title = `${keyLabel(keys[['q','w','e','r'][i]])} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0, rank - 1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or rank-modifier + key ranks up.`;
       el.querySelector('.rk').textContent = rank ? '●'.repeat(rank) : '';
       const cd = el.querySelector('.cd');
       if (!rank) { cd.classList.remove('hidden'); cd.textContent = i === 3 ? 'Lv 6' : 'Learn'; }
@@ -677,7 +699,7 @@ function render(h) {
     document.querySelectorAll('#spells .slot').forEach((el) => {
       const i = Number(el.dataset.spell);
       const id = i === 0 ? me.d : me.f;
-      el.querySelector('.face').textContent = i === 0 ? 'D' : 'F';
+      paintIcon(el.querySelector('.face'), DATA.spells[id].key);
       el.title = `${DATA.spells[id]?.name} — ${DATA.spells[id]?.desc}`;
       const cd = el.querySelector('.cd');
       if (me.scd[i] > 0.5) { cd.classList.remove('hidden'); cd.textContent = Math.ceil(me.scd[i]); }
@@ -686,7 +708,8 @@ function render(h) {
     document.querySelectorAll('#islots .slot').forEach((el) => {
       const i = Number(el.dataset.item);
       const it = DATA.items.find((x) => x.id === me.items[i]);
-      el.innerHTML = `<span class="key">${el.querySelector('.key')?.textContent ?? ''}</span>${it ? esc(it.name.split(' ').map((x) => x[0]).join('').slice(0, 2)) : '·'}${it?.charges ? `<small>${me.charges[i]}</small>` : ''}`;
+      const markup = `<span class="key">${esc(keyLabel(keys[`item${i + 1}`]))}</span>${it ? icon(it.key) : '<span class="empty-slot">·</span>'}${it?.charges ? `<small>${me.charges[i]}</small>` : ''}`;
+      if (el.dataset.markup !== markup) { el.innerHTML = markup; el.dataset.markup = markup; }
       el.title = it ? `${it.name}${it.charges ? ' x' + me.charges[i] : ''}` : 'empty';
     });
     const st = me.stats;
@@ -709,13 +732,13 @@ function renderShop(me) {
   const signature = JSON.stringify([me.g, me.alive, me.items, me.charges]);
   if (signature === lastShop) return;
   lastShop = signature;
-  s.innerHTML = `<h4>Item shop</h4> <span class="kbd">${me.g} gold · buy anywhere · B closes</span><p class="note">Permanent items grant passive stats. Use potion slots with your item keys.</p>` + DATA.items.map((it) => {
+  s.innerHTML = `<h4>Item shop</h4> <span class="kbd">${me.g} gold · buy anywhere · ${esc(keyLabel(keys.shop))} closes</span><p class="note">Permanent items grant passive stats. Use potion slots with your item keys.</p>` + DATA.items.map((it) => {
     const owned = me.items.includes(it.id);
     const refill = it.charges > 0 && me.items.some((id, i) => id === it.id && me.charges[i] < it.charges);
     const room = me.items.includes(0) || refill;
     const can = me.alive && me.g >= it.cost && room && (!owned || it.charges > 0);
     const label = !me.alive ? 'Respawning' : owned && !it.charges ? 'Owned' : !room ? 'Full' : `${it.cost}g`;
-    return `<div class="it"><button ${can ? '' : 'disabled'} data-buy="${it.id}">${refill ? 'Refill ' : ''}${label}</button><span class="d"><b>${esc(it.name)}</b> <span class="tier">TIER ${it.tier}</span><br>${esc(it.desc)}</span></div>`;
+    return `<div class="it">${icon(it.key)}<button ${can ? '' : 'disabled'} data-buy="${it.id}">${refill ? 'Refill ' : ''}${label}</button><span class="d"><b>${esc(it.name)}</b> <span class="tier">TIER ${it.tier}</span><br>${esc(it.desc)}</span></div>`;
   }).join('');
   s.querySelectorAll('[data-buy]').forEach((b) => { b.onclick = () => wasm_cmd({ buy: Number(b.dataset.buy) }); });
 }

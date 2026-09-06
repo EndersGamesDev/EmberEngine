@@ -330,6 +330,15 @@ button.go.chip, button.chip.go { border-color: var(--turq); color: var(--turq); 
 #result .box h2 { font-size: 1.8rem; }
 
 /* keybinds modal */
+#keys { position: fixed; z-index: 30; border-radius: 0; padding: 12px; }
+.emblem { width: 32px; height: 32px; display: block; color: var(--turq); flex: none; }
+.slot .face { display: grid; place-items: center; }
+.slot .key { z-index: 2; background: #101923; padding: 0 2px; border-radius: 2px; max-width: 44px; overflow: hidden; }
+.slot .cd { background: rgba(5, 7, 12, .56); text-shadow: 0 1px 3px #000; }
+#islots .emblem { width: 26px; height: 26px; }
+#shop .emblem { color: var(--bronze-hi); }
+.dkit > div { display: flex; gap: 8px; align-items: center; }
+.dkit .emblem { width: 28px; height: 28px; }
 .keys-box { width: min(560px, 92vw); text-align: left; max-height: 86vh; overflow: auto; }
 .keys-box h3 { margin: 0 0 4px; }
 #key-rows { margin: 10px 0; max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
@@ -373,6 +382,8 @@ button.go.chip, button.chip.go { border-color: var(--turq); color: var(--turq); 
   #detail { grid-template-columns: 140px 1fr; }
 }
 @media (max-width: 680px) {
+  #keys .keys-box { min-width: 0; padding: 18px; }
+  .coretxt { display: none; }
   .hero { grid-template-columns: 1fr; padding-top: 16px; }
   .arena { min-height: 150px; }
   #cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }

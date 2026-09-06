@@ -28,7 +28,7 @@
     </div>
   </section>
   <p class="note">Destroy the enemy core to win. The North Court grants damage; the South Court grants haste. Return to your fountain to recover health and mana.
-  Click enemies to attack them, click the ground to walk, cast at the cursor with your ability keys, use your spells, drink potions with your item keys, and open the shop with <b>B</b>.
+  Click enemies to attack them, click the ground to walk, cast at the cursor with your ability keys, use your spells, drink potions with your item keys, and open the shop with <b data-key-label="shop">B</b>.
   Rank up with the <b>+</b> on an ability, or hold <b>Shift</b>/<b>Ctrl</b> and press its key. Remap every key in <b>Keybinds</b>.</p>
   <section class="panel">
     <label>handle <input id="handle" maxlength="20"></label>
@@ -62,8 +62,8 @@
   <div id="detail" class="panel"><p class="note">Pick a champion to inspect their kit.</p></div>
   <div class="panel draft-bottom">
     <div class="btnrow">
-      <label>D <select id="pickd"></select></label>
-      <label>F <select id="pickf"></select></label>
+      <label><span data-key-label="d">D</span> <select id="pickd"></select></label>
+      <label><span data-key-label="f">F</span> <select id="pickf"></select></label>
       <span class="kbd">Rune pages: <button id="pgA" class="chip">A</button> <button id="pgB" class="chip">B</button> <button id="pgC" class="chip">C</button></span>
       <span class="kbd">Choose three runes. Each page saves automatically.</span>
     </div>
@@ -146,16 +146,16 @@
   </div></div>
 </div>
 
-<div id="keys" class="overlay hidden"><div class="box keys-box">
-  <h3>Keybinds</h3>
-  <p class="note">Click <b>change</b>, then press a key. <b>B</b> is fixed for the shop, <b>Esc</b> for menus, <b>Shift</b>/<b>Ctrl</b> rank abilities — they cannot be remapped. Changes save to this browser.</p>
+<div id="keys" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="keys-title"><div class="box keys-box">
+  <h3 id="keys-title">Keybinds</h3>
+  <p class="note">Choose <b>change</b>, then press a key. All 14 actions can be remapped. <b>Esc</b> opens menus; <b>Shift</b>/<b>Ctrl</b> plus an ability key learns a rank. Changes save to this browser.</p>
   <div id="key-rows"></div>
   <div id="key-conflict" class="conflict hidden">
     <span id="key-conflict-text"></span>
-    <button id="btn-conflict-take" class="go">Take it over</button>
+    <button id="btn-conflict-take" class="go">Swap keys</button>
     <button id="btn-conflict-keep">Keep as is</button>
   </div>
-  <div id="key-status" class="note"></div>
+  <div id="key-status" class="note" role="status"></div>
   <div class="btnrow"><button id="btn-keys-reset">Reset to defaults</button><button id="btn-keys-close" class="go">Done</button></div>
 </div></div>
 
