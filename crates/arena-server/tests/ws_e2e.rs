@@ -12,6 +12,115 @@ use tungstenite::{Message, WebSocket};
 type Ws = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[test]
+#[allow(clippy::too_many_lines)] // One real connection sequence proves reload cancellation preserves inventory.
+fn killshot_custom_loadout_inventory_reload_and_supplies_cross_real_websocket() {
+    let port = start_server();
+    let mut host = connect(port, "killshot-host");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "killshot".into(),
+            password: None,
+            map: MAP_HARBOR.into(),
+            mode: "tdm".into(),
+            loadout: "custom".into(),
+            starting_weapon: 3,
+        },
+    );
+    let me = recv_until(&mut host, 5, |message| match message {
+        S2C::GameJoined {
+            id,
+            loadout,
+            starting_weapon,
+            ..
+        } => {
+            assert_eq!(loadout, "custom");
+            assert_eq!(starting_weapon, 3);
+            Some(id)
+        }
+        _ => None,
+    });
+    let wire_input = |seq, fire, reload, select_slot| {
+        serde_json::from_value(serde_json::json!({
+            "t":"input", "seq":seq, "mx":0, "my":0, "ax":1, "az":0,
+            "fire":fire, "reload":reload, "select_slot":select_slot,
+        }))
+        .unwrap()
+    };
+    send(&mut host, &wire_input(1, true, false, 0));
+    let spent = recv_until(&mut host, 5, |message| match message {
+        S2C::State {
+            players, supplies, ..
+        } => {
+            assert_eq!(supplies, vec![true; 8]);
+            players.into_iter().find(|p| p.id == me && p.ammo < 30)
+        }
+        _ => None,
+    });
+    assert_eq!(spent.weapon, 3);
+    assert_eq!(spent.inventory[0].weapon, 1);
+    assert_eq!(spent.inventory[2].ammo, spent.ammo);
+    send(&mut host, &wire_input(2, false, true, 0));
+    let reloading = recv_until(&mut host, 5, |message| match message {
+        S2C::State { players, .. } => players
+            .into_iter()
+            .find(|p| p.id == me && p.ack == 2 && p.reloading),
+        _ => None,
+    });
+    assert!(reloading.reload_remaining > 0.0 && reloading.reload_remaining <= 1.5);
+    assert_eq!(reloading.reserve, 30, "reserve pays only at completion");
+    send(&mut host, &wire_input(3, false, false, 1));
+    let switched = recv_until(&mut host, 5, |message| match message {
+        S2C::State { players, .. } => players.into_iter().find(|p| p.id == me && p.ack == 3),
+        _ => None,
+    });
+    assert_eq!(switched.weapon, 1);
+    assert!(!switched.reloading);
+    assert_eq!(switched.reload_remaining, 0.0);
+    assert_eq!(switched.inventory[2].ammo, reloading.ammo);
+    send(&mut host, &wire_input(4, false, false, 3));
+    let restored = recv_until(&mut host, 5, |message| match message {
+        S2C::State { players, .. } => players.into_iter().find(|p| p.id == me && p.ack == 4),
+        _ => None,
+    });
+    assert_eq!(
+        (restored.weapon, restored.ammo, restored.reserve),
+        (3, reloading.ammo, 30)
+    );
+    let mut guest = connect(port, "killshot-guest");
+    send(&mut guest, &C2S::ListLobbies);
+    recv_until(&mut guest, 5, |message| match message {
+        S2C::LobbyList { lobbies } => {
+            assert_eq!(lobbies[0].loadout, "custom");
+            assert_eq!(lobbies[0].starting_weapon, 3);
+            Some(())
+        }
+        _ => None,
+    });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "killshot".into(),
+            password: None,
+        },
+    );
+    let guest_id = recv_until(&mut guest, 5, |message| match message {
+        S2C::GameJoined {
+            id,
+            starting_weapon: 3,
+            ..
+        } => Some(id),
+        _ => None,
+    });
+    recv_until(&mut guest, 5, |message| match message {
+        S2C::State { players, .. } => players
+            .into_iter()
+            .find(|p| p.id == guest_id && p.weapon == 3 && p.ammo == 30),
+        _ => None,
+    });
+}
+
+#[test]
 fn timed_shield_and_five_point_health_are_authoritative_wire_state() {
     let port = start_server();
     let mut ws = connect(port, "shield-state");
@@ -22,6 +131,8 @@ fn timed_shield_and_five_point_health_are_authoritative_wire_state() {
             password: None,
             map: MAP_FREIGHT_YARD.into(),
             mode: "ffa".into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let id = recv_until(&mut ws, 5, |m| match m {
@@ -101,6 +212,8 @@ fn harbor_advertises_real_bounds_and_eight_distinct_team_starts() {
                 password: Some("fixture".into()),
                 map: MAP_HARBOR.into(),
                 mode: "tdm".into(),
+                loadout: "classic".into(),
+                starting_weapon: 1,
             }
         } else {
             C2S::JoinLobby {
@@ -247,6 +360,8 @@ fn drop_in_arena_flow_with_password() {
             password: Some("s3cret".into()),
             map: MAP_TRENCH_CITY.into(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
@@ -342,6 +457,7 @@ fn drop_in_arena_flow_with_password() {
             sprint: false,
             crouch: false,
             reload: false,
+            select_slot: 0,
             jump: false,
             shield: false,
             melee: false,
@@ -398,6 +514,8 @@ fn a_shot_event_reaches_every_member_the_tick_the_round_ends() {
             password: None,
             map: MAP_FREIGHT_YARD.into(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut host, 5, |m| {
@@ -429,6 +547,7 @@ fn a_shot_event_reaches_every_member_the_tick_the_round_ends() {
             sprint: false,
             crouch: false,
             reload: false,
+            select_slot: 0,
             jump: false,
             shield: false,
             melee: false,
@@ -470,6 +589,8 @@ fn old_proto_may_list_but_not_join() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut host, 5, |m| {
@@ -541,6 +662,8 @@ fn a_lobby_lists_its_map() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut alice, 5, |m| match m {
@@ -560,6 +683,8 @@ fn a_lobby_lists_its_map() {
             password: None,
             map: MAP_TRENCH_CITY.into(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut bob, 5, |m| match m {
@@ -621,6 +746,8 @@ fn an_unknown_map_is_refused() {
             password: None,
             map: "moon-base".into(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     match recv(&mut alice) {
@@ -640,6 +767,8 @@ fn an_unknown_map_is_refused() {
             password: None,
             map: MAP_FREIGHT_YARD.into(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut alice, 5, |m| {
@@ -683,6 +812,8 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -709,6 +840,7 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
                 sprint: false,
                 crouch: false,
                 reload: false,
+                select_slot: 0,
                 jump: true,
                 shield: false,
                 melee: false,
@@ -747,6 +879,8 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -770,6 +904,7 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
             sprint: false,
             crouch: false,
             reload: false,
+            select_slot: 0,
             jump: true,
             shield: false,
             melee: false,
@@ -814,6 +949,8 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -834,6 +971,7 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             sprint: false,
             crouch: false,
             reload: false,
+            select_slot: 0,
             jump: false,
             shield: false,
             melee: false,
@@ -877,6 +1015,8 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -896,6 +1036,7 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
         sprint: false,
         crouch: false,
         reload: false,
+        select_slot: 0,
         jump,
         shield: false,
         melee: false,
@@ -974,6 +1115,8 @@ fn welcome_names_the_host_and_reports_its_live_load() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut alice, 5, |m| {
@@ -1054,6 +1197,8 @@ fn a_lobby_lists_its_mode() {
             password: None,
             map: String::new(),
             mode: String::new(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut alice, 5, |m| match m {
@@ -1077,6 +1222,8 @@ fn a_lobby_lists_its_mode() {
             password: None,
             map: MAP_TRENCH_CITY.into(),
             mode: GameMode::Tdm.name().into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut bob, 5, |m| match m {
@@ -1095,6 +1242,8 @@ fn a_lobby_lists_its_mode() {
             password: None,
             map: MAP_FREIGHT_YARD.into(),
             mode: GameMode::Hill.name().into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut carol, 5, |m| match m {
@@ -1191,6 +1340,8 @@ fn an_unknown_mode_is_refused() {
             password: None,
             map: String::new(),
             mode: "ctf".into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     match recv(&mut alice) {
@@ -1210,6 +1361,8 @@ fn an_unknown_mode_is_refused() {
             password: None,
             map: String::new(),
             mode: GameMode::Ffa.name().into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         },
     );
     recv_until(&mut alice, 5, |m| {

@@ -12,7 +12,10 @@
 # The rest is the same contract test-host-kings.sh applies to the default
 # mode, against the same fake products: the launch argv, the commit-aware
 # probes, the six pid files, the local entry, the redeploy rule and the exact
-# shutdown.
+# shutdown — plus the tunnel rules, which a prebuilt host needs exactly as
+# much as a building one and gets from the same code: a live tunnel kept
+# across a redeploy, `tunnels` repairing one without touching a server, and
+# EMBER_NO_MINT refusing to mint at all.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -135,7 +138,9 @@ contains "$(cat "$TMP/update.log")" "all three servers are running" "update requ
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$BEFORE" "an unchanged stamp restarted nothing"
 is "$(grep -cE '^(git|cargo) ' "$SHIM_LOG")" "0" "update asked no git either"
 
-echo "== a moved stamp is a redeploy =="
+echo "== a moved stamp is a redeploy, and the live tunnels survive it =="
+TUNNEL_BEFORE="$(pidof_file "$EMBER_HOME/run/tunnel-arena.pid")"
+URL_BEFORE="$(cat "$EMBER_HOME/run/arena.url")"
 MOVED="7500af5d000000000000000000000000000000ff"
 write_prebuilt "$MOVED"
 bash "$DEPLOY/host.sh" update > "$TMP/moved.log" 2>&1 || bad "update on a moved stamp failed"
@@ -146,6 +151,49 @@ else
     bad "the moved stamp left the old servers running"
 fi
 is "$(cat "$EMBER_HOME/run/deployed")" "$MOVED" "the new full commit was recorded"
+is "$(pidof_file "$EMBER_HOME/run/tunnel-arena.pid")" "$TUNNEL_BEFORE" "the live tunnel was kept across the redeploy"
+is "$(cat "$EMBER_HOME/run/arena.url")" "$URL_BEFORE" "so the public address did not rotate"
+contains "$(cat "$TMP/moved.log")" "keeping the arena tunnel: $URL_BEFORE" "and it said so"
+is "$(grep '^commit=' "$EMBER_HOME/run/deployed-stamp" | cut -d= -f2)" "$SHORT" "the running stamp was recorded beside it"
+
+echo "== tunnels repairs a tunnel without touching a server =="
+SERVER_BEFORE="$(pidof_file "$EMBER_HOME/run/server-arena.pid")"
+KINGS_TUNNEL="$(pidof_file "$EMBER_HOME/run/tunnel-kings.pid")"
+kill -9 "$(pidof_file "$EMBER_HOME/run/tunnel-arena.pid")" 2>/dev/null || true
+# A shipper leaves a NEWER directory beside the running servers. What gets
+# republished must be what is answering, not what is waiting to be deployed.
+write_prebuilt "aaaa1111000000000000000000000000000000ff"
+bash "$DEPLOY/host.sh" tunnels > "$TMP/tunnels.log" 2>&1 || bad "tunnels failed"
+is "$(pidof_file "$EMBER_HOME/run/server-arena.pid")" "$SERVER_BEFORE" "no server was restarted"
+is "$(pidof_file "$EMBER_HOME/run/tunnel-kings.pid")" "$KINGS_TUNNEL" "the healthy Kings tunnel was kept"
+if [ "$(pidof_file "$EMBER_HOME/run/tunnel-arena.pid")" != "$TUNNEL_BEFORE" ]; then
+    ok "the dead arena tunnel was minted again"
+else
+    bad "the dead arena tunnel was not replaced"
+fi
+is "$(jget "$LOCAL" 'd["commit"]')" "$SHORT" "the republished entry names the RUNNING build, not the shipped one"
+is "$(grep -cE '^(git|cargo) ' "$SHIM_LOG")" "0" "tunnels asked no git either, with no checkout to ask"
+
+echo "== EMBER_NO_MINT refuses to mint, and leaves the servers alone =="
+SERVER_BEFORE="$(pidof_file "$EMBER_HOME/run/server-fire.pid")"
+kill -9 "$(pidof_file "$EMBER_HOME/run/tunnel-fire.pid")" 2>/dev/null || true
+set +e
+EMBER_NO_MINT=1 bash "$DEPLOY/host.sh" tunnels > "$TMP/nomint.log" 2>&1
+NOMINT_RC=$?
+set -e
+is "$NOMINT_RC" "3" "a tunnel it may not mint is exit 3"
+contains "$(cat "$TMP/nomint.log")" "EMBER_NO_MINT is set; not minting one" "and it says why"
+is "$(pidof_file "$EMBER_HOME/run/server-fire.pid")" "$SERVER_BEFORE" "the fire server was not restarted for a tunnel"
+if [ -e "$EMBER_HOME/run/fire.url" ]; then bad "a dead tunnel kept its address"; else ok "the dead tunnel's address was dropped"; fi
+if "$PY" -c 'import json,sys; sys.exit(0 if "fire_ws" not in json.load(open(sys.argv[1])) else 1)' "$LOCAL"; then
+    ok "and the game was dropped from the entry rather than published at a dead address"
+else
+    bad "the entry still names the dead fire address"
+fi
+
+# Put fire back so the shutdown contract below still has three pairs.
+write_prebuilt "$MOVED"
+bash "$DEPLOY/host.sh" tunnels > "$TMP/repair.log" 2>&1 || bad "repairing fire failed"
 
 echo "== down stops exactly the three pairs =="
 PIDS=()

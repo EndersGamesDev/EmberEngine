@@ -4,25 +4,33 @@
 #
 #   bash deploy/host-tick.sh
 #
-# Two questions, in this order:
+# Three questions, in this order:
 #
-#   Did something die? All three servers AND all three tunnels must still be
-#   the processes host.sh started (pid + start time, host.sh's own rule). A
-#   tunnel that exited leaves healthy servers at an address nobody can
-#   reach, and `host.sh update` only looks at the servers - so a dead
-#   tunnel or server is answered with `host.sh up`, which restarts, mints
-#   and publishes new addresses.
+#   Did a SERVER die? `host.sh up`: rebuild if needed, restart the servers,
+#   keep every tunnel that still answers.
 #
-#   Did EMBER_REF move? `host.sh update` rebuilds, restarts, re-proves and
-#   republishes when it did, and says "nothing to do" when it did not. With
-#   EMBER_REF=ci-passed that pointer is moved by .github/workflows/ci.yml
-#   only when a main commit's tests are green, so a red run keeps the host
-#   on the last good build.
+#   Did a TUNNEL die? `host.sh tunnels`: mint only what is missing, keep the
+#   rest, republish. Never by restarting healthy servers.
 #
-# Serialised with a lock. Quiet ticks log nothing; everything else goes to
-# $EMBER_HOME/log/tick.log.
-# Descriptor9 belongs only to this tick: host.sh and its background children
-# must not inherit it, or retained servers would hold the tick lock forever.
+#   Did EMBER_REF move? `host.sh update` rebuilds, restarts the servers
+#   behind their existing tunnels, re-proves and republishes; "nothing to
+#   do" otherwise. With EMBER_REF=ci-passed that pointer is moved by
+#   .github/workflows/ci.yml only when a main commit's tests are green, so
+#   a red run keeps the host on the last good build.
+#
+# Minting is rationed. A quick tunnel is a request to Cloudflare, which
+# rate-limits them per public IP (HTTP 429, error 1015) - and every host
+# behind the same router shares that IP. After a run that could not prove
+# all three tunnels this script backs off - 30 minutes, or 60 doubling to
+# 240 when the tunnel logs show a 429 - before it lets anything mint again;
+# meanwhile host.sh runs with EMBER_NO_MINT=1, so servers are still updated
+# and restarted but no tunnel is requested. The first version of this file
+# re-minted three tunnels every two minutes and took the whole IP out of
+# quick tunnels for an afternoon (2026-09-06).
+#
+# Serialised with a lock on descriptor 9, which host.sh and its background
+# children must not inherit (a retained server would hold it forever).
+# Quiet ticks log nothing; everything else goes to $EMBER_HOME/log/tick.log.
 set -uo pipefail
 
 # The host's own configuration, read the way host.sh reads it.
@@ -34,6 +42,7 @@ SRC="$EMBER_HOME/src"
 RUN="$EMBER_HOME/run"
 LOGS="$EMBER_HOME/log"
 HOST_SH="$SRC/deploy/host.sh"
+BACKOFF="$RUN/.mint-backoff"   # "<until, epoch seconds> <attempt> [logged]"
 mkdir -p "$RUN" "$LOGS"
 if [ ! -f "$HOST_SH" ]; then
     echo "host-tick: no checkout at $SRC; run deploy/host.sh up once" >&2
@@ -63,28 +72,74 @@ alive() {
     [ "$now" = "$stamp" ]
 }
 
-dead=""
-for id in arena fire kings; do
-    alive "server-$id" || dead="$dead server-$id"
-    alive "tunnel-$id" || dead="$dead tunnel-$id"
-done
-if [ -n "$dead" ]; then
-    tlog "down:$dead - running host.sh up"
-    if bash "$HOST_SH" up 9>&- >> "$LOGS/tick.log" 2>&1; then
-        tlog "up done"
-    else
-        tlog "up FAILED (rc $?)"
+now="$(date +%s)"
+until_=0; attempt=0; logged=""
+if [ -f "$BACKOFF" ]; then read -r until_ attempt logged < "$BACKOFF" || true; fi
+until_="${until_:-0}"; attempt="${attempt:-0}"
+holding=""
+if [ "$until_" -gt "$now" ] 2>/dev/null; then holding=1; fi
+# EMBER_NO_MINT is what host.sh honours; empty means minting is allowed.
+nomint="${holding:+1}"
+
+# note_result <rc>: after a host.sh run that was ALLOWED to mint. rc 3 means
+# "servers fine, not every tunnel proven": start or extend the backoff.
+note_result() {
+    local rc="$1" wait n
+    if [ "$rc" -eq 3 ]; then
+        n=$((attempt + 1))
+        wait=1800
+        if grep -qs -E '429|error code: 1015' "$RUN"/tunnel-*.log; then
+            case "$n" in 1) wait=3600 ;; 2) wait=7200 ;; *) wait=14400 ;; esac
+        fi
+        echo "$((now + wait)) $n" > "$BACKOFF"
+        tlog "tunnels not proven; no minting for $((wait / 60)) min (attempt $n)"
+    elif [ "$rc" -eq 0 ]; then
+        rm -f "$BACKOFF"
     fi
+}
+
+dead_servers=""
+dead_tunnels=""
+for id in arena fire kings; do
+    alive "server-$id" || dead_servers="$dead_servers server-$id"
+    alive "tunnel-$id" || dead_tunnels="$dead_tunnels tunnel-$id"
+done
+
+if [ -n "$dead_servers" ]; then
+    tlog "down:$dead_servers$dead_tunnels - running host.sh up${nomint:+ (EMBER_NO_MINT=1: backing off from a 429)}"
+    EMBER_NO_MINT="$nomint" bash "$HOST_SH" up 9>&- >> "$LOGS/tick.log" 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then tlog "up done"; else tlog "up finished with rc $rc"; fi
+    [ -n "$nomint" ] || note_result "$rc"
     exit 0
 fi
 
-out="$(bash "$HOST_SH" update 9>&- 2>&1)"
+if [ -n "$dead_tunnels" ]; then
+    if [ -n "$holding" ]; then
+        if [ -z "$logged" ]; then
+            tlog "down:$dead_tunnels - not minting before $(date -u -d "@$until_" +%H:%M:%SZ 2>/dev/null || echo "$until_") (Cloudflare rate-limit backoff, attempt $attempt)"
+            echo "$until_ $attempt logged" > "$BACKOFF"
+        fi
+        # fall through: an update may still be due, servers are restarted
+        # behind whatever tunnels exist, and nothing is minted
+    else
+        tlog "down:$dead_tunnels - running host.sh tunnels"
+        bash "$HOST_SH" tunnels 9>&- >> "$LOGS/tick.log" 2>&1
+        rc=$?
+        if [ "$rc" -eq 0 ]; then tlog "tunnels done"; else tlog "tunnels finished with rc $rc"; fi
+        note_result "$rc"
+        exit 0
+    fi
+fi
+
+out="$(EMBER_NO_MINT="$nomint" bash "$HOST_SH" update 9>&- 2>&1)"
 rc=$?
 case "$out" in
     *"nothing to do"*) ;;
     *)
         printf '%s\n' "$out" >> "$LOGS/tick.log"
         tlog "update rc=$rc"
+        [ -n "$nomint" ] || note_result "$rc"
         ;;
 esac
 exit 0

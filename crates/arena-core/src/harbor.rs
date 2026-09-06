@@ -4,7 +4,7 @@
 //! West is the covered service warehouse, centre is staggered cargo, east is
 //! the open quay. The renderer reads these same boxes before dressing them.
 
-use crate::shooter::{Cover, Hill, Level, Obstacle};
+use crate::shooter::{Cover, Hill, Level, Obstacle, SupplyKind, SupplySpawn};
 
 pub const HARBOR_HALF: f32 = 48.0;
 pub const CONTAINER_W: f32 = 2.438;
@@ -388,6 +388,40 @@ impl Level {
             obstacles,
             spawns: SPAWNS.to_vec(),
             pads: Vec::new(),
+            supplies: vec![
+                SupplySpawn {
+                    pos: [-36.0, -12.0],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [-36.0, 12.0],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [36.0, -12.0],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [36.0, 12.0],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [-8.0, -18.0],
+                    kind: SupplyKind::Ammo,
+                },
+                SupplySpawn {
+                    pos: [8.0, 18.0],
+                    kind: SupplyKind::Ammo,
+                },
+                SupplySpawn {
+                    pos: [8.0, -18.0],
+                    kind: SupplyKind::Ammo,
+                },
+                SupplySpawn {
+                    pos: [-8.0, 18.0],
+                    kind: SupplyKind::Ammo,
+                },
+            ],
             decor: Vec::new(),
             hill: Some(HARBOR_HILL),
         }
