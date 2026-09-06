@@ -35,8 +35,8 @@
 
 use ember_julibrot_kernels::{EscapeParams, escape_shallow_point};
 use ember_julibrot_math::{
-    BigCentre, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px, construct_plane,
-    pixel_scale, plane_to_screen, screen_to_plane,
+    BigCentre, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px,
+    construct_plane, pixel_scale, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::{CLASSIC_PALETTE, exterior_zero, grid_screen, shade_escape_record};
 
@@ -186,7 +186,18 @@ fn sample_pose(pose: &Pose, screen: [f64; 2]) -> [f32; 4] {
     }
 }
 
-fn record_height(record: [f32; 4]) -> f64 {
+/// Where a never-escaped record is placed on the chart's own height axis.
+///
+/// `InteriorAtFloor` is the shipped law, mirrored below. `InteriorAtPeak` is the alternative the
+/// rulings name — the interior continuous with the deepest escapes rather than opposite them —
+/// carried here only so this oracle can measure what it would change in one frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mapping {
+    InteriorAtFloor,
+    InteriorAtPeak,
+}
+
+fn record_height_under(record: [f32; 4], mapping: Mapping) -> f64 {
     let malformed = !(record[1] == 0.0 || record[1] == 1.0)
         || !(record[3] == 0.0 || record[3] == 1.0 || record[3] == 2.0 || record[3] == 3.0)
         || !record[2].is_finite()
@@ -197,7 +208,10 @@ fn record_height(record: [f32; 4]) -> f64 {
     }
     if record[1] == 0.0 {
         if record[0] == -1.0 {
-            return -2.0;
+            return match mapping {
+                Mapping::InteriorAtFloor => -2.0,
+                Mapping::InteriorAtPeak => 2.0,
+            };
         }
         return 0.0;
     }
@@ -205,6 +219,31 @@ fn record_height(record: [f32; 4]) -> f64 {
         return 0.0;
     }
     4.0 * f64::from(record[0] / CAP.max(1) as f32).clamp(0.0, 1.0) - 2.0
+}
+
+fn record_height(record: [f32; 4]) -> f64 {
+    record_height_under(record, Mapping::InteriorAtFloor)
+}
+
+/// Which gate of `scene_vertex` decided this vertex, in the shader's own order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Reason {
+    /// Placed by the projection and drawn.
+    Drawn,
+    /// The flat path: no height amplitude, so the vertex stays where the chart puts it.
+    Flat,
+    /// A horizon record: the plane reaches no point at this pixel.
+    Horizon,
+    /// The screen map's denominator was not positive here.
+    Map,
+    /// Past the five-dimensional near limit at `0.05 * d5`.
+    NearLimit,
+    /// At or past the five-dimensional pole itself.
+    FivePole,
+    /// At or past the four-dimensional pole.
+    FourPole,
+    /// Behind the observer's own near plane.
+    Observer,
 }
 
 #[derive(Clone, Copy)]
@@ -217,6 +256,7 @@ struct Vertex {
     world: [f64; 3],
     valid: bool,
     clamped: bool,
+    reason: Reason,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -241,7 +281,14 @@ fn ambient_camera(mut point: [f64; 5], view: &ViewControls) -> [f64; 5] {
 }
 
 /// Line-for-line mirror of `scene_vertex`, with the base and fixed placement rules selectable.
-fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule) -> Vertex {
+fn scene_vertex(
+    pose: &Pose,
+    column: u32,
+    row: u32,
+    record: [f32; 4],
+    rule: Rule,
+    mapping: Mapping,
+) -> Vertex {
     let screen = draw_screen(column, row);
     let flat = Vertex {
         x: screen[0],
@@ -252,6 +299,7 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
         world: [0.0; 3],
         valid: true,
         clamped: false,
+        reason: Reason::Flat,
     };
     let invalid = Vertex {
         valid: false,
@@ -264,11 +312,31 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
         return flat;
     }
     if record[3] == 2.0 {
-        return if rule == Rule::Base { flat } else { invalid };
+        return if rule == Rule::Base {
+            Vertex {
+                reason: Reason::Horizon,
+                ..flat
+            }
+        } else {
+            Vertex {
+                reason: Reason::Horizon,
+                ..invalid
+            }
+        };
     }
     let denominator = map.rows[6].mul_add(screen[0], map.rows[7].mul_add(screen[1], map.rows[8]));
     if !denominator.is_finite() || denominator <= 0.0 {
-        return if rule == Rule::Base { flat } else { invalid };
+        return if rule == Rule::Base {
+            Vertex {
+                reason: Reason::Map,
+                ..flat
+            }
+        } else {
+            Vertex {
+                reason: Reason::Map,
+                ..invalid
+            }
+        };
     }
     let offset = [
         map.rows[0].mul_add(screen[0], map.rows[1].mul_add(screen[1], map.rows[2])) / denominator,
@@ -280,7 +348,7 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
             * f64::from(pose.plane.basis_u[axis])
                 .mul_add(offset[0], f64::from(pose.plane.basis_v[axis]) * offset[1])
     });
-    let height = pose.view.height_scale * (record_height(record) + 2.0) * 0.5;
+    let height = pose.view.height_scale * (record_height_under(record, mapping) + 2.0) * 0.5;
     let ambient = ambient_camera(
         [display[0], display[1], display[2], display[3], height],
         &pose.view,
@@ -293,18 +361,27 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
         raw_five.max(0.05 * d5)
     } else {
         if clamped {
-            return invalid;
+            return Vertex {
+                reason: Reason::NearLimit,
+                ..invalid
+            };
         }
         raw_five
     };
     if denominator_five <= 1.0e-4 {
-        return invalid;
+        return Vertex {
+            reason: Reason::FivePole,
+            ..invalid
+        };
     }
     let scale_five = d5 / denominator_five;
     let projected_four: [f64; 4] = core::array::from_fn(|axis| ambient[axis] * scale_five);
     let denominator_four = d4 - projected_four[3];
     if denominator_four <= 1.0e-4 {
-        return invalid;
+        return Vertex {
+            reason: Reason::FourPole,
+            ..invalid
+        };
     }
     let scale_four = d4 / denominator_four;
     let world = [
@@ -327,7 +404,10 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
         pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - d4,
     ];
     if -view_point[2] <= 1.0e-4 {
-        return invalid;
+        return Vertex {
+            reason: Reason::Observer,
+            ..invalid
+        };
     }
     let clip_depth = (far / (near - far)) * view_point[2] + far * near / (near - far);
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
@@ -342,6 +422,7 @@ fn scene_vertex(pose: &Pose, column: u32, row: u32, record: [f32; 4], rule: Rule
         world,
         valid: true,
         clamped,
+        reason: Reason::Drawn,
     }
 }
 
@@ -372,13 +453,70 @@ fn shade(record: [f32; 4], light: f64) -> [f64; 3] {
     ]
 }
 
+/// What painted one pixel, as the pass itself decided it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cause {
+    /// No primitive reached this pixel; the pass clear stands.
+    Sky,
+    /// A never-escaped record, placed by the height law at the chart floor.
+    Interior,
+    /// An escaped record whose lift is at most a twentieth of the cliff: the far exterior.
+    ExteriorFloor,
+    /// An escaped record lifted higher than that.
+    LiftedEscape,
+    /// A horizon record: the screen map reaches no plane point at that pixel.
+    Horizon,
+    /// A status-one or status-three record.
+    Uncertain,
+    /// A record the contract calls malformed; the pass answers with the debug tint.
+    Malformed,
+}
+
+/// The lift, as a fraction of the full cliff, below which an escaped record is the exterior floor.
+const FLOOR_FRACTION: f64 = 0.05;
+
+fn cause_of(record: [f32; 4], floor_fraction: f64) -> Cause {
+    if record[3] == 2.0 {
+        return Cause::Horizon;
+    }
+    if record[3] == 1.0 || record[3] == 3.0 {
+        return Cause::Uncertain;
+    }
+    if record[1] == 0.0 {
+        return if record[0] == -1.0 {
+            Cause::Interior
+        } else {
+            Cause::Malformed
+        };
+    }
+    if record[1] != 1.0 {
+        return Cause::Malformed;
+    }
+    if record_height(record) <= 4.0_f64.mul_add(floor_fraction, -2.0) {
+        Cause::ExteriorFloor
+    } else {
+        Cause::LiftedEscape
+    }
+}
+
+struct Frame {
+    colour: Vec<[u8; 3]>,
+    covered: Vec<bool>,
+    cause: Vec<Cause>,
+}
+
 fn render(pose: &Pose, records: &[[f32; 4]], rule: Rule) -> (Vec<[u8; 3]>, Vec<bool>) {
+    let frame = render_frame(pose, records, rule, Mapping::InteriorAtFloor);
+    (frame.colour, frame.covered)
+}
+
+fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping) -> Frame {
     let [width, height] = EXTENT;
     let vertices: Vec<Vertex> = (0..height)
         .flat_map(|row| {
             (0..width).map(move |column| {
                 let record = records[(row * width + column) as usize];
-                scene_vertex(pose, column, row, record, rule)
+                scene_vertex(pose, column, row, record, rule, mapping)
             })
         })
         .collect();
@@ -392,6 +530,7 @@ fn render(pose: &Pose, records: &[[f32; 4]], rule: Rule) -> (Vec<[u8; 3]>, Vec<b
     let mut colour = vec![clear_rgb; pixels];
     let mut depth = vec![f64::INFINITY; pixels];
     let mut covered = vec![false; pixels];
+    let mut cause = vec![Cause::Sky; pixels];
     let half_w = 0.5 * f64::from(width);
     let half_h = 0.5 * f64::from(height);
     let light_direction = {
@@ -501,13 +640,18 @@ fn render(pose: &Pose, records: &[[f32; 4]], rule: Rule) -> (Vec<[u8; 3]>, Vec<b
                         let linear = shade(record, light);
                         depth[index] = fragment_depth;
                         covered[index] = true;
+                        cause[index] = cause_of(record, FLOOR_FRACTION);
                         colour[index] = [srgb(linear[0]), srgb(linear[1]), srgb(linear[2])];
                     }
                 }
             }
         }
     }
-    (colour, covered)
+    Frame {
+        colour,
+        covered,
+        cause,
+    }
 }
 
 /// The browser's own classifier, over the canvas readback of the served frame.
@@ -735,7 +879,10 @@ fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_funct
     let scale = pixel_scale(pose.zoom_log2, pose.grid_width).expect("row scale");
     let split = ember_julibrot_math::scaled_pixel_scale(pose.zoom_log2, pose.grid_width)
         .expect("row scale split");
-    assert_eq!(split.exponent, -9, "the browser published scale_exponent -9");
+    assert_eq!(
+        split.exponent, -9,
+        "the browser published scale_exponent -9"
+    );
     assert!(
         (f64::from(split.mantissa) - 0.891_257_7).abs() <= 5.0e-8,
         "mantissa {} against the browser's 0.8912577",
@@ -767,12 +914,16 @@ fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_funct
         delta
             .iter()
             .zip(pose.plane.basis_u)
-            .fold(0.0, |sum, (value, basis)| f64::from(basis).mul_add(*value, sum))
+            .fold(0.0, |sum, (value, basis)| {
+                f64::from(basis).mul_add(*value, sum)
+            })
             / scale,
         delta
             .iter()
             .zip(pose.plane.basis_v)
-            .fold(0.0, |sum, (value, basis)| f64::from(basis).mul_add(*value, sum))
+            .fold(0.0, |sum, (value, basis)| {
+                f64::from(basis).mul_add(*value, sum)
+            })
             / scale,
     ];
     let recovered_offset = [
@@ -785,8 +936,10 @@ fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_funct
         "pixel (720,200) came back at {recovered_screen:?} from {screen:?}"
     );
 
-    // The residual of the same displacement off the plane is zero: the row's centre lies in the
-    // row's own plane, which is why one basis projection recovers it.
+    // The residual of the same displacement off the plane is at the plane's own rounding: the
+    // basis is rounded once to binary32 by `construct_plane`'s contract, so a displacement of
+    // magnitude one leaves about `f32::EPSILON` behind. The row's centre lies in the row's own
+    // plane to that accuracy, which is why one basis projection recovers it.
     let residual: f64 = (0..4)
         .map(|axis| {
             let reconstructed = scale
@@ -797,5 +950,653 @@ fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_funct
             (delta[axis] - reconstructed).abs()
         })
         .fold(0.0, f64::max);
-    assert!(residual <= 1.0e-12, "off-plane residual {residual}");
+    assert!(
+        residual <= 8.0 * f64::from(f32::EPSILON),
+        "off-plane residual {residual}"
+    );
+}
+
+const CAUSES: [Cause; 7] = [
+    Cause::Sky,
+    Cause::Interior,
+    Cause::ExteriorFloor,
+    Cause::LiftedEscape,
+    Cause::Horizon,
+    Cause::Uncertain,
+    Cause::Malformed,
+];
+
+const CAUSE_NAMES: [&str; 7] = [
+    "sky",
+    "interior",
+    "exteriorfloor",
+    "lifted",
+    "horizon",
+    "uncertain",
+    "malformed",
+];
+
+/// The four classes the browser census of the served frame was cut into.
+///
+/// The `dark` predicate is deliberately looser than the census's exact `(13,13,13)`: it admits any
+/// pixel whose brightest channel is under a fifth, which is every colour this pass can emit for a
+/// never-escaped record at any lighting term. The exact bytes the oracle does emit are reported
+/// beside the counts, so the difference between the two is visible rather than assumed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Dark,
+    PassClear,
+    Exterior,
+    Other,
+}
+
+const CLASS_NAMES: [&str; 4] = ["dark", "passclear", "exterior", "other"];
+
+fn class_of(pixel: [u8; 3]) -> Class {
+    if pixel[0] <= 51 && pixel[1] <= 51 && pixel[2] <= 51 {
+        return Class::Dark;
+    }
+    if pixel == [255, 129, 129] {
+        return Class::PassClear;
+    }
+    if background(pixel) {
+        return Class::Exterior;
+    }
+    Class::Other
+}
+
+const CENSUS_BANDS: usize = 6;
+const BAND_ROWS: usize = 90;
+
+fn cause_bands(frame: &Frame) -> [[u64; 7]; CENSUS_BANDS] {
+    let width = EXTENT[0] as usize;
+    let mut table = [[0_u64; 7]; CENSUS_BANDS];
+    for y in 0..EXTENT[1] as usize {
+        for x in 0..width {
+            let slot = CAUSES
+                .iter()
+                .position(|cause| *cause == frame.cause[y * width + x])
+                .expect("every cause is named");
+            table[y / BAND_ROWS][slot] += 1;
+        }
+    }
+    table
+}
+
+fn class_bands(frame: &Frame) -> [[u64; 4]; CENSUS_BANDS] {
+    let width = EXTENT[0] as usize;
+    let mut table = [[0_u64; 4]; CENSUS_BANDS];
+    for y in 0..EXTENT[1] as usize {
+        for x in 0..width {
+            let slot = match class_of(frame.colour[y * width + x]) {
+                Class::Dark => 0,
+                Class::PassClear => 1,
+                Class::Exterior => 2,
+                Class::Other => 3,
+            };
+            table[y / BAND_ROWS][slot] += 1;
+        }
+    }
+    table
+}
+
+fn totals<const N: usize>(table: &[[u64; N]; CENSUS_BANDS]) -> [u64; N] {
+    let mut sum = [0_u64; N];
+    for band in table {
+        for (slot, value) in band.iter().enumerate() {
+            sum[slot] += value;
+        }
+    }
+    sum
+}
+
+fn columns<T: core::fmt::Display>(values: impl IntoIterator<Item = T>) -> String {
+    use core::fmt::Write as _;
+    let mut line = String::new();
+    for value in values {
+        write!(line, "{value:>14}").expect("writing to a string cannot fail");
+    }
+    line
+}
+
+fn report_bands<const N: usize>(title: &str, names: [&str; N], table: &[[u64; N]; CENSUS_BANDS]) {
+    let sum = totals(table);
+    println!("{title}");
+    println!("  band  {}", columns(names));
+    for (index, band) in table.iter().enumerate() {
+        println!("  {index:>4}  {}", columns(band));
+    }
+    println!("  all   {}", columns(sum));
+}
+
+fn top_colours(frame: &Frame, count: usize) -> Vec<([u8; 3], u64)> {
+    let mut tally: std::collections::HashMap<[u8; 3], u64> = std::collections::HashMap::new();
+    for pixel in &frame.colour {
+        *tally.entry(*pixel).or_default() += 1;
+    }
+    let mut ordered: Vec<([u8; 3], u64)> = tally.into_iter().collect();
+    ordered.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    ordered.truncate(count);
+    ordered
+}
+
+const REASONS: [Reason; 8] = [
+    Reason::Drawn,
+    Reason::Flat,
+    Reason::Horizon,
+    Reason::Map,
+    Reason::NearLimit,
+    Reason::FivePole,
+    Reason::FourPole,
+    Reason::Observer,
+];
+
+const REASON_NAMES: [&str; 8] = [
+    "drawn",
+    "flat",
+    "horizon",
+    "map",
+    "nearlimit",
+    "fivepole",
+    "fourpole",
+    "observer",
+];
+
+/// Every gate of `scene_vertex` that decided a vertex, tallied over one grid.
+fn vertex_reasons(pose: &Pose, records: &[[f32; 4]], mapping: Mapping) -> [u64; 8] {
+    let [width, height] = EXTENT;
+    let mut tally = [0_u64; 8];
+    for row in 0..height {
+        for column in 0..width {
+            let record = records[(row * width + column) as usize];
+            let vertex = scene_vertex(pose, column, row, record, Rule::Fixed, mapping);
+            let slot = REASONS
+                .iter()
+                .position(|reason| *reason == vertex.reason)
+                .expect("every gate is named");
+            tally[slot] += 1;
+        }
+    }
+    tally
+}
+
+fn census(name: &str, pose: &Pose, records: &[[f32; 4]], mapping: Mapping) -> Frame {
+    let frame = render_frame(pose, records, Rule::Fixed, mapping);
+    let base = render_frame(pose, records, Rule::Base, mapping);
+    let width = EXTENT[0] as usize;
+    let mut sky_from_near_limit = 0_u64;
+    let mut sky_beyond = 0_u64;
+    for index in 0..frame.covered.len() {
+        if !frame.covered[index] {
+            if base.covered[index] {
+                sky_from_near_limit += 1;
+            } else {
+                sky_beyond += 1;
+            }
+        }
+    }
+    println!("== {name} ==");
+    report_bands("cause per 90-row band", CAUSE_NAMES, &cause_bands(&frame));
+    report_bands(
+        "browser class per 90-row band",
+        CLASS_NAMES,
+        &class_bands(&frame),
+    );
+    println!(
+        "  sky cleared by the near-limit refusal {sky_from_near_limit}, sky no primitive reaches at all {sky_beyond}"
+    );
+    let tally = vertex_reasons(pose, records, mapping);
+    println!("  vertices of {}: {}", width * EXTENT[1] as usize, {
+        use core::fmt::Write as _;
+        let mut line = String::new();
+        for (name, count) in REASON_NAMES.iter().zip(tally) {
+            write!(line, "{name} {count} ").expect("writing to a string cannot fail");
+        }
+        line
+    });
+    println!("  top colours:");
+    for (pixel, count) in top_colours(&frame, 6) {
+        println!(
+            "    ({:>3},{:>3},{:>3}) {count:>8}",
+            pixel[0], pixel[1], pixel[2]
+        );
+    }
+    frame
+}
+
+/// The zoomed row's frame, classified by cause at the three heights the browser census covers.
+///
+/// This is the instrument the evidence asked for: every pixel of the oracle's own frame carries
+/// the reason the pass painted it, and the reasons are summed into the same six 90-row bands the
+/// browser census was cut into. The assertions below fix only what the reading of the frame rests
+/// on; the printed tables carry the rest and are quoted in `docs/julibrot/present.md`.
+#[test]
+fn the_zoomed_row_s_frame_is_classified_by_cause_at_the_three_census_heights() {
+    let sampling = zoom_pose(3.565);
+    let records = steep_records(&sampling);
+    let mut interior_total = [0_u64; 3];
+    for (slot, height_scale) in [3.565_f64, 1.0, 0.0].into_iter().enumerate() {
+        let pose = zoom_pose(height_scale);
+        let frame = census(
+            &format!("zoom row, height {height_scale}"),
+            &pose,
+            &records,
+            Mapping::InteriorAtFloor,
+        );
+        let bands = cause_bands(&frame);
+        let sum = totals(&bands);
+        interior_total[slot] = sum[1];
+        assert_eq!(
+            sum.iter().sum::<u64>(),
+            u64::from(EXTENT[0]) * u64::from(EXTENT[1]),
+            "every pixel carries exactly one cause"
+        );
+        // The record field is the same array at all three heights, so the number of pixels that
+        // could show interior is fixed by the records; what moves is how many the mesh hides.
+        assert!(sum[6] == 0, "no malformed record in this row: {}", sum[6]);
+    }
+    // The dark region is not a flat share of the frame: the height control moves it, which is what
+    // a lifted surface does to what it hides and what it shows.
+    assert!(
+        interior_total[0] != interior_total[2],
+        "the interior share moved between height 3.565 and height 0"
+    );
+}
+
+/// The colour this pass emits for a never-escaped record, exactly, at this row's two lightings.
+///
+/// The census of the served frame reported 132,647 pixels of exactly `(13,13,13)` and read them as
+/// the set interior. The interior colour of the Classic palette is `(0.005, 0.005, 0.008)` linear,
+/// so whatever the lighting term does to it, the blue channel comes out strictly above the red and
+/// green, which are equal. A neutral grey is therefore not a colour the scene pass can emit for an
+/// interior record, and this test states the bytes it does emit instead.
+#[test]
+fn the_interior_colour_this_pass_emits_is_not_neutral_grey() {
+    let flat = zoom_pose(0.0);
+    let records = steep_records(&flat);
+    let interior = records
+        .iter()
+        .copied()
+        .find(|record| record[1] == 0.0 && record[0] == -1.0 && record[3] == 0.0)
+        .expect("this row's slice has interior records");
+    let frame = render_frame(&flat, &records, Rule::Fixed, Mapping::InteriorAtFloor);
+    let painted: Vec<[u8; 3]> = frame
+        .cause
+        .iter()
+        .zip(&frame.colour)
+        .filter(|(cause, _)| **cause == Cause::Interior)
+        .map(|(_, colour)| *colour)
+        .collect();
+    assert!(!painted.is_empty(), "the flat frame draws interior records");
+    let first = painted[0];
+    assert!(
+        painted.iter().all(|pixel| *pixel == first),
+        "a flat chart lights every interior fragment the same way"
+    );
+    assert_eq!(
+        first[0], first[1],
+        "the interior colour's red and green are equal"
+    );
+    assert!(
+        first[2] > first[0],
+        "and its blue is strictly higher: {first:?}"
+    );
+    assert_ne!(
+        first,
+        [13, 13, 13],
+        "the census's dark class is not this pass's interior colour"
+    );
+    println!("flat interior fragment {first:?} from record {interior:?}");
+    let lifted = zoom_pose(3.565);
+    let lifted_frame = render_frame(&lifted, &records, Rule::Fixed, Mapping::InteriorAtFloor);
+    let lifted_painted: Vec<[u8; 3]> = lifted_frame
+        .cause
+        .iter()
+        .zip(&lifted_frame.colour)
+        .filter(|(cause, _)| **cause == Cause::Interior)
+        .map(|(_, colour)| *colour)
+        .collect();
+    // Under the row's own height the interior is still one flat slab, but the triangles that
+    // resolve to an interior record are not all in it: a cell straddling the set boundary carries
+    // one floor vertex and one lifted vertex, and its fragments take that cliff's normal while
+    // still reading the interior record. So the interior appears at several lighting terms, and
+    // every one of them keeps red equal to green and blue strictly above both.
+    let mut lighting_terms: Vec<[u8; 3]> = lifted_painted;
+    lighting_terms.sort_unstable();
+    lighting_terms.dedup();
+    for pixel in &lighting_terms {
+        assert_eq!(
+            pixel[0], pixel[1],
+            "interior red and green differ: {pixel:?}"
+        );
+        assert!(
+            pixel[2] > pixel[0],
+            "interior blue is not highest: {pixel:?}"
+        );
+        assert_ne!(*pixel, [13, 13, 13], "a neutral grey interior fragment");
+    }
+    println!(
+        "lifted interior fragments over {} lighting terms: {lighting_terms:?}",
+        lighting_terms.len()
+    );
+}
+
+/// The boundary is a cliff, and this measures it in the units the picture is made of.
+///
+/// The height law puts a never-escaped record at the chart floor and a record that escaped only
+/// at the iteration cap at the peak, so two neighbouring samples across the set boundary are
+/// `height_scale * 2` chart units apart in the fifth coordinate. What that is worth in the picture
+/// is not a constant: the fifth perspective divides by `d5 - ambient.fifth`, so the same two
+/// samples separate by more screen pixels the closer the lifted one comes to the near limit. The
+/// test reports the separation of one measured pair, the spread over every boundary pair in the
+/// row, and how many of those pairs the near limit refuses outright.
+#[test]
+fn the_set_boundary_is_a_cliff_whose_screen_height_this_row_can_be_measured_in() {
+    let pose = zoom_pose(3.565);
+    let records = steep_records(&pose);
+    let [width, height] = EXTENT;
+    let interior = |record: [f32; 4]| record[3] == 0.0 && record[1] == 0.0 && record[0] == -1.0;
+    let mut separations: Vec<f64> = Vec::new();
+    let mut pairs = 0_u64;
+    let mut refused = 0_u64;
+    let mut example: Option<(u32, u32, f64, f64, f64)> = None;
+    for row in 0..height {
+        for column in 0..width - 1 {
+            let left = records[(row * width + column) as usize];
+            let right = records[(row * width + column + 1) as usize];
+            if interior(left) == interior(right) {
+                continue;
+            }
+            pairs += 1;
+            let (floor_column, floor_record, lifted_column, lifted_record) = if interior(left) {
+                (column, left, column + 1, right)
+            } else {
+                (column + 1, right, column, left)
+            };
+            let floor_vertex = scene_vertex(
+                &pose,
+                floor_column,
+                row,
+                floor_record,
+                Rule::Fixed,
+                Mapping::InteriorAtFloor,
+            );
+            let lifted_vertex = scene_vertex(
+                &pose,
+                lifted_column,
+                row,
+                lifted_record,
+                Rule::Fixed,
+                Mapping::InteriorAtFloor,
+            );
+            if !lifted_vertex.valid {
+                refused += 1;
+                continue;
+            }
+            if !floor_vertex.valid {
+                continue;
+            }
+            let separation =
+                (lifted_vertex.x - floor_vertex.x).hypot(lifted_vertex.y - floor_vertex.y);
+            separations.push(separation);
+            if example.is_none() && separation > 40.0 {
+                example = Some((
+                    floor_column,
+                    row,
+                    separation,
+                    record_height(floor_record),
+                    record_height(lifted_record),
+                ));
+            }
+        }
+    }
+    assert!(pairs > 0, "this row's slice has a set boundary");
+    separations.sort_by(f64::total_cmp);
+    let median = separations[separations.len() / 2];
+    let largest = *separations.last().expect("a measured pair");
+    let refused_share = refused as f64 / pairs as f64;
+    println!(
+        "boundary pairs {pairs}, near-limit refusals {refused} ({refused_share:.4}), screen separation median {median:.2} px, largest {largest:.2} px"
+    );
+    if let Some((column, row, separation, floor_height, lifted_height)) = example {
+        println!(
+            "one measured pair at column {column} row {row}: record heights {floor_height:.3} and {lifted_height:.3}, {separation:.2} screen pixels apart"
+        );
+    }
+    assert!(
+        median > 1.0,
+        "the boundary is a cliff, not a step: median {median}"
+    );
+}
+
+/// What the alternative height mapping would change in this frame, measured and not changed.
+///
+/// Placing a never-escaped record at the peak instead of the floor makes the interior continuous
+/// with the deepest escapes: the surface then has no cliff at the set boundary at all, because the
+/// records on both sides of it are the ones the law places highest. The shader keeps the shipped
+/// law; this renders the same record field under both and prints the two censuses so the choice
+/// can be argued from numbers.
+#[test]
+fn the_alternative_height_mapping_is_measured_here_and_not_adopted() {
+    let pose = zoom_pose(3.565);
+    let records = steep_records(&pose);
+    let shipped = census(
+        "zoom row, height 3.565, interior at the floor",
+        &pose,
+        &records,
+        Mapping::InteriorAtFloor,
+    );
+    let alternative = census(
+        "zoom row, height 3.565, interior at the peak",
+        &pose,
+        &records,
+        Mapping::InteriorAtPeak,
+    );
+    let shipped_bands = totals(&cause_bands(&shipped));
+    let alternative_bands = totals(&cause_bands(&alternative));
+    println!(
+        "interior pixels {} -> {}, sky {} -> {}",
+        shipped_bands[1], alternative_bands[1], shipped_bands[0], alternative_bands[0]
+    );
+    let differing = shipped
+        .colour
+        .iter()
+        .zip(&alternative.colour)
+        .filter(|(left, right)| left != right)
+        .count();
+    println!(
+        "the two mappings differ on {differing} of {} pixels",
+        EXTENT[0] as usize * EXTENT[1] as usize
+    );
+    assert!(
+        differing > 0,
+        "the mapping is a real choice in this frame, not a no-op"
+    );
+}
+
+/// The near limit cuts this frame by position on the chart, not by record height.
+///
+/// The five-dimensional camera is a general rotation, so the fifth coordinate it measures the near
+/// limit against is a combination of the four chart coordinates and the lifted height. In this
+/// row's camera the height enters that combination with a NEGATIVE weight: lifting a sample moves
+/// it away from the near limit rather than into it, so no amount of height can push a sample past
+/// the limit that its chart position had not already put there. The measurement below is the
+/// consequence — the refused set is the same 79,350 vertices at height 1.0, at height 3.565, and
+/// under the alternative height mapping, to within four vertices. It is therefore a region of the
+/// CHART, near enough a half-plane; a projective map takes a line to a line; and the boundary of
+/// the refusal reads as a straight edge across the frame rather than as anything the escape
+/// records drew. That straight edge is the slab boundary a reader of this frame sees.
+#[test]
+fn the_near_limit_cuts_this_row_by_chart_position_rather_than_by_height() {
+    let pose = zoom_pose(3.565);
+    let flat_fifth = ambient_camera([0.0, 0.0, 0.0, 0.0, 0.0], &pose.view)[4];
+    let raised_fifth = ambient_camera([0.0, 0.0, 0.0, 0.0, 1.0], &pose.view)[4];
+    let height_coefficient = raised_fifth - flat_fifth;
+    let chart_coefficients: [f64; 4] = core::array::from_fn(|axis| {
+        let mut point = [0.0; 5];
+        point[axis] = 1.0;
+        ambient_camera(point, &pose.view)[4] - flat_fifth
+    });
+    println!(
+        "fifth coordinate per unit of height {height_coefficient:.6}, per unit of chart axis {chart_coefficients:?}"
+    );
+    let records = steep_records(&pose);
+    let refusals: Vec<u64> = [3.565_f64, 1.0]
+        .into_iter()
+        .map(|height_scale| {
+            vertex_reasons(&zoom_pose(height_scale), &records, Mapping::InteriorAtFloor)[4]
+        })
+        .collect();
+    let peak = vertex_reasons(&pose, &records, Mapping::InteriorAtPeak)[4];
+    println!(
+        "near-limit refusals: height 3.565 {}, height 1.0 {}, interior at the peak {peak}",
+        refusals[0], refusals[1]
+    );
+    assert!(
+        height_coefficient < 0.0,
+        "lifting a sample must recede from the near limit, not approach it: {height_coefficient}"
+    );
+    assert!(
+        chart_coefficients[0].abs() > 3.0 * height_coefficient.abs(),
+        "the leading chart weight {} against the height's {height_coefficient}",
+        chart_coefficients[0]
+    );
+    let spread = refusals[0].abs_diff(refusals[1]);
+    assert!(
+        spread <= 10,
+        "a 3.5-fold height change moved the refused set by {spread} vertices"
+    );
+    assert_eq!(
+        peak, refusals[0],
+        "and the alternative height mapping moves it not at all"
+    );
+}
+
+/// The two record-driven shares a page fact could publish for this row, measured.
+///
+/// `surface_uncovered_fraction` is a statement about the MESH at five census heights and reports
+/// 0.042 here. Neither of the numbers below is that number, and neither is derivable from it: they
+/// are counts over the record field and over the frame the record field produced.
+#[test]
+fn the_record_driven_shares_this_row_would_publish() {
+    let pose = zoom_pose(3.565);
+    let records = steep_records(&pose);
+    let total = f64::from(EXTENT[0]) * f64::from(EXTENT[1]);
+    let interior_records = records
+        .iter()
+        .filter(|record| record[3] == 0.0 && record[1] == 0.0 && record[0] == -1.0)
+        .count();
+    let horizon_records = records.iter().filter(|record| record[3] == 2.0).count();
+    let frame = render_frame(&pose, &records, Rule::Fixed, Mapping::InteriorAtFloor);
+    let bands = totals(&cause_bands(&frame));
+    let refused = vertex_reasons(&pose, &records, Mapping::InteriorAtFloor)[4];
+    println!(
+        "interior records {interior_records} ({:.4} of the field), horizon records {horizon_records} ({:.4})",
+        interior_records as f64 / total,
+        horizon_records as f64 / total
+    );
+    println!(
+        "dark share of the frame {:.4} ({} pixels), sky share {:.4} ({} pixels), refused share of the mesh {:.4} ({refused} vertices)",
+        bands[1] as f64 / total,
+        bands[1],
+        bands[0] as f64 / total,
+        bands[0],
+        refused as f64 / total
+    );
+    assert!(
+        (bands[1] as f64 / total) > 0.2,
+        "a quarter of this frame is the set interior"
+    );
+}
+
+/// Where this oracle agrees with the browser's census of the served frame, and where it does not.
+///
+/// The flat frame is the strongest calibration there is for this instrument: at height zero every
+/// vertex takes the direct path, the mesh tiles the frame it was sampled for, and the picture is
+/// the two-dimensional chart with nothing projected. The browser counted 108,732 pixels in its
+/// dark class, 75,895 of them in the first 90-row band and 32,837 in the second and none below;
+/// exactly 17,556 in the pass-clear class, in the bottom band only. This oracle's interior cause
+/// reproduces all four numbers to within five pixels, which identifies the dark class as the set
+/// interior of this slice beyond argument.
+///
+/// Under the row's own height the agreement holds over the first four bands and breaks in the last
+/// two. That is this mirror's known approximation and not a disagreement about the frame: where a
+/// grid cell has one vertex past the near limit, the shipped pass clips the primitive and keeps
+/// the part whose interpolated validity is still one, while this rasterizer drops the whole
+/// primitive. The lower two bands are exactly where the near-limit refusals live, and the mirror
+/// clears about 25,000 pixels there that the served frame paints.
+#[test]
+fn the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_bands_of_the_row() {
+    let records = steep_records(&zoom_pose(3.565));
+    let flat = render_frame(
+        &zoom_pose(0.0),
+        &records,
+        Rule::Fixed,
+        Mapping::InteriorAtFloor,
+    );
+    let flat_causes = cause_bands(&flat);
+    let flat_total = totals(&flat_causes);
+    assert!(
+        flat_total[1].abs_diff(108_732) <= 8,
+        "flat interior {} against the browser's dark class 108,732",
+        flat_total[1]
+    );
+    assert!(
+        flat_causes[0][1].abs_diff(75_895) <= 8,
+        "flat interior band 0 {}",
+        flat_causes[0][1]
+    );
+    assert!(
+        flat_causes[1][1].abs_diff(32_837) <= 8,
+        "flat interior band 1 {}",
+        flat_causes[1][1]
+    );
+    assert_eq!(
+        flat_causes[2][1] + flat_causes[3][1] + flat_causes[4][1] + flat_causes[5][1],
+        0,
+        "the browser saw no dark pixel below row 180 in the flat frame"
+    );
+    let flat_classes = totals(&class_bands(&flat));
+    assert_eq!(
+        flat_classes[1], 17_556,
+        "the flat frame's pass-clear class is the horizon record count exactly"
+    );
+    assert!(
+        (flat_classes[2] + flat_classes[3]).abs_diff(392_112) <= 8,
+        "flat exterior and other together {}",
+        flat_classes[2] + flat_classes[3]
+    );
+
+    let lifted = render_frame(
+        &zoom_pose(3.565),
+        &records,
+        Rule::Fixed,
+        Mapping::InteriorAtFloor,
+    );
+    let lifted_classes = class_bands(&lifted);
+    let upper = |slot: usize| -> u64 { (0..4).map(|band| lifted_classes[band][slot]).sum() };
+    for (slot, browser, name) in [
+        (0_usize, 128_743_u64, "dark"),
+        (2, 188_433, "exterior"),
+        (3, 28_424, "other"),
+    ] {
+        let measured = upper(slot);
+        let apart = f64::from(u32::try_from(measured.abs_diff(browser)).expect("small difference"))
+            / f64::from(u32::try_from(browser).expect("browser count fits"));
+        println!(
+            "upper four bands, {name}: oracle {measured}, browser {browser}, {apart:.4} apart"
+        );
+        assert!(
+            apart <= 0.03,
+            "{name} in the upper four bands is {apart} apart from the browser"
+        );
+    }
+    let lower_clear: u64 = (4..6).map(|band| lifted_classes[band][1]).sum();
+    println!(
+        "lower two bands, pass clear: oracle {lower_clear}, browser 69,739 — the mirror's dropped primitives"
+    );
+    assert!(
+        lower_clear > 69_739,
+        "the mirror clears more of the lower bands than the served frame, never less"
+    );
 }
