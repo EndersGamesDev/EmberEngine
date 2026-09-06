@@ -2384,10 +2384,10 @@ mod tests {
     }
 
     #[test]
-    fn non_neutral_relief_sweep_measures_its_envelope_and_refuses_over_ceiling_rows() {
+    fn non_neutral_relief_sweep_measures_its_envelope_and_redraws_over_ceiling_rows() {
         let mut observed_max = 0.0_f64;
         let mut observed_p95 = 0.0_f64;
-        let mut cleared = 0_u32;
+        let mut relief_redraws = 0_u32;
         for (object, plane) in named_objects() {
             for step in 0..SWEEP_ANGLES {
                 let theta = -0.6 + 1.2 * f64::from(step) / f64::from(SWEEP_ANGLES - 1);
@@ -2396,24 +2396,25 @@ mod tests {
                 let from = object_pose(object, plane, from_view, [3.5, -2.25]);
                 let mut to = object_pose(object, plane, to_view, [5.5, -1.25]);
                 to.zoom_log2 += 0.025;
-                let plan = Warp::reproject(
+                let flat = warp_matrix(&from, &to).expect("the sweep has a finite flat map");
+                let raw = anchor_plan(
                     &frame(&from),
                     &from,
                     &to,
-                    PrecisionMode::PictureFast,
-                    WarpValidation::Measure,
-                );
-                assert_ne!(plan.kind, WarpKind::ReliefRedraw);
-                if plan.kind == WarpKind::ClearOnly {
-                    cleared = cleared.saturating_add(1);
-                }
-                let error = plan
+                    flat.forward,
+                    chart_residual(&from, &to),
+                )
+                .expect("the sweep has a finite image candidate");
+                let error = raw
                     .approx_max_error_px
                     .expect("the swept plan reports a sampled maximum");
-                let p95 = plan
+                let p95 = raw
                     .approx_p95_error_px
                     .expect("the swept plan reports a sampled percentile");
                 assert!(p95 <= error);
+                let plan = enforce_error_ceiling(raw, &from, &to);
+                relief_redraws = relief_redraws
+                    .saturating_add(u32::from(plan.kind == WarpKind::ReliefRedraw));
                 observed_max = observed_max.max(error);
                 observed_p95 = observed_p95.max(p95);
             }
@@ -2427,8 +2428,8 @@ mod tests {
             "swept p95 maximum was {observed_p95} pixels"
         );
         assert!(
-            cleared > 0,
-            "the measured non-neutral relief envelope never refused an over-ceiling row"
+            relief_redraws > 0,
+            "the measured non-neutral relief envelope never selected relief redraw"
         );
     }
 
