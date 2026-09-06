@@ -1195,6 +1195,42 @@ fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
 }
 
 #[test]
+fn relief_ledger_maps_preview_records_instead_of_asserting_requested_positions() {
+    let presented_extent = [960, 540];
+    let mut source = frame_on(91, [120, 68], presented_extent);
+    source.level = RefinementLevel::Preview;
+    let mut requested = pose_on(presented_extent);
+    requested.zoom_log2 = 0.1;
+    let plan = crate::WarpPlan {
+        lattice: crate::LatticePair::new(source.extent, presented_extent),
+        source_scene_id: Some(source.scene_id),
+        source_texture_index: Some(source.texture_index),
+        destination_pose: Some(requested),
+        source_valid: true,
+        exposed: true,
+        predicted_exposed_fraction: Some(0.071_952_160_494),
+        kind: WarpKind::ReliefRedraw,
+        ..clear_warp_plan(false, true)
+    };
+    let entry = presentation_ledger_entry(&plan, &requested, Some(&source), presented_extent);
+    assert_eq!(entry.requested_centre_px, Some([480.0, 270.0]));
+    assert_eq!(entry.anchor_px, Some([0.0, 0.0]));
+
+    let unstated_destination = crate::WarpPlan {
+        destination_pose: None,
+        ..plan
+    };
+    let entry = presentation_ledger_entry(
+        &unstated_destination,
+        &requested,
+        Some(&source),
+        presented_extent,
+    );
+    assert_eq!(entry.requested_centre_px, None);
+    assert_eq!(entry.anchor_px, None);
+}
+
+#[test]
 fn a_flat_centred_zoom_hold_keeps_the_centre_but_exposes_the_corner_correction() {
     let extent = [960, 540];
     let source = frame_on(83, extent, extent);

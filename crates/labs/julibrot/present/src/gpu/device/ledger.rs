@@ -16,17 +16,9 @@ pub(super) fn presentation_ledger_entry(
     let level = source.map(|frame| frame.level);
     let destination = plan.lattice.map(LatticePair::destination);
     let points = match (plan.kind, destination) {
-        (WarpKind::ReliefRedraw, Some(destination)) => Some([
-            presented_pixel([0.0, 0.0], destination, presented_extent),
-            presented_pixel(
-                [
-                    -f64::from(destination[0]) * 0.5,
-                    f64::from(destination[1]) * 0.5,
-                ],
-                destination,
-                presented_extent,
-            ),
-        ]),
+        (WarpKind::ReliefRedraw, Some(_)) => source.and_then(|source| {
+            relief_requested_points(plan, source, presented_extent)
+        }),
         (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(_)) => source
             .and_then(|source| mapped_requested_points(plan, requested, source, presented_extent)),
         (WarpKind::ClearOnly, _) | (_, None) => None,
@@ -38,6 +30,47 @@ pub(super) fn presentation_ledger_entry(
         requested_centre_px: points.map(|points| points[0]),
         anchor_px: points.map(|points| points[1]),
     }
+}
+
+fn relief_requested_points(
+    plan: &crate::WarpPlan,
+    source: &SceneFrame,
+    presented_extent: [u32; 2],
+) -> Option<[[f64; 2]; 2]> {
+    let lattice = plan.lattice?;
+    let destination = plan.destination_pose?;
+    if lattice.destination() != [destination.grid_width, destination.grid_height] {
+        return None;
+    }
+    let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)?;
+    let PoseMap::Mapped(destination_map) = destination.map else {
+        return None;
+    };
+    let PoseMap::Mapped(redraw_map) = redraw.map else {
+        return None;
+    };
+    let half_source = source.extent.map(|extent| f64::from(extent) * 0.5);
+    let requested_points = [
+        [0.0, 0.0],
+        [
+            -f64::from(lattice.destination()[0]) * 0.5,
+            f64::from(lattice.destination()[1]) * 0.5,
+        ],
+    ];
+    let mapped = requested_points.map(|requested_point| {
+        apply_homography(destination_map.rows, requested_point)
+            .and_then(|chart| apply_homography(redraw_map.inverse, chart))
+            .filter(|source_point| {
+                source_point[0].abs() <= half_source[0]
+                    && source_point[1].abs() <= half_source[1]
+            })
+            .and_then(|source_point| apply_homography(redraw_map.rows, source_point))
+            .and_then(|chart| apply_homography(destination_map.inverse, chart))
+            .map(|actual_destination| {
+                presented_pixel(actual_destination, lattice.destination(), presented_extent)
+            })
+    });
+    Some([mapped[0]?, mapped[1]?])
 }
 
 fn mapped_requested_points(
