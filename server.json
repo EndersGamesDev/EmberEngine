@@ -1,10 +1,10 @@
 {
-  "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788713747",
+  "ws": "wss://minds-cleared-das-bucks.trycloudflare.com",
+  "v": "1788714863",
   "proto": 23,
-  "fire_ws": "wss://automation-awesome-entrance-precise.trycloudflare.com",
+  "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
-  "kings_ws": "wss://madonna-diff-shake-studio.trycloudflare.com",
+  "kings_ws": "wss://ranch-lived-relate-everybody.trycloudflare.com",
   "kings_proto": 1,
   "hosts": [
     {
@@ -53,6 +53,23 @@
       "kings_proto": 1,
       "kings_version": "r582",
       "kings_commit": "3926c07"
+    },
+    {
+      "name": "lundi",
+      "ws": "wss://minds-cleared-das-bucks.trycloudflare.com",
+      "proto": 23,
+      "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
+      "fire_proto": 1,
+      "kings_ws": "wss://ranch-lived-relate-everybody.trycloudflare.com",
+      "kings_proto": 1,
+      "version": "r1500",
+      "commit": "374a8548",
+      "fire_version": "r1500",
+      "fire_commit": "374a8548",
+      "kings_version": "r1500",
+      "kings_commit": "374a8548",
+      "by": "ember@bd19b058cfb9",
+      "updated": "2026-09-06T17:14:23Z"
     }
   ],
   "mirrors": [
