@@ -1298,7 +1298,9 @@ fn review_camera(_input: &SceneInput<'_>) -> Option<Camera> {
 }
 
 /// Where the fight is: the midpoint of the closest pair of opposing living
-/// champions, else the centroid of every living champion.
+/// champions, else the centroid of every living champion. Native only,
+/// like the review camera that is its one caller.
+#[cfg(not(target_arch = "wasm32"))]
 #[must_use]
 pub fn action_focus(units: &[UnitLite]) -> Option<(f32, f32)> {
     let champs: Vec<&UnitLite> = units.iter().filter(|u| u.k == 0 && !u.dead).collect();
