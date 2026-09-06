@@ -72,6 +72,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - Nothing prunes the address book on a schedule: `deploy/publish-host.sh:25` `--remove` is the only deletion path, and the render-time filter at `web/hosts.js:361` drops a vanished host from the view but never from the book.
 - Hosts do not talk to each other — no lobby sharing, migration or cross-host matchmaking — and the client-side merge at `web/hosts.js:137` is the whole discovery story; recorded as deliberate at `docs/hosts.md:177`.
 - The workspace defines no release profile for the wasm payload: `Cargo.toml` carries only the development profile and its per-package override.
+- `web/games.json` describes fire v2 as protocol 1 with the castle-circuit note, but the published release is the protocol-2 GT Circuit V2 cut (`gh-pages` `80cf00ef`), so the launcher advertises a build the site does not serve; `CHANGELOG.md` records the published truth until the entry is corrected.
 
 ## infrastructure-servers
 
