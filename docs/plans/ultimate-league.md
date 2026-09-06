@@ -1,8 +1,8 @@
-# Ultimate League — v1 design of record
+# UltimateLegue — v1 design and release record
 
 A one-lane, top-down MOBA on ember: 1v1 and 3v3, an authoritative `league-server` running the same `league-core` sim the client renders, champion select with rune pages and summoner spells before the game, and a DOM page for everything with text (the scene pass has none).
 
-The three founding champions and their kits are the user's; two more (Bog Maw, Tessera) are ours. The spec asked for "call it" and cut off — the game ships as **Ultimate League**, id `league`.
+The three founding champions and their kits are the user's; two more (Bog Maw, Tessera) are ours. The game ships as **UltimateLegue**, id `league`, retaining the spelling in the owner's request.
 
 ## Shape
 
@@ -46,7 +46,7 @@ Start 500 gold, passive 1.2/s. Melee minion 25 / caster 30 on last hit; XP share
 
 ## Match flow (server)
 
-`Lobby → Select (60 s, host may start early when all humans picked) → Live → Over (12 s) → Lobby`. Slots: mode is 1 or 3 per team; a human joins takes the lowest free slot; the host (slot 0) starts, and unfilled slots become deterministic bots. Teams: slots 0..ts blue, ts..2ts red. Picks must be unique champions; a human who times out or disconnects gets a random (hashed) pick, and a disconnected champion becomes a bot mid-game.
+`Select (60 s, host may start early when all humans picked) → Live → Over (12 s) → Select`. Slots: mode is 1 or 3 per team; a human joining takes the lowest free slot; the lowest connected human slot hosts, and unfilled slots become deterministic bots. Teams: slots 0..ts blue, ts..2ts red. Picks must be unique within each team; opposing teams may mirror champions, so all six seats can draft from the five-champion roster. A human who times out or disconnects gets a hashed pick, and a disconnected champion becomes a bot mid-game. Passive XP (2/s) ensures progression even without last hits.
 
 ## Wire (PROTO_VERSION 1)
 
@@ -55,7 +55,7 @@ House style: `#[serde(tag="t", rename_all="snake_case")]`, text frames, `#[serde
 - `C2S`: `Hello`, `ListLobbies`, `CreateLobby{name,password,mode}`, `JoinLobby`, `LeaveLobby`, `Pick{champ,d,f,runes}`, `StartMatch`, `Cmd{a: CmdKind, x, z, target, slot}` (Move/Attack/Cast/Spell/UseItem/Buy — all point-and-event, no held inputs), `Ping`.
 - `S2C`: `Welcome{proto,host,version,commit,players,lobbies}`, `Rejected{reason}`, `Lobbies`, `Joined{lobby,id,mode,roster}`, `PlayerJoined/PlayerLeft`, `Phase{phase,left}`, `Roster`, `State{tick,units,champs,teams,fx,log}`, `Result{winner,stats}`, `Pong`.
 
-State is 20 Hz (`STATE_EVERY_TICKS = 3`). Units is one flat struct with `#[serde(default)]` champion extras; `fx` is a transient effects stream the client draws for ~0.25 s; `log` carries kills/captures by unit id for the kill feed. Client interpolation: latest two states, lerp by tick; own champion dead-reckoned from its last move order between states.
+State is 20 Hz (`STATE_EVERY_TICKS = 3`). Units is one flat struct with `#[serde(default)]` champion extras; `fx` is a transient effects stream; `log` carries kills/captures by unit id for the kill feed. Persistent `projs` and `zones` snapshots keep moving attacks and ground abilities visible between broadcasts. The client renders authoritative positions and smooths the following camera; unit interpolation and prediction are later work.
 
 ## Client
 
@@ -67,9 +67,12 @@ Native bin `league-app`: local match against bots with instant random picks (dev
 
 ## Deploy
 
-- `deploy-pages.sh`: league wasm build, `games/league/v1` assembly, `league_proto` stamp key.
-- `deploy/deploy-league-local.sh`: the arena-local recipe on port 7783 — build the committed tree, prove with the in-repo `wsprobe` example loopback and through a fresh quick tunnel, publish `league_ws` via `publish-host.sh`.
+- Build `league` for `wasm32-unknown-unknown --release --lib`, then generate `web/pkg/league.js` and `league_bg.wasm` with wasm-bindgen. `tools/league/browser.cjs` exercises the actual WASM page and a private server using headless browser events; it never drives desktop input.
+- `deploy/league-install-windows.ps1`: install only the League server (127.0.0.1:7783) and a separate durable tunnel task. Pin the server SHA256, prove a real loopback match before opening the tunnel, wait for DNS propagation, then prove a public match and exact build commit. Keep the workstation on for online play. A tunnel failure is limited to one mint per hour and only the task's own child is cleaned up.
+- `tools/league/publish-host.cjs` calls the canonical `publish-host.sh` on a staged address book and verifies other games and hosts are unchanged before pushing. `tools/league/publish.cjs` publishes only the League catalog entry and game folder, requiring clean current-main source, tested WASM hash, a matching live public server, and an unchanged Pages base. Existing games and their frozen bundles stay byte-identical.
 - `web/games.json`: league entry, v1 live, `handover: true` (the page honors `ember-pending`).
+
+The release work was coordinated with Fable through Barza. Core/server validation includes all twenty abilities, economy and assists, revival and buff timing, projectile/zone serialization, real two- and six-player WebSocket matches, and ten complete deterministic bot matches. Exact deployment revision, task state, browser results, and public proof are recorded in the final release handoff below when verified.
 
 ## v1 does not have (deliberately)
 
