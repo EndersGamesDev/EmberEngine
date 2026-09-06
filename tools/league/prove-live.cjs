@@ -29,10 +29,12 @@ async function main(){
     assert.equal(git('rev-parse',`${report.base}:${prefix}`).toString(),git('rev-parse',`${report.pagesCommit}:${prefix}`).toString(),`Peer bytes changed: ${prefix}`);
   }
   const book=JSON.parse(await get('server.json')),host=book.hosts.find(h=>h.name===report.host);
-  assert(host?.league_ws&&report.sourceCommit.startsWith(host.league_commit),'Public host book is stale');
+  const stamp=report.liveWelcome.commit;
+  assert(/^[0-9a-f]{7,40}$/.test(stamp)&&report.sourceCommit.startsWith(stamp),'Invalid live build stamp');
+  assert(host?.league_ws&&host.league_commit===stamp,'Public host book is stale');
   const probes=[];
   for(const mode of [1,3]){
-    const log=execFileSync(path.join(root,'target/release/examples/wsprobe.exe'),[host.league_ws,'public-'+Date.now()+'-'+mode,'--mode',String(mode),'--expect-commit',report.sourceCommit],{windowsHide:true,timeout:35000}).toString();
+    const log=execFileSync(path.join(root,'target/release/examples/wsprobe.exe'),[host.league_ws,'public-'+Date.now()+'-'+mode,'--mode',String(mode),'--expect-commit',stamp],{windowsHide:true,timeout:35000}).toString();
     probes.push({mode,log});console.log(log.trim());
   }
   const proof={passed:true,sourceCommit:report.sourceCommit,pagesCommit:report.pagesCommit,url:base+'games/league/v1/',files:results,probes,peerTreesUnchanged:true,elapsedSeconds:(Date.now()-started)/1000};
