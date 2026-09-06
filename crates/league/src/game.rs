@@ -14,7 +14,7 @@ use league_core::sim::Match;
 
 use crate::bindings::{self, Controls};
 use crate::scene::{self, camera_for, ground_point, project};
-use crate::world::{FxLite, World, feed_line};
+use crate::world::{World, feed_line};
 
 /// Commands queued by the page (`cmd_json`); both game modes drain this.
 pub mod uiq {
@@ -438,16 +438,7 @@ impl LocalGame {
         self.world.left = self.m.left;
         self.world.winner = self.m.winner;
         for f in fx {
-            self.world.push_fx(FxLite {
-                k: f.k,
-                x: f.x,
-                z: f.z,
-                x2: f.x2,
-                z2: f.z2,
-                v: f.v,
-                life: 0.0,
-                left: 0.0,
-            });
+            self.world.push_fx(f.into());
         }
         for ev in log {
             if let Some(text) = feed_line(&self.world, &ev) {

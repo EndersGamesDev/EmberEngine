@@ -1812,6 +1812,8 @@ mod tests {
             .collect();
         let fx: Vec<FxLite> = (0..13u8)
             .map(|k| FxLite {
+                champ: 255,
+                ability: 255,
                 k,
                 x: 1.0,
                 z: 2.0,
@@ -1822,6 +1824,8 @@ mod tests {
                 left: 0.2,
             })
             .chain(std::iter::once(FxLite {
+                champ: 255,
+                ability: 255,
                 k: 0,
                 x: 1.0,
                 z: 1.0,
@@ -1835,6 +1839,7 @@ mod tests {
         let zones: Vec<ZoneLite> = (0..4u8).map(|k| (k, f32::from(k) * 5.0, 3.0, 3.0, 0.5)).collect();
         let projs: Vec<ProjSnap> = (0..4u8)
             .map(|k| ProjSnap {
+                champ: 255,
                 id: 900 + u32::from(k),
                 k,
                 t: k % 2,

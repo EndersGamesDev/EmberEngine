@@ -9,7 +9,7 @@ use league_core::proto::{C2S, Cmd, Phase, S2C};
 
 use crate::game::{Prev, read_input, ui_command, uiq};
 use crate::net::{Inbox, Net, Status};
-use crate::world::{FxLite, World, feed_line};
+use crate::world::{World, feed_line};
 
 /// What the page hands to `start_online`.
 #[derive(Debug, Clone)]
@@ -180,16 +180,7 @@ impl OnlineGame {
                 self.world.projs = projs;
                 self.world.set_zones(&zones);
                 for f in fx {
-                    self.world.push_fx(FxLite {
-                        k: f.k,
-                        x: f.x,
-                        z: f.z,
-                        x2: f.x2,
-                        z2: f.z2,
-                        v: f.v,
-                        life: 0.0,
-                        left: 0.0,
-                    });
+                    self.world.push_fx(f.into());
                 }
                 for ev in log {
                     if let Some(text) = feed_line(&self.world, &ev) {
