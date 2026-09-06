@@ -3,6 +3,14 @@
 #
 #   bash deploy/bootstrap-host.sh
 #
+# EMBER_PREBUILT=<dir> prepares a host that will RUN binaries somebody else
+# built rather than build its own (docs/hosts.md §8). That host needs no git
+# and no Rust toolchain, so neither is required; python3, curl and sha256sum
+# still are, and the pinned cloudflared is installed exactly as below. The
+# check is on the variable being set, not on the directory's contents: this
+# step runs before the products are shipped as readily as after, and host.sh
+# is where an incomplete directory is refused.
+#
 # cloudflared 2026.8.3 and its checksum come from Cloudflare's official release:
 # https://github.com/cloudflare/cloudflared/releases/tag/2026.8.3
 set -euo pipefail
@@ -18,16 +26,20 @@ need() {
     command -v "$1" >/dev/null 2>&1 || die "missing $2 ($1 is not on PATH)"
 }
 
-need git git
-need cargo "Rust toolchain"
-need rustc "Rust toolchain"
 need python3 python3
 need curl curl
 need sha256sum sha256sum
-
 python3 -c '' >/dev/null 2>&1 || die "python3 is on PATH but does not run"
-cargo --version >/dev/null 2>&1 || die "Rust toolchain is on PATH but cargo does not run"
-rustc --version >/dev/null 2>&1 || die "Rust toolchain is on PATH but rustc does not run"
+
+if [ -n "${EMBER_PREBUILT:-}" ]; then
+    echo "prebuilt mode ($EMBER_PREBUILT): skipping the git and Rust toolchain checks"
+else
+    need git git
+    need cargo "Rust toolchain"
+    need rustc "Rust toolchain"
+    cargo --version >/dev/null 2>&1 || die "Rust toolchain is on PATH but cargo does not run"
+    rustc --version >/dev/null 2>&1 || die "Rust toolchain is on PATH but rustc does not run"
+fi
 
 [ "$(uname -s)" = "Linux" ] || die "unsupported operating system '$(uname -s)'; need Linux"
 case "$(uname -m)" in
@@ -87,6 +99,8 @@ else
 #EMBER_PUBLISH=none
 #EMBER_ARENA_PORT=7780
 #EMBER_FIRE_PORT=7781
+#EMBER_KINGS_PORT=7782
+#EMBER_PREBUILT=
 #EMBER_HOME=$HOME/ember-host
 #EMBER_TUNNEL_BIN=$HOME/bin/cloudflared
 ENV
