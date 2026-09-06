@@ -23,12 +23,14 @@
 #   republish-host workstation fetch/merge and unchanged no-push behaviour
 #   host-loopback host.sh up/status/update/down for real on loopback; builds
 #                 all three servers, so minutes on a cold target directory
+#   changelog     CHANGELOG.md against web/games.json, the object store and
+#                 the tags — instant; tag checks skip on a tagless checkout
 #
 # Nothing here contacts a host, a tunnel or a network.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
+SUITES="${*:-syntax changelog pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
 
 T0="$(date +%s)"
 failed=""
