@@ -37,6 +37,9 @@ use league_core::proto::{BuffSnap, ProjSnap};
 
 use crate::world::{FxLite, UnitLite, ZoneLite};
 
+/// Baked champion GLBs from the fleet, registered after the procedural set.
+pub mod art;
+
 pub const MESH_PLANE: u32 = 1;
 /// A capped cylinder, radius 1, from y=-1 to y=1.
 pub const MESH_FRUSTUM: u32 = 2;
@@ -146,10 +149,12 @@ fn rim_normal(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     norm_or_up([f32::midpoint(a[0], b[0]), 0.0, f32::midpoint(a[2], b[2])])
 }
 
-/// The whole mesh set, in registration order.
+/// The whole mesh set, in registration order: the nine procedural meshes,
+/// then every baked champion part (`art::meshes`), whose ids start at
+/// [`MESH_SPHERE`] + 1. `lib.rs` registers exactly this list.
 #[must_use]
 pub fn build_meshes() -> Vec<MeshData> {
-    vec![
+    let mut meshes = vec![
         plane_mesh(),
         frustum_mesh(),
         octa_mesh(),
@@ -159,7 +164,9 @@ pub fn build_meshes() -> Vec<MeshData> {
         blade_mesh(),
         gear_mesh(),
         sphere_mesh(),
-    ]
+    ];
+    meshes.extend(art::meshes(MESH_SPHERE + 1));
+    meshes
 }
 
 fn plane_mesh() -> MeshData {
@@ -692,6 +699,62 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
     }
 
     let y = bob;
+    if let Some(baked) = art::champion(def) {
+        push_baked(frame, baked, u, t, wear, col, holo, wob);
+    } else {
+        push_procedural(frame, def, u, t, wear, col, wob, r, x, y, z);
+    }
+
+    push_wearables(frame, u, t, wear, x, y, z, r);
+}
+
+/// A champion delivered as baked art: its parts at the unit's position,
+/// facing the sim's yaw, drawn white so the texture is not double-tinted;
+/// tints that mean something (hologram, immunity, exhaust, demon) still
+/// multiply on top. Motion is procedural: a breath bob, a lean into the
+/// facing, and a slow turn for the kits that are more orb than body.
+#[allow(clippy::too_many_arguments)]
+fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], holo: bool, wob: f32) {
+    let tinted = holo || wear.immune || wear.exhaust || (wear.demon && u.def != data::KNIGHT);
+    let paint = if tinted { col } else { [1.0, 1.0, 1.0] };
+    let breath = (t * 2.2 + u.id as f32).sin() * 0.015;
+    let scale = Vec3::splat(wob * (1.0 + breath));
+    let spin = if u.def == data::SWARM { Quat::from_rotation_y(t * 0.35) } else { Quat::IDENTITY };
+    let body = face(u.fa) * spin;
+    let lift = if u.def == data::SWARM { 0.25 + (t * 1.7 + u.id as f32).sin() * 0.06 } else { 0.0 };
+    let origin = v3(u.x, lift, u.z);
+    for part in &baked.parts {
+        // A part turns by `swing` about its own pivot p, then the whole body
+        // by `body`: v' = body * (p + swing * (v - p)). The engine applies
+        // scale, then rotation, then translation, so the instance rotation
+        // is body * swing and the translation carries body * (p - swing p).
+        // Parts named like a weapon sway at idle; an attack swing rides the
+        // same hook once the wire says who struck.
+        let swing = if part_is_weapon(&part.name) {
+            Quat::from_rotation_z((t * 1.3 + u.id as f32).sin() * 0.08)
+        } else {
+            Quat::IDENTITY
+        };
+        let p = part.pivot * scale;
+        frame.instances.push(
+            Instance::new(origin + body * (p - swing * p), scale, Vec3::from(paint))
+                .with_rot(body * swing)
+                .with_mesh(part.mesh),
+        );
+    }
+}
+
+/// Whether a baked part's node name marks it as the thing the champion
+/// swings: `sword`, `blade`, `staff`, `weapon`, `hook`, `hand` all count.
+fn part_is_weapon(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    ["sword", "blade", "staff", "weapon", "hook", "hand"].iter().any(|k| n.contains(k))
+}
+
+/// The procedural bodies: one silhouette per kit from the primitive set,
+/// used until a champion's baked art is delivered.
+#[allow(clippy::too_many_arguments)]
+fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], wob: f32, r: Quat, x: f32, y: f32, z: f32) {
     match def {
         data::KNIGHT => {
             let (body, s) = if wear.demon {
@@ -827,8 +890,11 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
             }
         }
     }
+}
 
-    // wearables shared by every kit
+/// Buff wearables shared by every kit, baked or procedural.
+#[allow(clippy::too_many_arguments)]
+fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y: f32, z: f32, r: Quat) {
     if wear.shield {
         frame.instances.push(
             ins(v3(x, 1.0 + y, z), v3(0.95, 1.0, 0.95), [0.55, 0.75, 1.0])
@@ -894,7 +960,9 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
         return; // objectives show their bar in the HUD, not in the world
     }
     let (w, y) = match u.k {
-        0 | 3 => (1.4, 2.55),
+        // a baked body carries its own height in the sidecar; the bar rides
+        // a hand above it, the procedural bodies keep their tuned constant
+        0 | 3 => (1.4, art::champion(u.def).map_or(2.55, |c| c.height + 1.15)),
         4 | 5 => (2.4, 7.2),
         6 | 7 => (3.0, 5.9),
         _ => (0.7, 1.8),
@@ -1252,6 +1320,7 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
         ..Frame::default()
     };
     push_ground(&mut frame);
+    push_showcase(&mut frame, &camera, t);
     for zone in input.zones {
         push_zone(&mut frame, zone, t);
     }
@@ -1283,6 +1352,49 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
     }
     frame
 }
+
+// ---------------------------------------------------------------------------
+// the showcase (native harness only)
+// ---------------------------------------------------------------------------
+
+/// `LEAGUE_SHOWCASE=1` lines the five champions up in front of the camera
+/// focus, turning slowly, so a baked mesh can be photographed for sign-off
+/// without waiting for a match to field it. Baked art where it exists, the
+/// procedural body otherwise, a team ring under each. Never on the web.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_showcase(frame: &mut Frame, camera: &Camera, t: f32) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("LEAGUE_SHOWCASE").is_ok_and(|v| v != "0" && !v.is_empty())) {
+        return;
+    }
+    let (cx, cz) = (camera.target.x, camera.target.z);
+    for def in 0..5u8 {
+        let x = cx + (f32::from(def) - 2.0) * 3.2;
+        let z = cz + 1.0;
+        let u = UnitLite {
+            id: 9000 + u32::from(def),
+            k: 0,
+            t: def % 2,
+            slot: def,
+            def,
+            x,
+            z,
+            fa: t * 0.6 + f32::from(def) * 0.4,
+            hp: 80.0,
+            mh: 100.0,
+            mn: 50.0,
+            mm: 100.0,
+            dead: false,
+            colour: data::CHAMPS[usize::from(def)].colour,
+        };
+        push_champion(frame, &u, t, Wear::default(), false);
+        push_hp_bar(frame, &u);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn push_showcase(_frame: &mut Frame, _camera: &Camera, _t: f32) {}
 
 // ---------------------------------------------------------------------------
 // the review camera (native harness only)
@@ -1426,7 +1538,18 @@ mod tests {
     #[test]
     fn every_mesh_has_vertices_and_normals() {
         let meshes = build_meshes();
-        assert_eq!(meshes.len() as u32, MESH_SPHERE, "the last id names the count");
+        assert!(
+            meshes.len() as u32 >= MESH_SPHERE,
+            "the nine procedural meshes come first; baked art follows them"
+        );
+        // every baked part is textured (the loader's silent 16-bit failure
+        // would show up here as `None`) and sized like a champion
+        for (i, m) in meshes.iter().enumerate().skip(MESH_SPHERE as usize) {
+            assert!(m.texture.is_some(), "baked mesh {i} has no 8-bit base-colour texture");
+            let top = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
+            let bottom = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min);
+            assert!(bottom > -0.05 && (1.0..=2.4).contains(&top), "baked mesh {i} stands {bottom}..{top}, not on the floor at champion height");
+        }
         for (i, m) in meshes.iter().enumerate() {
             assert!(!m.vertices.is_empty(), "mesh {i} is empty");
             assert_eq!(m.vertices.len() % 3, 0, "mesh {i} is not a triangle list");
