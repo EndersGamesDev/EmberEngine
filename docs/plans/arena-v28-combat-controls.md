@@ -22,7 +22,7 @@ Shared combat tests: five-health spawn/respawn, head versus shoulder/edge/body r
 
 ## Status
 
-Checkpoint `0df4f4af` was saved/pushed at the user's request, then the user explicitly asked to continue to completion. The v28 release candidate now passes actual WASM/browser verification as recorded below; deployment and public verification are the remaining steps. Worktree: `C:/Users/end/dev/ember-controls`, branch `codex/combat-controls`, base main `7500af5d`.
+Completed and publicly verified on 2026-09-06. Arena v28 and its protocol21 server serve source `f28a145f` / r1469. Public URL: https://endersgamesdev.github.io/EmberEngine/games/arena/v28/. Worktree: `C:/Users/end/dev/ember-controls`, branch `codex/combat-controls`, base main `7500af5d`. Checkpoint `0df4f4af` remains available in history.
 
 ### Implemented
 
@@ -76,7 +76,15 @@ Checkpoint `0df4f4af` was saved/pushed at the user's request, then the user expl
 - All five release WASM bundles and release arena-server built successfully, including wasm-bindgen, in 18.24 s. Arena WASM SHA256: `ba5e71a490d496749c2a7ac09982b44caf102bd76ab8363bb8a883dd95f0e61d`.
 - Actual v28 browser/WASM/private protocol21 server: 25/25 interaction checks passed (7.63 s, then 7.27 s after keeping Resume pinned outside the scrolling content). Settings pure tests rerun 69/69. Only synthetic DOM events in an isolated headless Edge session; real user-gesture pointer-lock permissions and physical controllers are not claimed as verified.
 - Real WebGL2 Harbor render: 15/15 views, 101 draws/frame, zero GL/runtime errors, 21.92 s. Freight Yard and Trench City both passed real-server rendering smoke in12.28 s; each logged one ~101–102 ms initialization/frame warning. Close standing/crouching body captures passed in5.10 s and visually confirm health symbols absent. Screenshots live under `target/controls-browser`, `controls-harbor`, `controls-old-maps`, `controls-bodies`; these generated artifacts are intentionally outside git.
-- `git diff --check` passed. Remaining: source/main publish, live server update and public-artifact/health verification. The numbered list below retains the exact reproducible gates, including those now completed.
+- `git diff --check` passed. Source pushed to main; server and public publication verified. The numbered list below is the historical recovery/reproduction recipe, not unfinished release work.
+
+### Final public release and peer-work preservation
+
+The durable `ember-environment` checkout was fast-forwarded to tested source `f28a145f`. After a fresh zero-player check, the old server was stopped before rebuilding its Windows-locked executable. Existing scheduled task `ember-arena-host` built in8 s, passed local and public wsbot health checks, finished with LastTaskResult0, and now runs its own durable binary on127.0.0.1:7780. Public address: `wss://python-firefox-marine-atmospheric.trycloudflare.com`, protocol21/r1469/f28a145f, verified after the task finished.
+
+The full publisher initially overwrote a separately published Fire V2 release from unmerged `origin/codex/fire-racer-v2` (source86086a2, protocol2). This was detected from the publication diff and corrected immediately: all seven `games/fire/v2` files plus only the Fire catalog object were restored from `00e097b1`, preserving Arena and the new server book. Final Pages commit `708d726569bb5d41bbb97943e535b35ecb4256ef` restores the exact Fire tree `acad2b3bbc1b7dae49c1fd89a687b8266da4dac8`. The newer Fire source was deliberately not blindly merged into main. A fail-closed publisher guard now refuses to overwrite a higher-protocol independently published Fire release; 74/74 shimmed Pages tests passed in16.27 s. Integrate that source deliberately or use a scoped publisher before the next full-site deployment.
+
+`node tools/v28/public-release.cjs` passed against the actual public site in8.89 s. It verified live Arena v28/protocol21 catalog, page settings cache stamp, version/source/server agreement, all16 checked files (four newly built JS/WASM pairs plus settings; seven byte-identical preserved Fire files), and the frozen v27 WASM hash. Arena is43,224,569 bytes with SHA256 `ba5e71a490d496749c2a7ac09982b44caf102bd76ab8363bb8a883dd95f0e61d`. Public proof is saved at `target/controls-public/results.json`. Final browser checks25/25, including visible Resume on narrow screens, passed in7.45 s. Generated evidence stays outside source control; reproducible verification scripts are committed.
 
 ### Exact next steps
 

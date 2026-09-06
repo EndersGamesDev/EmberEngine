@@ -110,6 +110,18 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
+# A peer can publish Fire from an unmerged source branch. Never downgrade its
+# independently versioned release when publishing another game's newer main.
+"$PY" - "$PAGES_DIR/games/fire/v2/release.json" "$REPO_DIR/crates/fire-core/src/proto.rs" <<'PY'
+import json, pathlib, re, sys
+release, source = map(pathlib.Path, sys.argv[1:])
+if release.exists():
+    shipped = json.loads(release.read_text(encoding="utf-8"))["protocol"]
+    local = int(re.search(r"PROTO_VERSION: u16 = (\d+)", source.read_text(encoding="utf-8")).group(1))
+    if shipped > local:
+        raise SystemExit("FAILED: live Fire is newer than this source; preserve its release or integrate its source before a full Pages publish")
+PY
+
 # Live version dirs (older versions stay frozen on the branch untouched).
 ARENA_LIVE="games/arena/v28"
 ARENA_V0_LIVE="games/arena/v0"

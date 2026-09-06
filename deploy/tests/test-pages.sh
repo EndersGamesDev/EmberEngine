@@ -273,6 +273,18 @@ fi
 cp "$DEPLOY/deploy-pages.sh" "$REPO/deploy/"
 
 echo "== every live catalog path must be assembled =="
+mkdir -p "$SEED/games/fire/v2"
+printf '{"protocol":2,"commit":"peer-release"}\n' > "$SEED/games/fire/v2/release.json"
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/peer-fire.log" 2>&1; then
+    bad "newer independently published Fire was overwritten"
+else
+    ok "newer independently published Fire is protected"
+fi
+contains "$(cat "$TMP/peer-fire.log")" "live Fire is newer than this source" "Fire downgrade refusal identifies the source mismatch"
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "Fire downgrade reached a publish"; else ok "Fire downgrade never reached a publish"; fi
+rm "$SEED/games/fire/v2/release.json"
+
 "$PY" - "$REPO/web/games.json" <<'PY'
 import json, sys
 p = sys.argv[1]
