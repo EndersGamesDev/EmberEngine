@@ -501,6 +501,7 @@ function launchLocal(m) {
 // ---- draft ------------------------------------------------------------------
 
 let mySlot = 0, roster = [], picked = null, dSel = 0, fSel = 1, runes = [0, 1, 2];
+let draftFeedback = '';
 let pages = readSaved('ember-league-pages', { A: [0, 1, 2], B: [3, 4, 0], C: [5, 6, 7] });
 if (!pages || typeof pages !== 'object' || Array.isArray(pages)) pages = {};
 let curPage = 'A';
@@ -541,7 +542,8 @@ function paintRunes() {
 }
 function sendPick() {
   if (picked === null || runes.length !== 3 || !launched) return;
-  pendingPick = { champ: picked, d: dSel, f: fSel, runes: [...runes], at: performance.now() };
+  draftFeedback = '';
+  pendingPick = { champ: picked, d: dSel, f: fSel, runes: [...runes], at: performance.now(), noticeBefore: latest?.notice };
   wasm_cmd({ pick: { champ: picked, d: dSel, f: fSel, runes } });
 }
 
@@ -609,14 +611,22 @@ function render(h) {
     $('menu').classList.add('hidden');
     $('stage').classList.remove('hidden');
     $('result').classList.add('hidden');
-    if (lastPhase !== 'select') { setShop(false); picked = null; pendingPick = null; }
+    if (lastPhase !== 'select') { setShop(false); picked = null; pendingPick = null; draftFeedback = ''; buildDetail(); }
     $('draft').classList.remove('hidden');
     if (!cardsBuilt) { buildCards(); buildDetail(); }
     roster = h.roster || [];
     mySlot = h.slot ?? 0;
     const me = roster.find((r) => r.slot === mySlot);
-    if (pendingPick && me?.picked && me.champ === pendingPick.champ && me.d === pendingPick.d && me.f === pendingPick.f && JSON.stringify(me.runes) === JSON.stringify(pendingPick.runes)) pendingPick = null;
-    if (pendingPick && (h.notice || performance.now() - pendingPick.at > 3000)) { pendingPick = null; picked = me?.picked ? me.champ : null; }
+    if (pendingPick && me?.picked && me.champ === pendingPick.champ && me.d === pendingPick.d && me.f === pendingPick.f && JSON.stringify(me.runes) === JSON.stringify(pendingPick.runes)) {
+      pendingPick = null;
+      draftFeedback = '';
+    }
+    if (pendingPick && ((h.notice && h.notice !== pendingPick.noticeBefore) || performance.now() - pendingPick.at > 3000)) {
+      draftFeedback = h.notice && h.notice !== pendingPick.noticeBefore ? h.notice : 'The server has not confirmed your pick. Choose a champion again.';
+      pendingPick = null;
+      picked = me?.picked ? me.champ : null;
+      buildDetail();
+    }
     if (me?.picked && !pendingPick && runes.length === 3) {
       picked = me.champ;
       dSel = me.d;
@@ -636,7 +646,7 @@ function render(h) {
     const host = roster.filter((r) => !r.bot && r.connected).reduce((min, r) => Math.min(min, r.slot), Infinity);
     const waiting = roster.some(r => !r.bot && !r.picked);
     $('btn-start').disabled = !me || mySlot !== host || picked === null || runes.length !== 3 || waiting || (!local && !h.connected);
-    $('draft-note').textContent = h.notice || (runes.length !== 3 ? `Choose ${3 - runes.length} more runes.`
+    $('draft-note').textContent = h.notice || draftFeedback || (runes.length !== 3 ? `Choose ${3 - runes.length} more runes.`
       : picked === null ? 'Pick a champion. Each team may pick a champion once; rivals may mirror picks.'
       : mySlot !== host ? 'Ready. The lobby host can start; empty seats become bots.'
       : waiting ? 'Waiting for every player to choose a champion.'
