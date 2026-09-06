@@ -583,22 +583,22 @@ fn hallow_cast(frame: &mut Frame, cast: &Cast, slot: u8) {
             // solid bubble. The shrinking waist gives the lattice its snap.
             diamond(
                 frame,
-                center + Vec3::Y * 0.45,
-                1.0 + cast.pulse * 0.2,
+                center + Vec3::Y * 1.25,
+                1.30 + cast.pulse * 0.2,
                 cast.yaw,
                 MINT,
             );
             diamond(
                 frame,
-                center + Vec3::Y * 0.45,
-                1.0 + cast.pulse * 0.2,
+                center + Vec3::Y * 1.25,
+                1.30 + cast.pulse * 0.2,
                 cast.yaw + FRAC_PI_2,
                 IVORY,
             );
             ring(
                 frame,
-                center + Vec3::Y * (cast.age * 0.8),
-                0.72 - cast.age * 0.18,
+                center + Vec3::Y * (1.0 + cast.age * 0.8),
+                1.02 - cast.age * 0.18,
                 IVORY,
                 Quat::IDENTITY,
             );
@@ -671,7 +671,7 @@ fn maw_cast(frame: &mut Frame, cast: &Cast, slot: u8) {
         2 => {
             for index in 0..4u8 {
                 let step = f32::from(index);
-                let point = cast.forward(0.35 + step * 0.5 + cast.age * 0.7);
+                let point = cast.forward(1.2 + step * 0.5 + cast.age * 0.7);
                 put(
                     frame,
                     MESH_OCTA,
@@ -793,7 +793,12 @@ fn cast_effect(frame: &mut Frame, cast: &Cast, champ: u8, ability: u8) {
 }
 
 fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
-    let pos = cast.origin + Vec3::Y * 0.9;
+    let start = fx.v.rem_euclid(8.0) >= 4.0;
+    let pos = if start && matches!(fx.champ, 2 | 3) {
+        cast.forward(1.15) + Vec3::Y * 1.65
+    } else {
+        cast.origin + Vec3::Y * 0.9
+    };
     match fx.champ {
         0 => {
             for index in 0..3u8 {
@@ -827,8 +832,8 @@ fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
             },
         ),
         2 => {
-            petals(frame, pos, 0.28 + cast.age * 0.7, -cast.age * 2.0, 4, IVORY);
-            diamond(frame, pos, 0.22 + cast.pulse * 0.3, cast.yaw, MINT);
+            petals(frame, pos, 0.58 + cast.age * 0.7, -cast.age * 2.0, 4, IVORY);
+            diamond(frame, pos, 0.42 + cast.pulse * 0.3, cast.yaw, MINT);
         }
         3 => claw_strike(frame, pos, cast.yaw, cast.age),
         4 => {
@@ -880,7 +885,9 @@ fn teleport(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
                 sparks(frame, point + Vec3::Y * 0.6, HOT, cast.age, 4);
             }
             3 => {
-                petals(frame, point, 0.45 + age * 0.5, cast.yaw, 5, SLUDGE);
+                petals(frame, point + Vec3::Y * 0.1, 1.25 + age * 0.5, cast.yaw, 5, SLUDGE);
+                arc(frame, point + Vec3::Y * 0.12, 1.3 + age * 0.5,
+                    [cast.yaw - PI * 0.7, cast.yaw + PI * 0.7], SLUDGE, 0.075);
                 put(
                     frame,
                     MESH_OCTA,
