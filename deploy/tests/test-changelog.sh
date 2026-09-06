@@ -38,6 +38,12 @@
 #   <tag>       tag `<name>`
 #               tag `<name>` (points at `<sha>`)
 #               no tag
+# A version the launcher lists but the published branch does not carry yet is
+# a legitimate state, not a gap: it takes `source not recorded · no tag` and
+# omits the published field, and the selection and publication checks pass
+# over it. Nothing else is relaxed for it — it still needs an entry, and its
+# protocol is still compared with the launcher's.
+#
 #   <published> published `<sha>`                  root version.json at that
 #                                                  publication names the source
 #               published `<sha>` (message)        the publication's own subject
@@ -201,10 +207,11 @@ import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 for g in d["games"]:
     for v in g["versions"]:
-        print("%s\t%s\t%s" % (g["id"], v["v"], v.get("proto", "-")))
+        print("%s\t%s\t%s\t%s" % (g["id"], v["v"], v.get("proto", "-"),
+                                    v.get("path", "-")))
 PY
 
-while IFS=$'\t' read -r gid ver lproto; do
+while IFS=$'\t' read -r gid ver lproto _; do
     [ -n "$gid" ] || continue
     want="$(section_for "$gid")"
     if [ -z "$want" ]; then
@@ -221,7 +228,7 @@ done < "$LAUNCHER"
 while IFS=$'\t' read -r _ section version _ _ _ _ _ _ _ _ _; do
     [ -n "$section" ] || continue
     found=""
-    while IFS=$'\t' read -r gid ver _; do
+    while IFS=$'\t' read -r gid ver _ _; do
         [ "$(section_for "$gid")" = "$section" ] && [ "$ver" = "$version" ] && found=1
     done < "$LAUNCHER"
     if [ -n "$found" ]; then
@@ -242,7 +249,7 @@ echo "== the protocol matches the launcher =="
 while IFS=$'\t' read -r _ section version pnum plauncher _ _ _ _ _ pubsha pubkind _; do
     [ -n "$section" ] || continue
     lproto="-"
-    while IFS=$'\t' read -r gid ver lp; do
+    while IFS=$'\t' read -r gid ver lp _; do
         [ "$(section_for "$gid")" = "$section" ] && [ "$ver" = "$version" ] && lproto="$lp"
     done < "$LAUNCHER"
     if [ "$plauncher" != "-" ]; then
@@ -311,6 +318,119 @@ if [ -n "$IN_GIT" ]; then
     done < <(grep '^ROW' "$PARSED")
 fi
 
+echo "== the named publication is the one the rule selects =="
+
+# Reading the right publication is the whole of the rule, and naming a
+# publication is not the same as naming the right one. A review broke the
+# previous suite by moving v22 back to its FIRST publication: source, stamp,
+# tag, protocol and ancestry all agreed, and only the existence of a later
+# byte-changing publication made the row wrong. So a named publication must
+# clear three bars. It must be reachable from the published branch, because a
+# commit that never reached gh-pages published nothing. It must appear in the
+# history of that entry's served path — the launcher's own `path`, so a lab
+# under labs/ is found where it actually lives — because a publication that
+# left the page untouched did not cut the release. And it must be the newest
+# such publication whose applicable stamp names an ancestor of HEAD, the
+# applicable stamp being the release's own version.json if it has one, else
+# the sha its message names, else the root ticker: exactly the precedence the
+# changelog states. A row that declares its source is not in this repository
+# is asserting that no on-main stamp applies to it, so the third bar is not
+# applied there; the first two still are.
+sel_checked=0
+sel_skipped=0
+
+PAGES="refs/remotes/pages/gh-pages"
+if [ -n "$IN_GIT" ] && git -C "$REPO" rev-parse -q --verify "$PAGES" >/dev/null 2>&1; then
+    HAVE_PAGES=1
+else
+    HAVE_PAGES=""
+fi
+
+# The applicable stamp of one publication, by the changelog's precedence.
+applicable_source() {
+    local c="$1" path="$2" got tok
+    got="$(git -C "$REPO" show "$c:$path/version.json" 2>/dev/null \
+           | "$PY" -c 'import json,sys
+try: print(json.load(sys.stdin)["commit"])
+except Exception: print("")')"
+    if [ -n "$got" ]; then echo "$got"; return; fi
+    for tok in $(git -C "$REPO" log -1 --format=%s "$c" | grep -oE '[0-9a-f]{7,40}' || true); do
+        if git -C "$REPO" cat-file -e "$tok^{commit}" 2>/dev/null; then echo "$tok"; return; fi
+    done
+    git -C "$REPO" show "$c:version.json" 2>/dev/null \
+        | "$PY" -c 'import json,sys
+try: print(json.load(sys.stdin)["commit"])
+except Exception: print("")'
+}
+
+if [ -n "$IN_GIT" ] && [ -z "$HAVE_PAGES" ]; then
+    sel_skipped="$(grep -c '^ROW' "$PARSED" || true)"
+    ok "SKIP selection checks: $PAGES is not in this checkout, so no publication can be located or compared ($sel_skipped rows)"
+elif [ -n "$IN_GIT" ]; then
+    while IFS=$'\t' read -r _ section version _ _ _ kind sha _ _ pubsha pubkind _; do
+        [ -n "$section" ] || continue
+        [ "$pubkind" != "-" ] || continue
+        path=""
+        while IFS=$'\t' read -r g v _ pth; do
+            [ "$(section_for "$g")" = "$section" ] && [ "$v" = "$version" ] && path="${pth%/}"
+        done < "$LAUNCHER"
+        if [ -z "$path" ]; then
+            bad "$section $version: the launcher gives no served path"
+            continue
+        fi
+        if ! git -C "$REPO" cat-file -e "$pubsha^{commit}" 2>/dev/null; then
+            sel_skipped=$((sel_skipped + 1))
+            ok "SKIP $section $version: publication $pubsha is not in this checkout"
+            continue
+        fi
+        sel_checked=$((sel_checked + 1))
+        if git -C "$REPO" merge-base --is-ancestor "$pubsha" "$PAGES" 2>/dev/null; then
+            ok "$section $version: publication $pubsha is reachable from the published branch"
+        else
+            bad "$section $version: publication $pubsha is not reachable from $PAGES, so it published nothing"
+            continue
+        fi
+        cands="$(git -C "$REPO" log "$PAGES" --format=%H -- "$path")"
+        case "$cands" in
+            *"$pubsha"*) ;;
+            *)
+                full="$(git -C "$REPO" rev-parse "$pubsha")"
+                case "$cands" in
+                    *"$full"*) ;;
+                    *)  bad "$section $version: publication $pubsha does not change $path"
+                        continue ;;
+                esac
+                ;;
+        esac
+        ok "$section $version: publication $pubsha changes $path"
+        if [ "$kind" != "sha" ]; then
+            ok "$section $version: no on-main stamp applies, so no newer eligible publication is required"
+            continue
+        fi
+        selected=""
+        for c in $cands; do
+            asrc="$(applicable_source "$c" "$path")"
+            [ -n "$asrc" ] || continue
+            git -C "$REPO" cat-file -e "$asrc^{commit}" 2>/dev/null || continue
+            if git -C "$REPO" merge-base --is-ancestor "$asrc" HEAD 2>/dev/null; then
+                selected="$c"
+                selsrc="$asrc"
+                break
+            fi
+        done
+        if [ -z "$selected" ]; then
+            bad "$section $version: no publication of $path has a stamp naming an ancestor of HEAD"
+        elif [ "$selected" != "$(git -C "$REPO" rev-parse "$pubsha")" ]; then
+            bad "$section $version: entry names publication $pubsha, but ${selected:0:8} is a newer publication of $path whose stamp names ${selsrc:0:8}"
+        elif [ "$(git -C "$REPO" rev-parse "$selsrc^{commit}")" != "$(git -C "$REPO" rev-parse "$sha^{commit}")" ]; then
+            bad "$section $version: the selected publication's stamp names $selsrc, entry says $sha"
+        else
+            ok "$section $version: $pubsha is the newest publication of $path with an on-main stamp"
+        fi
+    done < <(grep '^ROW' "$PARSED")
+    echo "   ($sel_checked selection(s) checked, $sel_skipped skipped)"
+fi
+
 echo "== the publication on the published branch says the same thing =="
 
 # This is the check the first version of this suite did not have. The
@@ -334,7 +454,7 @@ if [ -n "$IN_GIT" ]; then
         # The section heading is prose; the launcher carries the game id, and
         # the id is what the published layout is keyed on.
         gid=""
-        while IFS=$'\t' read -r g v _; do
+        while IFS=$'\t' read -r g v _ _; do
             [ "$(section_for "$g")" = "$section" ] && [ "$v" = "$version" ] && gid="$g"
         done < "$LAUNCHER"
         case "$pubkind" in
