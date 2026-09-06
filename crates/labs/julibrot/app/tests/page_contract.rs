@@ -29,7 +29,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 121] = [
+const PAGE_FACT_FIELDS: [&str; 123] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -67,6 +67,8 @@ const PAGE_FACT_FIELDS: [&str; 121] = [
     "sampled_reference_requests",
     "sampled_reference_rounds",
     "sampled_reference_discards",
+    "sampled_reference_refusal",
+    "scene_refusal_reason",
     "last_draft_skip_reason",
     "extent_divisor",
     "active_pixels",
@@ -762,6 +764,28 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("draft_skipped_count: loop_facts.draft_skipped_count()"));
     assert!(FACTS.contains("sampled_reference_rounds: loop_facts.sampled_reference_rounds()"));
     assert!(FACTS.contains("sampled_reference_discards: loop_facts.sampled_reference_discards()"));
+    assert!(FACTS.contains("sampled_reference_refusal: loop_facts.sampled_reference_refusal()"));
+    assert!(FACTS.contains("scene_refusal_reason: loop_facts.scene_refusal_reason()"));
+    assert!(FRAME.contains("self.retain_reference_across_discard("));
+    // The arrival must be processed while the owner still holds its submission in flight: the
+    // owner answers a navigation only through the submission it named, so a discard that runs
+    // after the submission is finished has nothing it can hand the accepted orbit to.
+    let arrivals = FRAME
+        .split_once("fn service_arrivals(")
+        .expect("the browser loop services arrivals")
+        .1;
+    let arrivals = arrivals
+        .split_once("fn process_arrival(")
+        .expect("service_arrivals precedes process_arrival in this source")
+        .0;
+    assert!(
+        arrivals.find("self.process_arrival(")
+            < arrivals.find("viewer.finish_reference_submission("),
+        "the arrival is processed before its submission is finished"
+    );
+    assert!(
+        FRAME.contains("super::warp_presents_requested_view(self.presenter.facts().warp_kind)")
+    );
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));

@@ -127,6 +127,10 @@ pub struct PageFacts<'a> {
     pub sampled_reference_rounds: u32,
     /// Census arrivals discarded for not lengthening the accepted reference orbit.
     pub sampled_reference_discards: u32,
+    /// Why the last census correction bought nothing, while the short reference still serves.
+    pub sampled_reference_refusal: Option<&'static str>,
+    /// Why the refinement ladder stood down without delivering the requested view.
+    pub scene_refusal_reason: Option<&'static str>,
     pub last_draft_skip_reason: Option<&'static str>,
     pub extent_divisor: Option<u32>,
     pub active_pixels: Option<u32>,
@@ -308,6 +312,8 @@ impl<'a> PageFacts<'a> {
             sampled_reference_requests: loop_facts.sampled_reference_requests(),
             sampled_reference_rounds: loop_facts.sampled_reference_rounds(),
             sampled_reference_discards: loop_facts.sampled_reference_discards(),
+            sampled_reference_refusal: loop_facts.sampled_reference_refusal(),
+            scene_refusal_reason: loop_facts.scene_refusal_reason(),
             last_draft_skip_reason: loop_facts.last_draft_skip_reason(),
             extent_divisor: Some(plan.extent_divisor),
             active_pixels: dispatch.map(|facts| facts.active_pixels),

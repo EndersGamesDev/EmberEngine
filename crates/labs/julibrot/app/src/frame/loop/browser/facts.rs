@@ -69,6 +69,17 @@ impl BrowserFrameLoop {
         self.loop_state.last_draft_skip_reason()
     }
 
+    /// Returns why the refinement ladder stood down without delivering the requested view.
+    ///
+    /// This is absent in every ordinary state, including a hold: a hold says replacement work is
+    /// coming, and this says it is not. A reader that sees refinement idle while the presented view
+    /// is still stale has here the one sentence that distinguishes a finished picture from a
+    /// refused one.
+    #[must_use]
+    pub const fn scene_refusal_reason(&self) -> Option<&'static str> {
+        self.loop_state.scene_refusal()
+    }
+
     /// Returns the count of transient fence refusals this session survived.
     #[must_use]
     pub const fn transient_refusals(&self) -> u32 {
