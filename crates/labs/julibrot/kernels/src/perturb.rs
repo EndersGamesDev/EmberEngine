@@ -559,6 +559,79 @@ mod tests {
         assert_eq!(glitch.record.escaped, 0.0);
     }
 
+    /// Pins what a reference orbit that escapes before the cap can still answer exactly.
+    ///
+    /// The delta iteration is only defined while the reference orbit it is expanded around exists,
+    /// so a reference that escapes at iteration k is not a reference that renders nothing: every
+    /// pixel whose own orbit leaves the bailout radius at an iteration the reference still covers
+    /// reads the same escape count it would read from a full-cap reference, and a pixel that
+    /// outruns the reference carries the reference-exhausted record rather than a number nothing
+    /// supports. That is the whole picture such a reference can honestly deliver, and it is a
+    /// picture: partly exact, and the rest named as uncertain.
+    #[test]
+    fn a_reference_that_escapes_early_answers_every_pixel_that_escapes_first() {
+        const CAP: u32 = 512;
+        let uniforms_for_length = |length: u32| uniform(CAP, length);
+        let bailout = f64::from(uniforms_for_length(1).bailout);
+
+        // The reference orbit of c = 1, which leaves the bailout radius long before the cap.
+        let mut reference = Vec::new();
+        let mut z = 0.0_f64;
+        loop {
+            reference.push(ReferenceOrbitRecord {
+                re: z as f32,
+                im: 0.0,
+            });
+            if z * z > bailout {
+                break;
+            }
+            z = z * z + 1.0;
+        }
+        let escaped_at = u32::try_from(reference.len()).expect("reference length fits");
+        assert!(escaped_at < CAP, "the reference escapes before the cap");
+        let uniforms = uniforms_for_length(escaped_at);
+
+        for offset in [0.0_f32, 1.0e-4, -1.0e-4, 1.0e-2, -1.0e-2] {
+            // The same pixel iterated directly, which is what "exact" is measured against.
+            let c = 1.0 + f64::from(offset);
+            let mut z = 0.0_f64;
+            let mut oracle = None;
+            for iteration in 0..CAP {
+                if z * z > bailout {
+                    oracle = Some(iteration);
+                    break;
+                }
+                z = z * z + c;
+            }
+            let oracle = oracle.expect("a point outside the set escapes within the cap");
+            assert!(
+                oracle < escaped_at,
+                "the fixture is the case where the pixel escapes before the reference does"
+            );
+            let sample = perturb_scaled_offset(&uniforms, &reference, [0.0, 0.0, offset, 0.0])
+                .expect("the reference covers its own stated length");
+            assert_eq!(sample.record.escaped, 1.0);
+            assert_eq!(sample.record.status, 0.0);
+            assert_eq!(
+                sample.escape_index,
+                Some(oracle),
+                "an escape the reference covers is the direct iteration's own count"
+            );
+        }
+
+        // The same pixel against a reference that runs out first claims nothing instead.
+        let exhausted = perturb_scaled_offset(&uniform(CAP, 1), &[ZERO], [0.0, 0.0, 1.0, 0.0])
+            .expect("a one-record reference states its length honestly");
+        assert_eq!(exhausted.escape_index, None);
+        assert_eq!(exhausted.record.escaped, 0.0);
+        assert_eq!(exhausted.record.status, 1.0);
+        assert_eq!(
+            exhausted.record.smooth_iter.to_bits(),
+            crate::GLITCH_REFERENCE_EXHAUSTED.to_bits(),
+            "outrunning the reference is named as that, not as arithmetic failure"
+        );
+    }
+
     #[test]
     fn mapped_terminal_precedes_reference_iteration() {
         let mut uniforms = uniform(4, 4);

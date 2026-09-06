@@ -29,7 +29,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 121] = [
+const PAGE_FACT_FIELDS: [&str; 122] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -67,6 +67,7 @@ const PAGE_FACT_FIELDS: [&str; 121] = [
     "sampled_reference_requests",
     "sampled_reference_rounds",
     "sampled_reference_discards",
+    "sampled_reference_refusal",
     "last_draft_skip_reason",
     "extent_divisor",
     "active_pixels",
@@ -762,6 +763,11 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("draft_skipped_count: loop_facts.draft_skipped_count()"));
     assert!(FACTS.contains("sampled_reference_rounds: loop_facts.sampled_reference_rounds()"));
     assert!(FACTS.contains("sampled_reference_discards: loop_facts.sampled_reference_discards()"));
+    assert!(FACTS.contains("sampled_reference_refusal: loop_facts.sampled_reference_refusal()"));
+    assert!(FRAME.contains("self.retain_reference_across_discard("));
+    assert!(
+        FRAME.contains("super::warp_presents_requested_view(self.presenter.facts().warp_kind)")
+    );
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));

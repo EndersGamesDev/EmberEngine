@@ -108,6 +108,16 @@ impl BrowserFrameLoop {
         self.sampled_reference_discards
     }
 
+    /// Returns why the last census correction bought nothing, while that verdict still stands.
+    ///
+    /// A discard is a limit on the picture, not a loop failure: the reference stays as short as it
+    /// escaped, so the levels drawn from it carry reference-exhausted records. Naming the reason is
+    /// what lets a reader tell that limit from a correction that has not been tried.
+    #[must_use]
+    pub const fn sampled_reference_refusal(&self) -> Option<&'static str> {
+        self.sampled_reference_refusal
+    }
+
     pub(super) fn service_arrivals(
         &mut self,
         viewer: &mut ViewerController,
@@ -140,6 +150,64 @@ impl BrowserFrameLoop {
         Ok(applied)
     }
 
+    /// Returns the accepted orbit to the navigation a discarded census correction created.
+    ///
+    /// The correction's request is a navigation with a zero delta: it moves the orbit point and
+    /// nothing the picture depends on, yet the owner stages a new generation and a new centre
+    /// revision for it. Discarding the arrival without answering that navigation leaves the
+    /// accepted lease naming the state before the correction, and the scene gate then reads the
+    /// reference as belonging to an older selection for as long as the page is open: a level stays
+    /// due, no dispatch is allowed, refinement reports pending with nothing in flight, and the
+    /// presenter goes on holding the previous picture under a rule written for pending work.
+    ///
+    /// Handing the orbit already held to that navigation ends the round in the only state that is
+    /// both true and useful. The orbit is short because the reference escaped, so the levels above
+    /// it carry records the kernel marks as reference-exhausted rather than silently wrong, and the
+    /// ladder resumes at the level whose census asked so the correction costs one round rather than
+    /// a repaint from Preview. A refusal to take the navigation means a newer one has already been
+    /// requested, which will bring its own reference.
+    fn retain_reference_across_discard(
+        &mut self,
+        viewer: &mut ViewerController,
+        generation: u32,
+        centre_revision: u32,
+        level: Option<RefinementLevel>,
+    ) -> Result<(), AppError> {
+        let Some(handle) = self.current_orbit else {
+            return Ok(());
+        };
+        let orbit = self.orbits.get(handle).map_err(registry_error)?;
+        let (orbit_length, orbit_precision_bits) = (orbit.length, orbit.precision_bits);
+        if !viewer.owner_mut().accept_navigation_with_orbit(
+            generation,
+            centre_revision,
+            handle.id,
+            orbit_length,
+            orbit_precision_bits,
+        ) {
+            return Ok(());
+        }
+        if let Some(receipt) = self.accepted_reference_receipt.as_mut() {
+            super::super::adopt_reference_lease_for_correction(
+                &mut receipt.lease,
+                generation,
+                centre_revision,
+            );
+        }
+        self.main = viewer.drain_main()?.main;
+        self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
+        match level {
+            Some(level) => self.loop_state.scene_input_resumed(generation, level),
+            None => self.loop_state.scene_input_ready(generation),
+        }
+        self.prepared_level = None;
+        let requested = viewer.requested();
+        let map = viewer.screen_map(self.prepared_extent())?;
+        let plane = viewer.checked_plane();
+        self.install_main(viewer, requested.object_angles, plane, map);
+        Ok(())
+    }
+
     fn process_arrival(
         &mut self,
         viewer: &mut ViewerController,
@@ -160,7 +228,14 @@ impl BrowserFrameLoop {
         };
         if submitted.sampled && response.length() <= self.main.orbit_length {
             self.sampled_reference_discards = self.sampled_reference_discards.saturating_add(1);
-            self.sampled_resume_level = None;
+            self.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
+            let level = self.sampled_resume_level.take();
+            self.retain_reference_across_discard(
+                viewer,
+                response.generation(),
+                response.centre_revision(),
+                level,
+            )?;
             return Ok((OrbitDisposition::Stale, false));
         }
         let upload_started_us = monotonic_now_us();
@@ -253,6 +328,7 @@ impl BrowserFrameLoop {
             self.sampled_references = 0;
             self.sampled_reference_rounds = 0;
             self.sampled_reference_discards = 0;
+            self.sampled_reference_refusal = None;
             self.sampled_resume_level = None;
         }
         self.main = viewer.drain_main()?.main;

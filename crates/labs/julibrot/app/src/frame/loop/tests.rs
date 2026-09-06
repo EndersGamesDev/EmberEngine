@@ -3088,8 +3088,13 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
     let correction_generation = ACCEPTED_GENERATION + 1;
     let correction_centre_revision = ACCEPTED_CENTRE_REVISION + 1;
 
-    // The discard path keeps the accepted lease exactly as it stands and returns.
-    let after_discard = accepted;
+    // The discard hands the orbit already held to the navigation the correction created.
+    let mut after_discard = accepted;
+    super::adopt_reference_lease_for_correction(
+        &mut after_discard,
+        correction_generation,
+        correction_centre_revision,
+    );
     assert!(
         perturbation_reference_is_current(
             correction_generation,
@@ -3105,12 +3110,53 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
          every later dispatch"
     );
 
-    // The schedule the refusal strands: a level is due, nothing is in flight, and no turn can
-    // move it, so refinement reports pending for as long as the page is open.
+    // The orbit that was already too short is still too short, so the levels above it draw
+    // reference-exhausted records rather than nothing: the lease keeps its escaped length.
+    assert_eq!(after_discard.orbit_length, ESCAPED_AT);
+    // The navigation before the correction is not served by the adopted lease: the orbit answers
+    // one navigation, and moving it forward is not the same as renewing it across a view change.
+    assert!(!perturbation_reference_is_current(
+        ACCEPTED_GENERATION,
+        ACCEPTED_CENTRE_REVISION,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        PRECISION_BITS,
+        CAP,
+        Some(after_discard)
+    ));
+
+    // The schedule the discard leaves behind: the level whose census asked is due again under the
+    // correction's generation, so the round costs one resumed level rather than a repaint from
+    // Preview, and no state is reachable in which a level is due that no dispatch may serve.
     let mut ladder = FrameLoop::default();
     ladder.restart(ACCEPTED_GENERATION);
     ladder.submitted(7, RefinementLevel::Preview);
     assert!(ladder.completed(7, ACCEPTED_GENERATION, RefinementLevel::Preview));
     assert_eq!(ladder.due(), Some(RefinementLevel::Interactive));
+    ladder.scene_input_resumed(correction_generation, RefinementLevel::Interactive);
+    assert_eq!(ladder.due(), Some(RefinementLevel::Interactive));
+    assert_eq!(ladder.generation(), correction_generation);
     assert!(ladder.refinement_pending());
+}
+
+/// Pins the stale reading a hold must not clear.
+///
+/// The loop stamps the view it expects the next presented image to reproduce when it submits the
+/// warp that will draw it. A held warp draws the last completed picture unmoved, so the image that
+/// reaches the canvas belongs to the view that was already there; stamping the requested view
+/// against it makes the loop report a picture of another zoom as the current view, and every
+/// caller that asks whether the picture is finished is told yes about the wrong picture.
+#[test]
+fn a_held_warp_does_not_stamp_the_requested_view_as_presented() {
+    assert!(!super::warp_presents_requested_view(WarpKind::HoldStale));
+    for kind in [
+        WarpKind::AnchorHomography,
+        WarpKind::ClearOnly,
+        WarpKind::ReliefRedraw,
+    ] {
+        assert!(
+            super::warp_presents_requested_view(kind),
+            "{kind:?} draws for the requested view and stamps it"
+        );
+    }
 }
