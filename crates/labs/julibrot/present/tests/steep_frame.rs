@@ -979,34 +979,74 @@ struct ReliefRedrawMeasurement {
     requested_anchor_error_px: f64,
 }
 
-impl core::fmt::Display for ReliefRedrawMeasurement {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            formatter,
-            "zoom_delta={:.1}\ncounts agree={} hole={} occluded_wrong={} resolution_only={}\nresolution_detail agree_record_changed={} same_broad_class={} class_changed={}\nhole_detail largest_connected={}\nchart_detail maximum_separation_px={:.12} source_texel_reach_px={:.12}\nfractions agree={:.12} hole={:.12} occluded_wrong={:.12} resolution_only={:.12} exposed={:.12}\ncentre truth_px={:?} redraw_px={:?} error_px={:.12}\nanchor truth_px={:?} redraw_px={:?} error_px={:.12}",
-            self.zoom_delta,
-            self.agree,
-            self.hole,
-            self.occluded_wrong,
-            self.resolution_only,
-            self.agree_record_changed,
+impl ReliefRedrawMeasurement {
+    fn assert_pinned(&self, expected: &Self) {
+        const FRACTION_TOLERANCE: f64 = 5.0e-13;
+        const CHART_TOLERANCE_PX: f64 = 5.0e-9;
+        const PLACEMENT_TOLERANCE_PX: f64 = 1.0e-9;
+
+        assert_eq!(self.zoom_delta, expected.zoom_delta);
+        assert_eq!(self.agree, expected.agree);
+        assert_eq!(self.hole, expected.hole);
+        assert_eq!(self.occluded_wrong, expected.occluded_wrong);
+        assert_eq!(self.resolution_only, expected.resolution_only);
+        assert_eq!(self.agree_record_changed, expected.agree_record_changed);
+        assert_eq!(
             self.resolution_same_broad_class,
+            expected.resolution_same_broad_class
+        );
+        assert_eq!(
             self.resolution_class_changed,
-            self.largest_connected_hole,
-            self.maximum_same_pixel_chart_separation_px,
-            self.source_texel_reach_px,
-            self.agree_fraction,
-            self.hole_fraction,
-            self.occluded_wrong_fraction,
-            self.resolution_only_fraction,
-            self.exposed_fraction,
+            expected.resolution_class_changed
+        );
+        assert_eq!(self.largest_connected_hole, expected.largest_connected_hole);
+        assert!(
+            (self.maximum_same_pixel_chart_separation_px
+                - expected.maximum_same_pixel_chart_separation_px)
+                .abs()
+                <= CHART_TOLERANCE_PX
+        );
+        assert!(
+            (self.source_texel_reach_px - expected.source_texel_reach_px).abs()
+                <= CHART_TOLERANCE_PX
+        );
+        for (actual, expected) in [
+            (self.agree_fraction, expected.agree_fraction),
+            (self.hole_fraction, expected.hole_fraction),
+            (
+                self.occluded_wrong_fraction,
+                expected.occluded_wrong_fraction,
+            ),
+            (
+                self.resolution_only_fraction,
+                expected.resolution_only_fraction,
+            ),
+            (self.exposed_fraction, expected.exposed_fraction),
+        ] {
+            assert!((actual - expected).abs() <= FRACTION_TOLERANCE);
+        }
+        assert_eq!(
             self.requested_centre_truth_px,
-            self.requested_centre_redraw_px,
-            self.requested_centre_error_px,
+            expected.requested_centre_truth_px
+        );
+        assert_eq!(
             self.requested_anchor_truth_px,
-            self.requested_anchor_redraw_px,
-            self.requested_anchor_error_px,
-        )
+            expected.requested_anchor_truth_px
+        );
+        for (actual, expected) in self
+            .requested_centre_redraw_px
+            .into_iter()
+            .zip(expected.requested_centre_redraw_px)
+            .chain(
+                self.requested_anchor_redraw_px
+                    .into_iter()
+                    .zip(expected.requested_anchor_redraw_px),
+            )
+        {
+            assert!((actual - expected).abs() <= PLACEMENT_TOLERANCE_PX);
+        }
+        assert!(self.requested_centre_error_px <= PLACEMENT_TOLERANCE_PX);
+        assert!(self.requested_anchor_error_px <= PLACEMENT_TOLERANCE_PX);
     }
 }
 
@@ -1183,7 +1223,7 @@ fn measure_relief_redraw(
 }
 
 #[test]
-fn measured_relief_zoom_redraw_reports_the_native_pixel_oracle() {
+fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
     let sampling_from = zoom_pose(3.565);
     let source_records = steep_records(&sampling_from);
     let mut from = sampling_from;
@@ -1222,10 +1262,68 @@ fn measured_relief_zoom_redraw_reports_the_native_pixel_oracle() {
             &from, &to, &redraw, &truth, zoom_delta,
         ));
     }
-    assert_eq!(reports.len(), 2, "both zoom deltas must be measured");
-    panic!(
-        "native relief redraw measurements:\n{}\n{}",
-        reports[0], reports[1]
+    let expected = [
+        ReliefRedrawMeasurement {
+            zoom_delta: 0.1,
+            agree: 476_107,
+            hole: 438,
+            occluded_wrong: 36_862,
+            resolution_only: 4_993,
+            agree_record_changed: 274_214,
+            resolution_same_broad_class: 1_961,
+            resolution_class_changed: 3_032,
+            largest_connected_hole: 108,
+            maximum_same_pixel_chart_separation_px: 5_529.504_350_957_549,
+            source_texel_reach_px: 1.464_965_064_442,
+            agree_fraction: 0.918_416_280_864,
+            hole_fraction: 0.000_844_907_407,
+            occluded_wrong_fraction: 0.071_107_253_086,
+            resolution_only_fraction: 0.009_631_558_642,
+            exposed_fraction: 0.071_952_160_494,
+            requested_centre_truth_px: [480.0, 270.0],
+            requested_centre_redraw_px: [480.0, 270.0],
+            requested_centre_error_px: 0.0,
+            requested_anchor_truth_px: [0.0, 0.0],
+            requested_anchor_redraw_px: [0.0, 0.0],
+            requested_anchor_error_px: 0.0,
+        },
+        ReliefRedrawMeasurement {
+            zoom_delta: 0.5,
+            agree: 486_977,
+            hole: 173,
+            occluded_wrong: 27_611,
+            resolution_only: 3_639,
+            agree_record_changed: 363_622,
+            resolution_same_broad_class: 1_618,
+            resolution_class_changed: 2_021,
+            largest_connected_hole: 4,
+            maximum_same_pixel_chart_separation_px: 295.800_968_280_872,
+            source_texel_reach_px: 1.707_106_781_187,
+            agree_fraction: 0.939_384_645_062,
+            hole_fraction: 0.000_333_719_136,
+            occluded_wrong_fraction: 0.053_261_959_877,
+            resolution_only_fraction: 0.007_019_675_926,
+            exposed_fraction: 0.053_595_679_012,
+            requested_centre_truth_px: [480.0, 270.0],
+            requested_centre_redraw_px: [480.0, 270.0],
+            requested_centre_error_px: 0.0,
+            requested_anchor_truth_px: [0.0, 0.0],
+            requested_anchor_redraw_px: [0.0, 0.0],
+            requested_anchor_error_px: 0.0,
+        },
+    ];
+    assert_eq!(reports.len(), expected.len(), "both zoom deltas are pinned");
+    for (actual, expected) in reports.iter().zip(&expected) {
+        actual.assert_pinned(expected);
+    }
+
+    // Eight percent is the smallest round policy boundary with useful headroom over the measured
+    // worst case: +0.1 is 7.1952%, leaving 0.8048 percentage point before a redraw becomes a hold.
+    const MAX_ACCEPTED_EXPOSED_FRACTION: f64 = 0.08;
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.exposed_fraction < MAX_ACCEPTED_EXPOSED_FRACTION)
     );
 }
 
