@@ -419,23 +419,40 @@ const fn adopt_reference_lease_for_correction(
 /// the previous picture no warp stamps the requested view at all, so the moment the last level
 /// completes the view on screen is honestly not the view being asked for and yet nothing is
 /// missing: the picture for that view exists and the next warp draws it. Restarting there spends a
-/// whole ladder repainting a scene that was one present away. The restart is therefore reserved
-/// for the case the rule is about, a view that moved on after the scene it asked for has already
-/// been shown.
+/// whole ladder repainting a scene that was one present away.
+///
+/// Manual refinement is exempt because it starts no work here. The observation only records that
+/// the pose moved, and the page's own update decides when a scene is drawn; withholding the record
+/// would lose the bookkeeping without saving the repaint, so a manual page still marks its pending
+/// update on every stale turn as it did before this rule existed.
+///
+/// The scene identities answer one question: is the picture on the canvas the completed scene? A
+/// hold names the retained frame as its source, so during a hold both readings are that frame and
+/// the rule fires as it always did. A clear names no source at all, so a blank canvas beside a
+/// completed scene reads as the one-present gap and waits — which is what it is at page load, where
+/// the opening warps clear and the first scene completes a turn before its own warp runs. That arm
+/// is safe only while a clear cannot strand a completed scene at a stale view: a clear replaces a
+/// hold exactly when nothing is pending, which is the state this rule restarts from, so the turn
+/// that would produce the stranded blank is the turn the ladder restarts on.
 #[cfg(any(target_arch = "wasm32", test))]
 const fn stale_view_needs_a_new_scene(
+    scene_mode: SceneMode,
     refinement_pending: bool,
     view_stale: bool,
     completed_scene_id: Option<u64>,
     presented_scene_id: Option<u64>,
 ) -> bool {
-    !refinement_pending
-        && view_stale
-        && match (completed_scene_id, presented_scene_id) {
+    if refinement_pending || !view_stale {
+        return false;
+    }
+    match scene_mode {
+        SceneMode::Manual => true,
+        SceneMode::Auto => match (completed_scene_id, presented_scene_id) {
             (Some(completed), Some(presented)) => completed == presented,
-            (None, None) => true,
-            _ => false,
-        }
+            (None, _) => true,
+            (Some(_), None) => false,
+        },
+    }
 }
 
 /// Whether a submitted warp puts the requested view on the canvas.
@@ -1159,6 +1176,7 @@ mod browser {
             self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             self.observe_scene_selection(viewer);
             if super::stale_view_needs_a_new_scene(
+                self.loop_state.scene_mode(),
                 self.loop_state.refinement_pending(),
                 self.presented_view_is_stale(viewer),
                 self.presenter.facts().completed_scene_id,

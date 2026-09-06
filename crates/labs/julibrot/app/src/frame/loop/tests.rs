@@ -3145,26 +3145,39 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
 /// stands in for it, including the turn its replacement completes on. The restart rule has to tell
 /// that turn from the case it exists for: a completed scene one present from the canvas is not a
 /// missing scene, while a view that moved on after its scene was shown is.
+///
+/// The scene identities come from the warp plan's source. A hold names the retained frame, which is
+/// also the frame the completed reading names, so a persisting hold leaves the two equal and the
+/// rule keeps working through it. A clear names nothing, so a blank canvas beside a completed scene
+/// is the one-present gap the opening frames of every page are in.
 #[test]
 fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
+    use super::SceneMode::Auto;
     assert!(
-        !super::stale_view_needs_a_new_scene(false, true, Some(7), Some(5)),
+        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(5)),
         "the completed scene has not been presented yet, so the picture for this view exists"
     );
     assert!(
-        !super::stale_view_needs_a_new_scene(false, true, Some(7), None),
-        "nothing has reached the canvas yet, and the completed scene is on its way"
+        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), None),
+        "a clear names no source: the completed scene has not reached the canvas yet"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(false, true, Some(7), Some(7)),
+        super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(7)),
         "the completed scene is what is on screen and the view has still moved on"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(false, true, None, None),
+        super::stale_view_needs_a_new_scene(Auto, false, true, None, None),
         "an opening frame with no scene at all starts the first ladder"
     );
-    assert!(!super::stale_view_needs_a_new_scene(true, true, None, None));
+    assert!(
+        super::stale_view_needs_a_new_scene(Auto, false, true, None, Some(5)),
+        "no completed scene exists, so nothing is on its way for this view"
+    );
     assert!(!super::stale_view_needs_a_new_scene(
+        Auto, true, true, None, None
+    ));
+    assert!(!super::stale_view_needs_a_new_scene(
+        Auto,
         false,
         false,
         Some(7),
@@ -3172,7 +3185,52 @@ fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
     ));
 }
 
-/// Pins the stale reading a hold must not clear.
+/// Pins that manual refinement still records every stale turn.
+///
+/// A manual page holds unconditionally, so under the scene-identity test its ladder would go
+/// unobserved for as long as the hold lasted and the pending-update flag the page shows would never
+/// be set. Manual refinement starts no work in this rule, so there is nothing for the test to save:
+/// the observation is bookkeeping, and it is kept. What the observation then does is unchanged —
+/// manual mode marks the update pending and waits, auto mode restarts.
+#[test]
+fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
+    use super::SceneMode::{Auto, Manual};
+    assert!(
+        super::stale_view_needs_a_new_scene(Manual, false, true, Some(7), Some(5)),
+        "a manual page records the moved pose in the very gap auto refinement waits through"
+    );
+    assert!(super::stale_view_needs_a_new_scene(
+        Manual,
+        false,
+        true,
+        Some(7),
+        None
+    ));
+    assert!(
+        !super::stale_view_needs_a_new_scene(Manual, true, true, Some(7), Some(7)),
+        "a pending ladder is already the record that work is due"
+    );
+    assert!(!super::stale_view_needs_a_new_scene(
+        Manual,
+        false,
+        false,
+        Some(7),
+        Some(7)
+    ));
+
+    // What the observation does in each mode: manual marks the update and stays paused.
+    let mut manual = FrameLoop::default();
+    manual.set_scene_mode(SceneMode::Manual, 7, true);
+    manual.scene_changed(7);
+    assert!(manual.scene_update_pending());
+    assert!(!manual.refinement_pending());
+    let mut auto = FrameLoop::default();
+    auto.set_scene_mode(Auto, 7, true);
+    auto.scene_changed(7);
+    assert_eq!(auto.due(), Some(RefinementLevel::Preview));
+}
+
+/// Pins the stale reading a hold must not clear./// Pins the stale reading a hold must not clear.
 ///
 /// The loop stamps the view it expects the next presented image to reproduce when it submits the
 /// warp that will draw it. A held warp draws the last completed picture unmoved, so the image that
