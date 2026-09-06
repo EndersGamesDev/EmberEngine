@@ -6,6 +6,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 ## Arena v29 follow-ups
 
+- Host updater: add bounded persisted backoff for provider429/1015 failures and distinguish a failed public-tunnel launch from a dead game server, so a two-minute repair timer neither extends a provider block nor repeatedly restarts healthy local games; reproduce with isolated shims before changing production behavior.
 - At render rates above60Hz, predicted HUD spread uses per-render displacement and can briefly narrow on frames without a movement tick before authoritative spread arrives; derive its moving flag from the latest fixed-tick motion without marking a blocked player moving. Server accuracy is authoritative and unchanged.
 - Harbor roof-bridge/indoor contact shading still shows the coarse voxel interpolation bands visible in v29 WebGL2 captures; measure a budget-preserving reconstruction/filter improvement separately from map collision and parkour. No new lighting feature was claimed in v29.
 
