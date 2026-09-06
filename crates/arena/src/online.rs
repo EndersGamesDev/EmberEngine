@@ -41,6 +41,7 @@ use ember_engine::{KeyCode, MouseButton};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PartAnim {
     Fixed,
+    Magazine,
     Cylinder,
     Hammer,
     Trigger,
@@ -174,6 +175,7 @@ fn classify(name: &str) -> Slot {
         _ if name.starts_with("w_revolver_") => Slot::Weapon(5),
         "w_sniper" => Slot::Weapon(6),
         "w_rpg7" => Slot::Weapon(7),
+        _ if name.starts_with("w_shotgun_") => Slot::Weapon(8),
         "w_rpg7_rocket" => Slot::Rocket,
         _ if name.starts_with("w_vityaz_") => Slot::Weapon(2),
         _ if name.starts_with("w_ak47_") => Slot::Weapon(3),
@@ -193,7 +195,9 @@ fn classify(name: &str) -> Slot {
 /// weapon as a prefix and the role as a suffix; the bare v15 names are kept
 /// so an older sidecar still animates.
 fn anim_of(name: &str) -> PartAnim {
-    if name.ends_with("_cylinder") || name.starts_with("cylinder") {
+    if name == "w_shotgun_magazine" {
+        PartAnim::Magazine
+    } else if name.ends_with("_cylinder") || name.starts_with("cylinder") {
         PartAnim::Cylinder
     } else if name.ends_with("_hammer") || name == "hammer" {
         PartAnim::Hammer
@@ -220,6 +224,8 @@ struct ViewmodelRig {
 
 const VIEWMODEL_GLB: &[u8] = include_bytes!("../assets/viewmodel.glb");
 const VIEWMODEL_RIG: &str = include_str!("../assets/viewmodel-rig.json");
+const SHOTGUN_GLB: &[u8] = include_bytes!("../assets/shotgun.glb");
+const SHOTGUN_RIG: &str = include_str!("../assets/shotgun-rig.json");
 
 /// How far along the muzzle axis the flash sat on the old box pistol; the
 /// fallback when the sidecar names no muzzle.
@@ -238,11 +244,23 @@ const ROCKET_CENTRE_X: f32 = 0.136;
 /// cube pistol when the asset is missing/broken.
 pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
     match ember_engine::assets::load_glb(VIEWMODEL_GLB) {
-        Ok(parts) => {
-            let rig: ViewmodelRig = serde_json::from_str(VIEWMODEL_RIG).unwrap_or_else(|e| {
+        Ok(mut parts) => {
+            let mut rig: ViewmodelRig = serde_json::from_str(VIEWMODEL_RIG).unwrap_or_else(|e| {
                 tracing::warn!("viewmodel sidecar unusable ({e}); parts ride rigidly");
                 ViewmodelRig::default()
             });
+            // Keep the frozen seven-weapon asset untouched. The shotgun has a
+            // small separate GLB with its own muzzle and moving magazine.
+            if let (Ok(shotgun), Ok(shotgun_rig)) = (
+                ember_engine::assets::load_glb(SHOTGUN_GLB),
+                serde_json::from_str::<ViewmodelRig>(SHOTGUN_RIG),
+            ) {
+                parts.extend(shotgun);
+                rig.muzzles.extend(shotgun_rig.muzzles);
+                rig.pivots.extend(shotgun_rig.pivots);
+            } else {
+                tracing::warn!("shotgun asset unavailable; using sidearm fallback");
+            }
             let mut meshes = Vec::new();
             let sidearm_muzzle = rig.muzzle.map_or(LEGACY_MUZZLE, Vec3::from_array);
             let mut assets = Assets {
@@ -553,7 +571,7 @@ impl Action {
         const CHAMBER: f32 = std::f32::consts::TAU / 6.0;
         let c = self.cycle.clamp(0.0, 1.0);
         match anim {
-            PartAnim::Fixed => Quat::IDENTITY,
+            PartAnim::Fixed | PartAnim::Magazine => Quat::IDENTITY,
             // One chamber per shot, advanced over the first 60% of the
             // cooldown with an ease-out, indexed by shots so it never runs
             // backwards between rounds.
@@ -640,6 +658,8 @@ fn push_reload_weapon(
         for (part, instance) in parts.iter().zip(&mut frame.instances[first..]) {
             if part.anim == PartAnim::Cylinder {
                 instance.position += rot * Vec3::new(0.0, -0.008, -0.065) * reload.cylinder_open;
+            } else if part.anim == PartAnim::Magazine {
+                instance.position += rot * reload.magazine_offset;
             }
         }
     }
@@ -1417,6 +1437,7 @@ fn push_showcase(
 /// ejection port, stops where it lands, and is gone at `CASING_SECS`.
 #[derive(Clone, Copy)]
 struct Casing {
+    weapon: u8,
     pos: Vec3,
     vel: Vec3,
     /// The height it lands on: my feet, which is the floor or the box I
@@ -1441,6 +1462,7 @@ struct PendingShot {
 #[derive(Clone, Copy)]
 struct PendingRemoteShot {
     owner: Option<u8>,
+    muzzle_effects: bool,
     shot: PendingShot,
     born: f32,
 }
@@ -1771,7 +1793,10 @@ pub struct ShooterGame {
     /// point the next segment of that round starts from. A segment that
     /// starts here is the same round going on, which draws a streak and
     /// an impact but no second flash, plume or gunshot.
-    continuations: Vec<(Vec3, f32)>,
+    continuations: Vec<(u64, Vec3, f32)>,
+    /// One muzzle/audio event per shotgun shell, even when its pellet endpoints
+    /// arrive on different frames. Pellet tracers and impact events remain separate.
+    shotgun_volleys: Vec<(u64, f32)>,
     /// A shot of mine was confirmed this frame: the render pass spawns the
     /// plume and the casing at the muzzle, which only it knows.
     own_plume: bool,
@@ -1922,6 +1947,7 @@ impl ShooterGame {
             pending_shots: Vec::new(),
             pending_remote_shots: Vec::new(),
             continuations: Vec::new(),
+            shotgun_volleys: Vec::new(),
             own_plume: false,
             own_anim: (0.0, 0.0, 0.0),
             script: script::from_env(),
@@ -1973,6 +1999,7 @@ impl ShooterGame {
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn on_shot(
         &mut self,
+        projectile_id: u64,
         owner: u8,
         weapon: u8,
         from: Vec3,
@@ -1985,11 +2012,21 @@ impl ShooterGame {
     ) {
         let now = self.time;
         self.continuations
-            .retain(|(_, t0)| now - t0 < CONTINUATION_SECS);
-        let continuation = self
-            .continuations
-            .iter()
-            .any(|(p, _)| (*p - from).length() < CONTINUATION_EPS);
+            .retain(|(_, _, t0)| now - t0 < CONTINUATION_SECS);
+        let continuation = self.continuations.iter().any(|(id, p, _)| {
+            // IDs distinguish adjacent pellets and shield reflections.
+            // ID zero retains compatibility with historical visual fixtures.
+            (projectile_id == 0 || *id == projectile_id) && (*p - from).length() < CONTINUATION_EPS
+        });
+        self.shotgun_volleys.retain(|(_, t0)| now - t0 < 2.0);
+        let mut muzzle_effects = !continuation;
+        if weapon == arena_core::shooter::SHOTGUN && projectile_id != 0 && !continuation {
+            let shell = projectile_id >> 4;
+            muzzle_effects = !self.shotgun_volleys.iter().any(|(id, _)| *id == shell);
+            if muzzle_effects {
+                self.shotgun_volleys.push((shell, now));
+            }
+        }
         let mine = Some(owner) == self.my_id;
         let traces = feel::traces(weapon);
         let stats = weapon_stats(weapon);
@@ -2005,17 +2042,20 @@ impl ShooterGame {
                 // in this event phase, in their original arrival order.
                 self.pending_remote_shots.push(PendingRemoteShot {
                     owner: Some(owner),
+                    muzzle_effects,
                     shot: PendingShot { from, to, weapon },
                     born: now,
                 });
-                let d = (from - ear.at).length();
-                sfx.push(Play::spatial(
-                    feel::shot_sfx(weapon, Dist::at(d)),
-                    feel::remote_shot_volume(&row, d),
-                    from,
-                    ear.at,
-                    ear.right,
-                ));
+                if muzzle_effects {
+                    let d = (from - ear.at).length();
+                    sfx.push(Play::spatial(
+                        feel::shot_sfx(weapon, Dist::at(d)),
+                        feel::remote_shot_volume(&row, d),
+                        from,
+                        ear.at,
+                        ear.right,
+                    ));
+                }
             }
         } else if traces {
             // A continuation left no muzzle: it starts where a shield
@@ -2023,13 +2063,17 @@ impl ShooterGame {
             // server's exactly.
             self.pending_remote_shots.push(PendingRemoteShot {
                 owner: None,
+                muzzle_effects: false,
                 shot: PendingShot { from, to, weapon },
                 born: now,
             });
         }
         // The crack of a round passing my head: mine never do, and it is
         // never late, because it arrives with the round.
-        if !mine && let Some(vol) = feel::crack(from, to, ear.at, stats.speed_max) {
+        if !mine
+            && muzzle_effects
+            && let Some(vol) = feel::crack(from, to, ear.at, stats.speed_max)
+        {
             sfx.push(Play::centre(Sfx::Crack, vol));
         }
         let d = (to - ear.at).length();
@@ -2086,7 +2130,7 @@ impl ShooterGame {
             ));
         }
         if hit == SHOT_BODY || hit == SHOT_SHIELD {
-            self.continuations.push((to, now));
+            self.continuations.push((projectile_id, to, now));
         }
     }
 
@@ -2111,7 +2155,7 @@ impl ShooterGame {
                 weapon,
                 born: pending.born,
             });
-            if pending.owner.is_some() {
+            if pending.muzzle_effects {
                 let row = weapon_feel(weapon);
                 self.flashes.push(Flash {
                     pos: muzzle,
@@ -3118,6 +3162,7 @@ impl EmberGame for ShooterGame {
                 // its mark all come from here. `victim` is not read: the
                 // damage flash on the body arrives as `Hit`.
                 S2C::Shot {
+                    projectile_id,
                     owner,
                     weapon,
                     x0,
@@ -3132,6 +3177,7 @@ impl EmberGame for ShooterGame {
                     normal,
                 } => {
                     self.on_shot(
+                        projectile_id,
                         owner,
                         weapon,
                         Vec3::new(x0, y0, z0),
@@ -4353,9 +4399,17 @@ impl EmberGame for ShooterGame {
             } else {
                 Quat::from_rotation_y(age * 25.0) * Quat::from_rotation_x(age * 18.0)
             };
+            let (size, color) = if c.weapon == arena_core::shooter::SHOTGUN {
+                (
+                    Vec3::new(0.065, 0.021, 0.021),
+                    Vec3::new(0.55, 0.055, 0.025),
+                )
+            } else {
+                (feel::CASING_SIZE, feel::CASING_COLOR)
+            };
             frame
                 .instances
-                .push(Instance::new(c.pos, feel::CASING_SIZE, feel::CASING_COLOR).with_rot(rot));
+                .push(Instance::new(c.pos, size, color).with_rot(rot));
         }
 
         // The rocket, from the state: the mesh flown along the server's
@@ -4595,6 +4649,7 @@ impl EmberGame for ShooterGame {
                     let (pos, vel) = feel::casing_eject(muzzle, right3, look);
                     let land_y = self.pred_y;
                     self.casings.push(Casing {
+                        weapon: my_weapon,
                         pos,
                         vel,
                         land_y,
@@ -6732,6 +6787,7 @@ mod wire_tests {
                     cover: u8,
                     normal: [i8; 3]| {
             S2C::Shot {
+                projectile_id: 0,
                 owner,
                 weapon,
                 x0: from[0],
@@ -6923,6 +6979,115 @@ mod wire_tests {
         assert!((game.marks[2].diameter() - feel::ROCKET_MARK).abs() < 1e-6);
     }
 
+    #[test]
+    fn shotgun_pellets_keep_eight_paths_but_only_one_remote_muzzle_and_report() {
+        use arena_core::shooter::{SHOT_COVER, SHOTGUN};
+        let (chan, _, _) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        let ear = Ear {
+            at: Vec3::ZERO,
+            right: Vec3::Z,
+        };
+        let mut audio = Vec::new();
+        let origin = Vec3::new(10.0, 1.45, 0.0);
+        let shell = (100_u64 << 12) | (3 << 4);
+        for pellet in 0..8_u8 {
+            game.time += 0.01; // Impacts can arrive on different frames.
+            game.on_shot(
+                shell | u64::from(pellet),
+                3,
+                SHOTGUN,
+                origin,
+                origin + Vec3::new(5.0, f32::from(pellet) * 0.01, 0.0),
+                SHOT_COVER,
+                0,
+                [-1, 0, 0],
+                ear,
+                &mut audio,
+            );
+            game.finish_remote_shots();
+        }
+        assert_eq!(game.tracers.len(), 8);
+        assert_eq!(game.marks.len(), 8);
+        assert_eq!(game.flashes.len(), 1);
+        assert_eq!(game.shotgun_volleys.len(), 1);
+        let cue = feel::shot_sfx(SHOTGUN, Dist::at(origin.length()));
+        assert_eq!(audio.iter().filter(|play| play.sfx == cue).count(), 1);
+        // A subsequent shell is not suppressed by the previous shell's cache.
+        game.on_shot(
+            shell + (60 << 12),
+            3,
+            SHOTGUN,
+            origin,
+            origin + Vec3::X * 5.0,
+            SHOT_COVER,
+            0,
+            [-1, 0, 0],
+            ear,
+            &mut audio,
+        );
+        game.finish_remote_shots();
+        assert_eq!(game.flashes.len(), 2);
+    }
+
+    #[test]
+    fn shotgun_reflection_identity_does_not_swallow_a_neighbouring_pellet() {
+        use arena_core::shooter::SHOTGUN;
+        let (chan, _, _) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        let ear = Ear {
+            at: Vec3::ZERO,
+            right: Vec3::Z,
+        };
+        let mut audio = Vec::new();
+        let start = Vec3::new(10.0, 1.0, 0.0);
+        let contact = start + Vec3::X;
+        let id = (100_u64 << 12) | (3 << 4);
+        game.on_shot(
+            id,
+            3,
+            SHOTGUN,
+            start,
+            contact,
+            SHOT_SHIELD,
+            0,
+            [-1, 0, 0],
+            ear,
+            &mut audio,
+        );
+        game.on_shot(
+            id,
+            4,
+            SHOTGUN,
+            contact,
+            start,
+            SHOT_BODY,
+            0,
+            [1, 0, 0],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(game.pending_remote_shots[1].owner, None);
+        game.on_shot(
+            id + 1,
+            3,
+            SHOTGUN,
+            contact,
+            contact + Vec3::X,
+            SHOT_BODY,
+            0,
+            [-1, 0, 0],
+            ear,
+            &mut audio,
+        );
+        assert_eq!(game.pending_remote_shots[2].owner, Some(3));
+        game.finish_remote_shots();
+        assert_eq!(game.tracers.len(), 3);
+        assert_eq!(game.flashes.len(), 1);
+    }
+
     /// Plant the shooter 10 m to the right of the watcher, facing and
     /// firing north, in the pose the case under test needs.
     fn place_shooter(game: &mut ShooterGame, crouch: bool, pitch: f32) {
@@ -6946,6 +7111,7 @@ mod wire_tests {
     fn fire_shot(inbox: &std::sync::mpsc::Sender<S2C>, launch: Vec3, to: Vec3) {
         inbox
             .send(S2C::Shot {
+                projectile_id: 0,
                 owner: 3,
                 weapon: 3,
                 x0: launch.x,
@@ -7296,6 +7462,7 @@ mod wire_tests {
         // A remote AK shot 10 m to my right, north into a container.
         inbox
             .send(S2C::Shot {
+                projectile_id: 0,
                 owner: 3,
                 weapon: 3,
                 x0: 10.0,
@@ -7402,6 +7569,7 @@ mod wire_tests {
         // A remote AK round from 10 m to my right, north into a container.
         inbox
             .send(S2C::Shot {
+                projectile_id: 0,
                 owner: 3,
                 weapon: 3,
                 x0: 10.0,
@@ -7985,8 +8153,8 @@ mod viewmodel_tests {
             let n = |mesh: u32| frame.instances.iter().filter(|i| i.mesh == mesh).count();
             assert_eq!(
                 frame.instances.len(),
-                15,
-                "5 rounds + 2 streak rods + the flying round + 2 holes + 5 flash cones"
+                rounds::Round::ALL.len() + 10,
+                "all rounds + 2 streak rods + the flying round + 2 holes + 5 flash cones"
             );
             for r in rounds::Round::ALL {
                 let want = if r == rounds::Round::Lapua { 2 } else { 1 };
@@ -8317,6 +8485,7 @@ mod grip_muzzle_tests {
         let to = from + Vec3::X * 12.0;
         let reflected_to = to - Vec3::Z * 8.0;
         let shot = |owner, start: Vec3, end: Vec3, hit| S2C::Shot {
+            projectile_id: 0,
             owner,
             weapon,
             x0: start.x,

@@ -115,11 +115,16 @@ pub enum Sfx {
     StepRunA,
     StepRunB,
     StepRunC,
+    // Appended so existing variants retain their deterministic synthesis seeds.
+    ShotShotgunNear,
+    ShotShotgunMid,
+    ShotShotgunFar,
+    ReloadShotgun,
 }
 
 /// Every variant, so both platforms synthesise the same set once and the
 /// tests walk every cue.
-const ALL: [Sfx; 58] = [
+const ALL: [Sfx; 62] = [
     Sfx::Shot,
     Sfx::Hit,
     Sfx::Hurt,
@@ -178,6 +183,10 @@ const ALL: [Sfx; 58] = [
     Sfx::StepRunA,
     Sfx::StepRunB,
     Sfx::StepRunC,
+    Sfx::ShotShotgunNear,
+    Sfx::ShotShotgunMid,
+    Sfx::ShotShotgunFar,
+    Sfx::ReloadShotgun,
 ];
 
 /// How many cues one frame may start. A backlogged burst (a hidden tab
@@ -266,7 +275,7 @@ impl Sfx {
         }
     }
 
-    /// The layered shot of weapon id 1..=7 at a distance, `None` for an id
+    /// The layered shot of weapon id 1..=8 at a distance, `None` for an id
     /// that is not a weapon.
     #[must_use]
     pub const fn shot(weapon: u8, dist: Dist) -> Option<Self> {
@@ -293,11 +302,14 @@ impl Sfx {
             (7, Near) => Self::ShotRpgNear,
             (7, Mid) => Self::ShotRpgMid,
             (7, Far) => Self::ShotRpgFar,
+            (8, Near) => Self::ShotShotgunNear,
+            (8, Mid) => Self::ShotShotgunMid,
+            (8, Far) => Self::ShotShotgunFar,
             _ => return None,
         })
     }
 
-    /// The reload that belongs to weapon id 1..=7: the sidearm's pistol
+    /// The reload that belongs to weapon id 1..=8: the sidearm's pistol
     /// reload, the three magazine rifles' one, the revolver's, the
     /// sniper's bolt and the tube; anything else gets the v18 clicks.
     #[must_use]
@@ -308,6 +320,7 @@ impl Sfx {
             5 => Self::ReloadRevolver,
             6 => Self::ReloadSniper,
             7 => Self::ReloadRpg,
+            8 => Self::ReloadShotgun,
             _ => Self::Reload,
         }
     }
@@ -377,6 +390,10 @@ impl Sfx {
             Self::StepRunA => "step_run_a",
             Self::StepRunB => "step_run_b",
             Self::StepRunC => "step_run_c",
+            Self::ShotShotgunNear => "shot_shotgun_near",
+            Self::ShotShotgunMid => "shot_shotgun_mid",
+            Self::ShotShotgunFar => "shot_shotgun_far",
+            Self::ReloadShotgun => "reload_shotgun",
         }
     }
 }
@@ -682,8 +699,8 @@ pub struct GunParams {
     pub seed: u32,
 }
 
-/// The seven rows of the v20 plan, indexed by weapon id minus one.
-pub const GUNS: [GunParams; 7] = [
+/// The seven original voices plus v31's Breach-12, indexed by weapon id minus one.
+pub const GUNS: [GunParams; 8] = [
     // 1 Sidearm: a flat, snappy .45.
     GunParams {
         blast_hz: 1400.0,
@@ -753,6 +770,17 @@ pub const GUNS: [GunParams; 7] = [
         whipcrack: false,
         whoosh: true,
         seed: 0x1000_0007,
+    },
+    // 8 Breach-12: broad low report, heavy body and short outdoor decay.
+    // One voice per discharged shell, never one cue per pellet.
+    GunParams {
+        blast_hz: 620.0,
+        body_hz: 82.0,
+        body_ms: 190.0,
+        tail_ms: 460.0,
+        whipcrack: false,
+        whoosh: false,
+        seed: 0x1000_0008,
     },
 ];
 
@@ -1113,6 +1141,17 @@ fn reload_rpg(seed: u32) -> Vec<f32> {
     finish(&out)
 }
 
+/// Short heavy magazine-release cue; do not queue a whole 2.8-second reload's
+/// seat/bolt sounds because the existing audio API cannot cancel them on swap.
+/// One cue starts per authoritative reload transition, not once per pellet.
+fn reload_shotgun(seed: u32) -> Vec<f32> {
+    let mut out = Vec::new();
+    place(&mut out, &click(seed, 1350.0, 9.0), 0.0, 0.75);
+    place(&mut out, &slide(seed ^ 1, 750.0, 220.0), 0.025, 0.55);
+    place(&mut out, &click(seed ^ 2, 1050.0, 8.0), 0.24, 0.45);
+    finish(&out)
+}
+
 // ---------------------------------------------------------------------------
 // 6.4 A footstep
 // ---------------------------------------------------------------------------
@@ -1372,6 +1411,9 @@ fn synth(sfx: Sfx) -> Vec<f32> {
             gunshot_at(&GUNS[5], dist_of(sfx))
         }
         Sfx::ShotRpgNear | Sfx::ShotRpgMid | Sfx::ShotRpgFar => gunshot_at(&GUNS[6], dist_of(sfx)),
+        Sfx::ShotShotgunNear | Sfx::ShotShotgunMid | Sfx::ShotShotgunFar => {
+            gunshot_at(&GUNS[7], dist_of(sfx))
+        }
         Sfx::Crack => crack(seed),
         Sfx::ImpactMetal => impact_metal(seed),
         Sfx::ImpactStone => impact_stone(seed),
@@ -1385,6 +1427,7 @@ fn synth(sfx: Sfx) -> Vec<f32> {
         Sfx::ReloadRevolver => reload_revolver(seed),
         Sfx::ReloadSniper => reload_sniper(seed),
         Sfx::ReloadRpg => reload_rpg(seed),
+        Sfx::ReloadShotgun => reload_shotgun(seed),
         Sfx::StepWalkA => footstep(&STEPS_WALK[0]),
         Sfx::StepWalkB => footstep(&STEPS_WALK[1]),
         Sfx::StepWalkC => footstep(&STEPS_WALK[2]),
@@ -1404,14 +1447,16 @@ const fn dist_of(sfx: Sfx) -> Dist {
         | Sfx::ShotM4Mid
         | Sfx::ShotRevolverMid
         | Sfx::ShotSniperMid
-        | Sfx::ShotRpgMid => Dist::Mid,
+        | Sfx::ShotRpgMid
+        | Sfx::ShotShotgunMid => Dist::Mid,
         Sfx::ShotSidearmFar
         | Sfx::ShotVityazFar
         | Sfx::ShotAkFar
         | Sfx::ShotM4Far
         | Sfx::ShotRevolverFar
         | Sfx::ShotSniperFar
-        | Sfx::ShotRpgFar => Dist::Far,
+        | Sfx::ShotRpgFar
+        | Sfx::ShotShotgunFar => Dist::Far,
         _ => Dist::Near,
     }
 }
@@ -1512,7 +1557,7 @@ pub use platform::Audio;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
-    use super::{ALL, SAMPLE_RATE, Sfx, pan_gains, source};
+    use super::{pan_gains, source, Sfx, ALL, SAMPLE_RATE};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1573,13 +1618,13 @@ mod platform {
 
 #[cfg(target_arch = "wasm32")]
 mod platform {
-    use super::{ALL, SAMPLE_RATE, Sfx, source};
+    use super::{source, Sfx, ALL, SAMPLE_RATE};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
 
     struct Inner {
         ctx: RefCell<Option<web_sys::AudioContext>>,
@@ -1717,7 +1762,11 @@ mod tests {
             .iter()
             .enumerate()
             .fold((0, 0.0f32), |(bi, bv), (i, &v)| {
-                if v.abs() > bv { (i, v.abs()) } else { (bi, bv) }
+                if v.abs() > bv {
+                    (i, v.abs())
+                } else {
+                    (bi, bv)
+                }
             });
         secs(i) * 1000.0
     }
@@ -1862,16 +1911,16 @@ mod tests {
             assert_eq!(synth(sfx(Dist::Mid)), mid);
             assert_eq!(synth(sfx(Dist::Far)), far);
         }
-        // Twenty-one distinct cues, and no shot for a non-weapon.
-        let mut all: Vec<Sfx> = (1..=7u8)
+        // Twenty-four distinct cues, and no shot for a non-weapon.
+        let mut all: Vec<Sfx> = (1..=8u8)
             .flat_map(|w| [Dist::Near, Dist::Mid, Dist::Far].map(|d| Sfx::shot(w, d).unwrap()))
             .collect();
         all.sort_by_key(|s| ALL.iter().position(|a| a == s));
         all.dedup();
-        assert_eq!(all.len(), 21);
+        assert_eq!(all.len(), 24);
         assert!(all.iter().all(|s| ALL.contains(s)));
         assert_eq!(Sfx::shot(0, Dist::Near), None);
-        assert_eq!(Sfx::shot(8, Dist::Far), None);
+        assert_eq!(Sfx::shot(9, Dist::Far), None);
         assert_eq!(Dist::at(0.0), Dist::Near);
         assert_eq!(Dist::at(11.9), Dist::Near);
         assert_eq!(Dist::at(12.0), Dist::Mid);
@@ -1886,6 +1935,7 @@ mod tests {
         assert_eq!(Sfx::reload(5), Sfx::ReloadRevolver);
         assert_eq!(Sfx::reload(6), Sfx::ReloadSniper);
         assert_eq!(Sfx::reload(7), Sfx::ReloadRpg);
+        assert_eq!(Sfx::reload(8), Sfx::ReloadShotgun);
         assert_eq!(Sfx::reload(0), Sfx::Reload);
     }
 

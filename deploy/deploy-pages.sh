@@ -123,7 +123,7 @@ if release.exists():
 PY
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v30"
+ARENA_LIVE="games/arena/v31"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"

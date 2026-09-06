@@ -294,7 +294,7 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     game.set_harbor(harbor_base);
     ember_engine::run(
         EngineConfig {
-            title: format!("Killshot v30 — {}", cfg.lobby),
+            title: format!("Killshot v31 — {}", cfg.lobby),
             // A scripted client (`EMBER_SCRIPT`) never grabs the cursor: the
             // operator keeps their pointer while a capture runs, and since
             // the grab is refused here, once, it cannot come back when the

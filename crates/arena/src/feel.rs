@@ -202,6 +202,26 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             launch_shake: 0.5,
             optical_zoom: weapon_handling(7).optical_zoom,
         },
+        8 => WeaponFeel {
+            kick_cam: 0.065,
+            kick_model: 0.46,
+            push: 0.07,
+            rise: 0.075,
+            settle_pow: 1.8,
+            yaw_alt: 0.006,
+            rumble: rumble(0.95, 0.45, 130),
+            flash: 0.29,
+            flash_ms: 0.055,
+            tracer_len: 0.34,
+            tracer_thick: 0.045,
+            tracer: Vec3::new(1.0, 0.82, 0.46),
+            accent: Vec3::new(0.92, 0.67, 0.30),
+            sound: Sfx::ShotShotgunNear,
+            volume: 0.60,
+            full_auto: false,
+            launch_shake: 0.0,
+            optical_zoom: weapon_handling(8).optical_zoom,
+        },
         _ => WeaponFeel {
             kick_cam: 0.012,
             kick_model: 0.16,
@@ -2584,6 +2604,16 @@ mod feel_tests {
             .filter(|&id| weapon_feel(id).full_auto)
             .collect();
         assert_eq!(autos, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn shotgun_has_heavy_single_shot_feedback_and_modest_ads() {
+        let shotgun = weapon_feel(8);
+        assert!(!shotgun.full_auto);
+        assert!(shotgun.kick_cam > weapon_feel(3).kick_cam);
+        assert!(shotgun.kick_model > weapon_feel(3).kick_model);
+        assert_eq!(shotgun.sound, Sfx::ShotShotgunNear);
+        assert_eq!(shotgun.optical_zoom, 1.25);
     }
 
     #[test]
