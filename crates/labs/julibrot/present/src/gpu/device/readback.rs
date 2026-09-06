@@ -29,10 +29,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{HotSlot, PaletteRecord, PresentError};
+use crate::PresentError;
 
-use super::warp::{encode_image_warp, warp_load_color};
-use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL, encode_scene_mesh};
+use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL, encode_shade};
 
 /// Which of the two routes produced, or will produce, a frame copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,18 +140,6 @@ pub(super) struct ReadbackTarget {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     extent: [u32; 2],
-}
-
-/// Everything the presentation pass was drawn with, so the capture draw is the same call.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct OffscreenCapturePlan {
-    pub(super) relief_redraw: bool,
-    pub(super) texture_index: usize,
-    /// The opaque HOT slot the presentation pass was drawn from; the capture asks it for its own
-    /// dynamic offset rather than being handed a number, so the two draws cannot be given
-    /// different ones.
-    pub(super) hot_slot: HotSlot,
-    pub(super) selected: PaletteRecord,
 }
 
 impl Presenter {
@@ -300,7 +287,6 @@ impl Presenter {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         extent: [u32; 2],
-        plan: OffscreenCapturePlan,
     ) -> Result<EncodedFrameReadback, PresentError> {
         if self.frame_readback.is_some() {
             return Err(PresentError::Device {
@@ -327,27 +313,7 @@ impl Presenter {
                 operation: "copy a frame whose target extent is not the presented extent",
             });
         }
-        let hot_offset = plan.hot_slot.dynamic_offset();
-        if plan.relief_redraw {
-            encode_scene_mesh(
-                encoder,
-                &self.gpu,
-                &target.view,
-                hot_offset,
-                warp_load_color(plan.selected),
-                false,
-                "Julibrot relief redraw capture pass",
-            );
-        } else {
-            encode_image_warp(
-                encoder,
-                &self.gpu,
-                &target.view,
-                plan.texture_index,
-                hot_offset,
-                plan.selected,
-            );
-        }
+        encode_shade(encoder, &self.gpu, &target.view);
         encode_copy(
             &self.device,
             encoder,

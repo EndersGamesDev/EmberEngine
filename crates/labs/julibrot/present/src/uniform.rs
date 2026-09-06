@@ -47,10 +47,10 @@ pub struct HotUniform {
     pub screen_to_plane_row_1: [f32; 4],
     /// Third padded row of the current screen-to-plane map.
     pub screen_to_plane_row_2: [f32; 4],
-    /// Palette exterior colour at zero smooth iterations.
-    pub exterior_zero_rgba: [f32; 4],
-    /// Honest clear and disocclusion colour.
-    pub clear_rgba: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_0: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_1: [f32; 4],
     /// Epoch low/high words, source validity, and edge-on state.
     pub flags: [u32; 4],
 }
@@ -276,8 +276,8 @@ mod tests {
         assert_eq!(offset_of!(HotUniform, homography_row_2), 176);
         assert_eq!(offset_of!(HotUniform, screen_to_plane_row_0), 192);
         assert_eq!(offset_of!(HotUniform, screen_to_plane_row_2), 224);
-        assert_eq!(offset_of!(HotUniform, exterior_zero_rgba), 240);
-        assert_eq!(offset_of!(HotUniform, clear_rgba), 256);
+        assert_eq!(offset_of!(HotUniform, reserved_0), 240);
+        assert_eq!(offset_of!(HotUniform, reserved_1), 256);
         assert_eq!(offset_of!(HotUniform, flags), 272);
         assert_eq!(size_of::<SceneUniform>(), 160);
         assert_eq!(align_of::<SceneUniform>(), 16);
@@ -318,8 +318,8 @@ mod tests {
             screen_to_plane_row_0: [1.0, 0.0, 0.0, 0.0],
             screen_to_plane_row_1: [0.0, 1.0, 0.0, 0.0],
             screen_to_plane_row_2: [0.0, 0.0, 1.0, 0.0],
-            exterior_zero_rgba: [1.0; 4],
-            clear_rgba: [0.0; 4],
+            reserved_0: [0.0; 4],
+            reserved_1: [0.0; 4],
             flags: [7, 0, 1, 0],
         };
         let bytes = bytemuck::bytes_of(&uniform);

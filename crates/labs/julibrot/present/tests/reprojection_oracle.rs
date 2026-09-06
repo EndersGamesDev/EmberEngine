@@ -4,10 +4,11 @@ use ember_julibrot_math::{
     pixel_scale, scene_footprint, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, PaletteId, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame,
+    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame,
     SubmissionKind, SubmissionMeasurement, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpPlan,
     WarpRefusalReason, WarpValidation, apply_homography, grid_screen, height_for_record,
-    project_scene_point, project_scene_vertex, relief_redraw_source_pose, shade_lit_escape_record,
+    presentation_value, project_scene_point, project_scene_vertex, relief_redraw_source_pose,
+    shade_presentation_value,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -93,7 +94,6 @@ const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
         pose: *pose,
-        palette: PaletteId::Classic,
         iteration_cap: ESCAPE.max_iter,
         level: RefinementLevel::Final,
         extent: [pose.grid_width, pose.grid_height],
@@ -230,8 +230,9 @@ fn same_terminal_and_index(left: KernelSample, right: KernelSample) -> bool {
 }
 
 fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
-    let left = shade_lit_escape_record(record(left), CLASSIC_PALETTE, LIGHT).rgba;
-    let right = shade_lit_escape_record(record(right), CLASSIC_PALETTE, LIGHT).rgba;
+    let left = shade_presentation_value(presentation_value(record(left), LIGHT), CLASSIC_PALETTE).rgba;
+    let right =
+        shade_presentation_value(presentation_value(record(right), LIGHT), CLASSIC_PALETTE).rgba;
     left.into_iter()
         .zip(right)
         .all(|(left, right)| (left - right).abs() <= 1.0 / 255.0 + f32::EPSILON)

@@ -31,7 +31,7 @@ use super::{
 };
 use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
 use ember_julibrot_present::{
-    PaletteId, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
+    SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
 };
 use ember_julibrot_worker::ReferenceVerification;
 use ember_lab_heap::SpanArena;
@@ -2469,7 +2469,6 @@ fn owner_height_drag_plan(
     let frame = SceneFrame {
         scene_id: 37,
         pose: retained,
-        palette: PaletteId::Classic,
         iteration_cap: 128,
         level: RefinementLevel::Final,
         extent: [retained.grid_width, retained.grid_height],

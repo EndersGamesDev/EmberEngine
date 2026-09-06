@@ -108,7 +108,6 @@ impl BrowserFrameLoop {
         let selection = SceneSelection {
             generation: self.main.generation_applied,
             requested_iter_cap: self.main.requested_iter_cap,
-            palette_id: self.main.palette_id,
             plane_origin_f64: self.main.plane_origin_f64,
             precision_mode: self.main.precision_mode,
         };
@@ -133,7 +132,6 @@ impl BrowserFrameLoop {
             generation_applied: self.main.generation_applied,
             centre_revision: self.main.centre_revision,
             requested_iter_cap: self.main.requested_iter_cap,
-            palette_id: self.main.palette_id,
             plane_origin_f64: self.main.plane_origin_f64,
             view: requested.view,
             zoom_log2: requested.zoom_log2,

@@ -6,6 +6,15 @@ pub const DEBUG_TINT: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 /// Opaque diagnostic colour used for a measured perturbation glitch.
 pub const GLITCH_DIAGNOSTIC: [f32; 4] = [1.0, 0.375, 0.0, 1.0];
 
+/// Value-target status left where no mesh geometry covers a pixel.
+pub const CLEAR_VALUE: [f32; 4] = [0.0, 0.0, 4.0, 1.0];
+
+/// Value-target status written when a warp asks outside its retained source.
+pub const EXPOSED_VALUE: [f32; 4] = [0.0, 0.0, 5.0, 1.0];
+
+/// Value-target status written for an edge-on destination with no finite chart.
+pub const SKY_VALUE: [f32; 4] = [0.0, 1.0, 6.0, 1.0];
+
 /// A stable identifier for one present-owned palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -18,7 +27,7 @@ pub enum PaletteId {
     Ice = 2,
 }
 
-/// The exact palette data uploaded in the scene uniform.
+/// The exact palette data uploaded only for the presentation shade pass.
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C, align(16))]
 pub struct PaletteRecord {
@@ -75,6 +84,16 @@ fn is_binary(value: f32) -> bool {
     value == 0.0 || value == 1.0
 }
 
+#[allow(clippy::float_cmp)]
+fn record_is_malformed(record: [f32; 4]) -> bool {
+    let [_smooth_iter, escaped, rebase_count, status] = record;
+    !is_binary(escaped)
+        || !matches!(status, 0.0 | 1.0 | 2.0 | 3.0)
+        || !rebase_count.is_finite()
+        || rebase_count < 0.0
+        || rebase_count.fract() != 0.0
+}
+
 fn hue_component(hue: f32, offset: f32) -> f32 {
     ((hue + offset).rem_euclid(1.0).mul_add(6.0, -3.0).abs() - 1.0).clamp(0.0, 1.0)
 }
@@ -95,12 +114,7 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
 #[allow(clippy::float_cmp)]
 pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
     let [smooth_iter, escaped, rebase_count, status] = record;
-    let malformed = !is_binary(escaped)
-        || !matches!(status, 0.0 | 1.0 | 2.0 | 3.0)
-        || !rebase_count.is_finite()
-        || rebase_count < 0.0
-        || rebase_count.fract() != 0.0;
-    if malformed {
+    if record_is_malformed(record) {
         return PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: true,
@@ -184,6 +198,49 @@ pub fn exterior_zero(selected: PaletteRecord) -> [f32; 4] {
     shade_escape_record([0.0, 1.0, 0.0, 0.0], selected).rgba
 }
 
+/// Converts one kernel escape record and its scene light into a colour-free target value.
+#[must_use]
+#[allow(clippy::float_cmp)]
+pub fn presentation_value(record: [f32; 4], light: f32) -> [f32; 4] {
+    if record_is_malformed(record) {
+        return [0.0, 0.0, 7.0, 1.0];
+    }
+    match record[3] {
+        1.0 => [record[0], record[1], 1.0, 1.0],
+        2.0 => [0.0, 1.0, 2.0, 1.0],
+        status => [record[0], record[1], status, light],
+    }
+}
+
+/// Applies a palette to one colour-free presentation value.
+#[must_use]
+#[allow(clippy::float_cmp)]
+pub fn shade_presentation_value(value: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
+    let [smooth_iter, escaped, status, light] = value;
+    match status {
+        7.0 => PaletteOutcome {
+            rgba: DEBUG_TINT,
+            contract_violation: true,
+        },
+        1.0 => PaletteOutcome {
+            rgba: GLITCH_DIAGNOSTIC,
+            contract_violation: false,
+        },
+        4.0 | 5.0 => PaletteOutcome {
+            rgba: selected.clear_rgba,
+            contract_violation: false,
+        },
+        2.0 | 6.0 => shade_escape_record([0.0, 1.0, 0.0, 0.0], selected),
+        0.0 | 3.0 => {
+            shade_lit_escape_record([smooth_iter, escaped, 0.0, status], selected, light)
+        }
+        _ => PaletteOutcome {
+            rgba: DEBUG_TINT,
+            contract_violation: true,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, size_of};
@@ -215,6 +272,30 @@ mod tests {
         assert_eq!(palette(PaletteId::Classic), CLASSIC_PALETTE);
         assert_eq!(palette(PaletteId::Ember), EMBER_PALETTE);
         assert_eq!(palette(PaletteId::Ice), ICE_PALETTE);
+    }
+
+    #[test]
+    fn value_statuses_are_palette_free_until_the_single_shade_step() {
+        assert_eq!(presentation_value([-1.0, 0.0, 0.0, 0.0], 0.7), [-1.0, 0.0, 0.0, 0.7]);
+        assert_eq!(presentation_value([12.0, 1.0, 0.0, 1.0], 0.7), [12.0, 1.0, 1.0, 1.0]);
+        assert_eq!(presentation_value([0.0, 1.0, 0.0, 2.0], 0.7), [0.0, 1.0, 2.0, 1.0]);
+        assert_eq!(shade_presentation_value(CLEAR_VALUE, EMBER_PALETTE).rgba, EMBER_PALETTE.clear_rgba);
+        assert_eq!(shade_presentation_value(EXPOSED_VALUE, ICE_PALETTE).rgba, ICE_PALETTE.clear_rgba);
+        assert_eq!(shade_presentation_value(SKY_VALUE, CLASSIC_PALETTE).rgba, exterior_zero(CLASSIC_PALETTE));
+        assert_eq!(
+            shade_presentation_value([0.0, 1.0, 2.0, 1.0], EMBER_PALETTE).rgba,
+            exterior_zero(EMBER_PALETTE)
+        );
+        let interior = shade_presentation_value([-1.0, 0.0, 0.0, 0.7], ICE_PALETTE).rgba;
+        assert_eq!(
+            interior,
+            [
+                ICE_PALETTE.interior_rgba[0] * 0.7,
+                ICE_PALETTE.interior_rgba[1] * 0.7,
+                ICE_PALETTE.interior_rgba[2] * 0.7,
+                1.0,
+            ]
+        );
     }
 
     #[test]

@@ -631,7 +631,6 @@ mod browser {
     struct SceneSelection {
         generation: u32,
         requested_iter_cap: u32,
-        palette_id: u32,
         plane_origin_f64: [f64; 4],
         precision_mode: u32,
     }
@@ -646,7 +645,6 @@ mod browser {
         generation_applied: u32,
         centre_revision: u32,
         requested_iter_cap: u32,
-        palette_id: u32,
         plane_origin_f64: [f64; 4],
         view: ember_julibrot_math::ViewControls,
         zoom_log2: f64,
@@ -681,7 +679,6 @@ mod browser {
             let selection_matches = self.generation_applied == other.generation_applied
                 && self.centre_revision == other.centre_revision
                 && self.requested_iter_cap == other.requested_iter_cap
-                && self.palette_id == other.palette_id
                 && self.plane_origin_f64 == other.plane_origin_f64
                 && self.zoom_log2 == other.zoom_log2
                 && self.object_angles == other.object_angles

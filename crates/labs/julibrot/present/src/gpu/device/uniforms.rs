@@ -101,3 +101,10 @@ pub(super) fn create_warp_texture_layout(device: &wgpu::Device) -> wgpu::BindGro
         ],
     })
 }
+
+pub(super) fn create_palette_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Julibrot present-time palette layout"),
+        entries: &[uniform_entry(0, false, 48)],
+    })
+}

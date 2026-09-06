@@ -1,9 +1,6 @@
-use crate::{PaletteRecord, Pose, PresentDataError, PresentError, SceneUniform};
+use crate::{Pose, PresentDataError, PresentError, SceneUniform};
 
-use super::{
-    GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts,
-    warp_load_color,
-};
+use super::{GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts, warp_load_color};
 
 impl Presenter {
     pub(super) fn prepare_relief_redraw(
@@ -45,14 +42,13 @@ pub(super) fn encode_relief_redraw(
     gpu: &GpuState,
     surface_view: &wgpu::TextureView,
     hot_offset: u32,
-    selected: PaletteRecord,
 ) {
     encode_scene_mesh(
         encoder,
         gpu,
         surface_view,
         hot_offset,
-        warp_load_color(selected),
+        warp_load_color(),
         false,
         "Julibrot relief redraw pass",
     );

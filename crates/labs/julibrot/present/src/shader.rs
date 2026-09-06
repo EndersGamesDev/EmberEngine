@@ -103,8 +103,8 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     // A horizon record is a pixel whose screen-to-plane denominator was not positive: the plane
     // reaches no point there, so the scene has no vertex there either. Placing it at direct_ndc
     // once the camera turns would draw a flat slab at the near depth over relief that is really in
-    // front of it. The pass clears to the same exterior colour these cells carry, so dropping the
-    // vertex leaves the picture unchanged wherever the projection is the identity.
+    // front of it. Dropping the vertex leaves the pass's clear status; the retained record is not
+    // projected at a made-up position.
     if (record.w == 2.0) { return output; }
     let screen = vec3<f32>(screen_x, screen_y, 1.0);
     let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));
@@ -122,7 +122,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     // plane, not the pole, and it is where the perspective magnification passes twenty. Past d5
     // itself the projective algebra returns the point's mirror image, which the former clamp drew.
     // Refusing the whole band matches what the four-dimensional and observer limits below already
-    // do, and shows sky rather than a surface at a position the record field did not give.
+    // do, and leaves clear rather than a surface at a position the record field did not give.
     let denominator_five = distance_five - ambient.fifth;
     if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
@@ -326,6 +326,13 @@ mod tests {
                 [
                     (naga::ShaderStage::Vertex, "warp_vertex"),
                     (naga::ShaderStage::Fragment, "warp_fragment"),
+                ],
+            ),
+            (
+                crate::shade_shader(),
+                [
+                    (naga::ShaderStage::Vertex, "shade_vertex"),
+                    (naga::ShaderStage::Fragment, "shade_fragment"),
                 ],
             ),
         ] {

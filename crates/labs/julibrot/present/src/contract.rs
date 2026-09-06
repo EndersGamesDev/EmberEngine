@@ -165,8 +165,6 @@ pub struct SceneFrame {
     pub scene_id: u64,
     /// Immutable pose captured at submission and rebased on accepted references.
     pub pose: Pose,
-    /// Palette captured by the scene pass.
-    pub palette: PaletteId,
     /// Delivered iteration cap.
     pub iteration_cap: u32,
     /// Delivered kernels refinement level.
@@ -592,7 +590,7 @@ pub struct PresentFacts {
     pub iteration_cap: Option<u32>,
     /// Exact status-one record count for the delivered Final scene.
     pub glitch_pixel_count: Option<u32>,
-    /// Latest MAIN palette selection.
+    /// Palette control applied by the latest presentation.
     pub palette: PaletteId,
     /// Latest VIEW controls carried by a HOT write.
     pub view: ViewControls,

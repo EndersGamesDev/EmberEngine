@@ -38,7 +38,7 @@ impl Presenter {
         let pose = self.hot[hot_slot.index() as usize].ok_or(PresentError::Device {
             operation: "select unwritten HOT slot",
         })?;
-        let (palette_id, _) = main.selected_palette().ok_or(PresentError::Device {
+        main.selected_palette().ok_or(PresentError::Device {
             operation: "decode palette identifier",
         })?;
         let precision_mode = main.precision_mode().ok_or(PresentError::Device {
@@ -128,7 +128,6 @@ impl Presenter {
             Ok(crate::state::PendingScene {
                 scene_id,
                 pose,
-                palette: palette_id,
                 iteration_cap: main.state.delivered_iter_cap,
                 level: main.grid.level,
                 extent,

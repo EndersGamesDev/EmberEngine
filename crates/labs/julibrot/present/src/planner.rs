@@ -963,7 +963,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{PaletteId, SampleClass, SubmissionKind, SubmissionMeasurement};
+    use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
 
     const SWEEP_ANGLES: u32 = 256;
     const RELIEF_YAW: f64 = 0.349;
@@ -1567,7 +1567,6 @@ mod tests {
         SceneFrame {
             scene_id: 3,
             pose: *pose,
-            palette: PaletteId::Classic,
             iteration_cap: 256,
             level: RefinementLevel::Interactive,
             extent: [pose.grid_width, pose.grid_height],

@@ -12,7 +12,7 @@ use ember_julibrot_math::{
     ObjectAngles, Plane, Pose, PoseMap, PrecisionMode, ViewControls, screen_to_plane,
 };
 use ember_julibrot_present::{
-    PaletteId, PresentEvent, PresentEvents, SampleClass, SceneFrame, SubmissionKind,
+    PresentEvent, PresentEvents, SampleClass, SceneFrame, SubmissionKind,
     SubmissionMeasurement, Warp, WarpValidation,
 };
 
@@ -104,7 +104,6 @@ const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
         pose: *pose,
-        palette: PaletteId::Classic,
         iteration_cap: 256,
         level: RefinementLevel::Final,
         extent: [pose.grid_width, pose.grid_height],

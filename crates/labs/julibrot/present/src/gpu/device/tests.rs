@@ -209,7 +209,6 @@ fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::Scen
             Ok(PendingScene {
                 scene_id,
                 pose: binding_pose(),
-                palette: PaletteId::Classic,
                 iteration_cap: 64,
                 level: RefinementLevel::Final,
                 extent: [64, 36],
@@ -702,17 +701,42 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
         .find("self.main = Some(main);")
         .expect("the main publication ends");
     let body = &body[..end];
-    assert_eq!(
-        body.matches("backdrop").count(),
-        2,
-        "the backdrop may reach set_main only as the selection comparison"
-    );
-    assert!(body.contains("previous.backdrop != main.backdrop"));
+    assert!(body.contains("scene_selection_replaced(previous, &main)"));
     assert!(
-        body.find("previous.backdrop != main.backdrop")
+        body.find("scene_selection_replaced(previous, &main)")
             < body.find("self.ledger.invalidate_incompatible("),
         "the backdrop comparison belongs to the selection test, never to the clear"
     );
+    assert!(source.contains("previous.backdrop != current.backdrop"));
+}
+
+#[test]
+fn a_palette_change_reuses_values_and_recolours_on_the_next_present() {
+    let previous = binding_main();
+    let mut current = previous.clone();
+    current.state.palette_id = PaletteId::Ice as u32;
+    assert!(!scene_selection_replaced(&previous, &current));
+
+    let warp = include_str!("warp.rs");
+    let palette_write = warp
+        .find("write_palette(&self.queue, &self.gpu, selected.1);")
+        .expect("the current palette is uploaded for each present");
+    let shade = warp
+        .find("encode_shade(&mut encoder, &self.gpu, state.surface_view);")
+        .expect("every present runs the sole shade pass");
+    let submit = warp
+        .find("self.queue.submit(")
+        .expect("the presentation submission exists");
+    assert!(palette_write < shade && shade < submit);
+
+    let scene = crate::scene_shader(ember_lab_heap::DialectLimits {
+        descriptor_capacity: 2,
+        span_capacity: 2,
+        handle_capacity: 4,
+    });
+    assert!(!scene.contains("PaletteUniform"));
+    assert!(!scene.contains("palette."));
+    assert!(crate::shade_shader().contains("palette."));
 }
 
 /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.
@@ -724,10 +748,8 @@ fn the_scene_depth_target_carries_a_stencil_aspect() {
 }
 
 #[test]
-fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
-    let disocclusion = warp_load_color(crate::CLASSIC_PALETTE);
-    let clear = crate::CLASSIC_PALETTE.clear_rgba.map(f64::from);
-    let exterior = crate::exterior_zero(crate::CLASSIC_PALETTE).map(f64::from);
+fn relief_redraw_disocclusion_is_a_clear_value() {
+    let disocclusion = warp_load_color();
     assert_eq!(
         [
             disocclusion.r,
@@ -735,9 +757,8 @@ fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
             disocclusion.b,
             disocclusion.a
         ],
-        clear
+        [0.0, 0.0, 4.0, 1.0]
     );
-    assert_ne!(clear, exterior);
 }
 
 #[test]
@@ -850,7 +871,6 @@ fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
     crate::SceneFrame {
         scene_id,
         pose,
-        palette: PaletteId::Classic,
         iteration_cap: 64,
         level: RefinementLevel::Preview,
         extent,

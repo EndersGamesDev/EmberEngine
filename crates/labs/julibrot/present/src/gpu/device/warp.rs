@@ -1,5 +1,4 @@
 use super::ledger::{LatticeRefusal, presentation_ledger_entry};
-use super::readback::OffscreenCapturePlan;
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
@@ -10,7 +9,7 @@ use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
     PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
     WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
-    exterior_zero, identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
+    identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
 };
 
 /// Keeps the displayed redraw accepted while a render temporarily leases its record span.
@@ -67,7 +66,6 @@ impl Presenter {
             };
             pose_is_finite(&pose).then_some(pose)
         });
-        let selected = selected_or_classic(self.main.as_ref());
         let plan = pose.as_ref().map_or_else(
             || clear_warp_plan(false, true),
             |to_pose| {
@@ -162,8 +160,8 @@ impl Presenter {
             screen_to_plane_row_0: screen_rows[0],
             screen_to_plane_row_1: screen_rows[1],
             screen_to_plane_row_2: screen_rows[2],
-            exterior_zero_rgba: exterior_zero(selected.1),
-            clear_rgba: selected.1.clear_rgba,
+            reserved_0: [0.0; 4],
+            reserved_1: [0.0; 4],
             flags: [
                 epoch_low,
                 epoch_high,
@@ -303,11 +301,13 @@ impl Presenter {
             self.clear_hot_source(hot_slot);
             presented_plan = clear_warp_plan(presented_plan.edge_on, true);
         }
-        let selected = self
-            .main
-            .as_ref()
-            .and_then(PresentMain::selected_palette)
-            .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
+        let selected = selected_or_classic(self.main.as_ref());
+        ensure_value_target(
+            &self.device,
+            &mut self.gpu,
+            [state.canvas_width, state.canvas_height],
+        );
+        write_palette(&self.queue, &self.gpu, selected.1);
         let relief_redraw_prepared = if planned_relief_redraw {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
@@ -359,9 +359,8 @@ impl Presenter {
             encode_relief_redraw(
                 &mut encoder,
                 &self.gpu,
-                state.surface_view,
+                &self.gpu.presentation_values.view,
                 hot_slot.dynamic_offset(),
-                selected.1,
             );
             self.facts.record_relief_redraw();
             self.facts
@@ -371,15 +370,15 @@ impl Presenter {
             encode_image_warp(
                 &mut encoder,
                 &self.gpu,
-                state.surface_view,
+                &self.gpu.presentation_values.view,
                 texture_index,
                 hot_slot.dynamic_offset(),
-                selected.1,
             );
             if held_stale {
                 self.facts.record_warp_hold();
             }
         }
+        encode_shade(&mut encoder, &self.gpu, state.surface_view);
         // An armed copy is drawn here or not at all. The second encode is the same call the
         // presentation just made, appended to the same encoder before it is submitted, so nothing
         // — a scene promotion, a control move, a uniform write — can land between the two draws:
@@ -387,14 +386,8 @@ impl Presenter {
         // refuses with its reason and leaves the frame alone; the picture is not a casualty of a
         // measurement of it.
         let armed_capture = if self.frame_readback_armed {
-            let plan = OffscreenCapturePlan {
-                relief_redraw,
-                texture_index,
-                hot_slot,
-                selected: selected.1,
-            };
             let extent = [state.canvas_width, state.canvas_height];
-            match self.encode_offscreen_capture(&mut encoder, extent, plan) {
+            match self.encode_offscreen_capture(&mut encoder, extent) {
                 Ok(copy) => Some(copy),
                 Err(error) => {
                     self.disarm_offscreen_frame_readback();
@@ -574,7 +567,6 @@ pub(super) fn encode_image_warp(
     surface_view: &wgpu::TextureView,
     texture_index: usize,
     hot_offset: u32,
-    selected: PaletteRecord,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Julibrot sole warp pass"),
@@ -582,7 +574,7 @@ pub(super) fn encode_image_warp(
             view: surface_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(warp_load_color(selected)),
+                load: wgpu::LoadOp::Clear(warp_load_color()),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -596,20 +588,16 @@ pub(super) fn encode_image_warp(
     pass.draw(0..3, 0..1);
 }
 
-pub(super) fn warp_load_color(selected: PaletteRecord) -> wgpu::Color {
-    color(selected.clear_rgba)
+pub(super) const fn warp_load_color() -> wgpu::Color {
+    wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 4.0,
+        a: 1.0,
+    }
 }
 
 pub(super) fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord) {
     main.and_then(PresentMain::selected_palette)
         .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)))
-}
-
-pub(super) fn color(rgba: [f32; 4]) -> wgpu::Color {
-    wgpu::Color {
-        r: f64::from(rgba[0]),
-        g: f64::from(rgba[1]),
-        b: f64::from(rgba[2]),
-        a: f64::from(rgba[3]),
-    }
 }

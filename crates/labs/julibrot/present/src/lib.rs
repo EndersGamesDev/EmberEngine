@@ -10,6 +10,7 @@ mod lattice;
 mod mesh;
 mod palette;
 mod planner;
+mod shade_shader;
 mod shader;
 mod state;
 mod tile;
@@ -39,15 +40,16 @@ pub use mesh::{
     view_scale,
 };
 pub use palette::{
-    CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, GLITCH_DIAGNOSTIC, ICE_PALETTE, PaletteId,
-    PaletteOutcome, PaletteRecord, exterior_zero, palette, shade_escape_record,
-    shade_lit_escape_record,
+    CLASSIC_PALETTE, CLEAR_VALUE, DEBUG_TINT, EMBER_PALETTE, EXPOSED_VALUE, GLITCH_DIAGNOSTIC,
+    ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, SKY_VALUE, exterior_zero, palette,
+    presentation_value, shade_escape_record, shade_lit_escape_record, shade_presentation_value,
 };
 pub use planner::{
     RELIEF_REDRAW_MAX_EXPOSED_FRACTION, WARP_MAX_ERROR_PX, Warp, project_scene_point,
     project_scene_record_vertex, project_scene_vertex, project_scene_vertex_exact,
     relief_redraw_source_pose, renders_same_picture,
 };
+pub use shade_shader::shade_shader;
 pub use shader::{glitch_count_shader, scene_shader};
 pub use tile::{
     CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
