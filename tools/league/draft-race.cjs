@@ -9,12 +9,13 @@ const path = require('node:path');
 const { startPreview } = require('./preview.cjs');
 const { chromium } = require(process.env.EMBER_QA_PLAYWRIGHT || 'playwright');
 const root = path.resolve(__dirname, '../..');
-const out = path.join(root, process.env.LEAGUE_DRAFT_OUT || 'target/league-draft-race');
+const dropFirst = process.argv.includes('--drop-first-pick');
+const out = path.join(root, process.env.LEAGUE_DRAFT_OUT || (dropFirst ? 'target/league-draft-drop' : 'target/league-draft-race'));
 const started = Date.now();
 const wasm = fs.readFileSync(path.join(root, 'web/pkg/league_bg.wasm'));
 const glue = fs.readFileSync(path.join(root, 'web/pkg/league.js'));
 const ui = fs.readFileSync(path.join(root, 'web/games/league/v2/ui.js'));
-const report = { wasmSha256: crypto.createHash('sha256').update(wasm).digest('hex'),
+const report = { kind: dropFirst ? 'controlled-first-pick-drop' : 'real-draft-ordering', wasmSha256: crypto.createHash('sha256').update(wasm).digest('hex'),
   uiSha256: crypto.createHash('sha256').update(ui).digest('hex'), runs: [], errors: [] };
 let browser, preview;
 const now = () => Date.now() - started;
@@ -27,7 +28,8 @@ const snapshot = page => page.evaluate(() => ({
   })),
   runes: [...document.querySelectorAll('#runebox .rune.on')].map(r => r.dataset.r),
   note: document.getElementById('draft-note').textContent,
-  clickTrace: window.qaClicks, commandTrace: window.qaCommands,
+  clickTrace: window.qaClicks, commandTrace: window.qaCommands, droppedPick: window.qaDroppedPick,
+  detail: document.getElementById('detail').textContent.trim(),
 }));
 async function page(run, label) {
   const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -47,7 +49,18 @@ async function page(run, label) {
     }
     socket.on('close', () => trace.frames.push({ at: now(), id, close: true }));
   });
-  await p.addInitScript(() => {
+  await p.addInitScript(({ dropFirstPick }) => {
+    if (dropFirstPick) {
+      const originalSend = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        let message; try { message = JSON.parse(data); } catch {}
+        if (message?.t === 'pick' && !window.qaDroppedPick) {
+          window.qaDroppedPick = { at: performance.now(), message };
+          return;
+        }
+        return originalSend.call(this, data);
+      };
+    }
     window.focus = () => {};
     Element.prototype.setPointerCapture = () => {};
     window.qaClicks = [];
@@ -69,7 +82,7 @@ async function page(run, label) {
         record.runesAfter = [...document.querySelectorAll('#runebox .rune.on')].map(r => r.dataset.r);
       });
     }, true);
-  });
+  }, { dropFirstPick: dropFirst && label === 'host' });
   await p.route('**/pkg/league_bg.wasm', route => route.fulfill({ contentType: 'application/wasm', body: wasm }));
   await p.route('**/pkg/league.js', route => route.fulfill({ contentType: 'text/javascript', body: glue }));
   await p.route('**/games/league/v2/ui.js', route => route.fulfill({ contentType: 'text/javascript', body: ui }));
@@ -163,12 +176,64 @@ async function exercise(index) {
       recovered: run.recoveredBySecondHostClick }));
   }
 }
+async function controlledDrop() {
+  const run = { variant: 'one-host-Pick-intentionally-dropped', started: now(), checks: [] };
+  report.runs.push(run);
+  let a, b;
+  const check = (ok, name) => { assert(ok, name); run.checks.push(name); console.log('PASS ' + name); };
+  try {
+    a = await page(run, 'host'); b = await page(run, 'guest');
+    const lobby = `draft-drop-${process.pid}`;
+    await a.evaluate(lobby => { document.getElementById('newlobby').value = lobby;
+      document.getElementById('newmode').value = '1'; }, lobby);
+    await click(a, '#btn-create');
+    await a.waitForFunction(() => window.qaState().connected && window.qaState().roster.length === 2);
+    await click(b, '#btn-refresh');
+    await b.waitForFunction(lobby => [...document.querySelectorAll('#lobbies li')].some(li =>
+      li.querySelector('b')?.textContent === lobby), lobby);
+    await b.evaluate(lobby => [...document.querySelectorAll('#lobbies li')].find(li =>
+      li.querySelector('b')?.textContent === lobby).querySelector('button').click(), lobby);
+    await b.waitForFunction(() => window.qaState().connected && window.qaState().slot === 1);
+    await click(a, '#cards [data-c="0"]');
+    await click(b, '#cards [data-c="0"]');
+    await a.waitForFunction(() => /not confirmed/i.test(document.getElementById('draft-note').textContent), null, { timeout: 7000 });
+    run.unconfirmed = await snapshot(a);
+    check(run.unconfirmed.droppedPick?.message?.t === 'pick', 'controlled fault dropped exactly the first host Pick');
+    check(run.unconfirmed.state.roster[0].picked === false && run.unconfirmed.state.roster[1].picked === true,
+      'server retains the real unpicked host and accepted guest');
+    check(run.unconfirmed.cards.every(card => !card.selected) && /Pick a champion to inspect/.test(run.unconfirmed.detail),
+      'unconfirmed selection clears both card highlight and stale champion detail');
+    check(run.host.frames.filter(f => f.direction === 'out' && f.data?.t === 'pick').length === 0,
+      'client does not automatically retry an unconfirmed Pick');
+    await a.waitForFunction(left => window.qaState().left < left - 0.1, run.unconfirmed.state.left, { timeout: 2500 });
+    check(await a.evaluate(() => /not confirmed/i.test(document.getElementById('draft-note').textContent)),
+      'unconfirmed feedback survives the next authoritative draft-clock update');
+    await a.screenshot({ path: path.join(out, 'unconfirmed.png'), fullPage: true });
+    await click(a, '#cards [data-c="0"]');
+    await Promise.all([a, b].map(p => p.waitForFunction(() =>
+      window.qaState().roster.filter(r => r.picked).length === 2, null, { timeout: 6000 })));
+    await a.waitForFunction(() => !document.getElementById('btn-start').disabled);
+    check(run.host.frames.filter(f => f.direction === 'out' && f.data?.t === 'pick').length === 1,
+      'one fresh user click sends one valid Pick and restores ready-to-start state');
+    check(await a.evaluate(() => !/not confirmed/i.test(document.getElementById('draft-note').textContent)),
+      'accepted fresh pick clears the feedback message');
+    check(!run.host.errors.length && !run.guest.errors.length, 'controlled case has no browser errors');
+    run.passed = true; report.passed = true;
+  } finally {
+    if (a) run.hostFinal = await snapshot(a).catch(error => ({ error: error.message }));
+    if (b) run.guestFinal = await snapshot(b).catch(error => ({ error: error.message }));
+    await Promise.all([a, b].filter(Boolean).map(p => p.close()));
+    run.ended = now();
+  }
+}
+
 async function main() {
   os.setPriority(0, os.constants.priority.PRIORITY_LOW);
   fs.mkdirSync(out, { recursive: true });
   preview = await startPreview({ port: 8098, gamePort: 7798 });
   browser = await chromium.launch({ channel: 'msedge', headless: true,
     args: ['--disable-webgpu', '--disable-features=WebGPU', '--enable-webgl', '--ignore-gpu-blocklist'] });
+  if (dropFirst) { await controlledDrop(); return; }
   if (process.env.LEAGUE_DRAFT_WARMUP) await warmup(Number(process.env.LEAGUE_DRAFT_WARMUP));
   for (let index = 0; index < 10; index++) await exercise(index);
   report.passed = report.runs.every(run => run.passed && !run.host.errors.length && !run.guest.errors.length);
