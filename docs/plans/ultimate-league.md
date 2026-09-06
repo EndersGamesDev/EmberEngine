@@ -59,7 +59,7 @@ State is 20 Hz (`STATE_EVERY_TICKS = 3`). Units is one flat struct with `#[serde
 
 ## Client
 
-Camera: fixed-yaw perspective from (−10, 20, 12) above your champion, fov 45, target the champion's chest. Right-click ground = move (ray/plane from `cursor_ndc`), right-click a picked enemy = attack (CPU screen-space pick, nearest within threshold). QWER aim at the cursor; self/ally skills cast on self in 1v1 or the ally nearest the cursor. D/F, 1–6, B (shop panel — page side). `capture_mouse: false`.
+Camera: fixed-yaw perspective from (0, 30, 14) above your champion, fov 40, looking along −Z so the lane reads left to right. Click ground = move (ray/plane from `cursor_ndc`), click an enemy = attack (CPU screen-space pick, nearest within threshold); both mouse buttons work. QWER aim at the cursor; self/ally skills cast on self in 1v1 or the ally nearest the cursor. Shift+QWER spends a skill point. D/F, 1–6, B (shop panel — page side). `capture_mouse: false`.
 
 `cmd_json(json)` queues page commands (pick/start/buy/use/lock), `state_json()` is polled each rAF: everything the page shows. Minimap is a page-side 2D canvas drawn from the same JSON.
 
