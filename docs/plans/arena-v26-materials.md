@@ -1,5 +1,7 @@
 # Arena v26: first material realism pass
 
+What v26 actually shipped — its protocol, build stamp and source commit — is the `v26` entry in `CHANGELOG.md`.
+
 ## Scope and coordination
 
 Branch `codex/graphics-polish`, based on main `00982ed`. Client/renderer presentation only; protocol 20, movement, level collision and the running v25 server stay unchanged. Root owns the renderer API/shader and release; workers own CPU mip filtering, Arena material presets, and independent headless capture/review. Keep the original dirty checkout untouched. No shared-target Cargo builds run concurrently.

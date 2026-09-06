@@ -3,6 +3,8 @@
 https://endersgamesdev.github.io/EmberEngine/
 #Ender build this with ai 
 
+Every published version of every game, with the protocol it speaks, the build stamp it was published under and the commit it was built from: `CHANGELOG.md`.
+
 ## Design pillars
 
 1. **Engine = compiler + small runtime.** Assets (glTF, textures, shaders) get

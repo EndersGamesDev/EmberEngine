@@ -1,5 +1,7 @@
 # Arena v28: health, headshots, shield rules and personal controls
 
+What v28 actually shipped — its protocol, build stamp and source commit — is the `v28` entry in `CHANGELOG.md`, which also records that v28 was published twice.
+
 ## Scope and ownership
 
 Start from main `7500af5d` in isolated `codex/combat-controls`. Preserve the original checkout's uncommitted Arena/League work and the newer Julibrot work already merged into main. Root owns client integration, removal of health displays, verification and coordinated release. Independent workers own shared combat/server rules, the Rust controls adapter and the v28 browser settings UI. Only root runs Cargo against the shared warm target; builds and headless test processes use Idle priority and never drive the operator's input.

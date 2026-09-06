@@ -2,6 +2,8 @@
 
 The weapons update. The five new weapon archives in `assets/` become held guns with their own bullets; a Mario-style loot block hands out a random one to whoever head-butts it from below; every gun gets its own recoil, sound, tracer and rumble; the engine learns gamepads and force feedback; and a second authored map, Freight Yard, is built for it from the v13 prop set.
 
+What v18 actually shipped — its protocol, build stamp and source commit — is the `v18` entry in `CHANGELOG.md`.
+
 Written before any of it was built, in the shape of `docs/plans/arena-v13-trench-city.md`, as the coordination surface for the work packages in §9. It was synthesised from three independent designs (feel-first, simulation-rigour-first, level-first) and two judges' verdicts over them; every constraint below was verified in the tree on 2026-09-03, and every number is the number that ships unless a test proves it wrong. Where the judges disagreed the choice is stated with its reason.
 
 ## 1. What is being asked, in this engine's terms

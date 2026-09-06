@@ -2,6 +2,8 @@
 
 User request: introduce a shotgun in v31. Work stays on `codex/killshot-v31`, incorporating main's host repair `70ffba2a` and the v30 release handoff. Preserve the unrelated dirty original checkout, all frozen releases, and peer game changes. No all-game updater or new Cloudflare tunnel is part of this task.
 
+What v31 actually shipped — its protocol, build stamp and source commit — is the `v31` entry in `CHANGELOG.md`; the checkpoint below names an earlier candidate than the one that was published.
+
 ## Ready-to-publish checkpoint — not yet live
 
 Release approval received: the user replied "puplish" to the explicit v31 Windows-Arena-only publish/restart question. League acknowledged a temporary main/Pages writer hold. Fresh preflight found the older durable checkout dirty (line-ending-only differences, still preserved), so v31 will run from the new clean `C:/Users/end/dev/ember-killshot-live-v31` worktree. Its hash-pinned `tools/v31/server-only-windows.ps1` never manages tunnels. Retain the old v30 binary/task for rollback; disable the legacy Arena logon updater to prevent it invoking the old publisher on a future login, replacing that Arena-only startup role with the v31 server-only task. A read-only audit caught two stale protocol23 assertions in the v31 public verifier; a shared protocol24/entry validator now has acceptance/rejection regression coverage. No gameplay changed during release preparation. The earlier pending-approval notes below are historical.

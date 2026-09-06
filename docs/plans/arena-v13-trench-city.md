@@ -2,6 +2,8 @@
 
 The graphics and map update. One authored arena replaces the seeded box field; the cover becomes real objects (closed shipping containers, wooden crates, ammunition boxes, sandbags, trench walls, covered tunnels); the fight is set in the square of a beautiful old European city that is being fought over; and the pipeline that produced every picture and every mesh is checked in under `tools/v13/` so the next map can be made the same way.
 
+What v13 actually shipped — its protocol, build stamp and source commit — is the `v13` entry in `CHANGELOG.md`.
+
 Written before any of it was built, as the coordination surface for the workers building it in parallel. Every constraint below was verified in the tree first; every number in §4 is the number that ships unless a test proves it wrong.
 
 ## 1. What is being asked, in this engine's terms

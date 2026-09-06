@@ -2,6 +2,8 @@
 
 Status: charter for the lab that prototypes the real toolchain; five slice documents under `docs/julibrot/` refine it, and the implementation follows those documents, not this one, wherever they are more specific.
 
+The lab's published state, and what its launcher entry names, is the `v1` entry under Julibrot Lab in `CHANGELOG.md`.
+
 ## 1. Why this lab exists
 
 The heap lattice (`docs/gpu-heap-lattice.md`) paid for the middle of the engine chain on the WebGL2 floor: descriptors, heaps, kernels landing GPU-resident data into geometry. This lab pays for the rest of the chain once, in its smallest real form, on one object that needs every stage: a worker producing data under forward pressure, a lock boundary with a versioned owner, two update rates, kernels over heap spans, geometry and projection, and cooperative re-projection that keeps the picture moving while the next frame computes.

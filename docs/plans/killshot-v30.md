@@ -2,6 +2,8 @@
 
 User request: rename the shooter Killshot v30; show life and ammunition clearly; add health and ammo boxes; animate every weapon reload with a small circular countdown; keep collected weapons on number slots 1–9; offer a selectable starting-weapon mode.
 
+What v30 actually shipped — its protocol, build stamp and source commit — is the `v30` entry in `CHANGELOG.md`.
+
 ## Release checkpoint — 2026-09-06
 
 The user explicitly approved "Publish and restart Arena after checks." Final gameplay source is `374a85485eadb9286d0831d91cae51402e75d840`, r1500, protocol 23, merged into main and promoted to ci-passed. Exact-source branch CI [34046626630](https://github.com/EndersGamesDev/EmberEngine/actions/runs/34046626630) and main CI [34046737288](https://github.com/EndersGamesDev/EmberEngine/actions/runs/34046737288) both passed Linux cores/servers and deployment shim suites. The final clean build and artifact/129-JS/10-publisher gates took 3.319s; the WASM hash remained identical to the actual-browser-tested candidate. A final eight-peer, three-mode test against the exact r1500 server passed in 23.027s (24.771s including lifecycle), with 5,240 states and zero errors; its report is `target/killshot-network/network-results.json`.

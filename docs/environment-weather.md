@@ -2,6 +2,8 @@
 
 Arena v22 uses the shared engine's `Frame.environment` for a visible directional sun, moving procedural clouds and a directional shadow pass. `Frame.particles` carries camera-facing transparent particles. Other games retain their existing lighting through `Environment::default()`; `Environment::outdoor(Weather::Clear, time)` opts a scene into the outdoor renderer.
 
+The releases these features shipped in — v22 for the sun, shadows, clouds and rain, and v25 to v27 for the material and contact work — are in `CHANGELOG.md`.
+
 The sunlight direction is a vector toward the light. The sky disc, mesh lighting, specular highlights and shadow projection all consume that one direction. Freight Yard uses warm afternoon light; Trench City has denser cloud and passing rain. Weather follows the client's presentation clock and never affects authoritative movement, hit registration, map generation or the simulation RNG. Protocol 17 remains unchanged.
 
 Rain has a fixed upper limit of 320 particles before shelter filtering, with analytic positions rather than accumulated per-frame spawning. The arena removes drops whose bottom crosses the floor or falls beneath the top of an obstacle, including raised tunnel roofs. Cloud cover and rain intensity vary slowly. Native captures can set `EMBER_WEATHER=clear`, `cloudy` or `rain` to pin the weather preset. The map selects the browser preset.

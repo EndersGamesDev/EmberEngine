@@ -2,6 +2,8 @@
 
 The immersion update. Rounds fly at their real muzzle velocities and are stopped where they actually meet cover; what the player sees of a round is a tracer streak, a muzzle plume, a casing and an impact that depends on what was hit, and what the player hears is a layered gunshot that arrives late from far away, low-passed by the distance and panned to where it came from, a supersonic crack when a round passes close, an impact that sounds like the material, a casing on the cobbles, and a reload that belongs to the gun in hand. AAA is the direction; this document says exactly how far this renderer and this audio path can carry it and where the next tier starts.
 
+What v20 actually shipped — its protocol, build stamp and source commit — is the `v20` entry in `CHANGELOG.md`, which also records why the `v20` tag sits on a different commit.
+
 Written before the code, in the shape of the v18 and v19 plans. Every constraint below was verified in the tree on 2026-09-04.
 
 ## 1. What is being asked, in this engine's terms

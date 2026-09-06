@@ -2,6 +2,8 @@
 
 The 96 × 96 m terminal keeps its original eight screened spawn pockets, three ground-route families, central hill, cargo stacks, warehouse, working quay, two cranes and moored ship. The upgrade adds three enterable service buildings, three ordinary stairways, two warehouse roof bridges and three four-metre wall-jump lanes. The existing spawn screens rise from 2.8 m to 3.4 m so the newly reachable warehouse roof edges and clerestory do not expose the spawn centres; their footprints and rear exits are unchanged. There is no random placement, new downloaded asset, runtime toolchain or added rendering feature.
 
+The release this map shipped in is the `v29` entry in `CHANGELOG.md`.
+
 ## Shared geometry is the authority
 
 All dimensions and placements live in `crates/arena-core/src/harbor.rs`; `crates/arena/src/harbor.rs` draws each solid from those same `Obstacle` bounds and adds only shallow surface dressing. There are 160 obstacles: the original 75 plus 30 building solids, 42 stair treads, six bridge solids, the warehouse clerestory, an east pump-house screen and five roof vents. Five remain transient loot boxes, excluded from the contact-occlusion bake; including its two bounded floor boxes gives 157 source occluders. The map bounds and occlusion volume resolution are unchanged.

@@ -1,5 +1,7 @@
 # Arena v27: local ambient/contact shading
 
+What v27 actually shipped — its protocol, build stamp and source commit — is the `v27` entry in `CHANGELOG.md`.
+
 ## Scope
 
 Follow v26 with nearby static light blockage, making container feet, wall junctions and cover more grounded. Work starts from main `dae87d1` in isolated `codex/contact-shading`; preserve the original dirty checkout and the v26 build for comparison. Presentation only: no movement, simulation, map geometry or protocol change, and no live server restart. Root owns GPU integration/release, separate workers own the pure CPU baker, Arena integration and independent verification.

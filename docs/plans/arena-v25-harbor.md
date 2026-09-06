@@ -1,5 +1,7 @@
 # Arena v25 — Breakwater Harbor
 
+What v25 actually shipped — its protocol, build stamp and source commit — is the `v25` entry in `CHANGELOG.md`.
+
 ## Brief and ownership
 
 The owner requested 4 m/s walking and a third, larger, realistic harbor map for eight players, based on real port references rather than randomly generated assets or layout. Work starts from main `1e2ec48` in the isolated `codex/harbor-v25` worktree. Existing Trench City and Freight Yard remain available; the shared checkout's uncommitted work is not overwritten. This release retains v24 weapon handling and the legacy horizontal air speed and jump arc. Existing stance multipliers make sprinting 6.4 m/s and crouch walking 2.2 m/s.

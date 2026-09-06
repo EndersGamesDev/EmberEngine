@@ -2,6 +2,8 @@
 
 The match update. Until now the arena is one endless free-for-all: frags count up, nothing ends, nothing restarts. v19 gives the lobby a mode, chosen at creation beside the map: **free for all** (today's rules, first to a frag limit), **team deathmatch** (blue against red, no friendly fire, team spawns, first team to a limit) and **king of the hill** (the hill is the spot the king block already hangs over: the loading dock on Freight Yard and the statue's plinth on Trench City; alone on it earns a point a second, contested earns nothing, first to a limit). Every mode is a round that ends, announces its winner, and restarts after a pause.
 
+What v19 actually shipped — its protocol, build stamp and source commit — is the `v19` entry in `CHANGELOG.md`.
+
 Written before the code, in the shape of `docs/plans/arena-v18-freight-yard.md` and shorter, because the shape of the change is the same (a sim rule, its wire, its drawing) and most of the numbers are limits. Every constraint below was verified in the tree on 2026-09-04.
 
 ## 1. What is being asked, in this engine's terms

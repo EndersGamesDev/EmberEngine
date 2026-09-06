@@ -1,5 +1,7 @@
 # Arena v29: vertical Breakwater Harbor and parkour
 
+What v29 actually shipped — its protocol, build stamp and source commit — is the `v29` entry in `CHANGELOG.md`.
+
 ## Published v29 — 2026-09-06 16:25 UTC
 
 The user explicitly approved Windows Arena-only restart with "jes do it". V29 is now public at https://endersgamesdev.github.io/EmberEngine/games/arena/v29/ . Runtime source/main/ci-passed remains `129bcac43d0968613aa5359b802f01c04f98b28b` (`r1490`, protocol22). Arena host metadata was published at `3c36c364cd25c9600ae36faad062eb8a623bfb7d`, then the eight-path Arena release at `28d1b0741efea1a601e7f906cf07892b0fd753bf`. Pages run [34045206864](https://github.com/EndersGamesDev/EmberEngine/actions/runs/34045206864) succeeded; its workflow metadata names the preceding host-book commit, but its checkout log explicitly proves28d1b074 and the public bytes match the v29 publication report. The earlier metadata-only Pages run was superseded/cancelled, not a game-test failure.

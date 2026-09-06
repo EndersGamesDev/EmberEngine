@@ -2,6 +2,8 @@
 
 Four Kings (game id `kings`) is a four-corner chess variant on the ember engine: four players, a 10x10 board, sixteen pieces each in a 4x4 corner block, one action per 15-second turn, the last king on the board wins. It is chess plus two new legend pieces, the Joker (a teleporting sniper with a single capture tile) and the Hero (a dormant piece that trades a pawn for a rook-plus-knight body), with the pawn rules widened so that a corner formation is not a wall. This document is the rules of record and the build plan: every rule the spec left open is decided here, with the reason, so that a server validator and a client written independently from it agree on every legal move.
 
+The release this design shipped in is the `v1` entry under Four Kings in `CHANGELOG.md`.
+
 The spec and the diagram are the source. Where a sentence of the spec is made precise, the rule says so. Where the spec is silent, the decision is listed in section 3 with a one-line reason. Rule constants named in code style (`TURN_MS`, `NO_PROGRESS_TURNS`) are the constants of `kings-core`, so the doc and the crate cannot drift apart silently.
 
 ## 1. Rules
