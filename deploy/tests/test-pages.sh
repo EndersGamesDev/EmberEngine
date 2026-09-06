@@ -42,8 +42,10 @@ export PATH="$SHIMS:$PATH"
 
 mkdir -p "$REPO/deploy" "$REPO/web/$ARENA_LIVE" "$REPO/web/games/arena/v0"
 mkdir -p "$REPO/web/games/fire/v2" "$REPO/web/games/kings/v1" "$REPO/web/games/what-is-this/v1"
+mkdir -p "$REPO/web/games/league/v1"
 mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
+mkdir -p "$REPO/crates/league-core/src"
 cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
 # Give recompute a deterministic stamp distinct from deploy-pages.sh's first
 # stamp, so the test proves loaders read server.json only after recompute.
@@ -64,6 +66,7 @@ printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
+printf 'league v1\n' > "$REPO/web/games/league/v1/index.html"
 printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
@@ -76,20 +79,24 @@ printf 'julibrot style\n' > "$REPO/web/labs/julibrot/style.css"
 printf 'pub const PROTO_VERSION: u16 = 15;\n' > "$REPO/crates/arena-core/src/proto.rs"
 printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/fire-core/src/proto.rs"
 printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/kings-core/src/proto.rs"
+printf 'pub const PROTO_VERSION: u16 = 3;\n' > "$REPO/crates/league-core/src/proto.rs"
 
 mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
+mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg"
 printf 'keep arena\n' > "$SEED/games/arena/v17/frozen.txt"
 printf 'archived arena<script src="./settings.js?v=archived"></script>\n' > "$SEED/games/arena/v17/index.html"
 printf 'archived controls\n' > "$SEED/games/arena/v17/settings.js"
 printf 'keep fire\n' > "$SEED/games/fire/v1/frozen.txt"
 printf 'keep kings\n' > "$SEED/games/kings/old/frozen.txt"
+printf 'keep league archive\n' > "$SEED/games/league/old/frozen.txt"
+printf 'stale foreign bundle\n' > "$SEED/games/league/v1/pkg/arena.js"
 printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
 printf 'frozen pong js\n' > "$SEED/games/pong/v1/pkg/pong.js"
 printf 'frozen pong wasm\n' > "$SEED/games/pong/v1/pkg/pong_bg.wasm"
-printf '{"v":"seed","proto":14,"ws":"wss://old.example","hosts":[{"name":"new-host","ws":"wss://new.example","proto":15,"version":"r2"}]}\n' > "$SEED/server.json"
+printf '{"v":"seed","proto":14,"ws":"wss://old.example","league_proto":2,"league_ws":"wss://old-league.example","hosts":[{"name":"new-host","ws":"wss://new.example","proto":15,"version":"r2","league_ws":"wss://new-league.example","league_proto":3}]}\n' > "$SEED/server.json"
 export SHIM_PAGES_SEED="$SEED"
 
-echo "== ordinary build assembles all four games and the Julibrot lab =="
+echo "== ordinary build assembles all five games and the Julibrot lab =="
 : > "$SHIM_LOG"
 rm -f "$SHIM_GIT_INDEX"
 if (cd "$REPO" && bash deploy/deploy-pages.sh) > "$TMP/build.log" 2>&1; then
@@ -101,6 +108,8 @@ fi
 ARGV="$(cat "$SHIM_LOG")"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [what-is-this] [--lib]" "what-is-this is built as a wasm library"
 contains "$ARGV" "release/what_is_this.wasm" "what-is-this is passed to wasm-bindgen"
+contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [league] [--lib]" "League is built as a wasm library"
+contains "$ARGV" "release/league.wasm" "League is passed to wasm-bindgen"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [ember-julibrot-app] [--lib]" "Julibrot is built as a wasm library"
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
@@ -111,6 +120,19 @@ for f in index.html pkg/what_is_this.js pkg/what_is_this_bg.wasm; do
         bad "assembled what-is-this is missing $f"
     fi
 done
+for f in index.html version.json pkg/league.js pkg/league_bg.wasm; do
+    if [ -f "$SHIM_PUBLISHED/games/league/v1/$f" ]; then
+        ok "assembled League $f"
+    else
+        bad "assembled League is missing $f"
+    fi
+done
+is "$(find "$SHIM_PUBLISHED/games/league/v1/pkg" -type f -printf '%f\n' | sort | tr '\n' ' ')" "league.js league_bg.wasm " "League gets only its own bundle and replaces stale files"
+if cmp -s "$REPO/web/version.json" "$SHIM_PUBLISHED/games/league/v1/version.json"; then
+    ok "League carries the source build stamp beside its page"
+else
+    bad "League is missing the source build stamp"
+fi
 for f in index.html main.js lab.js drive.html worker.js style.css pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/labs/julibrot/$f" ]; then
         ok "assembled Julibrot $f"
@@ -121,6 +143,9 @@ done
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
+is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "3" "League ships its independent source protocol"
+is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_ws"]')" "wss://new-league.example" "League address recompute follows its shipped protocol"
+contains "$(cat "$TMP/build.log")" "LEAGUE PROTOCOL BUMP: v2 -> v3" "a League protocol change reports its required server restart"
 if cmp -s "$REPO/web/$ARENA_LIVE/settings.js" "$SHIM_PUBLISHED/$ARENA_LIVE/settings.js"; then
     ok "Arena settings.js is copied byte-for-byte beside its live page"
 else
@@ -160,7 +185,7 @@ is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
+for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "league/v1 league"; do
     # shellcheck disable=SC2086
     set -- $spec
     live="$1"
@@ -168,6 +193,9 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     rm -rf "$EXPECTED/games/$live"
     mkdir -p "$EXPECTED/games/$live/pkg"
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
+    if [ "$bundle" = league ]; then
+        cp "$REPO/web/version.json" "$EXPECTED/games/$live/"
+    fi
     if [ "games/$live" = "$ARENA_LIVE" ]; then
         # Expected output is authored independently of the publisher's rewrite.
         printf 'arena live<script src="./settings.js?v=%s"></script>\n' "$STAMP" > "$EXPECTED/games/$live/index.html"
@@ -176,7 +204,7 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     printf 'shim js for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/$bundle.js"
     printf 'shim wasm for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/${bundle}_bg.wasm"
 done
-for game in arena fire kings; do
+for game in arena fire kings league; do
     if diff -r "$EXPECTED/games/$game" "$SHIM_PUBLISHED/games/$game" > "$TMP/$game.diff"; then
         ok "$game Pages tree is unchanged"
     else
@@ -186,7 +214,7 @@ for game in arena fire kings; do
 done
 
 echo "== prebuilt mode fails closed on missing game and Julibrot artifacts =="
-rm "$REPO/web/pkg/what_is_this_bg.wasm" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
+rm "$REPO/web/pkg/what_is_this_bg.wasm" "$REPO/web/pkg/league.js" "$REPO/web/pkg/league_bg.wasm" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing.log" 2>&1; then
     bad "prebuilt mode accepted a missing artifact"
@@ -196,10 +224,15 @@ fi
 contains "$(cat "$TMP/missing.log")" "web/labs/julibrot/pkg/ember_lab_julibrot.js" "the failure lists the missing Julibrot JavaScript"
 contains "$(cat "$TMP/missing.log")" "web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm" "the failure lists the missing Julibrot wasm"
 contains "$(cat "$TMP/missing.log")" "web/pkg/what_is_this_bg.wasm" "the failure lists the missing game wasm"
+contains "$(cat "$TMP/missing.log")" "web/pkg/league.js" "the failure lists the missing League JavaScript"
+contains "$(cat "$TMP/missing.log")" "web/pkg/league_bg.wasm" "the failure lists the missing League wasm"
 if grep -q '^cargo' "$SHIM_LOG"; then bad "the refused prebuilt run invoked cargo"; else ok "the refused prebuilt run invoked no cargo"; fi
+if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "missing prebuilt artifacts reached Pages assembly"; else ok "missing prebuilt artifacts stopped before Pages assembly"; fi
 
 echo "== complete prebuilt mode skips every build tool =="
 printf 'shim wasm for what_is_this\n' > "$REPO/web/pkg/what_is_this_bg.wasm"
+printf 'shim js for league\n' > "$REPO/web/pkg/league.js"
+printf 'shim wasm for league\n' > "$REPO/web/pkg/league_bg.wasm"
 printf 'shim js for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js"
 printf 'shim wasm for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
 : > "$SHIM_LOG"
@@ -211,6 +244,18 @@ else
     tail -40 "$TMP/prebuilt.log" >&2
 fi
 if grep -Eq '^(cargo|wasm-bindgen)' "$SHIM_LOG"; then bad "complete prebuilt mode invoked a build tool"; else ok "complete prebuilt mode invoked no build tool"; fi
+
+echo "== a missing League page is refused before any publish =="
+mv "$REPO/web/games/league/v1/index.html" "$TMP/league-index.saved"
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing-league.log" 2>&1; then
+    bad "a missing live League page was accepted"
+else
+    ok "a missing live League page was refused"
+fi
+contains "$(cat "$TMP/missing-league.log")" "games/league/v1/index.html" "the failure identifies the missing League page"
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing League page reached a publish"; else ok "missing League page never reached a publish"; fi
+mv "$TMP/league-index.saved" "$REPO/web/games/league/v1/index.html"
 
 echo "== a missing Arena controls script is refused before any publish =="
 mv "$REPO/web/$ARENA_LIVE/settings.js" "$TMP/settings.js.saved"

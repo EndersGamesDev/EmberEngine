@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UltimateLegue · Ember</title>
+<meta name="description" content="Five champions. One lane. Free 1v1 and 3v3 MOBA battles in your browser.">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 14px 0 30px; background: #0b0d13; color: #dcdfe8;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 4px; font-weight: 600; }
+  h1 a { color: inherit; text-decoration: none; }
+  h1 small { opacity: .5; font-weight: 400; }
+  .col { width: min(1280px, 96vw); }
+  button, select, input {
+    font: inherit; background: #1b1f2c; color: #dcdfe8; border: 1px solid #333a4e;
+    border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.go { background: #2c4a78; border-color: #47649a; }
+  input { cursor: text; }
+  .note { font-size: .85rem; opacity: .8; margin: 6px 0; }
+  .note.bad { color: #ff9c8f; }
+  .chip { font-size: .78rem; opacity: .75; }
+
+  /* ---- menu ---- */
+  #menu .panel { background: #141722; border: 1px solid #262c3d; border-radius: 12px; padding: 14px 16px; margin-top: 12px; }
+  #lobbies { list-style: none; margin: 8px 0 0; padding: 0; }
+  #lobbies li { display: flex; gap: 10px; align-items: baseline; padding: 6px 2px; border-bottom: 1px solid #212739; }
+  #lobbies .meta { flex: 1; font-size: .85rem; opacity: .75; }
+  .pill { font-size: .72rem; background: #232a3e; border-radius: 999px; padding: 2px 8px; opacity: .9; }
+
+  /* ---- draft ---- */
+  #draft { display: none; }
+  #cards { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+  .card { width: 235px; background: #141722; border: 2px solid #262c3d; border-radius: 12px; padding: 10px; cursor: pointer; }
+  .card.sel { border-color: #6ea0ff; }
+  .card.taken { opacity: .45; }
+  .card b { font-size: .95rem; }
+  .card .kit { font-size: .74rem; opacity: .78; margin-top: 6px; line-height: 1.35; }
+  #runebox { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .rune { font-size: .78rem; padding: 4px 9px; border-radius: 999px; border: 1px solid #333a4e; background: #1b1f2c; cursor: pointer; }
+  .rune.on { background: #2c4a78; border-color: #6ea0ff; }
+  .hidden { display: none !important; }
+
+  /* ---- game stage ---- */
+  #stage { display: none; position: relative; width: min(1280px, 96vw); margin-top: 10px; }
+  #ember-root { width: 100%; }
+  #ember-root canvas { width: 100% !important; height: auto !important; aspect-ratio: 16/9; display: block; background: #000; border-radius: 10px; outline: none; }
+  #hud { position: absolute; inset: 0; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #hud .p { position: absolute; background: rgba(10, 12, 20, .72); border-radius: 10px; padding: 8px 10px; backdrop-filter: blur(3px); }
+  #topbar { top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; font-size: .95rem; }
+  #topbar .core { display: inline-flex; align-items: center; gap: 6px; }
+  #feed { top: 56px; right: 10px; width: 300px; font-size: .8rem; line-height: 1.5; opacity: .95; }
+  #score { top: 56px; left: 10px; font-size: .8rem; min-width: 240px; }
+  #score table { border-collapse: collapse; width: 100%; }
+  #score td, #score th { padding: 2px 6px; text-align: left; font-weight: 400; }
+  #bar { bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: flex-end; }
+  .orb { width: 130px; }
+  .orb .b { position: relative; height: 12px; background: #222; border-radius: 6px; overflow: hidden; margin: 2px 0; }
+  .orb .b i { position: absolute; inset: 0 auto 0 0; display: block; }
+  .slot { width: 46px; height: 46px; border-radius: 9px; background: #1a1f2e; border: 1px solid #333a4e; position: relative; display: flex; align-items: center; justify-content: center; font-size: .8rem; pointer-events: auto; cursor: pointer; user-select: none; }
+  .slot small { position: absolute; bottom: -1px; right: 3px; opacity: .7; }
+  .slot .cd { position: absolute; inset: 0; background: rgba(6,8,14,.78); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: .85rem; }
+  .slot .up { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; border-radius: 50%; background: #2c4a78; border: 1px solid #6ea0ff; color: #fff; font-size: 11px; line-height: 12px; text-align: center; }
+  #islots .slot { width: 38px; height: 38px; font-size: .7rem; }
+  #mini { position: absolute; right: 10px; bottom: 10px; background: rgba(10,12,20,.72); border-radius: 8px; pointer-events: none; }
+  #shop { position: absolute; right: 70px; bottom: 70px; width: 430px; max-height: 62%; overflow: auto; display: none; pointer-events: auto; font-size: .8rem; }
+  #shop .it { display: flex; gap: 8px; align-items: baseline; padding: 5px 2px; border-bottom: 1px solid #212739; }
+  #shop .it .d { flex: 1; opacity: .75; }
+  #result { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8,10,16,.62); pointer-events: auto; }
+  #result .box { text-align: center; background: #141722; border: 1px solid #2c3550; border-radius: 14px; padding: 26px 42px; }
+  .kbd { font-size: .72rem; opacity: .7; }
+  body { background: radial-gradient(ellipse at 75% 0%, #183038 0, transparent 55%), #090e16; }
+  button { transition: background .15s, border-color .15s; }
+  button:hover:not(:disabled) { background: #294156; border-color: #66d7c5; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #83f2dd; outline-offset: 3px; }
+  button.go { background: #b6edbd; border-color: #b6edbd; color: #112823; font-weight: 700; }
+  #menu .hero { display: grid; grid-template-columns: 1.5fr 1fr; gap: 24px; padding: 36px 0 22px; }
+  .eyebrow { color: #8be1ce; font-size: .72rem; letter-spacing: .18em; font-weight: 700; }
+  .hero h2 { font-size: clamp(2.7rem, 6vw, 5rem); line-height: 1; letter-spacing: -.06em; margin: 14px 0 18px; }
+  .hero p { max-width: 550px; line-height: 1.65; color: #adb9c8; }
+  .lane-art { position: relative; min-height: 220px; overflow: hidden; display: grid; place-items: center; background: linear-gradient(145deg,#152534,#111923); border: 1px solid #2e4b51; border-radius: 20px; }
+  .lane-art::before { content: ""; position: absolute; width: 130%; height: 90px; background: linear-gradient(90deg,#26496d,#385051,#6c393c); transform: rotate(-30deg); border-block: 1px solid #6b8d86; }
+  .lane-art span { position: relative; font-weight: 900; letter-spacing: -.05em; font-size: 2.5rem; color: #ddf5e5; }
+  .lane-art small { position: absolute; bottom: 20px; letter-spacing: .2em; color: #bccec9; }
+  #menu .panel { background: #111b26; border-color: #283b48; line-height: 2.5; }
+  #draft { padding-top: 22px; }
+  #teams { display: flex; gap: 28px; padding: 8px 0; }
+  #cards { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); }
+  .card { width: auto; text-align: left; padding: 16px 12px; background: #121e29; }
+  .card.sel { border-color: #a3e4bc; background: #193731; }
+  .card .kit { line-height: 1.5; }
+  .card .emblem { height: 50px; font-size: 2rem; display: block; margin-bottom: 8px; }
+  #draft .panel { padding: 18px 0; }
+  #runebox { gap: 8px; margin: 14px 0; }
+  .rune { padding: 8px 12px; }
+  #status { margin-top: 10px; padding: 12px 16px; background: #302c21; border: 1px solid #675735; border-radius: 9px; }
+  #status button { margin-left: 12px; }
+  #stage-tools { display: none; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  #loading { display: block; padding: 28px; }
+  #ember-root:has(canvas) #loading { display: none; }
+  #stage.drafting { display: block !important; position: fixed; left: -20000px; top: 0; width: 1280px; height: 720px; pointer-events: none; }
+  #bar { gap: 8px; }
+  #score { max-width: 280px; min-width: 0; background: rgba(10,12,20,.6); }
+  #score td { font-size: .7rem; }
+  .slot.unlearned { border-color: #776747; color: #ccb88b; }
+  .slot .up { width: 23px; height: 23px; line-height: 19px; right: -5px; top: -13px; font-size: 16px; background: #386a49; border-color: #a3e4bc; cursor: pointer; }
+  .slot .key { position: absolute; left: 4px; top: 2px; font-size: .6rem; opacity: .65; }
+  #stats { color: #acbfce; font-size: .72rem; }
+  #shop { width: 470px; bottom: 80px; right: 10px; max-height: 72%; background: rgba(12,23,32,.98); border: 1px solid #4c7064; }
+  #shop .it { align-items: center; padding: 9px 0; }
+  #shop .it b { display: block; color: #e3eac7; }
+  #shop .it .d { line-height: 1.4; opacity: 1; }
+  #mini { width: 210px; height: 121px; }
+  @media (max-width: 1050px) { #cards { grid-template-columns: repeat(3, minmax(0,1fr)); } #mini { width: 150px; height: 87px; bottom: 80px; } #bar { transform: translateX(-50%) scale(.84); transform-origin: bottom center; } #feed { width: 220px; } }
+  @media (max-width: 680px) { #menu .hero { grid-template-columns: 1fr; padding-top: 24px; } .lane-art { min-height: 150px; } #cards { grid-template-columns: repeat(2,minmax(0,1fr)); } #teams { display: block; } #bar { transform: translateX(-50%) scale(.57); } #score,#mini,#feed { display: none; } #topbar { font-size: .65rem; gap: 6px; white-space: nowrap; } #shop { width: 96%; right: 2%; max-height: 75%; } }
+</style>
+</head>
+<body>
+<h1 class="col"><a href="../../../">&larr; games</a> &middot; UltimateLegue <small>v1</small> <span id="host-chip" class="chip"></span></h1>
+
+<div id="menu" class="col">
+  <div class="hero"><div><div class="eyebrow">EMBER ORIGINAL · SINGLE LANE MOBA</div><h2>One lane.<br>Make it yours.</h2><p>Five champions. Two rival cores. Fight a 1v1 duel or build a 3v3 squad, claim the Courts, and turn every level into an advantage.</p><span class="pill">Free browser game</span> <span class="pill">Mouse + keyboard</span></div><div class="lane-art" aria-hidden="true"><span>ULTIMATE<br>LEGUE</span><small>BLUE → THE LANE ← RED</small></div></div>
+  <p class="note">Destroy the enemy core to win. The North Court grants damage; the South Court grants haste. Return to your fountain to recover health and mana.
+  Click enemies to attack them, right-click or left-click the ground to walk, <b>Q W E R</b> cast at the cursor, <b>D F</b> summoner spells,
+  <b>1-6</b> drink potions, <b>B</b> the shop. Level-up points go in with the little <b>+</b> on each ability, or <b>Shift + Q/W/E/R</b>. <b>S</b> stops moving.</p>
+  <div class="panel">
+    <label>handle <input id="handle" maxlength="20"></label>
+    <button disabled id="btn-practice" class="go">Practice 1v1</button>
+    <button disabled id="btn-practice3">Practice 3v3</button>
+    <button disabled id="btn-quick" class="go">Quick match</button>
+  </div>
+  <div class="panel">
+    <div>
+      <input id="newlobby" maxlength="24" placeholder="lobby name">
+      <select id="newmode"><option value="3">3 v 3</option><option value="1">1 v 1</option></select>
+      <input id="newpass" type="password" maxlength="40" placeholder="password (optional)">
+      <button disabled id="btn-create" class="go">create lobby</button>
+      <button id="btn-refresh">refresh</button>
+    </div>
+    <ul id="lobbies"></ul>
+    <div id="lobby-note" class="note"></div>
+  </div>
+  <div id="engine-note" class="note" role="status">Loading game...</div>
+</div>
+
+<div id="draft" class="col">
+  <h1>Choose your champion <small><span id="draft-left"></span></small></h1>
+  <div id="teams" class="note"></div>
+  <div id="cards"></div>
+  <div class="panel">
+    <div>
+      <label>D <select id="pickd"></select></label>
+      <label>F <select id="pickf"></select></label>
+    </div>
+    <div id="runebox"></div>
+    <div class="note">Rune pages: <button id="pgA" class="chip">page A</button> <button id="pgB" class="chip">page B</button> <button id="pgC" class="chip">page C</button>
+    <span class="kbd">Choose three runes. Each page saves automatically.</span></div>
+    <div><button id="btn-start" class="go">start match</button> <span id="draft-note" class="note"></span></div>
+  </div>
+</div>
+
+<div id="status" class="col hidden" role="status"><span id="status-text"></span><button id="btn-recover">Return to lobby</button></div>
+<div id="stage-tools" class="col"><button id="btn-shop">Shop [B]</button><button id="btn-leave">Leave match</button><span id="stats"></span></div>
+<div id="stage">
+  <div id="ember-root"><span id="loading">loading engine&hellip;</span></div>
+  <div id="hud">
+    <div id="topbar" class="p">
+      <span id="timer">0:00</span>
+      <span class="core" id="core0"></span>
+      <span class="core" id="core1"></span>
+      <span id="boons"></span>
+    </div>
+    <div id="feed" class="p hidden"></div>
+    <div id="score" class="p"><table><tbody id="score-body"></tbody></table></div>
+    <div id="bar" class="p">
+      <div class="orb">
+        <div class="b" title="health"><i id="hp" style="background:#3fbf5f"></i></div>
+        <div class="b" title="mana"><i id="mn" style="background:#4a86ff"></i></div>
+        <div class="kbd" id="vitals"></div><div class="kbd" id="lvl">lv 1 &middot; 0 g</div>
+      </div>
+      <div id="abils" style="display:flex;gap:6px">
+        <div class="slot" data-abil="0"><span>Q</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot" data-abil="1"><span>W</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot" data-abil="2"><span>E</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot" data-abil="3"><span>R</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <div class="slot" data-spell="0"><span>D</span><div class="cd hidden"></div></div>
+        <div class="slot" data-spell="1"><span>F</span><div class="cd hidden"></div></div>
+      </div>
+      <div id="islots" style="display:flex;gap:4px">
+        <div class="slot" data-item="0">1</div><div class="slot" data-item="1">2</div><div class="slot" data-item="2">3</div>
+        <div class="slot" data-item="3">4</div><div class="slot" data-item="4">5</div><div class="slot" data-item="5">6</div>
+      </div>
+    </div>
+    <canvas id="mini" width="260" height="150"></canvas>
+    <div id="shop" class="p"></div>
+    <div id="respawn" class="p hidden" style="top:45%;left:50%;transform:translate(-50%,-50%);font-size:1.4rem"></div>
+  </div>
+  <div id="result"><div class="box"><h2 id="result-who"></h2><p id="result-stats" class="note"></p><p id="result-countdown" class="kbd"></p><button onclick="location.reload()">Return to lobby</button></div></div>
+</div>
+
+<script type="module">
+import { chooseHost, listLobbies, renderChip } from '../../../hosts.js';
+
+const ROOT = new URL('../../../', location);
+const $ = (id) => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const readSaved = (key, fallback, store = localStorage) => { try { return JSON.parse(store.getItem(key)) ?? fallback; } catch { return fallback; } };
+const save = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
+const showStatus = text => { $('status-text').textContent = text; $('status').classList.toggle('hidden', !text); };
+$('btn-leave').onclick = $('btn-recover').onclick = () => location.reload();
+const fail = msg => showStatus('Unable to start the game: ' + (msg || 'see browser console'));
+window.addEventListener('error', (e) => fail(e.message));
+window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+
+// The promise resolves only when WASM and every control binding are ready.
+// Consumers can obtain the initialized API without racing a second import.
+let resolveLeagueReady;
+window.leagueReady = new Promise(resolve => { resolveLeagueReady = resolve; });
+document.body.dataset.leagueBoot = 'loading';
+let wasm = null, PROTO = 0, DATA = null;
+let chosen = null, candidates = [], wrongProto = [];
+let launched = false, mode = 3, shopOpen = false, lastPhase = '', local = false, latest = null, lastAim = null, lastShop = '', pendingPick = null;
+
+try {
+  const m = await import('./pkg/league.js');
+  await m.default();
+  wasm = m;
+  PROTO = wasm.proto_version();
+  DATA = JSON.parse(wasm.data_json());
+} catch (e) {
+  wasm = null;
+  console.error(e);
+  const n = $('engine-note');
+  n.className = 'note bad';
+  n.textContent = 'The game could not load. Reload the page to try again.';
+  $('btn-practice').disabled = true; $('btn-practice3').disabled = true; $('btn-create').disabled = true; $('btn-quick').disabled = true;
+}
+
+const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT');
+addEventListener('keydown', (e) => {
+  if (typing(e)) return;
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+  if (e.repeat || !launched) return;
+  if (e.key.toLowerCase() === 'b') { e.preventDefault(); setShop(!shopOpen); }
+  if (e.key === 'Escape') setShop(false);
+  if (e.key.toLowerCase() === 's') wasm_cmd({stop:true});
+  if ((e.ctrlKey || e.shiftKey) && 'qwer'.includes(e.key.toLowerCase())) e.preventDefault();
+});
+document.addEventListener('pointermove', e => {
+  if (!e.target.matches('#ember-root canvas')) return;
+  const r = e.target.getBoundingClientRect();
+  lastAim = [2 * (e.clientX-r.left)/r.width-1, 1-2*(e.clientY-r.top)/r.height];
+});
+document.addEventListener('contextmenu', e => { if (e.target.matches('#ember-root canvas')) e.preventDefault(); });
+function setShop(open) {
+  shopOpen = !!open && latest?.phase === 'live';
+  $('shop').style.display = shopOpen ? 'block' : 'none';
+  $('btn-shop').textContent = shopOpen ? 'Close shop [B]' : 'Shop [B]';
+  wasm_cmd({shop:shopOpen});
+  if (shopOpen) renderShop(latest?.me);
+}
+$('btn-shop').onclick = () => setShop(!shopOpen);
+function aimedCommand(kind, slot) {
+  const c = document.querySelector('#ember-root canvas');
+  wasm_cmd({[kind]:slot, aim:lastAim, aspect:c ? c.clientWidth/c.clientHeight : 16/9});
+}
+
+const handleValue = () => {
+  const h = ($('handle').value || '').trim().slice(0, 20) || 'summoner';
+  $('handle').value = h;
+  try { localStorage.setItem('ember-league-handle', h); } catch {}
+  return h;
+};
+try { $('handle').value = localStorage.getItem('ember-league-handle') || 'summoner'; } catch { $('handle').value = 'summoner'; }
+
+async function discover() {
+  try {
+    const r = await chooseHost(ROOT.href, { game: 'league', proto: PROTO || null });
+    if (launched) return;
+    chosen = r.chosen; candidates = r.candidates; wrongProto = r.wrongProto || [];
+    for (const id of ['btn-create', 'btn-quick']) $(id).disabled = !wasm || !(chosen || candidates[0]);
+    renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+  } catch (e) { console.error(e); }
+}
+
+async function showLobbies() {
+  const list = $('lobbies');
+  if (!candidates.length) { $('lobby-note').textContent = 'no league server is published right now — practice mode still works'; list.innerHTML = ''; return; }
+  const lists = await Promise.all(candidates.map((c) => listLobbies(c.url, { proto: PROTO || 0 }).catch(() => [])));
+  if (launched) return;
+  const all = [];
+  candidates.forEach((host, i) => { for (const l of lists[i] || []) all.push({ host, lobby: l }); });
+  list.innerHTML = '';
+  if (!all.length) { $('lobby-note').textContent = 'no open lobbies — create one'; }
+  $('lobby-note').textContent = all.length ? '' : $('lobby-note').textContent;
+  for (const { host, lobby: l } of all) {
+    const li = document.createElement('li');
+    const go = document.createElement('button');
+    go.className = 'go';
+    go.textContent = l.racing ? 'in match' : l.players >= l.cap ? 'full' : 'join';
+    go.disabled = !!l.racing || l.players >= l.cap || !wasm;
+    go.onclick = () => {
+      const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
+      if (l.has_password && pass === null) return;
+      mode = l.mode || 3;
+      launchOnline(l.name, pass, false, host);
+    };
+    const name = document.createElement('b'); name.textContent = (l.name || '?') + (l.has_password ? ' 🔒' : '');
+    const meta = document.createElement('span'); meta.className = 'meta';
+    meta.textContent = `${l.players}/${l.cap} · mode ${l.mode}v${l.mode} · host ${l.host || '?'}${l.racing ? ' · in match' : ''}`;
+    const tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = host.name || 'server'; tag.title = host.url || '';
+    li.append(name, meta, tag, go);
+    list.appendChild(li);
+  }
+}
+
+function onlyHost(url) {
+  const entry = { name: '', league_ws: url, league_version: '', league_commit: '', updated: '' };
+  return { chosen: { ...entry, url }, candidates: [{ ...entry, url }], wrongProto: [] };
+}
+
+function launchOnline(lobby, password, create, host) {
+  if (!wasm || launched) return;
+  launched = true; local = false;
+  $('stage').classList.add('drafting');
+  mode = mode === 1 ? 1 : 3;
+  $('menu').style.display = 'none';
+  $('draft').style.display = 'block';
+  try {
+    wasm.start_online(JSON.stringify({
+      ws: host.url, handle: handleValue(), lobby,
+      password: password || '', create: !!create, mode,
+    }));
+  } catch (e) {
+    launched = false;
+    $('menu').style.display = 'block'; $('draft').style.display = 'none';
+    const n = $('lobby-note'); n.className = 'note bad'; n.textContent = String(e);
+    return;
+  }
+  pollHud();
+}
+
+$('btn-create').onclick = () => {
+  const name = ($('newlobby').value || '').trim();
+  if (!name) { $('lobby-note').textContent = 'name the lobby first'; return; }
+  const host = chosen || candidates[0];
+  if (!host) { $('lobby-note').textContent = 'no server to host on'; return; }
+  mode = Number($('newmode').value);
+  launchOnline(name, $('newpass').value || '', true, host);
+};
+$('btn-refresh').onclick = async () => { await discover(); await showLobbies(); };
+$('btn-practice').onclick = () => launchLocal(1);
+$('btn-practice3').onclick = () => launchLocal(3);
+$('btn-quick').onclick = async () => {
+  const host = chosen || candidates[0];
+  if (!host) { $('lobby-note').textContent = 'no server right now'; return; }
+  const rows = await listLobbies(host.url, { proto: PROTO });
+  const open = (rows || []).filter((l) => !l.racing && !l.has_password && l.players < l.cap && l.mode === Number($('newmode').value));
+  if (!open.length) { mode = Number($('newmode').value); launchOnline('Quick ' + Math.random().toString(36).slice(2,8), '', true, host); return; }
+  mode = open[0].mode;
+  launchOnline(open[0].name, null, false, host);
+};
+
+function launchLocal(m) {
+  if (!wasm || launched) return;
+  launched = true; local = true; mode = m;
+  $('stage').classList.add('drafting');
+  $('menu').style.display = 'none';
+  $('draft').style.display = 'block';
+  try { wasm.start_local(m); pollHud(); } catch (e) { fail(e); }
+}
+
+// ---- the draft screen ------------------------------------------------------
+
+let mySlot = 0, roster = [], picked = null, dSel = 0, fSel = 1, runes = [0, 1, 2];
+let pages = readSaved('ember-league-pages', {A:[0,1,2],B:[3,4,0],C:[5,6,7]});
+if (!pages || typeof pages !== 'object' || Array.isArray(pages)) pages = {};
+let curPage = 'A';
+
+function buildDraftChrome() {
+  const opt = (v, t) => `<option value="${v}">${t}</option>`;
+  $('pickd').innerHTML = DATA.spells.map((s, i) => opt(i, s.name)).join('');
+  $('pickf').innerHTML = DATA.spells.map((s, i) => opt(i, s.name)).join('');
+  $('runebox').innerHTML = DATA.runes.map((r, i) =>
+    `<button class="rune" data-r="${i}" title="${esc(r.desc)}">${esc(r.name)}</button>`).join('');
+  $('runebox').querySelectorAll('.rune').forEach((el) => {
+    el.onclick = () => {
+      const i = Number(el.dataset.r);
+      runes = runes.includes(i) ? runes.filter(x => x !== i) : [...(runes.length === 3 ? runes.slice(1) : runes), i];
+      pages[curPage] = [...runes];
+      save('ember-league-pages', pages);
+      sendPick();
+      paintRunes();
+    };
+  });
+  for (const p of ['A', 'B', 'C']) {
+    $('pg' + p).onclick = () => { curPage = p; runes = cleanRunes(pages[p] || [0,1,2]); sendPick(); paintRunes(); };
+  }
+  $('btn-start').onclick = () => { sendPick(); wasm_cmd({start:true}); };
+  $('pickd').onchange = () => { dSel = Number($('pickd').value); if (dSel === fSel) fSel = (dSel+1)%DATA.spells.length; $('pickf').value = fSel; sendPick(); };
+  $('pickf').onchange = () => { fSel = Number($('pickf').value); if (fSel === dSel) dSel = (fSel+1)%DATA.spells.length; $('pickd').value = dSel; sendPick(); };
+  runes = cleanRunes(pages.A || [0,1,2]);
+  $('pickd').value = dSel; $('pickf').value = fSel;
+}
+function cleanRunes(values) { return Array.isArray(values) ? [...new Set(values)].filter(n => Number.isInteger(n) && n >= 0 && n < DATA.runes.length).slice(0,3) : []; }
+function paintRunes() {
+  for (const p of ['A','B','C']) $('pg'+p).classList.toggle('go', curPage === p);
+  $('runebox').querySelectorAll('.rune').forEach((el) => el.classList.toggle('on', runes.includes(Number(el.dataset.r))));
+}
+function sendPick() {
+  if (picked === null || runes.length !== 3 || !launched) return;
+  pendingPick = {champ:picked,d:dSel,f:fSel,runes:[...runes],at:performance.now()};
+  wasm_cmd({ pick: { champ: picked, d: dSel, f: fSel, runes } });
+}
+
+let cardsBuilt = false;
+function buildCards() {
+  $('cards').innerHTML = DATA.champs.map((c, i) => {
+    const rgb = c.colour.map((x) => Math.round(x * 255)).join(',');
+    return `<button class="card" data-c="${i}"><span class="emblem" aria-hidden="true">${["◈","♜","✦","⚓","⌛"][i]}</span>
+      <b style="color:rgb(${rgb})">${c.name}</b> <span class="kbd">${c.title}</span>
+      <div class="kit"><b>Q</b> ${c.q.name} — ${c.q.desc}<br><b>W</b> ${c.w.name} — ${c.w.desc}<br>
+      <b>E</b> ${c.e.name} — ${c.e.desc}<br><b>R</b> ${c.r.name} — ${c.r.desc}</div></button>`;
+  }).join('');
+  $('cards').querySelectorAll('.card').forEach((el) => {
+    el.onclick = () => { if (el.disabled) return; picked = Number(el.dataset.c); buildCardsSel(); sendPick(); };
+  });
+  cardsBuilt = true;
+}
+function buildCardsSel() {
+  if (!cardsBuilt) return;
+  const team = roster.find(r => r.slot === mySlot)?.team;
+  const taken = new Set(roster.filter((r) => r.team === team && r.picked && r.slot !== mySlot).map((r) => r.champ));
+  $('cards').querySelectorAll('.card').forEach((el) => {
+    const i = Number(el.dataset.c);
+    el.classList.toggle('sel', i === picked);
+    el.classList.toggle('taken', taken.has(i));
+    el.disabled = taken.has(i);
+    el.setAttribute('aria-pressed', String(i === picked));
+  });
+}
+
+// ---- commands back into the engine ------------------------------------------
+
+function wasm_cmd(obj) {
+  try { wasm?.cmd_json(JSON.stringify(obj)); } catch (e) { console.error(e); }
+}
+
+// ---- the HUD ---------------------------------------------------------------
+
+const mini = $('mini'), mctx = mini.getContext('2d');
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+function render(h) {
+  latest = h;
+  mySlot = h.slot ?? 0;
+  showStatus(h.notice || (!local && !h.connected ? 'Connecting to the server…' : ''));
+  $('stage-tools').style.display = h.phase === 'select' ? 'none' : 'flex';
+  $('stage').classList.toggle('drafting', h.phase === 'select');
+  if (h.phase === 'select') {
+    $('menu').style.display = 'none';
+    $('stage').style.display = 'block';
+    $('result').style.display = 'none';
+    if (lastPhase !== 'select') { setShop(false); picked = null; pendingPick = null; }
+    $('draft').style.display = 'block';
+    if (!cardsBuilt) buildCards();
+    roster = h.roster || [];
+    mySlot = h.slot ?? 0;
+    const me = roster.find((r) => r.slot === mySlot);
+    if (pendingPick && me?.picked && me.champ === pendingPick.champ && me.d === pendingPick.d && me.f === pendingPick.f && JSON.stringify(me.runes) === JSON.stringify(pendingPick.runes)) pendingPick = null;
+    if (pendingPick && (h.notice || performance.now()-pendingPick.at > 3000)) { pendingPick = null; picked = me?.picked ? me.champ : null; }
+    if (me?.picked && !pendingPick && runes.length === 3) {
+      picked = me.champ; dSel = me.d; fSel = me.f; runes = cleanRunes(me.runes);
+    }
+    $('pickd').value = dSel; $('pickf').value = fSel;
+    $('draft-left').textContent = Math.ceil(h.left || 0) + 's';
+    $('teams').innerHTML = [0, 1].map((t) => {
+      const row = roster.filter((r) => r.team === t).map((r) => {
+        const who = r.handle + (r.bot ? ' [bot]' : '') + (r.picked ? ' — ' + (DATA.champs[r.champ]?.name ?? '?') : ' — picking…');
+        return `<li>${esc(who)}${r.slot === mySlot ? " (you)" : ""}</li>`;
+      }).join('');
+      return `<div><b style="color:${t ? '#ff7a70' : '#6ea0ff'}">${t ? 'RED' : 'BLUE'}</b><ul style="margin:2px 0 10px;padding-left:18px">${row}</ul></div>`;
+    }).join('<div style="height:8px"></div>');
+    const host = roster.filter(r => !r.bot && r.connected).reduce((min,r) => Math.min(min,r.slot),Infinity);
+    $('btn-start').disabled = !me || mySlot !== host || picked === null || runes.length !== 3 || (!local && !h.connected);
+    $('draft-note').textContent = h.notice || (runes.length !== 3 ? `Choose ${3-runes.length} more runes.` : picked === null ? 'Pick a champion. Each team may pick a champion once; rivals may mirror picks.' : mySlot !== host ? 'Ready. The lobby host can start; empty seats become bots.' : 'Ready to start. Empty seats become bots; the countdown starts automatically.');
+    buildCardsSel();
+    paintRunes();
+    lastPhase = 'select';
+    return;
+  }
+  if (lastPhase !== h.phase) { setShop(false); if (h.phase === 'live') requestAnimationFrame(() => document.querySelector('#ember-root canvas')?.focus({preventScroll:true})); }
+  $('draft').style.display = 'none';
+  $('menu').style.display = 'none';
+  $('stage').style.display = 'block';
+  const live = h.phase === 'live';
+  $('result').style.display = h.phase === 'over' ? 'flex' : 'none';
+  if (h.phase === 'over') {
+    $('result-who').textContent = h.winner === 0 ? 'BLUE wins' : 'RED wins';
+    $('result-who').style.color = h.winner === 0 ? '#6ea0ff' : '#ff7a70';
+    $('result-stats').textContent = `kills ${h.kills[0]} — ${h.kills[1]}`;
+    $('result-countdown').textContent = `Next draft in ${Math.ceil(h.left || 0)}s`;
+  }
+  $('timer').textContent = fmtTime(h.secs || 0);
+  const cores = h.cores || [];
+  const setCore = (el, c, col) => {
+    if (!c) return;
+    el.innerHTML = `<span class="pill" style="background:${col}">core ${Math.max(0, Math.round(c.hp))}/${c.mh}</span>`;
+  };
+  const cB = cores.find((c) => c.t === 0), cR = cores.find((c) => c.t === 1);
+  setCore($('core0'), cB, '#2c4a78'); setCore($('core1'), cR, '#78302c');
+  $('boons').textContent = (h.boon || []).map((b, i) =>
+    b ? `${b === 1 ? '⚔' : '⏲'}${fmtTime(h.boonLeft?.[i] || 0)}` : '').join(' ');
+  const me = h.me && typeof h.me === 'object' ? h.me : null;
+  if (me) {
+    $('hp').style.width = `${Math.max(0, 100 * me.hp / Math.max(1, me.mh))}%`;
+    $('mn').style.width = `${Math.max(0, 100 * me.mn / Math.max(1, me.mm))}%`;
+    $('vitals').textContent = `${Math.ceil(me.hp)} HP · ${Math.floor(me.mn)} mana`;
+    $('lvl').textContent = `lv ${me.lv} · ${me.g} g` + (me.pt ? ` · ${me.pt} pts` : '');
+    $('respawn').classList.toggle('hidden', me.alive);
+    if (!me.alive) $('respawn').textContent = `respawn ${Math.ceil(me.resp)}s`;
+    document.querySelectorAll('#abils .slot').forEach((el) => {
+      const i = Number(el.dataset.abil);
+      const rank = me.rk[i], champ = DATA.champs[me.champ], ability = champ?.[['q','w','e','r'][i]];
+      el.classList.toggle('unlearned', !rank);
+      el.title = `${['Q','W','E','R'][i]} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0,rank-1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or Shift+key ranks up.`;
+      el.querySelector('.rk').textContent = rank ? '●'.repeat(rank) : '';
+      const cd = el.querySelector('.cd');
+      if (!rank) { cd.classList.remove('hidden'); cd.textContent = i === 3 ? 'Lv 6' : 'Learn'; }
+      else if (me.cd[i] > 0.05) { cd.classList.remove('hidden'); cd.textContent = me.cd[i].toFixed(1); }
+      else cd.classList.add('hidden');
+      el.querySelector('.up').classList.toggle('hidden', !(me.pt > 0 && me.rk[i] < 3 && (i !== 3 || me.lv >= (DATA.ultimateLevels || [6,9,12])[me.rk[i]])));
+    });
+    document.querySelectorAll('[data-spell]').forEach((el) => {
+      const i = Number(el.dataset.spell);
+      const id = i === 0 ? me.d : me.f;
+      el.querySelector('span').textContent = i === 0 ? 'D' : 'F';
+      el.title = `${DATA.spells[id]?.name} — ${DATA.spells[id]?.desc}`;
+      const cd = el.querySelector('.cd');
+      if (me.scd[i] > 0.5) { cd.classList.remove('hidden'); cd.textContent = Math.ceil(me.scd[i]); }
+      else cd.classList.add('hidden');
+    });
+    document.querySelectorAll('#islots .slot').forEach((el) => {
+      const i = Number(el.dataset.item);
+      const it = DATA.items.find((x) => x.id === me.items[i]);
+      el.innerHTML = `<span class="key">${i+1}</span>${it ? esc(it.name.split(' ').map(x=>x[0]).join('').slice(0,2)) : '·'}${it?.charges ? '<small>'+me.charges[i]+'</small>' : ''}`;
+      el.title = it ? `${it.name}${it.charges ? ' x' + me.charges[i] : ''}` : 'empty';
+    });
+    const st = me.stats;
+    $('stats').textContent = st ? `AD ${Math.round(st.ad)} · AP ${Math.round(st.ap)} · attacks/s ${st.attackSpeed.toFixed(2)} · crit ${Math.round(st.crit*100)}% / ${Math.round(st.critd)}% · haste ${Math.round(st.haste*100)}%` : '';
+  }
+  if (shopOpen) renderShop(me);
+  $('score-body').innerHTML = (h.roster || []).map((r) => {
+    const name = (r.handle || '?') + (r.bot ? ' [bot]' : '');
+    return `<tr><td style="color:${r.team ? '#ff7a70' : '#6ea0ff'}">${esc(name)}</td><td>${DATA.champs[r.champ]?.name ?? '—'}</td></tr>`;
+  }).join('');
+  $('feed').classList.toggle('hidden', !(h.feed || []).length);
+  $('feed').innerHTML = (h.feed || []).map((t) => `• ${esc(t)}`).join('<br>');
+  drawMini(h);
+  lastPhase = h.phase;
+}
+
+function renderShop(me) {
+  const s = $('shop');
+  s.style.display = 'block';
+  if (!me) { s.textContent = 'The shop needs a live match.'; return; }
+  const signature = JSON.stringify([me.g,me.alive,me.items,me.charges]);
+  if (signature === lastShop) return;
+  lastShop = signature;
+  s.innerHTML = `<b>Item shop</b> <span class="kbd">${me.g} gold · buy anywhere · B closes</span><p class="note">Permanent items grant passive stats. Use potion slots with 1–6.</p>` + DATA.items.map(it => {
+    const owned = me.items.includes(it.id);
+    const refill = it.charges > 0 && me.items.some((id,i) => id === it.id && me.charges[i] < it.charges);
+    const room = me.items.includes(0) || refill;
+    const can = me.alive && me.g >= it.cost && room && (!owned || it.charges > 0);
+    const label = !me.alive ? 'Respawning' : owned && !it.charges ? 'Owned' : !room ? 'Full' : `${it.cost}g`;
+    return `<div class="it"><button ${can ? '' : 'disabled'} data-buy="${it.id}">${refill ? 'Refill ' : ''}${label}</button><span class="d"><b>${esc(it.name)}</b>${esc(it.desc)}</span></div>`;
+  }).join('');
+  s.querySelectorAll('[data-buy]').forEach(b => b.onclick = () => wasm_cmd({buy:Number(b.dataset.buy)}));
+}
+
+function drawMini(h) {
+  mctx.clearRect(0, 0, mini.width, mini.height);
+  mctx.fillStyle = '#0d1017';
+  mctx.fillRect(0, 0, mini.width, mini.height);
+  const X = (x) => ((x + 70) / 140) * mini.width;
+  const Z = (z) => ((z + 40) / 80) * mini.height;
+  mctx.fillStyle = '#1d2233';
+  mctx.fillRect(X(-70), Z(-7), mini.width, Z(7) - Z(-7));
+  for (const u of (h.units || [])) {
+    const [k, t, x, z, hp, slot] = u;
+    if (k === 3) continue;
+    mctx.fillStyle = t === 2 ? '#b59a4a' : (t === 0 ? '#6ea0ff' : '#ff7a70');
+    if (k === 6 || k === 7) mctx.fillStyle = '#cfd6ff';
+    const r = (k === 0 ? 3 : k === 1 || k === 2 ? 1.6 : 4);
+    mctx.globalAlpha = k === 4 || k === 5 || k === 6 || k === 7 ? (hp / 100) : 1;
+    if (hp <= 0) mctx.globalAlpha = 0.15;
+    mctx.fillRect(X(x) - r / 2, Z(z) - r / 2, r, r);
+    mctx.globalAlpha = 1;
+    if (k === 0 && slot === mySlot) { mctx.strokeStyle = '#fff'; mctx.strokeRect(X(x)-4, Z(z)-4, 8, 8); }
+  }
+}
+
+function pollHud() {
+  if (pollHud.started) return;
+  pollHud.started = true;
+  let previous = 0;
+  const tick = now => {
+    if (now-previous < 50) { requestAnimationFrame(tick); return; }
+    previous = now;
+    try {
+      const h = JSON.parse(wasm.state_json());
+      render(h);
+    } catch (e) {
+      if (!pollHud.warned) { pollHud.warned = true; console.error(e); }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// ability +-buttons and item keys on click
+document.querySelectorAll('#abils .slot').forEach((el) => {
+  el.addEventListener('click', e => {
+    const i = Number(el.dataset.abil);
+    if (e.target.closest('.up') || !latest?.me?.rk[i]) wasm_cmd({rank:i});
+    else aimedCommand('cast',i);
+  });
+});
+document.querySelectorAll('#islots .slot').forEach((el) => {
+  el.addEventListener('click', () => wasm_cmd({ use: Number(el.dataset.item) }));
+});
+
+document.querySelectorAll('[data-spell]').forEach(el => el.onclick = () => aimedCommand('spell', Number(el.dataset.spell)));
+if (DATA) {
+  buildDraftChrome();
+  for (const id of ['btn-practice', 'btn-practice3']) $(id).disabled = false;
+  $('engine-note').textContent = '';
+  document.body.dataset.leagueBoot = 'ready';
+} else {
+  document.body.dataset.leagueBoot = 'failed';
+}
+resolveLeagueReady(wasm);
+
+// ---- boot -------------------------------------------------------------------
+
+// handover from the hub: it writes ember-pending when a lobby row is clicked there
+const pending = readSaved('ember-pending', null, sessionStorage);
+try { sessionStorage.removeItem('ember-pending'); } catch {}
+await discover();
+if (pending && pending.ws && wasm) {
+  const h = onlyHost(pending.ws).chosen;
+  mode = pending.mode ? Number(pending.mode) : 3;
+  launchOnline(pending.lobby, pending.password, pending.action === 'create', h);
+} else {
+  await showLobbies();
+  setInterval(() => { if (!launched) showLobbies(); }, 10000);
+}
+</script>
+</body>
+</html>

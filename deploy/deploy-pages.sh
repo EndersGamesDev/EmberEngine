@@ -3,10 +3,11 @@
 # Run from anywhere (git-bash): bash deploy/deploy-pages.sh
 #
 # Server-build/workstation-publish recipe (the workstation holds the push key):
-#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this -p ember-julibrot-app --lib
+#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p ember-julibrot-app --lib
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/league.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 # Copy web/pkg from the server into this checkout, then publish without builds:
@@ -20,6 +21,7 @@
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
+#   games/league/v1/      live UltimateLegue build (one lane, 1v1 and 3v3)
 #   games/what-is-this/v1/ live browser and hardware diagnostic
 #   labs/julibrot/        live four-dimensional slice viewer lab
 #   games/pong/v1/        archived first web build (materialized from history)
@@ -50,7 +52,7 @@ V1_COMMIT="e7b85e8"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     missing=()
-    for bundle in fire arena kings what_is_this; do
+    for bundle in fire arena kings league what_is_this; do
         for artifact in "$bundle.js" "${bundle}_bg.wasm"; do
             [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
         done
@@ -59,7 +61,7 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
         [ -f "web/labs/julibrot/pkg/$artifact" ] || missing+=("web/labs/julibrot/pkg/$artifact")
     done
     if [ "${#missing[@]}" -ne 0 ]; then
-        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all four game bundles and the Julibrot lab bundle; missing:" >&2
+        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all five game bundles and the Julibrot lab bundle; missing:" >&2
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
@@ -69,12 +71,13 @@ echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
-    echo "== using four prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
+    echo "== using five prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p fire --lib
     cargo build --target wasm32-unknown-unknown --release -p arena --lib
     cargo build --target wasm32-unknown-unknown --release -p kings --lib
+    cargo build --target wasm32-unknown-unknown --release -p league --lib
     cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
@@ -83,6 +86,8 @@ else
         target/wasm32-unknown-unknown/release/arena.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/kings.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/league.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/what_is_this.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
@@ -127,14 +132,15 @@ ARENA_LIVE="games/arena/v31"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
+LEAGUE_LIVE="games/league/v1"
 WHAT_LIVE="games/what-is-this/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
 rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
-    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" \
+    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$LEAGUE_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" \
     "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
     "${PAGES_DIR:?}"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 # The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
 # and every live page imports it from there, so there is one copy of the rule
@@ -158,6 +164,7 @@ cp "web/$ARENA_LIVE/settings.js" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
+cp "web/$LEAGUE_LIVE/index.html" web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
 # lab.js is not optional furniture: main.js imports it statically, so a deploy
 # that omits it resolves the import to a missing file and the whole module graph
@@ -190,6 +197,7 @@ copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$ARENA_V0_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
+copy_pkg "$PAGES_DIR/$LEAGUE_LIVE/pkg" league
 copy_pkg "$PAGES_DIR/$WHAT_LIVE/pkg" what_is_this
 cp -r web/pkg "$PAGES_DIR"/pkg
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
@@ -231,10 +239,12 @@ PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/arena-core/src/proto.rs |
 FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.rs | grep -oE '[0-9]+$')"
 # Four Kings likewise: its own crate, its own number, its own server.json key.
 KINGS_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/kings-core/src/proto.rs | grep -oE '[0-9]+$')"
-echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO, kings protocol v$KINGS_PROTO =="
-"$PY" - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
+LEAGUE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/league-core/src/proto.rs | grep -oE '[0-9]+$')"
+echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO, kings protocol v$KINGS_PROTO, league protocol v$LEAGUE_PROTO =="
+"$PY" - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" "$LEAGUE_PROTO" <<'EOF'
 import json, os, sys, time
-p, proto, fire_proto, kings_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+p = sys.argv[1]
+proto, fire_proto, kings_proto, league_proto = map(int, sys.argv[2:6])
 
 
 def die(msg):
@@ -262,16 +272,25 @@ if os.path.exists(p):
 was = d.get("proto")
 was_fire = d.get("fire_proto")
 was_kings = d.get("kings_proto")
+was_league = d.get("league_proto")
 d["v"] = str(int(time.time()))
 d["proto"] = proto
 d["fire_proto"] = fire_proto
 d["kings_proto"] = kings_proto
+d["league_proto"] = league_proto
 # Temp file plus rename, so an interrupted write cannot leave a truncated book
 # behind — which is one of the ways the unparseable book above gets made.
 tmp = p + ".tmp"
 with open(tmp, "w", encoding="utf-8") as fh:
     json.dump(d, fh)
 os.replace(tmp, p)
+if was_league is not None and was_league != league_proto:
+    print(f"""
+!! LEAGUE PROTOCOL BUMP: v{was_league} -> v{league_proto}
+!! league-server must be rebuilt and restarted with the same protocol before
+!! players can create or join a match. The lobby listing stays available to
+!! older browsers, but the game join gate requires exact equality.
+""")
 if was_kings is not None and was_kings != kings_proto:
     print(f"""
 !! KINGS PROTOCOL BUMP: v{was_kings} -> v{kings_proto}
