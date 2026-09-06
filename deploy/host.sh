@@ -381,10 +381,13 @@ probe_public() {  # <id> <url> <commit>: up to two minutes of retries
 }
 
 # ensure_tunnels <commit>: on return every game has either a proven tunnel
-# (its address in $RUN/<id>.url) or none. At most one mint per game per call.
-# Returns 0 when all three are proven, 3 when at least one is missing.
+# (its address in $RUN/<id>.url) or none, and TUNNELS_MISSING names the games
+# without one. At most one mint per game per call. Returns 0 when all three
+# are proven, 3 when at least one is missing.
+TUNNELS_MISSING=""
 ensure_tunnels() {
     local commit="$1" id url minted="" missing="" retry=""
+    TUNNELS_MISSING=""
     for id in $(game_ids); do
         if alive "tunnel-$id" && [ -s "$RUN/$id.url" ]; then
             echo "   keeping the $id tunnel: $(cat "$RUN/$id.url")"
@@ -457,6 +460,7 @@ ensure_tunnels() {
         done
     fi
     if [ -n "$missing" ]; then
+        TUNNELS_MISSING="${missing# }"
         echo "host.sh: no public address for:$missing" >&2
         if grep -qs -E '429|error code: 1015' "$RUN"/tunnel-*.log; then
             echo "host.sh: Cloudflare is rate-limiting new quick tunnels (429 / error 1015) for this public IP; retry later, not sooner" >&2
@@ -467,18 +471,36 @@ ensure_tunnels() {
 }
 
 # The entry for what is running now: written locally always, published where
-# EMBER_PUBLISH says. Returns publish-host.sh's status.
-publish_current() {  # <name> <version> <commit>
-    local name="$1" version="$2" commit="$3" id args=()
+# EMBER_PUBLISH says. Games named after the commit have no proven tunnel and
+# are DROPPED from the entry rather than left at a dead address - the book
+# must never name an address that does not answer. Returns publish-host.sh's
+# status.
+ENTRY_ARGS=()
+build_entry_args() {  # <version> <commit> [missing game ids...] -> ENTRY_ARGS
+    local version="$1" commit="$2"; shift 2
+    local missing="$*" id proven=""
+    ENTRY_ARGS=()
     for id in $(game_ids); do
-        args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
+        case " $missing " in
+            *" $id "*) ENTRY_ARGS+=(--drop-game "$id"); continue ;;
+        esac
+        # no address on disk is the same thing as no proven tunnel
+        if [ ! -s "$RUN/$id.url" ]; then ENTRY_ARGS+=(--drop-game "$id"); continue; fi
+        ENTRY_ARGS+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
+        proven="$proven $id"
     done
-    write_local_entry "$name" "${args[@]}" \
-        --version "$version" --commit "$commit" \
-        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
-    publish_entry "$name" "${args[@]}" \
-        --version "$version" --commit "$commit" \
-        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
+    if [ -n "$proven" ]; then
+        # the build stamp applies to the games in the call, so only with one
+        ENTRY_ARGS+=(--version "$version" --commit "$commit")
+    fi
+    ENTRY_ARGS+=(--by "$(id -un)@$(hostname 2>/dev/null || uname -n)")
+}
+
+publish_current() {  # <name> <version> <commit> [missing game ids...]
+    local name="$1"; shift
+    build_entry_args "$@"
+    write_local_entry "$name" "${ENTRY_ARGS[@]}"
+    publish_entry "$name" "${ENTRY_ARGS[@]}"
 }
 
 # --- the address book ------------------------------------------------------
@@ -668,7 +690,10 @@ cmd_up() {
     echo "   tunnels settled in $(( $(date +%s) - tt ))s"
     if [ "$trc" -ne 0 ]; then
         say "servers UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s, but not every tunnel is proven:$urls"
-        echo "host.sh: not publishing an incomplete entry; 'host.sh tunnels' finishes the job once tunnels can be minted" >&2
+        say "publishing the proven games only (dropping: $TUNNELS_MISSING)"
+        # shellcheck disable=SC2086
+        publish_current "$name" "$version" "$commit" $TUNNELS_MISSING || true
+        echo "host.sh: 'host.sh tunnels' finishes the job once tunnels can be minted" >&2
         return 3
     fi
     say "UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s:$urls"
@@ -698,12 +723,22 @@ cmd_tunnels() {
     for id in $(game_ids); do
         alive "server-$id" || die "the $id server is not running; run host.sh up"
     done
-    local name version commit trc=0
+    # The RUNNING build, not the checkout's HEAD: the two differ whenever the
+    # source moved ahead of a deploy, and the kings probe asks the server for
+    # its commit.
+    local rev name version commit trc=0
+    rev="$(cat "$RUN/deployed" 2>/dev/null || true)"
+    [ -n "$rev" ] || die "nothing deployed yet; run host.sh up"
     name="$(bash "$(helper host-name.sh)")"
-    version="r$(git -C "$SRC" rev-list --count HEAD)"
-    commit="$(git -C "$SRC" rev-parse --short HEAD)"
+    version="r$(git -C "$SRC" rev-list --count "$rev")"
+    commit="$(git -C "$SRC" rev-parse --short "$rev")"
     ensure_tunnels "$commit" || trc=$?
-    [ "$trc" -eq 0 ] || return 3
+    if [ "$trc" -ne 0 ]; then
+        say "publishing the proven games only (dropping: $TUNNELS_MISSING)"
+        # shellcheck disable=SC2086
+        publish_current "$name" "$version" "$commit" $TUNNELS_MISSING || true
+        return 3
+    fi
     say "publishing"
     publish_current "$name" "$version" "$commit"
 }
@@ -718,16 +753,14 @@ cmd_update() {
         alive "server-$id" || all_up=""
     done
     if [ "$rev" = "$deployed" ] && [ -n "$all_up" ]; then
-        local name version commit args=()
+        local name version commit
         name="$(bash "$(helper host-name.sh)")"
-        version="r$(git -C "$SRC" rev-list --count HEAD)"
-        commit="$(git -C "$SRC" rev-parse --short HEAD)"
-        for id in $(game_ids); do
-            args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
-        done
-        write_local_entry "$name" "${args[@]}" \
-            --version "$version" --commit "$commit" \
-            --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
+        version="r$(git -C "$SRC" rev-list --count "$rev")"
+        commit="$(git -C "$SRC" rev-parse --short "$rev")"
+        # A game whose tunnel is missing is dropped from the local entry rather
+        # than written at an empty address (which publish-host.sh refuses).
+        build_entry_args "$version" "$commit"
+        write_local_entry "$name" "${ENTRY_ARGS[@]}"
         echo "up to date at ${rev:0:7} and all three servers are running; nothing to do"
         return 0
     fi
