@@ -3,6 +3,7 @@
 #
 #   bash deploy/host.sh up        clone/update, build, start, prove, publish
 #   bash deploy/host.sh update    rebuild and restart only if the ref moved
+#   bash deploy/host.sh tunnels   mint what tunnels are missing, keep the rest, republish
 #   bash deploy/host.sh status    what is running, from what, at what address
 #   bash deploy/host.sh down      stop the servers and their tunnels
 #
@@ -291,6 +292,16 @@ stop_all() {
     done
 }
 
+# The servers only. A tunnel forwards a public name to a loopback port and
+# does not care which process answers there, so a restart behind it keeps the
+# address; see ensure_tunnels.
+stop_servers() {
+    local id
+    for id in $(game_ids); do
+        stop_one "server-$id"
+    done
+}
+
 # Read the tunnel's public address out of its log.
 #
 # cloudflared prints one https://<random>.trycloudflare.com line on startup and
@@ -313,6 +324,161 @@ wait_for_tunnel() {
     done
     echo "host.sh: no public address from the $id tunnel in 60s; see $log" >&2
     return 1
+}
+
+# --- tunnels -----------------------------------------------------------------
+# A quick tunnel is a process forwarding a public name to a loopback port.
+# Restarting the server behind it needs no new tunnel: cloudflared keeps
+# forwarding to the port, and the address book keeps its entry. So a live
+# tunnel that still answers is KEPT across `up` and `update`, and only a dead
+# or unanswering one is minted again. That is also what keeps a host off
+# Cloudflare's rate limit for new quick tunnels (HTTP 429, error 1015): the
+# first on-host timer re-minted three tunnels every two minutes and took the
+# whole public IP - every host behind that router - out of quick tunnels for
+# an afternoon (2026-09-06).
+#
+# EMBER_NO_MINT=1 forbids minting altogether (the timer sets it while backing
+# off from a 429): dead tunnels are reported, servers are left alone.
+
+mint_tunnel() {  # <id>: a fresh tunnel process for the game; the log starts over
+    local id="$1" port; port="$(game_port "$id")"
+    stop_one "tunnel-$id"
+    rm -f "$RUN/$id.url"
+    say "starting the $id tunnel"
+    : > "$RUN/tunnel-$id.log"
+    nohup "$EMBER_TUNNEL_BIN" tunnel --url "http://127.0.0.1:$port" --no-autoupdate \
+        >> "$RUN/tunnel-$id.log" 2>&1 &
+    record_pid "tunnel-$id" "$!"
+}
+
+# Let fresh hostnames exist before anything asks for them. The first DNS query
+# for a brand-new *.trycloudflare.com name can land before Cloudflare has
+# published the record, and a resolver that caches that NXDOMAIN keeps
+# returning it long after the record appears (the FRITZ!Box: 20+ minutes).
+# Only a real cloudflared mints names that need this; the test stub's loopback
+# addresses resolve at once. EMBER_TUNNEL_SETTLE overrides.
+settle_tunnels() {
+    local settle="${EMBER_TUNNEL_SETTLE:-}"
+    if [ -z "$settle" ]; then
+        case "$(basename "$EMBER_TUNNEL_BIN")" in cloudflared) settle=15 ;; *) settle=0 ;; esac
+    fi
+    if [ "$settle" != "0" ]; then
+        say "letting the tunnel hostnames propagate (${settle}s)"
+        sleep "$settle"
+    fi
+}
+
+probe_public() {  # <id> <url> <commit>: up to two minutes of retries
+    local id="$1" url="$2" commit="$3" attempt
+    for attempt in $(seq 1 24); do
+        if probe_game "$id" "$url" public "$commit"; then
+            echo "   $id answered through its public address (attempt $attempt)"
+            return 0
+        fi
+        [ "$attempt" -lt 24 ] && sleep 5
+    done
+    return 1
+}
+
+# ensure_tunnels <commit>: on return every game has either a proven tunnel
+# (its address in $RUN/<id>.url) or none. At most one mint per game per call.
+# Returns 0 when all three are proven, 3 when at least one is missing.
+ensure_tunnels() {
+    local commit="$1" id url minted="" missing="" retry=""
+    for id in $(game_ids); do
+        if alive "tunnel-$id" && [ -s "$RUN/$id.url" ]; then
+            echo "   keeping the $id tunnel: $(cat "$RUN/$id.url")"
+        elif [ -n "${EMBER_NO_MINT:-}" ]; then
+            stop_one "tunnel-$id"
+            rm -f "$RUN/$id.url"
+            echo "   the $id tunnel is down and EMBER_NO_MINT is set; not minting one"
+            missing="$missing $id"
+        else
+            mint_tunnel "$id"
+            minted="$minted $id"
+        fi
+    done
+    for id in $minted; do
+        if url="$(wait_for_tunnel "$id")"; then
+            echo "$url" > "$RUN/$id.url"
+            echo "   $id: $url"
+        else
+            stop_one "tunnel-$id"
+            missing="$missing $id"
+        fi
+    done
+    [ -z "$minted" ] || settle_tunnels
+    # Prove every tunnel that exists. A kept one that no longer answers is a
+    # corpse - cloudflared can outlive its own tunnel - and is stopped; when
+    # minting is allowed it gets one fresh attempt below.
+    for id in $(game_ids); do
+        case " $missing " in *" $id "*) continue ;; esac
+        url="$(cat "$RUN/$id.url")"
+        say "health check for $id through $url"
+        if probe_public "$id" "$url" "$commit"; then continue; fi
+        stop_one "tunnel-$id"
+        rm -f "$RUN/$id.url"
+        case " $minted " in
+            *" $id "*)
+                echo "   the $id tunnel is up but the server did not answer through it within two minutes"
+                missing="$missing $id"
+                continue ;;
+        esac
+        if [ -n "${EMBER_NO_MINT:-}" ]; then
+            echo "   the $id tunnel no longer answers and EMBER_NO_MINT is set; not minting one"
+            missing="$missing $id"
+            continue
+        fi
+        echo "   the $id tunnel no longer answers; minting a new one"
+        mint_tunnel "$id"
+        retry="$retry $id"
+    done
+    if [ -n "$retry" ]; then
+        for id in $retry; do
+            if url="$(wait_for_tunnel "$id")"; then
+                echo "$url" > "$RUN/$id.url"
+                echo "   $id: $url"
+            else
+                stop_one "tunnel-$id"
+                missing="$missing $id"
+            fi
+        done
+        settle_tunnels
+        for id in $retry; do
+            case " $missing " in *" $id "*) continue ;; esac
+            url="$(cat "$RUN/$id.url")"
+            say "health check for $id through $url"
+            if ! probe_public "$id" "$url" "$commit"; then
+                stop_one "tunnel-$id"
+                rm -f "$RUN/$id.url"
+                echo "   the $id tunnel is up but the server did not answer through it within two minutes"
+                missing="$missing $id"
+            fi
+        done
+    fi
+    if [ -n "$missing" ]; then
+        echo "host.sh: no public address for:$missing" >&2
+        if grep -qs -E '429|error code: 1015' "$RUN"/tunnel-*.log; then
+            echo "host.sh: Cloudflare is rate-limiting new quick tunnels (429 / error 1015) for this public IP; retry later, not sooner" >&2
+        fi
+        return 3
+    fi
+    return 0
+}
+
+# The entry for what is running now: written locally always, published where
+# EMBER_PUBLISH says. Returns publish-host.sh's status.
+publish_current() {  # <name> <version> <commit>
+    local name="$1" version="$2" commit="$3" id args=()
+    for id in $(game_ids); do
+        args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
+    done
+    write_local_entry "$name" "${args[@]}" \
+        --version "$version" --commit "$commit" \
+        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
+    publish_entry "$name" "${args[@]}" \
+        --version "$version" --commit "$commit" \
+        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
 }
 
 # --- the address book ------------------------------------------------------
@@ -440,8 +606,8 @@ cmd_up() {
     ) || die "build failed"
     echo "   built in $(( $(date +%s) - tb ))s"
 
-    say "stopping whatever was running"
-    stop_all
+    say "stopping the servers (live tunnels are kept)"
+    stop_servers
 
     local id port bin bind ts
     ts="$(date +%s)"
@@ -481,88 +647,65 @@ cmd_up() {
     done
     echo "   local probes passed in $(( $(date +%s) - tl ))s"
 
-    local urls="" tt
-    tt="$(date +%s)"
-    for id in $(game_ids); do
-        port="$(game_port "$id")"
-        say "starting the $id tunnel"
-        : > "$RUN/tunnel-$id.log"
-        nohup "$EMBER_TUNNEL_BIN" tunnel --url "http://127.0.0.1:$port" --no-autoupdate \
-            >> "$RUN/tunnel-$id.log" 2>&1 &
-        record_pid "tunnel-$id" "$!"
-    done
-    for id in $(game_ids); do
-        local url; url="$(wait_for_tunnel "$id")" || die "no public address for $id"
-        echo "$url" > "$RUN/$id.url"
-        echo "   $id: $url"
-        urls="$urls $id=$url"
-    done
-    echo "   tunnels started in $(( $(date +%s) - tt ))s"
-
-    # Let the hostnames exist before anything asks for them. The first DNS
-    # query for a brand-new *.trycloudflare.com name can land before
-    # Cloudflare has published the record, and a resolver that caches that
-    # NXDOMAIN keeps returning it long after the record appears — so the
-    # first attempt waits, and the rest retry for up to two minutes. The
-    # ssh deploys learned this the hard way on 2026-09-01; this script
-    # learned it on its first real run on 2026-09-02, when it probed the
-    # arena's fresh name within a second of minting it and gave up.
-    # Only a real cloudflared mints names that need this; the test stub's
-    # loopback addresses resolve at once. EMBER_TUNNEL_SETTLE overrides.
-    local settle="${EMBER_TUNNEL_SETTLE:-}" tp
-    tp="$(date +%s)"
-    if [ -z "$settle" ]; then
-        case "$(basename "$EMBER_TUNNEL_BIN")" in cloudflared) settle=15 ;; *) settle=0 ;; esac
-    fi
-    if [ "$settle" != "0" ]; then
-        say "letting the tunnel hostnames propagate (${settle}s)"
-        sleep "$settle"
-    fi
-    for id in $(game_ids); do
-        local url; url="$(cat "$RUN/$id.url")"
-        say "health check for $id through $url"
-        local ok="" attempt
-        for attempt in $(seq 1 24); do
-            if probe_game "$id" "$url" public "$commit"; then ok=1; break; fi
-            [ "$attempt" -lt 24 ] && sleep 5
-        done
-        [ -n "$ok" ] || die "the $id tunnel is up but the server did not answer through it within two minutes"
-        echo "   $id answered through its public address (attempt $attempt)"
-    done
-    echo "   public probes passed in $(( $(date +%s) - tp ))s"
-
-    # WHAT IS RUNNING is recorded as soon as it is proven running — all three
-    # servers answered on loopback and through their public addresses — and
-    # before the publish, which is a different question. It used to come after,
-    # so a host with no push rights on EMBER_REPO (the documented normal case
-    # for "anyone with a Linux box") aborted here with both games healthy and
-    # `$RUN/deployed` never written; every later `update` then read "none",
-    # took the redeploy branch, and its first act was stop_all — tearing down
-    # two working servers mid-game, rebuilding, minting two new tunnel URLs and
-    # failing to publish again. The operator never even saw the UP line.
+    # WHAT IS RUNNING is recorded as soon as the servers are proven on
+    # loopback - before the tunnels and before the publish, which are
+    # different questions. It used to come after the public probes, so a
+    # host that could not mint a tunnel (Cloudflare's 429 on 2026-09-06)
+    # never wrote it, and every later `update` restarted three healthy
+    # servers to try again; the publish had taught the same lesson earlier,
+    # when a host with no push rights on EMBER_REPO (the documented normal
+    # case for "anyone with a Linux box") aborted here with both games
+    # healthy and `update` then tore them down on every run.
     echo "$rev" > "$RUN/deployed"
+
+    local tt trc=0
+    tt="$(date +%s)"
+    ensure_tunnels "$commit" || trc=$?
+    local urls=""
+    for id in $(game_ids); do
+        [ -s "$RUN/$id.url" ] && urls="$urls $id=$(cat "$RUN/$id.url")"
+    done
+    echo "   tunnels settled in $(( $(date +%s) - tt ))s"
+    if [ "$trc" -ne 0 ]; then
+        say "servers UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s, but not every tunnel is proven:$urls"
+        echo "host.sh: not publishing an incomplete entry; 'host.sh tunnels' finishes the job once tunnels can be minted" >&2
+        return 3
+    fi
     say "UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s:$urls"
 
     say "publishing"
-    local args=() pubrc=0
-    for id in $(game_ids); do
-        args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
-    done
-    write_local_entry "$name" "${args[@]}" \
-        --version "$version" --commit "$commit" \
-        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
-    # Loud and non-zero, but no longer fatal to the record above: a host absent
+    local pubrc=0
+    # Loud and non-zero, but not fatal to the record above: a host absent
     # from the book IS a failure and a wrapper must see it, while `update` must
-    # stop mistaking an unpublished host for an undeployed one.
-    publish_entry "$name" "${args[@]}" \
-        --version "$version" --commit "$commit" \
-        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)" || pubrc=$?
+    # not mistake an unpublished host for an undeployed one.
+    publish_current "$name" "$version" "$commit" || pubrc=$?
     if [ "$pubrc" -ne 0 ]; then
         echo "host.sh: the servers are UP at$urls but publishing FAILED;" >&2
         echo "         players will not find this host until it publishes." >&2
         echo "         Fix EMBER_PUBLISH (currently '$EMBER_PUBLISH') and re-run." >&2
         return "$pubrc"
     fi
+}
+
+# Mint what tunnels are missing, keep the ones that answer, republish. The
+# repair for "the servers are fine but a tunnel died" - which `update` does
+# not do, on purpose: it must never restart healthy servers for a tunnel.
+cmd_tunnels() {
+    [ -x "$EMBER_TUNNEL_BIN" ] || die "no tunnel binary at $EMBER_TUNNEL_BIN (set EMBER_TUNNEL_BIN)"
+    [ -n "$PY" ] || die "need a working python3 (or python) on PATH to publish the entry"
+    [ -d "$SRC/.git" ] || die "nothing deployed yet; run host.sh up"
+    local id
+    for id in $(game_ids); do
+        alive "server-$id" || die "the $id server is not running; run host.sh up"
+    done
+    local name version commit trc=0
+    name="$(bash "$(helper host-name.sh)")"
+    version="r$(git -C "$SRC" rev-list --count HEAD)"
+    commit="$(git -C "$SRC" rev-parse --short HEAD)"
+    ensure_tunnels "$commit" || trc=$?
+    [ "$trc" -eq 0 ] || return 3
+    say "publishing"
+    publish_current "$name" "$version" "$commit"
 }
 
 cmd_update() {
@@ -648,8 +791,9 @@ cmd_down() {
 }
 
 case "$CMD" in
-    up)     cmd_up ;;
-    update) cmd_update ;;
+    up)      cmd_up ;;
+    update)  cmd_update ;;
+    tunnels) cmd_tunnels ;;
     status) cmd_status ;;
     down)   cmd_down ;;
     *)      sed -n '2,20p' "$0" >&2; exit 2 ;;
