@@ -45,8 +45,15 @@ $ready=@{url=$url;version=$Version;commit=$Commit;pid=$child.Id;verified=[DateTi
 if ($Publish) {
     Push-Location -LiteralPath $Repository
     try {
-        & $Node (Join-Path $Repository 'tools/league/publish-host.cjs') $url $Version $Commit $HostName
-        if ($LASTEXITCODE -ne 0) { throw 'League is reachable but its address book publication failed' }
+        $published=$false
+        for($try=0;$try -lt 3;$try++) {
+            & $Node (Join-Path $Repository 'tools/league/publish-host.cjs') $url $Version $Commit $HostName
+            if($LASTEXITCODE -eq 0){$published=$true;break}
+            # Re-fetch and re-merge after a concurrent address-book writer,
+            # retaining this proven tunnel throughout the retry.
+            Start-Sleep -Seconds 5
+        }
+        if (-not $published) { throw 'League is reachable but its address book publication failed' }
     } finally { Pop-Location }
 }
 $child.WaitForExit()

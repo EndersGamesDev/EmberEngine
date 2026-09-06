@@ -1,14 +1,14 @@
 //! Native Arena client.
 //!
 //!     arena-app                                              # Arena v0, local 2P
-//!     arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE] [MAP] [MODE] [classic|custom] [WEAPON1-7]
+//!     arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE] [MAP] [MODE] [classic|custom] [WEAPON1-8]
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("online") {
-        let usage = "usage: arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE] [MAP] [MODE] [classic|custom] [WEAPON1-7]";
+        let usage = "usage: arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE] [MAP] [MODE] [classic|custom] [WEAPON1-8]";
         let cfg = arena::OnlineConfig {
             url: args.get(1).expect(usage).clone(),
             action: args.get(2).expect(usage).clone(),

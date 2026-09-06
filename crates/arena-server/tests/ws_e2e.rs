@@ -1096,11 +1096,13 @@ fn welcome_names_the_host_and_reports_its_live_load() {
     let (mut alice, raw) = connect_raw_welcome(port, "alice");
     match serde_json::from_str::<S2C>(&raw).unwrap() {
         S2C::Welcome {
+            motd,
             host,
             players,
             lobbies,
             ..
         } => {
+            assert_eq!(motd, "Killshot v31 — Breach-12 — powered by Ember");
             assert_eq!(host, "test-otter");
             assert_eq!(players, 0, "an idle server has nobody in a game: {raw}");
             assert_eq!(lobbies, 0);

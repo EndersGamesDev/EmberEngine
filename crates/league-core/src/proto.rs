@@ -102,9 +102,10 @@ pub enum Phase {
 }
 
 /// A player command: one event with a world aim point and an optional
-/// unit id / inventory index. There are no held inputs in league; move is
-/// a destination, attacks and casts are orders the authoritative sim
-/// executes.
+/// unit id / inventory index.
+///
+/// There are no held inputs in league; move is a destination, attacks and
+/// casts are orders the authoritative sim executes.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 #[serde(tag = "a", rename_all = "snake_case")]
 pub enum Cmd {
@@ -239,7 +240,9 @@ pub struct ZoneSnap {
     pub r: f32,
 }
 
-/// Transient effect for the renderer, one snapshot's worth. `k`:
+/// Transient effect for the renderer, one snapshot's worth.
+///
+/// `k`:
 /// 0 auto-attack (u->v), 1 beam (xy->xy2), 2 explosion (x, v=radius),
 /// 3 zone spawn, 4 trap plant, 5 death, 6 level-up, 7 gold, 8 teleport,
 /// 9 heal flash, 10 hook cast, 11 cast flash, 12 shield flash.

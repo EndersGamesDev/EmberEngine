@@ -34,7 +34,16 @@ pub struct Grips {
 impl Grips {
     /// The M4 uses the sidearm mesh today, so it must use that mesh's grip too.
     pub fn get(&self, id: u8) -> Option<&WeaponGrip> {
-        self.weapons.get(usize::from(id)).and_then(Option::as_ref)
+        // Breach-12 geometry is authored around the unchanged AK glove and
+        // wrist sockets; no extra texture uploads or loose fallback hands.
+        let grip_id = if id == arena_core::shooter::SHOTGUN {
+            3
+        } else {
+            id
+        };
+        self.weapons
+            .get(usize::from(grip_id))
+            .and_then(Option::as_ref)
     }
 }
 

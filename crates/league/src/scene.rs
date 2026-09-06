@@ -1213,9 +1213,9 @@ pub struct SceneInput<'a> {
     pub my_slot: Option<u8>,
 }
 
-/// The entry both game modes call: bodies, zones, shots and effects. Buffs
-/// and the own-seat ring come through [`scene_with`] once a caller passes
-/// them; until then the picture is bodies without wearables.
+/// Test helper for a scene without buffs or an own-seat marker; both game
+/// modes call [`scene_with`].
+#[cfg(test)]
 #[must_use]
 pub fn scene(
     units: &[UnitLite],

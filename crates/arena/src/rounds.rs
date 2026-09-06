@@ -58,11 +58,20 @@ pub enum Round {
     Casull,
     /// .338 Lapua Magnum, long boat tail, long secant ogive: the sniper.
     Lapua,
+    /// Round buckshot pellet; never draw a complete shotgun shell in flight.
+    Buckshot,
 }
 
 impl Round {
     /// Every round, in registration order.
-    pub const ALL: [Self; 5] = [Self::Nine, Self::Ak, Self::M4, Self::Casull, Self::Lapua];
+    pub const ALL: [Self; 6] = [
+        Self::Nine,
+        Self::Ak,
+        Self::M4,
+        Self::Casull,
+        Self::Lapua,
+        Self::Buckshot,
+    ];
 
     /// Offset from the registered base.
     #[must_use]
@@ -79,6 +88,7 @@ impl Round {
             Self::M4 => (5.7, 23.0),
             Self::Casull => (11.5, 19.0),
             Self::Lapua => (8.6, 41.0),
+            Self::Buckshot => (8.4, 8.4),
         }
     }
 
@@ -100,6 +110,7 @@ impl Round {
             Self::M4 => 2.3,
             Self::Casull => 5.4,
             Self::Lapua => 3.4,
+            Self::Buckshot => 0.2,
         }
     }
 
@@ -114,7 +125,7 @@ impl Round {
 const MM: f32 = 0.001;
 
 /// The streak mesh's offset from the registered base: after the last round.
-pub const STREAK_OFFSET: u32 = Round::Lapua.offset() + 1;
+pub const STREAK_OFFSET: u32 = Round::Buckshot.offset() + 1;
 
 /// The core frustum's offset: after the streak.
 pub const CORE_OFFSET: u32 = STREAK_OFFSET + 1;
@@ -206,6 +217,7 @@ pub const fn round_for(weapon: u8) -> Option<Round> {
         5 => Some(Round::Casull),
         6 => Some(Round::Lapua),
         7 => None,
+        8 => Some(Round::Buckshot),
         _ => Some(Round::Nine),
     }
 }
@@ -383,6 +395,19 @@ fn profile(r: Round) -> (Vec<Pt>, Vec<Band>) {
                 p(41.0, 0.0),
             ],
             vec![(36.0, 41.0, TIP_DIM)],
+        ),
+        Round::Buckshot => (
+            vec![
+                c(0.0, 0.0),
+                c(0.0, heel),
+                p(0.56, 2.1),
+                p(2.1, 3.637),
+                p(4.2, 4.2),
+                p(6.3, 3.637),
+                p(7.84, 2.1),
+                p(8.4, 0.0),
+            ],
+            vec![],
         ),
     }
 }
@@ -901,6 +926,7 @@ mod tests {
         assert_eq!(round_for(5), Some(Round::Casull));
         assert_eq!(round_for(6), Some(Round::Lapua));
         assert_eq!(round_for(7), None);
+        assert_eq!(round_for(8), Some(Round::Buckshot));
         assert_eq!(round_for(0), Some(Round::Nine));
         assert_eq!(round_for(200), Some(Round::Nine));
         // Every weapon that traces has a round; the one that does not is
@@ -914,15 +940,15 @@ mod tests {
         for (k, r) in (0u32..).zip(Round::ALL) {
             assert_eq!(rs.mesh(r), 40 + k);
         }
-        assert_eq!(rs.streak(), 45);
-        assert_eq!(rs.core(), 46);
-        assert_eq!(rs.disc(), 47);
-        assert_eq!(rs.puff(), 48);
-        assert_eq!(STREAK_OFFSET, 5, "the streak follows the last round");
-        assert_eq!(CORE_OFFSET, 6, "the core follows the streak");
-        assert_eq!(DISC_OFFSET, 7, "the disc follows the core");
-        assert_eq!(PUFF_OFFSET, 8, "the puff is last of the group");
-        assert_eq!(round_meshes().len(), 9);
+        assert_eq!(rs.streak(), 46);
+        assert_eq!(rs.core(), 47);
+        assert_eq!(rs.disc(), 48);
+        assert_eq!(rs.puff(), 49);
+        assert_eq!(STREAK_OFFSET, 6, "the streak follows the last round");
+        assert_eq!(CORE_OFFSET, 7, "the core follows the streak");
+        assert_eq!(DISC_OFFSET, 8, "the disc follows the core");
+        assert_eq!(PUFF_OFFSET, 9, "the puff is last of the group");
+        assert_eq!(round_meshes().len(), 10);
         // Real sizes, in metres.
         assert!((Round::Nine.length() - 0.0155).abs() < 1e-7);
         assert!((diameter(Round::Lapua) - 0.0086).abs() < 1e-7);

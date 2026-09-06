@@ -613,7 +613,7 @@ impl Match {
     /// The wire view of the whole world; drains the transient streams, so
     /// it is called exactly once per broadcast, like arena's shot events.
     pub fn snapshot(&mut self) -> proto::S2C {
-        let units: Vec<UnitSnap> = self.units.iter().map(|u| self.unit_snap(u)).collect();
+        let units: Vec<UnitSnap> = self.units.iter().map(Self::unit_snap).collect();
         let mut champs: Vec<ChampView> = self
             .units
             .iter()
@@ -699,7 +699,7 @@ impl Match {
         }
     }
 
-    fn unit_snap(&self, u: &Unit) -> UnitSnap {
+    fn unit_snap(u: &Unit) -> UnitSnap {
         UnitSnap {
             id: u.id,
             k: u.kind.code(),
@@ -1189,14 +1189,13 @@ impl Match {
             }
         }
         if let Some((ti, d)) = best {
+            let (tx, tz) = (self.units[ti].x, self.units[ti].z);
             if d <= 1.9 + self.range_of(ui) - 1.6 {
-                let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                 self.face_to(ui, tx, tz);
                 if self.units[ui].atk_cd <= 0.0 {
                     self.do_attack(ui, ti);
                 }
             } else {
-                let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                 self.walk_toward(ui, tx, tz);
             }
             return;
@@ -1265,15 +1264,15 @@ impl Match {
             Kind::Champ | Kind::Clone => {
                 data::champ_stats(u.def, u.level).ms
                     * MS_SCALE
-                    * self.ms_mult(u, u.kind == Kind::Champ)
+                    * Self::ms_mult(u, u.kind == Kind::Champ)
             }
-            Kind::Melee | Kind::Caster => 300.0 * MS_SCALE * self.ms_mult(u, false),
+            Kind::Melee | Kind::Caster => 300.0 * MS_SCALE * Self::ms_mult(u, false),
             _ => 0.0,
         }
     }
 
     /// Move-speed percent total for a unit (runes, items, buffs).
-    fn ms_pct(&self, u: &Unit, champ: bool) -> f32 {
+    fn ms_pct(u: &Unit, champ: bool) -> f32 {
         let mut pct = 0.0;
         if champ && u.kind == Kind::Champ {
             pct += data::rune_stats(&u.runes).ms;
@@ -1290,8 +1289,8 @@ impl Match {
         pct
     }
 
-    fn ms_mult(&self, u: &Unit, champ: bool) -> f32 {
-        (1.0 + self.ms_pct(u, champ) / 100.0).max(0.05)
+    fn ms_mult(u: &Unit, champ: bool) -> f32 {
+        (1.0 + Self::ms_pct(u, champ) / 100.0).max(0.05)
     }
 
     #[must_use]
@@ -1306,6 +1305,10 @@ impl Match {
     }
 
     /// One auto-attack from `ui` at `ti`, paid for by `atk_cd`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One attack resolves stats, crit, cooldown and its melee/projectile effect in a fixed order."
+    )]
     fn do_attack(&mut self, ui: usize, ti: usize) {
         let kind = self.units[ui].kind;
         let reach_is_melee = self.range_of(ui) < 2.5;
@@ -1431,6 +1434,10 @@ impl Match {
     // projectiles and zones
     // ------------------------------------------------------------------
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Projectile movement, collision and hit effects form one ordered tick transition."
+    )]
     fn step_proj(&mut self, pi: usize) {
         if self.projs[pi].travel <= 0.0 {
             return;
@@ -1551,6 +1558,10 @@ impl Match {
         }
     }
 
+    #[allow(
+        clippy::while_float,
+        reason = "The half-second zone accumulator intentionally preserves existing f32 timing and catch-up order."
+    )]
     fn step_zone(&mut self, zi: usize) {
         if self.zones[zi].ttl <= 0.0 {
             return;
@@ -1598,8 +1609,8 @@ impl Match {
                 }
             }
             ZoneKind::Tornado | ZoneKind::Stasis | ZoneKind::Shroud => {
-                let mut t = self.zones[zi].tick_t - crate::DT;
-                while t <= 0.0 {
+                let mut tick_left = self.zones[zi].tick_t - crate::DT;
+                while tick_left <= 0.0 {
                     for i in 0..self.units.len() {
                         if self.hitable_enemy(i, team, x, z, r) {
                             let dealt = self.deal_damage(i, dmg, 1, owner, true);
@@ -1620,9 +1631,9 @@ impl Match {
                             }
                         }
                     }
-                    t += 0.5;
+                    tick_left += 0.5;
                 }
-                self.zones[zi].tick_t = t;
+                self.zones[zi].tick_t = tick_left;
                 if self.zones[zi].ttl <= 0.0 && zk == ZoneKind::Stasis && detonate > 0.0 {
                     for i in 0..self.units.len() {
                         if self.hitable_enemy(i, team, x, z, r) {
@@ -1644,23 +1655,23 @@ impl Match {
 
     /// Can a zone/beam from `owner` on `team` hurt unit `i` at radius `r`?
     pub(crate) fn hitable_enemy(&self, i: usize, team: u8, x: f32, z: f32, r: f32) -> bool {
-        let o = &self.units[i];
-        if o.dead {
+        let target = &self.units[i];
+        if target.dead {
             return false;
         }
-        if o.kind == Kind::Clone {
+        if target.kind == Kind::Clone {
             return false;
         }
         if matches!(
-            o.kind,
+            target.kind,
             Kind::CourtN | Kind::CourtS | Kind::CoreBlue | Kind::CoreRed
         ) {
             return false;
         }
-        if o.team == team {
+        if target.team == team {
             return false;
         }
-        dist(x, z, o.x, o.z) <= r + o.kind.hit_r()
+        dist(x, z, target.x, target.z) <= r + target.kind.hit_r()
     }
 
     // ------------------------------------------------------------------
@@ -1670,6 +1681,10 @@ impl Match {
     /// Apply `raw` damage from unit `src` to unit `ti`. `source_kind`:
     /// 0 auto-attack, 1 ability (spell multipliers apply), 2 dot/true.
     /// Returns what actually landed after immunities, shields and DR.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Damage resolution keeps source modifiers, shields, assist credit and lethal effects in their deterministic order."
+    )]
     pub fn deal_damage(
         &mut self,
         ti: usize,
@@ -1793,6 +1808,10 @@ impl Match {
     }
 
     /// The victim at `ti` has reached 0 hp. `src` landed the blow.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "The exhaustive unit-kind dispatch keeps revive, bounty, experience and objective transitions together at the lethal-hit boundary."
+    )]
     fn on_death(&mut self, ti: usize, src: u32, killer_slot: Option<u8>) {
         let (kind, team) = (self.units[ti].kind, self.units[ti].team);
         let (x, z) = (self.units[ti].x, self.units[ti].z);
