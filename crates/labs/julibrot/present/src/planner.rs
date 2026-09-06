@@ -868,8 +868,8 @@ mod tests {
             distance_five: 8.0,
             distance_four: 8.0,
         };
-        let plane = construct_plane(object)
-            .expect("the measured relief zoom row constructs its plane");
+        let plane =
+            construct_plane(object).expect("the measured relief zoom row constructs its plane");
         let mut posed = object_pose(object, plane, view, [0.0; 2]);
         posed.zoom_log2 = 1.259_194_831_013_92;
         posed.plane_origin = [-0.629, 0.0, -0.083, 0.016];
