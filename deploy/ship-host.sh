@@ -338,18 +338,41 @@ cmd_deploy() {
     echo "   collected in $(( $(date +%s) - tc ))s"
     ls -l "$stage/products"
 
-    # A fresh directory per commit, rather than overwriting in place. A running
-    # binary cannot be written to (ETXTBSY), and an immutable directory makes
-    # "these binaries and this stamp" one thing rather than two that can drift.
+    # A fresh directory per commit, rather than overwriting in place, and the
+    # upload goes to a sibling that is then renamed over it. Both halves are
+    # needed. A running binary cannot be written to at all (ETXTBSY), which is
+    # exactly what re-shipping the SAME commit onto a live host does; and a
+    # rename only replaces the directory entry, so the processes still holding
+    # the old files keep running until host.sh stops them. Unlinking those
+    # files afterwards is safe for the same reason.
     local root="$EMBER_SHIP_REMOTE_ROOT" dest="$EMBER_SHIP_REMOTE_ROOT/$commit"
+    local incoming="$dest.incoming"
     say "shipping to $EMBER_SHIP_HOST:$dest"
     local ts; ts="$(date +%s)"
-    host_ssh "mkdir -p '$dest' '$root/deploy'" || unknown "cannot reach $EMBER_SHIP_HOST"
-    host_scp "$stage/products"/* "$EMBER_SHIP_HOST:$dest/" \
+    host_ssh "rm -rf '$incoming' && mkdir -p '$incoming' '$root/deploy'" \
+        || unknown "cannot reach $EMBER_SHIP_HOST"
+    host_scp "$stage/products"/* "$EMBER_SHIP_HOST:$incoming/" \
         || die "could not copy the products to $EMBER_SHIP_HOST"
     host_scp "$SELF_DIR"/*.sh "$SELF_DIR"/*.py "$EMBER_SHIP_HOST:$root/deploy/" \
         || die "could not copy deploy/ to $EMBER_SHIP_HOST"
+    host_ssh "rm -rf '$dest.old'; if [ -d '$dest' ]; then mv '$dest' '$dest.old'; fi; mv '$incoming' '$dest'; rm -rf '$dest.old'" \
+        || die "could not move the shipped products into place on $EMBER_SHIP_HOST"
     echo "   shipped in $(( $(date +%s) - ts ))s"
+
+    # The name is a property of the MACHINE, not of one invocation. host.sh
+    # takes EMBER_HOST_NAME, else ~/.ember/host-name, else generates one and
+    # keeps it — so a configured name passed only on the command line left the
+    # box with no memory of it, and the next bare `host.sh status` or
+    # republish generated a different name and would have listed the same
+    # machine a second time under it. Recording it here is what makes every
+    # later run on that host agree with this one.
+    if [ -n "$EMBER_SHIP_HOST_NAME" ]; then
+        [[ "$EMBER_SHIP_HOST_NAME" =~ ^[a-z0-9-]{3,32}$ ]] \
+            || die "EMBER_SHIP_HOST_NAME='$EMBER_SHIP_HOST_NAME' is not a host name"
+        say "recording the host name"
+        host_ssh "mkdir -p \"\$HOME/.ember\" && printf '%s\\n' '$EMBER_SHIP_HOST_NAME' > \"\$HOME/.ember/host-name\"" \
+            || die "could not record the host name on $EMBER_SHIP_HOST"
+    fi
 
     say "bootstrapping $EMBER_SHIP_HOST"
     # Double quotes, so the REMOTE shell expands $HOME. Single ones travel as

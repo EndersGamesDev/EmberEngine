@@ -144,13 +144,17 @@ is "$(grep '^arena_proto=' "$STAMP" | cut -d= -f2)" "22" "and the arena protocol
 echo "== the copy list =="
 contains "$LOG" "scp [-F] [$EMBER_SHIP_BUILDER_SSH_CONFIG]" "the builder is reached through its own ssh config"
 contains "$LOG" "[sokol-worker:/workspace/loops/ember/ember-ship-products] [$TMP/stage/products]" "the products came off the path the builder resolved"
-contains "$LOG" "[lundi-ember:ember-prebuilt/$PUB_COMMIT/]" "and went to a directory named by the commit"
+contains "$LOG" "[lundi-ember:ember-prebuilt/$PUB_COMMIT.incoming/]" "and went to a sibling of the directory named by the commit"
+contains "$LOG" "mv 'ember-prebuilt/$PUB_COMMIT.incoming' 'ember-prebuilt/$PUB_COMMIT'" "which is then renamed over it, because a running binary cannot be written to"
 contains "$LOG" "[$DEPLOY/host.sh]" "deploy/ travelled with them"
 contains "$LOG" "[$DEPLOY/bootstrap-host.sh]" "bootstrap-host.sh included"
 contains "$LOG" "[$DEPLOY/publish-host.sh]" "and the book writer host.sh calls"
 contains "$LOG" "[lundi-ember:ember-host/run/host.json]" "the host's own entry came back"
 if [ -s "$TMP/stage/host.json" ]; then ok "and was written down"; else bad "the fetched entry is empty"; fi
 contains "$DEPLOY_OUT" '"name": "lundi"' "the entry was printed"
+
+echo "== the name is left on the machine, not only in the invocation =="
+contains "$LOG" "\$HOME/.ember/host-name" "the configured name was written to the host's own name file"
 
 echo "== what the host was told to run =="
 contains "$LOG" "EMBER_PREBUILT=\"\$HOME/ember-prebuilt/$PUB_COMMIT\" bash \"\$HOME/ember-prebuilt/deploy/bootstrap-host.sh\"" "bootstrap ran in prebuilt mode, with a path the remote shell will expand"
