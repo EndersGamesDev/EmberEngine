@@ -3,8 +3,8 @@
     {
       "id": "arena",
       "title": "Killshot",
-      "tag": "online multiplayer · first person · up to 8",
-      "desc": "Killshot is Ember's online first-person shooter for up to eight players. The new Breach-12 shotgun joins eight weapons with individual sights, zoom, accuracy and reload animations. Read LIFE and ammunition at a glance, collect health and ammo boxes, and keep collected weapons in rebindable slots 1–9 until death. A circular countdown shows reload progress. Classic starts with a sidearm; Custom loadout lets the host choose a shared starting weapon independently of free for all, 4v4 team deathmatch or king of the hill. Slide, slide-jump and chain wall kicks through three hand-authored maps, including the vertical 96 × 96 m Breakwater Harbor with enterable port buildings and rooftop routes. Five HP, head-sized headshots and a timed shield. Sunlight, shadows, clouds, weather, spatial sound and gamepad support. Settings includes sensitivity, key bindings and fullscreen.",
+      "tag": "online multiplayer \u00c2\u00b7 first person \u00c2\u00b7 up to 8",
+      "desc": "Killshot is Ember's online first-person shooter for up to eight players. The new Breach-12 shotgun joins eight weapons with individual sights, zoom, accuracy and reload animations. Read LIFE and ammunition at a glance, collect health and ammo boxes, and keep collected weapons in rebindable slots 1\u00e2\u20ac\u201c9 until death. A circular countdown shows reload progress. Classic starts with a sidearm; Custom loadout lets the host choose a shared starting weapon independently of free for all, 4v4 team deathmatch or king of the hill. Slide, slide-jump and chain wall kicks through three hand-authored maps, including the vertical 96 \u00c3\u2014 96 m Breakwater Harbor with enterable port buildings and rooftop routes. Five HP, head-sized headshots and a timed shield. Sunlight, shadows, clouds, weather, spatial sound and gamepad support. Settings includes sensitivity, key bindings and fullscreen.",
       "versions": [
         {
           "v": "v31",
@@ -20,7 +20,7 @@
           "live": false,
           "proto": 23,
           "handover": true,
-          "note": "Killshot: LIFE and ammo HUD, health and ammo boxes, per-weapon reload animations and circular timer, retained weapon slots 1–9, Classic or custom starting loadout"
+          "note": "Killshot: LIFE and ammo HUD, health and ammo boxes, per-weapon reload animations and circular timer, retained weapon slots 1\u00e2\u20ac\u201c9, Classic or custom starting loadout"
         },
         {
           "v": "v29",
@@ -60,7 +60,7 @@
           "live": false,
           "proto": 20,
           "handover": true,
-          "note": "Breakwater Harbor: a hand-authored 96 × 96 m tactical port for eight players, with a moored ship, cranes, container routes, proper large-map collision and 4 m/s walking"
+          "note": "Breakwater Harbor: a hand-authored 96 \u00c3\u2014 96 m tactical port for eight players, with a moored ship, cranes, container routes, proper large-map collision and 4 m/s walking"
         },
         {
           "v": "v24",
@@ -171,7 +171,7 @@
           "path": "games/arena/v11/",
           "live": false,
           "proto": 11,
-          "note": "Q shield — blocks and reflects"
+          "note": "Q shield \u00e2\u20ac\u201d blocks and reflects"
         },
         {
           "v": "v10",
@@ -231,20 +231,28 @@
           "v": "v0",
           "path": "games/arena/v0/",
           "live": false,
-          "note": "the original local game — the pong classic"
+          "note": "the original local game \u00e2\u20ac\u201d the pong classic"
         }
       ]
     },
     {
       "id": "league",
       "title": "UltimateLegue",
-      "tag": "One lane / Five champions / 1v1 + 3v3",
+      "tag": "Crystalforge / Five champions / 1v1 + 3v3",
       "desc": "Draft your champion and three runes, master four abilities, and turn gold into a winning build. Capture the two side objectives for team bonuses, push with your minions, and destroy the enemy core. Play online or practice with bots.",
       "versions": [
         {
+          "v": "v2",
+          "path": "games/league/v2/",
+          "live": true,
+          "proto": 1,
+          "handover": true,
+          "note": "Crystalforge: five fleet-created champions, a textured garden arena, redesigned HUD and saved keybindings"
+        },
+        {
           "v": "v1",
           "path": "games/league/v1/",
-          "live": true,
+          "live": false,
           "proto": 1,
           "handover": true,
           "note": "first build: one lane, five champions, draft with rune pages and summoner spells, courts, cores, a shop, and bots"
@@ -254,8 +262,8 @@
     {
       "id": "fire",
       "title": "Fire Racer",
-      "tag": "local + online · 8 cars · 3 laps",
-      "desc": "Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.",
+      "tag": "local + online \u00c2\u00b7 8 cars \u00c2\u00b7 3 laps",
+      "desc": "Arcade racing through a gothic castle bailey \u00e2\u20ac\u201d a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.",
       "versions": [
         {
           "v": "v2",
@@ -269,7 +277,7 @@
           "v": "v1",
           "path": "games/fire/v1/",
           "live": false,
-          "note": "archived — the first build, before the castle circuit"
+          "note": "archived \u00e2\u20ac\u201d the first build, before the castle circuit"
         }
       ]
     },
@@ -291,7 +299,7 @@
     {
       "id": "what-is-this",
       "title": "what is this?",
-      "tag": "local diagnostic · browser + hardware · optional upload",
+      "tag": "local diagnostic \u00c2\u00b7 browser + hardware \u00c2\u00b7 optional upload",
       "desc": "A playful, staged answer to a practical question: what kind of machine and browser is this? Runs fixed wasm CPU and timing kernels, records floating-point and feature fingerprints, and keeps going when a probe is unavailable. The complete JSON report can stay on your device; sending it to the Ember server is a separate, explicit choice.",
       "versions": [
         {
@@ -306,7 +314,7 @@
       "id": "julibrot",
       "kind": "lab",
       "title": "Julibrot Lab",
-      "tag": "four-dimensional slices · local lab · WebGL2",
+      "tag": "four-dimensional slices \u00c2\u00b7 local lab \u00c2\u00b7 WebGL2",
       "desc": "A four-dimensional slice viewer with every delivered limit and measurement left visible. WebGL2 with EXT_color_buffer_float is required.",
       "versions": [
         {

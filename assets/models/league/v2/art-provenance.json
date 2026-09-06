@@ -1,0 +1,18 @@
+[
+  {
+    "name": "swarm",
+    "generator": "SDXL 1.0 / LAN specht32 ComfyUI",
+    "prompt": "(A floating spherical robot with one enormous glowing cyan eye:1.4), (four broad blade-shaped bronze fins attached around the sphere:1.2), hovering magical surveillance drone, compact ivory armored sphere, ancient geometric bronze engravings, turquoise light from its large central lens, two small shoulder drone pods, original fantasy strategy game art, painted ceramic and aged bronze materials, clean bold silhouette, entire robot visible centered, three quarter view on plain neutral gray background, high quality digital painting, soft studio lighting.",
+    "seed": 6090610,
+    "steps": 32,
+    "cfg": 7,
+    "negative": "text, watermark, logo, blurry, low quality, cropped, duplicate character, multiple views, photograph, modern gun, display stand, pedestal, legs, arms, hands, feet, human, humanoid",
+    "width": 1024,
+    "height": 1024,
+    "source": "target/league-art/swarm/20260906_00003_.png",
+    "output": "web/games/league/v2/art/swarm.webp",
+    "sha256": "e890351e66107b3e4f39aa4aa0f31dbcd7a2fadccc452a8a64081df76f714c11",
+    "elapsed_seconds": 14.52,
+    "review": "Selected after visual review: bronze orb silhouette with turquoise lenses; orbiting drones remain separately animated in scene."
+  }
+]
