@@ -51,7 +51,8 @@ mod warp;
 #[cfg(test)]
 pub use scene::scene_load_color;
 
-const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const GLITCH_COUNT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const FENCE_BYTES: u64 = 4;
 const HOT_HOMOGRAPHY_BYTE_OFFSET: u64 = 144;
@@ -643,7 +644,7 @@ fn create_gpu_state(
         "scene_fragment",
         &heap_layout,
         &scene_layout,
-        SCENE_FORMAT,
+        GLITCH_COUNT_FORMAT,
         Some(SceneLayer::Main),
     );
     // Same shader, same target, one differing fixed-function state: the backdrop is stencil-tested

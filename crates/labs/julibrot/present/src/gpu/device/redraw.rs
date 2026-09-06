@@ -11,7 +11,6 @@ impl Presenter {
         source: &crate::SceneFrame,
         destination: &Pose,
         surface_extent: [u32; 2],
-        selected: PaletteRecord,
     ) -> Result<bool, PresentError> {
         let Some(grid) = self.ledger.retained_grid() else {
             return Ok(false);
@@ -19,7 +18,7 @@ impl Presenter {
         if validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_err() {
             return Ok(false);
         }
-        let Ok(uniform) = relief_scene_uniform(grid, source, destination, selected) else {
+        let Ok(uniform) = relief_scene_uniform(grid, source, destination) else {
             return Ok(false);
         };
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
@@ -33,11 +32,10 @@ impl Presenter {
         &self,
         source: &crate::SceneFrame,
         destination: &Pose,
-        selected: PaletteRecord,
     ) -> bool {
         self.ledger.retained_grid().is_some_and(|grid| {
             validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_ok()
-                && relief_scene_uniform(grid, source, destination, selected).is_ok()
+                && relief_scene_uniform(grid, source, destination).is_ok()
         })
     }
 }
@@ -64,7 +62,6 @@ pub(super) fn relief_scene_uniform(
     grid: &ember_julibrot_kernels::EscapeGrid,
     source: &crate::SceneFrame,
     destination: &Pose,
-    selected: PaletteRecord,
 ) -> Result<SceneUniform, PresentError> {
     if [grid.width, grid.height] != source.extent {
         return Err(PresentError::InvalidGrid {
@@ -86,7 +83,6 @@ pub(super) fn relief_scene_uniform(
         grid.span.logical_len,
         redraw.plane,
         redraw.map,
-        selected,
     )
     .map_err(|error| match error {
         PresentDataError::InvalidMap => PresentError::Device {

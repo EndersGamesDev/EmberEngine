@@ -3,8 +3,8 @@ use ember_lab_heap::DialectLimits;
 const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
-struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, exterior_zero_rgba: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, }
+struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
 @group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
@@ -28,25 +28,6 @@ fn finite(value: f32) -> bool { return abs(value) <= 3.402823e38; }
 fn terminal_status(value: f32) -> bool { return value == 0.0 || value == 1.0 || value == 2.0 || value == 3.0; }
 fn malformed(record: vec4<f32>) -> bool {
     return !binary(record.y) || !terminal_status(record.w) || !finite(record.z) || record.z < 0.0 || record.z != floor(record.z);
-}
-fn hue_component(hue: f32, offset: f32) -> f32 {
-    return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-}
-fn shade(record: vec4<f32>) -> vec4<f32> {
-    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (record.w == 2.0) { return hot.exterior_zero_rgba; }
-    if (record.y == 0.0) {
-        if (record.x == -1.0) { return scene.interior_rgba; }
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
-    if (!finite(record.x) || !finite(scene.palette_map.x) || scene.palette_map.x <= 0.0) {
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
-    let hue = fract(max(record.x, 0.0) / scene.palette_map.x + scene.palette_map.y);
-    let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
-    let rgb = scene.palette_map.w * mix(vec3<f32>(1.0), phase_rgb, scene.palette_map.z);
-    return vec4<f32>(rgb, 1.0);
 }
 fn record_height(record: vec4<f32>) -> f32 {
     if (malformed(record) || record.w == 1.0 || record.w == 2.0) { return 0.0; }
@@ -172,15 +153,15 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
-    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (record.w == 2.0 || scene.span.z != 0u) { return hot.exterior_zero_rgba; }
+    if (malformed(record)) { return vec4<f32>(0.0, 0.0, 7.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }
+    if (record.w == 2.0) { return vec4<f32>(0.0, 1.0, 2.0, 1.0); }
+    if (scene.span.z != 0u) { return vec4<f32>(0.0, 1.0, 6.0, 1.0); }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     if (dot(normal_cross, normal_cross) > 1.0e-12) { normal = normalize(normal_cross); }
     let light = 0.58 + 0.24 * abs(dot(normal, normalize(vec3<f32>(0.4, 0.7, 0.6))));
-    let base = shade(record);
-    return vec4<f32>(base.rgb * light, base.a);
+    return vec4<f32>(record.xy, record.w, light);
 }
 ";
 
@@ -366,23 +347,25 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_loads_bottom_row_and_keeps_glitches_out_of_debug() {
+    fn the_scene_loads_bottom_row_and_emits_colour_free_values() {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
         assert!(source.contains("if (malformed(record))"));
         assert!(
-            source.contains("if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }")
+            source.contains("if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }")
         );
         assert!(!source.contains("if (malformed(record) || record.w == 1.0) { return vec4<f32>"));
-        assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
+        assert!(source.contains("if (record.w == 2.0) { return vec4<f32>(0.0, 1.0, 2.0, 1.0); }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
-        // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior
-        // sample: only a non-finite count is a contract violation, and the hue clamps at zero the
-        // way the height law already clamps.
+        // A beyond-bailout escape carries a negative smooth count and stays an ordinary value;
+        // only a non-finite count affects its height. Presentation applies the hue clamp later.
         assert!(!source.contains("record.x < 0.0"));
-        assert!(source.contains("fract(max(record.x, 0.0) / scene.palette_map.x"));
         assert!(source.contains("if (!finite(record.x)) { return 0.0; }"));
-        assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
+        assert!(source.contains("return vec4<f32>(record.xy, record.w, light);"));
+        assert!(!source.contains("palette_map"));
+        assert!(!source.contains("interior_rgba"));
+        assert!(!source.contains("clear_rgba"));
+        assert!(!source.contains("fn shade("));
         assert!(source.contains("textureLoad(heap_data"));
     }
 

@@ -496,12 +496,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let retained_grid = ledger
         .retained_grid()
         .expect("retained frame owns its record grid");
-    let uniform = relief_scene_uniform(
-        retained_grid,
-        &sampled,
-        &sampled.pose,
-        crate::CLASSIC_PALETTE,
-    )
+    let uniform = relief_scene_uniform(retained_grid, &sampled, &sampled.pose)
     .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
@@ -509,9 +504,8 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
     assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.0]);
-    let load = scene_load_color(crate::CLASSIC_PALETTE);
-    let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
-    assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    let load = scene_load_color();
+    assert_eq!([load.r, load.g, load.b, load.a], [0.0, 0.0, 4.0, 1.0]);
 }
 
 /// What one pixel of the scene attachment holds when the pass is over.
@@ -787,12 +781,7 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
     retained_grid.width /= 2;
     retained_grid.height /= 2;
     assert!(
-        relief_scene_uniform(
-            &retained_grid,
-            &sampled,
-            &sampled.pose,
-            crate::CLASSIC_PALETTE
-        )
+        relief_scene_uniform(&retained_grid, &sampled, &sampled.pose)
         .is_err()
     );
 }
@@ -811,7 +800,7 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
         main.grid.span.directory_index
     );
     assert!(
-        relief_scene_uniform(&main.grid, &sampled, &sampled.pose, crate::CLASSIC_PALETTE).is_ok()
+        relief_scene_uniform(&main.grid, &sampled, &sampled.pose).is_ok()
     );
 }
 
@@ -1120,7 +1109,7 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     destination.zoom_log2 = 1.0;
     destination.centre_from_reference_px = [4.0, -2.0];
     destination.view.height_scale = 2.0;
-    let uniform = relief_scene_uniform(&grid, &source, &destination, crate::CLASSIC_PALETTE)
+    let uniform = relief_scene_uniform(&grid, &source, &destination)
         .expect("the reduced retained grid composes into the destination chart");
 
     assert_eq!(uniform.grid[..2], [8, 5]);

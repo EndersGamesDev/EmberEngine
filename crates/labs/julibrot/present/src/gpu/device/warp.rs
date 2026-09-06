@@ -85,7 +85,7 @@ impl Presenter {
         );
         let relief_records_ready = self.ledger.retained().is_some_and(|source| {
             plan.destination_pose.is_some_and(|destination| {
-                self.retained_records_support_relief_redraw(source, &destination, selected.1)
+                self.retained_records_support_relief_redraw(source, &destination)
             })
         });
         let presented_kind = self
@@ -323,7 +323,6 @@ impl Presenter {
                 source,
                 destination,
                 [state.canvas_width, state.canvas_height],
-                selected.1,
             )?
         } else {
             false

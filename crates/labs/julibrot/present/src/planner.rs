@@ -2530,13 +2530,12 @@ mod tests {
         });
         let mut edge_on = poses[0];
         edge_on.map = PoseMap::EdgeOn;
-        let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
-        let scene_load = crate::gpu::scene_load_color(crate::CLASSIC_PALETTE);
-        let expected_sky = wgpu::Color {
-            r: f64::from(sky[0]),
-            g: f64::from(sky[1]),
-            b: f64::from(sky[2]),
-            a: f64::from(sky[3]),
+        let scene_load = crate::gpu::scene_load_color();
+        let expected_scene_clear = wgpu::Color {
+            r: 0.0,
+            g: 0.0,
+            b: 4.0,
+            a: 1.0,
         };
         let clear = crate::CLASSIC_PALETTE.clear_rgba;
         let clear = wgpu::Color {
@@ -2545,7 +2544,7 @@ mod tests {
             b: f64::from(clear[2]),
             a: f64::from(clear[3]),
         };
-        assert_eq!(scene_load, expected_sky);
+        assert_eq!(scene_load, expected_scene_clear);
         assert_ne!(scene_load, clear);
         let mut saw_mesh = false;
         let mut saw_sky = false;
@@ -2560,7 +2559,10 @@ mod tests {
                         saw_mesh = true;
                     } else {
                         saw_sky = true;
-                        assert_eq!(scene_load, expected_sky, "pixel {column},{row} was not sky");
+                        assert_eq!(
+                            scene_load, expected_scene_clear,
+                            "pixel {column},{row} was not clear"
+                        );
                         assert_ne!(scene_load, clear, "pixel {column},{row} used clear colour");
                     }
                 }

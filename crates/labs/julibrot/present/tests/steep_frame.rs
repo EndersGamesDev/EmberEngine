@@ -2387,7 +2387,6 @@ fn the_zoomed_row_uploads_the_steep_row_s_scene_payload_unchanged() {
             pose.grid_width * pose.grid_height,
             pose.plane,
             pose.map,
-            CLASSIC_PALETTE,
         )
         .expect("the row's map packs into the scene payload")
     };

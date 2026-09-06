@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use ember_julibrot_math::{Plane, PoseMap};
 use thiserror::Error;
 
-use crate::{PaletteRecord, pack_homography_rows};
+use crate::pack_homography_rows;
 
 /// Number of payload bytes in one HOT ring slot.
 pub const HOT_PAYLOAD_BYTES: u32 = 288;
@@ -73,12 +73,12 @@ pub struct SceneUniform {
     pub screen_to_plane_row_1: [f32; 4],
     /// Third padded row of the map; its fourth lane carries the applied sampling apron.
     pub screen_to_plane_row_2: [f32; 4],
-    /// Palette period, phase, colour mix, and value.
-    pub palette_map: [f32; 4],
-    /// Exact interior colour.
-    pub interior_rgba: [f32; 4],
-    /// Exact clear colour.
-    pub clear_rgba: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_0: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_1: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_2: [f32; 4],
 }
 
 /// Refusal from checked presentation-data construction.
@@ -209,7 +209,6 @@ impl SceneUniform {
         logical_len: u32,
         plane: Plane,
         map: PoseMap,
-        selected: PaletteRecord,
     ) -> Result<Self, PresentDataError> {
         let [width, height] = extent;
         let active_len = width
@@ -251,9 +250,9 @@ impl SceneUniform {
             screen_to_plane_row_0: rows[0],
             screen_to_plane_row_1: rows[1],
             screen_to_plane_row_2: rows[2],
-            palette_map: selected.map,
-            interior_rgba: selected.interior_rgba,
-            clear_rgba: selected.clear_rgba,
+            reserved_0: [0.0; 4],
+            reserved_1: [0.0; 4],
+            reserved_2: [0.0; 4],
         })
     }
 }
@@ -263,8 +262,6 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::*;
-    use crate::CLASSIC_PALETTE;
-
     #[test]
     fn gpu_layouts_match_the_exact_byte_contract() {
         assert_eq!(size_of::<HotUniform>(), 288);
@@ -290,9 +287,9 @@ mod tests {
         assert_eq!(offset_of!(SceneUniform, basis_v), 48);
         assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_0), 64);
         assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_2), 96);
-        assert_eq!(offset_of!(SceneUniform, palette_map), 112);
-        assert_eq!(offset_of!(SceneUniform, interior_rgba), 128);
-        assert_eq!(offset_of!(SceneUniform, clear_rgba), 144);
+        assert_eq!(offset_of!(SceneUniform, reserved_0), 112);
+        assert_eq!(offset_of!(SceneUniform, reserved_1), 128);
+        assert_eq!(offset_of!(SceneUniform, reserved_2), 144);
     }
 
     #[test]
@@ -396,7 +393,7 @@ mod tests {
             basis_v: [0.0, 1.0, 0.0, 0.0],
         };
         let map = PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY);
-        let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, map, CLASSIC_PALETTE)
+        let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, map)
             .expect("six active records fit twelve-record capacity");
         assert_eq!(uniform.grid, [3, 2, 1, 64]);
         assert_eq!(uniform.span, [7, 6, 0, 0]);
@@ -405,11 +402,11 @@ mod tests {
             apron_scale: 1.5,
             ..ember_julibrot_math::Homography::IDENTITY
         });
-        let apron = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map, CLASSIC_PALETTE)
+        let apron = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map)
             .expect("apron map packs");
         assert_eq!(apron.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.5]);
         assert_eq!(
-            SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map, CLASSIC_PALETTE),
+            SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map),
             Err(PresentDataError::InvalidGrid {
                 width: 4,
                 height: 4,
@@ -424,7 +421,6 @@ mod tests {
             12,
             plane,
             PoseMap::EdgeOn,
-            CLASSIC_PALETTE,
         )
         .expect("edge-on scene uses finite map placeholders");
         assert_eq!(sky.span, [7, 6, 1, 0]);

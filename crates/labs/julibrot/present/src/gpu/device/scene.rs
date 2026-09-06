@@ -1,11 +1,11 @@
 use ember_lab_heap::DialectLimits;
 use wgpu::util::DeviceExt as _;
 
-use crate::{PaletteRecord, PresentError, PresentMain, exterior_zero, scene_indices};
+use crate::{PresentError, PresentMain, scene_indices};
 
 use super::{
     BACKDROP_STENCIL, DEPTH_FORMAT, DepthTarget, GpuState, IndexTarget, SCENE_DEPTH_COMPARE,
-    SCENE_FORMAT, SceneLayer, SceneTexture, color, scene_depth_range, scene_draw_order,
+    SCENE_FORMAT, SceneLayer, SceneTexture, scene_depth_range, scene_draw_order,
     scene_stencil, stencil_reference, viewport_dimension,
 };
 
@@ -237,7 +237,6 @@ pub(super) fn encode_scene(
     gpu: &GpuState,
     texture_index: usize,
     hot_offset: u32,
-    selected: PaletteRecord,
     has_backdrop: bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -246,7 +245,7 @@ pub(super) fn encode_scene(
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
+                load: wgpu::LoadOp::Clear(scene_load_color()),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -369,8 +368,13 @@ pub(super) fn draw_scene_mesh<'pass>(
     }
 }
 
-pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
-    color(exterior_zero(selected))
+pub const fn scene_load_color() -> wgpu::Color {
+    wgpu::Color {
+        r: 0.0,
+        g: 0.0,
+        b: 4.0,
+        a: 1.0,
+    }
 }
 pub(super) fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
     validate_grid_parts(&main.grid, main.state.delivered_iter_cap, limits)

@@ -38,7 +38,7 @@ impl Presenter {
         let pose = self.hot[hot_slot.index() as usize].ok_or(PresentError::Device {
             operation: "select unwritten HOT slot",
         })?;
-        let (palette_id, palette_record) = main.selected_palette().ok_or(PresentError::Device {
+        let (palette_id, _) = main.selected_palette().ok_or(PresentError::Device {
             operation: "decode palette identifier",
         })?;
         let precision_mode = main.precision_mode().ok_or(PresentError::Device {
@@ -54,7 +54,6 @@ impl Presenter {
             main.grid.span.logical_len,
             main.plane,
             main.map,
-            palette_record,
         )
         .map_err(|error| match error {
             PresentDataError::InvalidMap => PresentError::Device {
@@ -78,7 +77,6 @@ impl Presenter {
                     backdrop.grid.span.logical_len,
                     backdrop.plane,
                     backdrop.map,
-                    palette_record,
                 )
             })
             .transpose()
@@ -162,7 +160,6 @@ impl Presenter {
             &self.gpu,
             texture_index as usize,
             hot_slot.dynamic_offset(),
-            palette_record,
             main.backdrop.is_some(),
         );
         let readback = &self.gpu.glitch_readback;
