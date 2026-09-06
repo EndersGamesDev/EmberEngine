@@ -3,11 +3,13 @@
 'use strict';
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
+const {gameVersion}=require('./publish.cjs');
+const selected=gameVersion(process.env.LEAGUE_GAME_VERSION||'v1');
 const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
-const root=process.cwd(),out=path.join(root,'target/league-public-browser');
+const root=process.cwd(),out=path.join(root,selected==='v1'?'target/league-public-browser':`target/league-public-browser-${selected}`);
 const hubUrl='https://endersgamesdev.github.io/EmberEngine/';
-const gameUrl=new URL('games/league/v1/',hubUrl).href;
-const started=Date.now(),report={hubUrl,gameUrl,checks:[],errors:[],screenshots:[],passed:false};
+const gameUrl=new URL(`games/league/${selected}/`,hubUrl).href;
+const started=Date.now(),report={gameVersion:selected,hubUrl,gameUrl,checks:[],errors:[],screenshots:[],passed:false};
 const lobbyName=`proof-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 // Never include the password in logs, result JSON, or screenshots of field values.
 const lobbyPassword=crypto.randomBytes(20).toString('hex');
@@ -50,7 +52,7 @@ async function main(){
   await hub.goto(hubUrl,{waitUntil:'domcontentloaded',timeout:45000});
   await hub.waitForFunction(expected=>{const card=document.querySelector('[data-game="league"]');return card?.querySelector('h3')?.textContent==='UltimateLegue'&&new URL(card.querySelector('select').value,document.baseURI).href===expected;},gameUrl,{timeout:30000});
   const link=await hub.evaluate(()=>new URL(document.querySelector('[data-game="league"] select').value,document.baseURI).href);
-  check(link===gameUrl,'public hub lists UltimateLegue with the live v1 selected');
+  check(link===gameUrl,`public hub lists UltimateLegue with live ${selected} selected`);
   report.hubGameLink=link;
   await capture(hub,'public-hub');
   await Promise.all([hub.waitForURL(gameUrl),click(hub,'[data-game="league"] button')]);
@@ -58,6 +60,7 @@ async function main(){
   await hub.close();
   gamePage=await context.newPage();
   gamePage.on('pageerror',error=>report.errors.push('game: '+error.message));
+  gamePage.on('response',response=>{if(response.status()>=400)report.errors.push(`HTTP ${response.status()}: ${response.url()}`);});
   const creates=[],joins=[];
   gamePage.on('websocket',socket=>{
     socket.on('framesent',event=>{
