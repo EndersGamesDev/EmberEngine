@@ -20,6 +20,11 @@ if [[ ! "$ARENA_LIVE" =~ ^games/arena/v[0-9]+$ ]]; then
     echo "pages fixture: cannot determine deploy-pages.sh's live arena path" >&2
     exit 1
 fi
+LEAGUE_LIVE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(next(v["path"].rstrip("/") for g in d["games"] if g["id"] == "league" for v in g["versions"] if v.get("live") is True))' "$DEPLOY/../web/games.json" | tr -d '\r')"
+if [[ ! "$LEAGUE_LIVE" =~ ^games/league/v[1-9][0-9]*$ ]]; then
+    echo "pages fixture: cannot determine the catalog's live League path" >&2
+    exit 1
+fi
 
 TMP="$(mktemp -d -t ember-pagestest-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
@@ -42,7 +47,7 @@ export PATH="$SHIMS:$PATH"
 
 mkdir -p "$REPO/deploy" "$REPO/web/$ARENA_LIVE" "$REPO/web/games/arena/v0"
 mkdir -p "$REPO/web/games/fire/v2" "$REPO/web/games/kings/v1" "$REPO/web/games/what-is-this/v1"
-mkdir -p "$REPO/web/games/league/v1"
+mkdir -p "$REPO/web/$LEAGUE_LIVE/art/nested" "$REPO/web/$LEAGUE_LIVE/pkg"
 mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
 mkdir -p "$REPO/crates/league-core/src"
@@ -66,7 +71,13 @@ printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
-printf 'league v1\n' > "$REPO/web/games/league/v1/index.html"
+printf '<link href="./ui.css"><script src="./ui.js"></script><img src="./art/swarm.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
+printf 'league UI\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
+printf 'league CSS\n' > "$REPO/web/$LEAGUE_LIVE/ui.css"
+printf 'league portrait bytes\n' > "$REPO/web/$LEAGUE_LIVE/art/swarm.webp"
+printf '{"source":"fleet"}\n' > "$REPO/web/$LEAGUE_LIVE/art/nested/manifest.json"
+printf 'stale source bundle\n' > "$REPO/web/$LEAGUE_LIVE/pkg/arena.js"
+printf 'stale source stamp\n' > "$REPO/web/$LEAGUE_LIVE/version.json"
 printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
@@ -82,14 +93,18 @@ printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/kings-core/src/prot
 printf 'pub const PROTO_VERSION: u16 = 3;\n' > "$REPO/crates/league-core/src/proto.rs"
 
 mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
-mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg"
+mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg" "$SEED/$LEAGUE_LIVE/pkg"
 printf 'keep arena\n' > "$SEED/games/arena/v17/frozen.txt"
 printf 'archived arena<script src="./settings.js?v=archived"></script>\n' > "$SEED/games/arena/v17/index.html"
 printf 'archived controls\n' > "$SEED/games/arena/v17/settings.js"
 printf 'keep fire\n' > "$SEED/games/fire/v1/frozen.txt"
 printf 'keep kings\n' > "$SEED/games/kings/old/frozen.txt"
 printf 'keep league archive\n' > "$SEED/games/league/old/frozen.txt"
-printf 'stale foreign bundle\n' > "$SEED/games/league/v1/pkg/arena.js"
+printf 'frozen league v1\n' > "$SEED/games/league/v1/index.html"
+printf 'frozen league v1 js\n' > "$SEED/games/league/v1/pkg/league.js"
+printf 'frozen league v1 wasm\n' > "$SEED/games/league/v1/pkg/league_bg.wasm"
+printf 'stale foreign bundle\n' > "$SEED/$LEAGUE_LIVE/pkg/arena.js"
+printf 'stale live asset\n' > "$SEED/$LEAGUE_LIVE/obsolete.css"
 printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
 printf 'frozen pong js\n' > "$SEED/games/pong/v1/pkg/pong.js"
 printf 'frozen pong wasm\n' > "$SEED/games/pong/v1/pkg/pong_bg.wasm"
@@ -120,18 +135,26 @@ for f in index.html pkg/what_is_this.js pkg/what_is_this_bg.wasm; do
         bad "assembled what-is-this is missing $f"
     fi
 done
-for f in index.html version.json pkg/league.js pkg/league_bg.wasm; do
-    if [ -f "$SHIM_PUBLISHED/games/league/v1/$f" ]; then
+for f in index.html ui.js ui.css art/swarm.webp art/nested/manifest.json version.json pkg/league.js pkg/league_bg.wasm; do
+    if [ -f "$SHIM_PUBLISHED/$LEAGUE_LIVE/$f" ]; then
         ok "assembled League $f"
     else
         bad "assembled League is missing $f"
     fi
 done
-is "$(find "$SHIM_PUBLISHED/games/league/v1/pkg" -type f -printf '%f\n' | sort | tr '\n' ' ')" "league.js league_bg.wasm " "League gets only its own bundle and replaces stale files"
-if cmp -s "$REPO/web/version.json" "$SHIM_PUBLISHED/games/league/v1/version.json"; then
+is "$(find "$SHIM_PUBLISHED/$LEAGUE_LIVE/pkg" -type f -printf '%f\n' | sort | tr '\n' ' ')" "league.js league_bg.wasm " "League gets only its own generated bundle and replaces stale files"
+if cmp -s "$REPO/web/version.json" "$SHIM_PUBLISHED/$LEAGUE_LIVE/version.json"; then
     ok "League carries the source build stamp beside its page"
 else
     bad "League is missing the source build stamp"
+fi
+if [ "$LEAGUE_LIVE" != games/league/v1 ]; then
+    if diff -r "$SEED/games/league/v1" "$SHIM_PUBLISHED/games/league/v1" > "$TMP/league-v1.diff"; then
+        ok "frozen League v1 is preserved byte-for-byte"
+    else
+        bad "frozen League v1 changed"
+        cat "$TMP/league-v1.diff" >&2
+    fi
 fi
 for f in index.html main.js lab.js drive.html worker.js style.css pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/labs/julibrot/$f" ]; then
@@ -185,7 +208,7 @@ is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "league/v1 league"; do
+for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
     # shellcheck disable=SC2086
     set -- $spec
     live="$1"
@@ -195,6 +218,8 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
     if [ "$bundle" = league ]; then
         cp "$REPO/web/version.json" "$EXPECTED/games/$live/"
+        cp "$REPO/web/games/$live/ui.js" "$REPO/web/games/$live/ui.css" "$EXPECTED/games/$live/"
+        cp -R "$REPO/web/games/$live/art" "$EXPECTED/games/$live/"
     fi
     if [ "games/$live" = "$ARENA_LIVE" ]; then
         # Expected output is authored independently of the publisher's rewrite.
@@ -245,17 +270,43 @@ else
 fi
 if grep -Eq '^(cargo|wasm-bindgen)' "$SHIM_LOG"; then bad "complete prebuilt mode invoked a build tool"; else ok "complete prebuilt mode invoked no build tool"; fi
 
+echo "== unsafe or ambiguous League catalog destinations are refused =="
+cp "$REPO/web/games.json" "$TMP/catalog.saved"
+for fixture in traversal other-game duplicate; do
+    "$PY" - "$TMP/catalog.saved" "$REPO/web/games.json" "$fixture" <<'PY'
+import json, sys
+catalog = json.load(open(sys.argv[1], encoding="utf-8"))
+league = next(g for g in catalog["games"] if g["id"] == "league")
+live = next(v for v in league["versions"] if v.get("live") is True)
+if sys.argv[3] == "duplicate":
+    league["versions"].append(dict(live))
+else:
+    live["path"] = {"traversal": "games/league/v2/../../fire/v2/", "other-game": "games/fire/v2/"}[sys.argv[3]]
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(catalog, fh)
+PY
+    : > "$SHIM_LOG"
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/league-$fixture.log" 2>&1; then
+        bad "the $fixture League destination was accepted"
+    else
+        ok "the $fixture League destination was refused"
+    fi
+    contains "$(cat "$TMP/league-$fixture.log")" "exactly one safe live version path" "the $fixture League failure identifies the catalog contract"
+    if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "$fixture League destination reached Pages assembly"; else ok "$fixture League destination stopped before Pages assembly"; fi
+done
+cp "$TMP/catalog.saved" "$REPO/web/games.json"
+
 echo "== a missing League page is refused before any publish =="
-mv "$REPO/web/games/league/v1/index.html" "$TMP/league-index.saved"
+mv "$REPO/web/$LEAGUE_LIVE/index.html" "$TMP/league-index.saved"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing-league.log" 2>&1; then
     bad "a missing live League page was accepted"
 else
     ok "a missing live League page was refused"
 fi
-contains "$(cat "$TMP/missing-league.log")" "games/league/v1/index.html" "the failure identifies the missing League page"
+contains "$(cat "$TMP/missing-league.log")" "$LEAGUE_LIVE/index.html" "the failure identifies the missing League page"
 if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing League page reached a publish"; else ok "missing League page never reached a publish"; fi
-mv "$TMP/league-index.saved" "$REPO/web/games/league/v1/index.html"
+mv "$TMP/league-index.saved" "$REPO/web/$LEAGUE_LIVE/index.html"
 
 echo "== a missing Arena controls script is refused before any publish =="
 mv "$REPO/web/$ARENA_LIVE/settings.js" "$TMP/settings.js.saved"
