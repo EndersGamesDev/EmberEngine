@@ -83,3 +83,20 @@ Fable's Barza #125 capture identified that cores originally had no retaliation. 
 ## v1 does not have (deliberately)
 
 No wards/vision (whole map is visible), no tower structures beyond the core, no client-side prediction/rollback (30 Hz-ish input events + 20 Hz states), no item components/recipes (flat list), no rune mastery trees (3-of-8 pages), no spectators, no disconnect restore mid-Live (you become a bot until the lobby resets). These go to `docs/plans/backlog.md` one line each.
+
+## Released 2026-09-06
+
+[Play UltimateLegue v1](https://endersgamesdev.github.io/EmberEngine/games/league/v1/), also listed on the [game hub](https://endersgamesdev.github.io/EmberEngine/).
+
+- Live source: `4e069d5ab7813768d7fd10b262fd3f5d4bbf5a9a`, version `r1554`, protocol 1. Main CI [34050266372](https://github.com/EndersGamesDev/EmberEngine/actions/runs/34050266372) passed, including the merged Linux prebuilt-host and shipping suites.
+- Pages: `468eb61d5dade3007ffcc77f980e8ca74fbd16f0`; deployment [34050482027](https://github.com/EndersGamesDev/EmberEngine/actions/runs/34050482027) passed. The scoped publication added only the League page, version, JS/WASM bundle and catalog entry. Host-book predecessor: `2161d4ef11093e82018175edc8ed278ecc1904e3`.
+- Tested/public WASM SHA256: `efd3b625aa2d414d27182b2e5f14a005fc9711a8e1ecf7ec238ce9d3c1517f3b`. Server SHA256: `43c8d6106df97ad47d90a1cc0e6076a07e951bc86e6bb82ffdb61f796b55811c`.
+- Dedicated clean runtime: `C:/Users/end/dev/ember-league-live-v1`, detached at the live source. Server PID 40888 on `127.0.0.1:7783`; tunnel PID 11200; scheduled tasks `ember-league-server-v1` and `ember-league-tunnel-v1` are running and start at logon. These PIDs describe the release instant, not permanent identities.
+- Public host: `dusky-osprey`, `wss://hosting-spirit-primary-des.trycloudflare.com`. The host list is authoritative when a later restart changes the address. Online play requires this workstation to remain on; practice runs in the browser.
+- Validation: 47 core tests, 16 client tests, 7 server tests; core/client strict Clippy clean. Final actual WASM browser suite: 104 checks, zero errors, 19.595 seconds. Windows launcher sharing/recovery regression: 11 checks passed.
+- Exact public bytes and unchanged peer catalog/trees passed in 22.3 seconds. Real public 1v1 and 3v3 probes confirmed build identity, skill learning, shopping and movement (0.93 and 0.82 seconds). The public browser proof passed 12 checks in 3.143 seconds: hub Play navigation, initialization, a unique password-protected 3v3 room, champion selection, match start, HUD skill learning and Q casting. Its room was left and sockets closed.
+- Evidence remains under `target/league-browser`, `target/league-publish/public-proof.json`, and `target/league-public-browser`. Reproduce the published UI check with `node tools/league/public-smoke.cjs` from the repository root and Playwright available through `EMBER_QA_PLAYWRIGHT`.
+- The first tunnel launch exposed a Windows sharing violation while reading redirected live logs. The fixed launcher uses shared reads and persisted diagnostics. One guarded recovery was consumed; the durable task action has the ordinary one-hour retry policy, without the recovery argument. GitHub initially built the preceding host-book commit; an explicit Pages build of the final commit resolved propagation before the successful byte checks.
+- Preserved peers: Killshot v31 and every other game catalog entry and published tree stayed unchanged. Arena PID 1468 retained start UTC ticks `639243131359233435`; existing Cloudflare PIDs 4072 and 3824 retained their lifetimes. Knecht fleet timer/service remain inactive.
+
+Fable supplied and playtested the final scene, camera, champion silhouettes, effects and native review harness, and identified the undefended-core issue addressed before release. OpenCode's initial audit identified documentation discrepancies, which were verified against the implementation and corrected. Post-release documentation and reusable proof tooling may advance the integration branch beyond the pinned live revision above.
