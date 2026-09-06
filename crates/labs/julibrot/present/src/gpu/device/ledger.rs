@@ -1,5 +1,103 @@
 use super::{EXPOSURE_FACT_STEPS, Pose, PoseMap, WarpKind};
-use crate::{LatticePair, identity_warp_rows};
+use crate::{
+    LatticePair, PresentationLedgerEntry, SceneFrame, apply_homography, identity_warp_rows,
+    solve_homography,
+};
+use ember_julibrot_math::warp_matrix;
+
+/// Records where two fixed requested-view floor points landed in the actual displayed image.
+pub(super) fn presentation_ledger_entry(
+    plan: &crate::WarpPlan,
+    requested: &Pose,
+    source: Option<&SceneFrame>,
+    presented_extent: [u32; 2],
+) -> PresentationLedgerEntry {
+    let scene_id = source.map(|frame| frame.scene_id);
+    let level = source.map(|frame| frame.level);
+    let destination = plan.lattice.map(LatticePair::destination);
+    let points = match (plan.kind, destination) {
+        (WarpKind::ReliefRedraw, Some(destination)) => Some([
+            presented_pixel([0.0, 0.0], destination, presented_extent),
+            presented_pixel(
+                [
+                    -f64::from(destination[0]) * 0.5,
+                    f64::from(destination[1]) * 0.5,
+                ],
+                destination,
+                presented_extent,
+            ),
+        ]),
+        (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(_)) => source
+            .and_then(|source| mapped_requested_points(plan, requested, source, presented_extent)),
+        (WarpKind::ClearOnly, _) | (_, None) => None,
+    };
+    PresentationLedgerEntry {
+        scene_id,
+        level,
+        warp_kind: plan.kind,
+        requested_centre_px: points.map(|points| points[0]),
+        anchor_px: points.map(|points| points[1]),
+    }
+}
+
+fn mapped_requested_points(
+    plan: &crate::WarpPlan,
+    requested: &Pose,
+    source: &SceneFrame,
+    presented_extent: [u32; 2],
+) -> Option<[[f64; 2]; 2]> {
+    let lattice = plan.lattice?;
+    let requested_from_source = warp_matrix(&source.pose, requested).ok()?;
+    let source_delivery = LatticePair::new(
+        source.extent,
+        [source.pose.grid_width, source.pose.grid_height],
+    )?;
+    let actual_forward = displayed_forward(plan.rows, lattice)?;
+    let requested_points = [
+        [0.0, 0.0],
+        [
+            -f64::from(lattice.destination()[0]) * 0.5,
+            f64::from(lattice.destination()[1]) * 0.5,
+        ],
+    ];
+    let mapped = requested_points.map(|requested_point| {
+        apply_homography(requested_from_source.inverse, requested_point)
+            .and_then(|source_point| apply_homography(source_delivery.covering_map(), source_point))
+            .and_then(|source_point| apply_homography(actual_forward, source_point))
+            .map(|actual_destination| {
+                presented_pixel(actual_destination, lattice.destination(), presented_extent)
+            })
+    });
+    Some([mapped[0]?, mapped[1]?])
+}
+
+fn displayed_forward(rows: [[f32; 4]; 3], lattice: LatticePair) -> Option<[f64; 9]> {
+    let inverse = core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]));
+    let half = lattice.destination().map(|extent| f64::from(extent) * 0.5);
+    let destination = [
+        [-half[0], -half[1]],
+        [half[0], -half[1]],
+        [-half[0], half[1]],
+        [half[0], half[1]],
+    ];
+    let source = destination.map(|point| apply_homography(inverse, point));
+    let [Some(a), Some(b), Some(c), Some(d)] = source else {
+        return None;
+    };
+    solve_homography([a, b, c, d], destination)
+}
+
+fn presented_pixel(
+    destination: [f64; 2],
+    destination_extent: [u32; 2],
+    presented_extent: [u32; 2],
+) -> [f64; 2] {
+    let point = [
+        (destination[0] / f64::from(destination_extent[0]) + 0.5) * f64::from(presented_extent[0]),
+        (0.5 - destination[1] / f64::from(destination_extent[1])) * f64::from(presented_extent[1]),
+    ];
+    point.map(|value| (value * 100.0).round() / 100.0)
+}
 
 pub(super) fn pose_is_finite(pose: &Pose) -> bool {
     pose.grid_width > 0
@@ -124,6 +222,11 @@ pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::Warp
         edge_on,
         exposed,
         kind: WarpKind::ClearOnly,
+        refusal_reason: if edge_on {
+            Some(crate::WarpRefusalReason::EdgeOn)
+        } else {
+            None
+        },
         chart_residual: 0.0,
         approx_max_error_px: None,
         approx_p95_error_px: None,

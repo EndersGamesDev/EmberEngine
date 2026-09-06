@@ -30,6 +30,7 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
     let poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
     let poll_fixed: fn(&mut Presenter, f64) -> PresentEvents = Presenter::poll_fixed;
     let facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
+    let record_presented: fn(&mut Presenter, u64) = Presenter::record_presented;
     let warp: fn(
         &ember_julibrot_present::SceneFrame,
         &ember_julibrot_present::Pose,
@@ -45,6 +46,7 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
     std::hint::black_box(poll);
     std::hint::black_box(poll_fixed);
     std::hint::black_box(facts);
+    std::hint::black_box(record_presented);
     std::hint::black_box(warp);
 }
 

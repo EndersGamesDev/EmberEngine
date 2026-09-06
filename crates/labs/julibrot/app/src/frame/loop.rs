@@ -1503,6 +1503,7 @@ mod browser {
                             }
                         }) {
                             observed.presented = true;
+                            presenter.record_presented(measurement.id);
                             // What is now on the canvas, as opposed to what was last submitted.
                             self.presented_scene_id = measurement.source_scene_id;
                             if let Some((warp_id, stamp)) = self.pending_warp_view

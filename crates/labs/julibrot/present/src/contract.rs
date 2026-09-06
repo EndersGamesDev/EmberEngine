@@ -242,12 +242,63 @@ pub struct WarpPlan {
     pub exposed: bool,
     /// Exact, approximate, or clear-only plan kind.
     pub kind: WarpKind,
+    /// Planner branch that refused the image warp, absent when the plan was accepted.
+    pub refusal_reason: Option<WarpRefusalReason>,
     /// Plane-chart residual in retained-frame pixels.
     pub chart_residual: f64,
     /// Maximum sampled approximation error in pixels, when applicable.
     pub approx_max_error_px: Option<f64>,
     /// Ninety-fifth-percentile sampled approximation error in pixels, when applicable.
     pub approx_p95_error_px: Option<f64>,
+}
+
+/// Why the image-warp planner refused a requested pose.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WarpRefusalReason {
+    /// The retained frame was not rendered from the claimed source pose.
+    PoseMismatch,
+    /// The poses do not describe one plane-preserving sample set.
+    ObjectSamples,
+    /// The flat image map or its rounded anchor solve was not finite.
+    Matrix,
+    /// The new chart leaves the retained affine plane by more than the stated pixel amount.
+    ChartResidual {
+        /// Measured residual in retained-frame pixels.
+        px: f64,
+    },
+    /// A sampled finite relief displacement exceeded the displayed-error ceiling.
+    ErrorCeiling {
+        /// Largest resolved displacement in retained-frame pixels.
+        max_px: f64,
+        /// Ninety-fifth-percentile resolved displacement in retained-frame pixels.
+        p95_px: f64,
+    },
+    /// One or more lifted corpus samples could not be projected by the scene's own limits.
+    ErrorCorpus {
+        /// Number of non-horizon height samples refused by either pose.
+        refused_samples: u16,
+    },
+    /// The destination is the physical all-sky edge-on state.
+    EdgeOn,
+}
+
+impl std::fmt::Display for WarpRefusalReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PoseMismatch => formatter.write_str("PoseMismatch"),
+            Self::ObjectSamples => formatter.write_str("ObjectSamples"),
+            Self::Matrix => formatter.write_str("Matrix"),
+            Self::ChartResidual { px } => write!(formatter, "ChartResidual(px={px:.6})"),
+            Self::ErrorCeiling { max_px, p95_px } => write!(
+                formatter,
+                "ErrorCeiling(max_px={max_px:.2},p95_px={p95_px:.2})"
+            ),
+            Self::ErrorCorpus { refused_samples } => {
+                write!(formatter, "ErrorCorpus(refused_samples={refused_samples})")
+            }
+            Self::EdgeOn => formatter.write_str("EdgeOn"),
+        }
+    }
 }
 
 /// Reprojection algorithm selected for one HOT payload.
@@ -272,6 +323,63 @@ impl WarpKind {
             Self::ClearOnly => "ClearOnly",
             Self::HoldStale => "HoldStale",
             Self::ReliefRedraw => "ReliefRedraw",
+        }
+    }
+}
+
+/// Number of actual surface presents retained in the position ledger.
+pub const PRESENTATION_LEDGER_CAPACITY: usize = 8;
+
+/// One successfully submitted presentation and the two requested-view points it put on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresentationLedgerEntry {
+    /// Retained scene sampled by this present, absent for a clear-only frame.
+    pub scene_id: Option<u64>,
+    /// Refinement level of that retained scene, absent for a clear-only frame.
+    pub level: Option<RefinementLevel>,
+    /// Image algorithm the presenter actually submitted.
+    pub warp_kind: WarpKind,
+    /// Presented-pixel position of the requested view's centre, rounded to two decimals.
+    pub requested_centre_px: Option<[f64; 2]>,
+    /// Presented-pixel position of the requested view's upper-left floor-chart anchor.
+    ///
+    /// The anchor is the fixed plane point at the requested pose's upper-left screen corner. It
+    /// remains the same plane point while a stale source is held, so its movement measures the
+    /// position correction that the centre alone cannot reveal for a centred zoom.
+    pub anchor_px: Option<[f64; 2]>,
+}
+
+/// Fixed-capacity oldest-to-newest ledger of successfully displayed surface presents.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentationLedger {
+    entries: [Option<PresentationLedgerEntry>; PRESENTATION_LEDGER_CAPACITY],
+    next: usize,
+    len: usize,
+}
+
+impl PresentationLedger {
+    /// Iterates over retained entries from oldest to newest.
+    pub fn iter(&self) -> impl Iterator<Item = &PresentationLedgerEntry> {
+        let start =
+            (self.next + PRESENTATION_LEDGER_CAPACITY - self.len) % PRESENTATION_LEDGER_CAPACITY;
+        (0..self.len).filter_map(move |offset| {
+            self.entries[(start + offset) % PRESENTATION_LEDGER_CAPACITY].as_ref()
+        })
+    }
+
+    pub(crate) fn record(&mut self, entry: PresentationLedgerEntry) {
+        self.entries[self.next] = Some(entry);
+        self.next = (self.next + 1) % PRESENTATION_LEDGER_CAPACITY;
+        self.len = self.len.saturating_add(1).min(PRESENTATION_LEDGER_CAPACITY);
+    }
+}
+
+impl Default for PresentationLedger {
+    fn default() -> Self {
+        Self {
+            entries: [None; PRESENTATION_LEDGER_CAPACITY],
+            next: 0,
+            len: 0,
         }
     }
 }
@@ -502,6 +610,10 @@ pub struct PresentFacts {
     pub warp_p95_error_px: Option<f64>,
     /// Reprojection algorithm the latest plan selected.
     pub warp_kind: WarpKind,
+    /// Planner branch that refused the latest image warp, absent when it was accepted.
+    pub warp_refusal_reason: Option<WarpRefusalReason>,
+    /// Last eight successfully displayed surface presents and their mapped positions.
+    pub presentation_ledger: PresentationLedger,
     /// Honest current status.
     pub status: PresentStatus,
 }
@@ -522,8 +634,8 @@ impl PresentFacts {
 
     /// Records the planner and exposure facts from one warp plan.
     ///
-    /// A clear-only or exact-flat plan has no sampled tumbled corpus, so both error facts stay
-    /// absent rather than reporting a stale or invented number.
+    /// Early clear-only and exact-flat plans have no sampled tumbled corpus, so both error facts
+    /// stay absent. An error-ceiling clear keeps the finite subset that caused its refusal.
     pub const fn record_warp_plan(&mut self, plan: &WarpPlan, exposed_fraction: Option<f64>) {
         self.chart_residual = if plan.source_valid {
             Some(plan.chart_residual)
@@ -533,6 +645,7 @@ impl PresentFacts {
         self.warp_max_error_px = plan.approx_max_error_px;
         self.warp_p95_error_px = plan.approx_p95_error_px;
         self.warp_kind = plan.kind;
+        self.warp_refusal_reason = plan.refusal_reason;
         self.warp_exposed = plan.exposed;
         [self.warp_source_width, self.warp_source_height] = match plan.lattice {
             Some(lattice) => lattice.source(),
@@ -582,6 +695,8 @@ impl Default for PresentFacts {
             warp_max_error_px: None,
             warp_p95_error_px: None,
             warp_kind: WarpKind::ClearOnly,
+            warp_refusal_reason: None,
+            presentation_ledger: PresentationLedger::default(),
             status: PresentStatus::WaitingForFirstScene,
         }
     }
@@ -691,6 +806,29 @@ mod tests {
         assert_eq!(facts.relief_redraw_count, 0);
         assert_eq!(facts.warp_hold_count, 0);
         assert_eq!(facts.status, PresentStatus::WaitingForFirstScene);
+        assert_eq!(facts.warp_refusal_reason, None);
+        assert_eq!(facts.presentation_ledger.iter().count(), 0);
+    }
+
+    #[test]
+    fn presentation_ledger_retains_the_last_eight_in_oldest_first_order() {
+        let mut ledger = PresentationLedger::default();
+        for scene_id in 1..=10 {
+            ledger.record(PresentationLedgerEntry {
+                scene_id: Some(scene_id),
+                level: Some(RefinementLevel::Preview),
+                warp_kind: WarpKind::AnchorHomography,
+                requested_centre_px: Some([480.0, 270.0]),
+                anchor_px: Some([0.0, 0.0]),
+            });
+        }
+        assert_eq!(
+            ledger
+                .iter()
+                .map(|entry| entry.scene_id.expect("the fixture names a scene"))
+                .collect::<Vec<_>>(),
+            (3..=10).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -708,6 +846,7 @@ mod tests {
             edge_on: false,
             exposed: false,
             kind: WarpKind::AnchorHomography,
+            refusal_reason: None,
             chart_residual: 0.25,
             approx_max_error_px: Some(1.75),
             approx_p95_error_px: Some(0.5),
@@ -720,11 +859,13 @@ mod tests {
         assert_eq!(facts.chart_residual, Some(0.25));
         assert_eq!(facts.warp_max_error_px, Some(1.75));
         assert_eq!(facts.warp_p95_error_px, Some(0.5));
+        assert_eq!(facts.warp_refusal_reason, None);
         assert_eq!(facts.warp_exposed_fraction, Some(0.0));
         let cleared = WarpPlan {
             source_valid: false,
             exposed: true,
             kind: WarpKind::ClearOnly,
+            refusal_reason: Some(WarpRefusalReason::Matrix),
             approx_max_error_px: None,
             approx_p95_error_px: None,
             lattice: None,
@@ -735,6 +876,7 @@ mod tests {
         assert_eq!(facts.chart_residual, None);
         assert_eq!(facts.warp_max_error_px, None);
         assert_eq!(facts.warp_p95_error_px, None);
+        assert_eq!(facts.warp_refusal_reason, Some(WarpRefusalReason::Matrix));
         assert_eq!(facts.warp_exposed_fraction, None);
     }
 
@@ -753,6 +895,7 @@ mod tests {
             edge_on: false,
             exposed: true,
             kind: WarpKind::ReliefRedraw,
+            refusal_reason: None,
             chart_residual: 0.0,
             approx_max_error_px: Some(2.0),
             approx_p95_error_px: Some(1.0),

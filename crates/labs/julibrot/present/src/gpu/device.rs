@@ -324,6 +324,7 @@ pub struct Presenter {
     hot: [Option<Pose>; 3],
     latest_hot_slot: Option<HotSlot>,
     hot_warp_source: [WarpSourceSlot; 3],
+    hot_warp_plan: [Option<crate::WarpPlan>; 3],
     hot_exposed: [bool; 3],
     exposure: ExposureLatch,
     ledger: SceneLedger,
@@ -344,6 +345,7 @@ pub struct Presenter {
     active_warp_scene: Option<u64>,
     active_warp_count: u32,
     replaced_warp_scene: Option<u64>,
+    pending_presentation: Option<(u64, crate::PresentationLedgerEntry)>,
     facts: PresentFacts,
 }
 
@@ -371,6 +373,7 @@ impl Presenter {
             hot: [None; 3],
             latest_hot_slot: None,
             hot_warp_source: [WarpSourceSlot::default(); 3],
+            hot_warp_plan: [None; 3],
             hot_exposed: [false; 3],
             exposure: ExposureLatch::default(),
             ledger: SceneLedger::default(),
@@ -387,6 +390,7 @@ impl Presenter {
             active_warp_scene: None,
             active_warp_count: 0,
             replaced_warp_scene: None,
+            pending_presentation: None,
             facts: PresentFacts::default(),
         })
     }

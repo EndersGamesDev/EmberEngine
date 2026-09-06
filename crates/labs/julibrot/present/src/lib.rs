@@ -17,10 +17,11 @@ mod uniform;
 mod warp_shader;
 
 pub use contract::{
-    DropReason, FenceRefusal, FramePartition, FrameReceipt, FrameState, PresentBackdrop,
-    PresentConfig, PresentError, PresentEvent, PresentEvents, PresentFacts, PresentHot,
-    PresentMain, PresentStatus, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WarpKind, WarpPlan, WarpValidation,
+    DropReason, FenceRefusal, FramePartition, FrameReceipt, FrameState,
+    PRESENTATION_LEDGER_CAPACITY, PresentBackdrop, PresentConfig, PresentError, PresentEvent,
+    PresentEvents, PresentFacts, PresentHot, PresentMain, PresentStatus, PresentationLedger,
+    PresentationLedgerEntry, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
+    WarpKind, WarpPlan, WarpRefusalReason, WarpValidation,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};
