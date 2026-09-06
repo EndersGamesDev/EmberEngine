@@ -56,9 +56,9 @@ trap 'rm -f "$PARSED" "$LAUNCHER"' EXIT
 echo "== the file parses =="
 
 # One TSV row per entry: section, version, proto, stamp, source kind, source
-# sha, tag name, tag target. Kinds: sha, offmain, absent, unrecorded. A tag
-# target of "-" means the entry declares no tag; an empty target means the tag
-# is claimed to point at the source commit.
+# sha, tag name, tag target, date. Kinds: sha, offmain, absent, unrecorded.
+# "-" is the empty field in every column, because tab is IFS whitespace and a
+# genuinely empty field would shift every column after it.
 "$PY" - "$CHANGELOG" > "$PARSED" <<'PY'
 import re, sys
 
@@ -115,7 +115,7 @@ while i < len(lines):
 
     name = target = ""
     if tag == "no tag":
-        target = "-"
+        pass
     elif re.match(r"^tag `[^`]+`$", tag):
         name = tag.split("`")[1]
     elif re.match(r"^tag `[^`]+` \(points at `[0-9a-f]{7,40}`\)$", tag):
@@ -125,7 +125,12 @@ while i < len(lines):
         bad.append("%s %s: bad tag field %r" % (section, version, tag))
         continue
 
-    rows.append((section, version, proto, stamp, kind, sha, name, target, date))
+    # Tab is IFS whitespace in the shell that reads this back, so runs of
+    # tabs collapse and an empty field silently shifts every field after it.
+    # "-" stands for empty everywhere: no sha, no tag name, no explicit tag
+    # target.
+    rows.append((section, version, proto, stamp, kind, sha or "-",
+                 name or "-", target or "-", date))
 
 for line in bad:
     print("BAD\t%s" % line)
@@ -249,9 +254,9 @@ skipped=0
 if [ -n "$IN_GIT" ]; then
     while IFS=$'\t' read -r _ section version _ _ kind sha name target _; do
         [ -n "$section" ] || continue
-        [ -n "$name" ] || continue
+        [ "$name" != "-" ] || continue
         want="$target"
-        [ -n "$want" ] && [ "$want" != "-" ] || want="$sha"
+        [ "$want" != "-" ] || want="$sha"
         if ! git -C "$REPO" rev-parse -q --verify "refs/tags/$name" >/dev/null 2>&1; then
             skipped=$((skipped + 1))
             ok "SKIP $section $version: tag $name is not in this checkout (tags are fetched separately from commits)"
