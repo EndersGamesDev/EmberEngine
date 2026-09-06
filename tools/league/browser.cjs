@@ -4,10 +4,13 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),os=require('node:os');
 const {spawn}=require('node:child_process');
+const {gameVersion,safePath}=require('./publish.cjs');
+const selected=gameVersion(process.env.LEAGUE_GAME_VERSION||'v1');
 const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
-const root=process.cwd(),web=path.join(root,'web'),out=path.join(root,'target/league-browser');
+const root=process.cwd(),web=path.join(root,'web'),out=path.join(root,selected==='v1'?'target/league-browser':`target/league-browser-${selected}`);
+const entry=`games/league/${selected}`;
 const origin='http://127.0.0.1:8093',ws='ws://127.0.0.1:7793';
-const started=Date.now(),report={checks:[],errors:[],screenshots:[]};
+const started=Date.now(),report={gameVersion:selected,checks:[],errors:[],screenshots:[]};
 let browser,server,game;
 const fixturePeers=new Set();
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -15,13 +18,14 @@ const check=(ok,name)=>{assert(ok,name);report.checks.push(name);console.log('PA
 async function page({holdWasm=false}={}){
   const p=await browser.newPage({viewport:{width:1440,height:1000}});
   p.on('pageerror',e=>report.errors.push(e.message));
+  p.on('response',response=>{if(response.status()>=400)report.errors.push(`HTTP ${response.status()}: ${response.url()}`);});
   await p.addInitScript(()=>{window.focus=()=>{};Element.prototype.setPointerCapture=()=>{};});
   let releaseWasm;
   if(holdWasm){
     const gate=new Promise(resolve=>{releaseWasm=resolve;});
     await p.route('**/*.wasm',async route=>{await gate;await route.continue();});
   }
-  await p.goto(origin+'/games/league/v1/',{waitUntil:holdWasm?'commit':'load'});
+  await p.goto(`${origin}/${entry}/`,{waitUntil:holdWasm?'commit':'load'});
   if(holdWasm){
     await p.waitForFunction(()=>document.body?.dataset.leagueBoot==='loading');
     check(await p.evaluate(()=>['btn-practice','btn-practice3','btn-create','btn-quick'].every(id=>document.getElementById(id).disabled)),'launch controls stay disabled while WASM is loading');
@@ -228,15 +232,23 @@ async function quickMatch(mode){
 }
 async function main(){
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);fs.mkdirSync(out,{recursive:true});
+  const catalog=JSON.parse(fs.readFileSync(path.join(web,'games.json')));
+  const proto=catalog.games.find(game=>game.id==='league')?.versions.find(version=>version.v===selected&&version.path===`${entry}/`)?.proto;
+  assert(Number.isInteger(proto)&&proto>0,'Selected League version is missing from the local catalog');
+  safePath(web,`${entry}/index.html`);
   server=http.createServer((req,res)=>{
     let url;try{url=new URL(req.url,origin);}catch{res.writeHead(400).end();return;}
-    if(url.pathname==='/server.json'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({hosts:[{name:'league-qa',league_ws:ws,league_proto:1}],mirrors:[]}));return;}
+    if(url.pathname==='/server.json'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({hosts:[{name:'league-qa',league_ws:ws,league_proto:proto}],mirrors:[]}));return;}
     if(url.pathname==='/favicon.ico'){res.writeHead(204).end();return;}
     let rel=url.pathname.endsWith('/')?url.pathname+'index.html':url.pathname;
-    if(rel.startsWith('/games/league/v1/pkg/'))rel='/pkg/'+path.basename(rel);
-    const f=path.resolve(web,'.'+rel);
-    if(!f.startsWith(web+path.sep)||!fs.existsSync(f)){res.writeHead(404).end();return;}
-    res.setHeader('Content-Type',({'.wasm':'application/wasm','.js':'text/javascript','.html':'text/html','.json':'application/json'})[path.extname(f)]||'application/octet-stream');
+    rel=rel.slice(1);
+    if(rel.startsWith(`${entry}/pkg/`)){
+      const bundle=rel.slice(`${entry}/pkg/`.length);
+      if(!['league.js','league_bg.wasm'].includes(bundle)){res.writeHead(404).end();return;}
+      rel='pkg/'+bundle;
+    }
+    let f;try{f=safePath(web,rel);if(!fs.lstatSync(f).isFile())throw new Error('Not a file');}catch{res.writeHead(404).end();return;}
+    res.setHeader('Content-Type',({'.wasm':'application/wasm','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.html':'text/html','.json':'application/json','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.svg':'image/svg+xml','.woff':'font/woff','.woff2':'font/woff2'})[path.extname(f).toLowerCase()]||'application/octet-stream');
     res.end(fs.readFileSync(f));
   });
   await new Promise((r,j)=>{server.once('error',j);server.listen(8093,'127.0.0.1',r);});

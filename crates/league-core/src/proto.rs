@@ -24,6 +24,13 @@ pub const CLIENT_PING_SECS: u64 = 5;
 pub const CLIENT_TIMEOUT_SECS: u64 = 30;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+/// Missing presentation identity in a legacy snapshot or a non-champion effect.
+pub const UNKNOWN_PRESENTATION: u8 = u8::MAX;
+
+const fn unknown_presentation() -> u8 {
+    UNKNOWN_PRESENTATION
+}
+
 /// Strip control characters and cap length; empty stays empty.
 #[must_use]
 pub fn sanitize(s: &str, max: usize) -> String {
@@ -225,6 +232,9 @@ pub struct ProjSnap {
     pub id: u32,
     pub k: u8,
     pub t: u8,
+    /// Champion definition of the original shooter, including holograms.
+    #[serde(default = "unknown_presentation")]
+    pub champ: u8,
     pub x: f32,
     pub z: f32,
     pub dx: f32,
@@ -245,10 +255,20 @@ pub struct ZoneSnap {
 /// `k`:
 /// 0 auto-attack (u->v), 1 beam (xy->xy2), 2 explosion (x, v=radius),
 /// 3 zone spawn, 4 trap plant, 5 death, 6 level-up, 7 gold, 8 teleport,
-/// 9 heal flash, 10 hook cast, 11 cast flash, 12 shield flash.
+/// 9 heal flash, 10 hook cast, 11 cast flash, 12 shield flash,
+/// 13 accepted Q/W/E/R cast (pre-cast x/z -> requested aim x2/z2, v=0).
+/// For k=0, v is a flag word: bit 0 crit, bit 1 spell, bit 2 attack-start.
+/// Starts run x/z -> x2/z2 even when the target is at the origin; impacts
+/// are points at x/z with bit 2 clear.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct Fx {
     pub k: u8,
+    /// Champion definition responsible for the effect; 255 means generic.
+    #[serde(default = "unknown_presentation")]
+    pub champ: u8,
+    /// 0..3 Q/W/E/R, 4 auto-attack, or 255 for a generic effect.
+    #[serde(default = "unknown_presentation")]
+    pub ability: u8,
     pub x: f32,
     pub z: f32,
     pub x2: f32,
@@ -402,6 +422,24 @@ pub struct ChampView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_effects_default_to_generic_and_new_identity_round_trips() {
+        let old_fx = r#"{"k":0,"x":1.0,"z":2.0,"x2":3.0,"z2":4.0,"v":0.0}"#;
+        let mut fx: Fx = serde_json::from_str(old_fx).unwrap();
+        assert_eq!((fx.champ, fx.ability), (UNKNOWN_PRESENTATION, UNKNOWN_PRESENTATION));
+        fx.champ = 4;
+        fx.ability = 3;
+        let round_trip: Fx = serde_json::from_str(&serde_json::to_string(&fx).unwrap()).unwrap();
+        assert_eq!((round_trip.champ, round_trip.ability), (4, 3));
+
+        let old_proj = r#"{"id":7,"k":0,"t":1,"x":1.0,"z":2.0,"dx":1.0,"dz":0.0}"#;
+        let mut proj: ProjSnap = serde_json::from_str(old_proj).unwrap();
+        assert_eq!(proj.champ, UNKNOWN_PRESENTATION);
+        proj.champ = 2;
+        let round_trip: ProjSnap = serde_json::from_str(&serde_json::to_string(&proj).unwrap()).unwrap();
+        assert_eq!(proj, round_trip);
+    }
 
     #[test]
     fn the_wire_shape_is_the_house_style() {

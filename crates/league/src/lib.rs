@@ -11,10 +11,12 @@
 //! talks to `league-core` for the simulation and to `ember-engine` for
 //! the window and the GPU, and neither of those knows this crate exists.
 
+pub mod bindings;
 pub mod game;
 pub mod online_game;
 pub mod world;
 
+mod combat;
 mod net;
 mod scene;
 
@@ -123,6 +125,30 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn data_json() -> String {
         super::world::data_json()
+    }
+
+    /// Apply a flat physical-key map over the defaults. Validation is atomic.
+    #[wasm_bindgen]
+    pub fn set_bindings_json(json: &str) -> Result<(), JsValue> {
+        super::bindings::set_json(json).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Complete physical bindings, including the shop key handled by the page.
+    #[wasm_bindgen]
+    pub fn bindings_json() -> String {
+        super::bindings::json()
+    }
+
+    /// Supported physical keys and their short labels for the settings page.
+    #[wasm_bindgen]
+    pub fn binding_options_json() -> String {
+        super::bindings::options_json()
+    }
+
+    /// Suppress gameplay input while menus or text fields have focus.
+    #[wasm_bindgen]
+    pub fn set_input_enabled(enabled: bool) {
+        super::bindings::set_input_enabled(enabled);
     }
 
     /// Queue one page command for the next frame: `{"pick":{...}}`,

@@ -6,8 +6,9 @@
 //! they see is exactly what `league_core::sim::Match` said last.
 //!
 //! The lobby walks `Select → Live → Over → Select`: humans pick champions,
-//! summoner spells and rune pages during Select (the host may start early;
-//! the clock starts the match otherwise), unfilled seats are deterministic
+//! summoner spells and rune pages during Select (the host may start early
+//! after every human has picked; the clock starts the match otherwise).
+//! Unfilled seats are deterministic
 //! bots that think with `league_core::ai`, and the result screen holds for
 //! `RESULT_SECS` before the same roster re-selects.
 
@@ -587,6 +588,17 @@ fn handle_msg(
                     id,
                     &S2C::Rejected {
                         reason: "the draft already ran".into(),
+                    },
+                );
+                return;
+            }
+            if lobby.m.roster.iter().any(|r| !r.bot && !r.picked) {
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "every player must pick a champion before the host can start"
+                            .into(),
                     },
                 );
                 return;

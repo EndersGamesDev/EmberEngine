@@ -1,0 +1,36 @@
+{
+  "name": "bogmaw",
+  "pivot": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "forward": "+x",
+  "up": "+y",
+  "height": 2.1,
+  "extents": {
+    "min": [
+      -0.8108777311249,
+      0.0,
+      -1.041433743901588
+    ],
+    "max": [
+      0.8108777311249,
+      2.1,
+      1.041433743901588
+    ]
+  },
+  "faces": {
+    "source": 137930,
+    "shipped": 6000
+  },
+  "atlas": {
+    "size": 512,
+    "png_bytes": 380773
+  },
+  "glb_bytes": 617048,
+  "bake_wall_seconds": 3.0,
+  "part_order": [
+    "bogmaw"
+  ]
+}

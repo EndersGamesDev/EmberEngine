@@ -238,13 +238,21 @@
     {
       "id": "league",
       "title": "UltimateLegue",
-      "tag": "One lane / Five champions / 1v1 + 3v3",
+      "tag": "Crystalforge / Five champions / 1v1 + 3v3",
       "desc": "Draft your champion and three runes, master four abilities, and turn gold into a winning build. Capture the two side objectives for team bonuses, push with your minions, and destroy the enemy core. Play online or practice with bots.",
       "versions": [
         {
+          "v": "v2",
+          "path": "games/league/v2/",
+          "live": true,
+          "proto": 1,
+          "handover": true,
+          "note": "Crystalforge: five fleet-created champions, a textured garden arena, distinct combat animations, redesigned HUD and saved keybindings"
+        },
+        {
           "v": "v1",
           "path": "games/league/v1/",
-          "live": true,
+          "live": false,
           "proto": 1,
           "handover": true,
           "note": "first build: one lane, five champions, draft with rune pages and summoner spells, courts, cores, a shop, and bots"

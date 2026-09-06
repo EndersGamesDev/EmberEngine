@@ -1,0 +1,36 @@
+{
+  "name": "tessera",
+  "pivot": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "forward": "+x",
+  "up": "+y",
+  "height": 2.2,
+  "extents": {
+    "min": [
+      -0.5562041576897034,
+      0.0,
+      -0.5395957029493677
+    ],
+    "max": [
+      0.5562041576897034,
+      2.2,
+      0.5395957029493677
+    ]
+  },
+  "faces": {
+    "source": 66285,
+    "shipped": 5999
+  },
+  "atlas": {
+    "size": 512,
+    "png_bytes": 286248
+  },
+  "glb_bytes": 502548,
+  "bake_wall_seconds": 2.1,
+  "part_order": [
+    "tessera"
+  ]
+}

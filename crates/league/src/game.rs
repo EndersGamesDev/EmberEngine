@@ -12,14 +12,29 @@ use league_core::ai;
 use league_core::proto::{Cmd, Phase, S2C};
 use league_core::sim::Match;
 
+use crate::bindings::{self, Controls};
 use crate::scene::{self, camera_for, ground_point, project};
-use crate::world::{FxLite, World, feed_line};
+use crate::world::{World, feed_line};
 
 /// Commands queued by the page (`cmd_json`); both game modes drain this.
 pub mod uiq {
     use std::sync::Mutex;
 
-    static QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    use crate::bindings::{self, Permit};
+
+    pub struct Queued {
+        pub json: String,
+        permit: Permit,
+    }
+
+    impl Queued {
+        #[must_use]
+        pub fn gameplay_allowed(&self) -> bool {
+            self.permit.allows(&bindings::snapshot())
+        }
+    }
+
+    static QUEUE: Mutex<Vec<Queued>> = Mutex::new(Vec::new());
 
     /// The page calls this between frames; wasm is single-threaded and the
     /// engine loop runs on rAF, so it never races `update`.
@@ -27,11 +42,14 @@ pub mod uiq {
         if let Ok(mut q) = QUEUE.lock()
             && q.len() < 256
         {
-            q.push(json);
+            q.push(Queued {
+                json,
+                permit: bindings::snapshot().permit(),
+            });
         }
     }
 
-    pub fn drain() -> Vec<String> {
+    pub fn drain() -> Vec<Queued> {
         QUEUE
             .lock()
             .map(|mut q| std::mem::take(&mut *q))
@@ -49,6 +67,9 @@ pub mod uiq {
     reason = "JSON numbers narrow to the simulation f32 format and are checked for finiteness below"
 )]
 pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
+    if !bindings::snapshot().enabled {
+        return None;
+    }
     if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
         return u16::try_from(item).ok().map(|item| Cmd::Buy { item });
     }
@@ -125,9 +146,36 @@ pub fn read_input(
     aspect: f32,
     my_alive: bool,
 ) -> Vec<Cmd> {
+    read_controls(
+        input,
+        prev,
+        world,
+        aspect,
+        my_alive,
+        &bindings::snapshot(),
+        input.cursor_ndc(),
+    )
+}
+
+// Cursor is explicit here so tests can exercise mouse and keyboard commands
+// without synthesizing device input or changing the platform-owned snapshot.
+fn read_controls(
+    input: &InputState,
+    prev: &mut Prev,
+    world: &World,
+    aspect: f32,
+    my_alive: bool,
+    controls: &Controls,
+    cursor: Option<[f32; 2]>,
+) -> Vec<Cmd> {
     let mut out = Vec::new();
     let camera = camera_for(world.cam);
-    let cursor = input.cursor_ndc();
+    // A pause or rebind requires a fresh press. This also catches menus that
+    // open and close between two engine frames, while a key is still held.
+    let changed = prev.revision != controls.revision;
+    prev.revision = controls.revision;
+    let active =
+        my_alive && world.phase == Phase::Live && !world.shop_open && controls.enabled && !changed;
 
     // right button: the MOBA cursor — attack what is under it, else walk
     let rmb = input.mouse_down(MouseButton::Right);
@@ -137,8 +185,7 @@ pub fn read_input(
     prev.rmb = rmb;
     prev.rmb_was_left = lmb;
 
-    let my_alive = my_alive && world.phase == Phase::Live && !world.shop_open;
-    if my_alive
+    if active
         && (rmb_edge || lmb_edge)
         && let Some(ndc) = cursor
     {
@@ -156,12 +203,9 @@ pub fn read_input(
         || input.down(KeyCode::ShiftRight)
         || input.down(KeyCode::ControlLeft)
         || input.down(KeyCode::ControlRight);
-    for (idx, key) in [KeyCode::KeyQ, KeyCode::KeyW, KeyCode::KeyE, KeyCode::KeyR]
-        .into_iter()
-        .enumerate()
-    {
+    for (idx, key) in controls.keys[..4].iter().copied().enumerate() {
         let down = input.down(key);
-        if my_alive && down && !prev.abil[idx] {
+        if active && down && !prev.abil[idx] {
             if rank_modifier {
                 out.push(Cmd::Rank {
                     slot: u8::try_from(idx).unwrap_or_default(),
@@ -176,9 +220,9 @@ pub fn read_input(
         }
         prev.abil[idx] = down;
     }
-    for (idx, key) in [KeyCode::KeyD, KeyCode::KeyF].into_iter().enumerate() {
+    for (idx, key) in controls.keys[4..6].iter().copied().enumerate() {
         let down = input.down(key);
-        if my_alive
+        if active
             && down
             && !prev.spell[idx]
             && let Some((x, z)) = aim
@@ -191,25 +235,25 @@ pub fn read_input(
         }
         prev.spell[idx] = down;
     }
-    for (idx, key) in [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-    ]
-    .into_iter()
-    .enumerate()
-    {
+    for (idx, key) in controls.keys[6..12].iter().copied().enumerate() {
         let down = input.down(key);
-        if my_alive && down && !prev.item[idx] {
+        if active && down && !prev.item[idx] {
             out.push(Cmd::UseItem {
                 slot: u8::try_from(idx).unwrap_or_default(),
             });
         }
         prev.item[idx] = down;
     }
+    let stop = input.down(controls.keys[12]);
+    if active
+        && stop
+        && !prev.stop
+        && let Some(me) = world.my_unit()
+    {
+        out.push(Cmd::Move { x: me.x, z: me.z });
+    }
+    prev.stop = stop;
+    // keys[13] is shop: only the DOM dispatches that presentation action.
     out
 }
 
@@ -255,6 +299,8 @@ pub struct Prev {
     pub abil: [bool; 4],
     pub spell: [bool; 2],
     pub item: [bool; 6],
+    stop: bool,
+    revision: u64,
 }
 
 /// The practice match. One human (slot 0), the rest bots, a duel by
@@ -295,8 +341,8 @@ impl LocalGame {
         reason = "Preserve the existing byte-valued pick bridge; the shared simulation validates champion, spell, and rune ids"
     )]
     fn drain_ui(&mut self) {
-        for json in uiq::drain() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        for queued in uiq::drain() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&queued.json) else {
                 continue;
             };
             if let Some(p) = v.get("pick") {
@@ -319,7 +365,9 @@ impl LocalGame {
                 self.m.start();
                 self.world.phase = Phase::Live;
             }
-            if let Some(b) = ui_command(&v, &self.world) {
+            if queued.gameplay_allowed()
+                && let Some(b) = ui_command(&v, &self.world)
+            {
                 self.m.command(self.human, b);
             }
             if let Some(open) = v.get("shop").and_then(serde_json::Value::as_bool) {
@@ -390,16 +438,7 @@ impl LocalGame {
         self.world.left = self.m.left;
         self.world.winner = self.m.winner;
         for f in fx {
-            self.world.push_fx(FxLite {
-                k: f.k,
-                x: f.x,
-                z: f.z,
-                x2: f.x2,
-                z2: f.z2,
-                v: f.v,
-                life: 0.0,
-                left: 0.0,
-            });
+            self.world.push_fx(f.into());
         }
         for ev in log {
             if let Some(text) = feed_line(&self.world, &ev) {
@@ -528,5 +567,193 @@ mod tests {
         );
         let (x, z) = ground_point(&camera_for(world.cam), 16.0 / 9.0, [0.0, 0.0]).unwrap();
         assert_eq!(command, Some(Cmd::Cast { slot: 1, x, z }));
+    }
+
+    fn live_world() -> World {
+        let mut world = World::new(1);
+        world.phase = Phase::Live;
+        world.set_units(&[UnitSnap {
+            id: 1,
+            k: 0,
+            t: 0,
+            slot: 0,
+            x: -40.0,
+            z: 1.0,
+            ..UnitSnap::default()
+        }]);
+        world
+    }
+
+    fn mapped_input(
+        keys: &[KeyCode],
+        buttons: &[MouseButton],
+        prev: &mut Prev,
+        world: &World,
+        controls: &Controls,
+    ) -> Vec<Cmd> {
+        read_controls(
+            &InputState::from_parts(keys, buttons, (0.0, 0.0), None),
+            prev,
+            world,
+            16.0 / 9.0,
+            true,
+            controls,
+            Some([0.0, 0.0]),
+        )
+    }
+
+    #[test]
+    fn remapped_abilities_spells_items_and_stop_use_physical_edges() {
+        let world = live_world();
+        let mut controls = Controls::DEFAULT;
+        controls
+            .set_json(r#"{"q":"KeyA","d":"KeyG","item1":"Numpad1","stop":"KeyX"}"#)
+            .unwrap();
+        let mut prev = Prev::default();
+        // Consume the configuration transition before any keys are pressed.
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(
+                &[KeyCode::KeyQ, KeyCode::KeyD, KeyCode::Digit1, KeyCode::KeyS],
+                &[],
+                &mut prev,
+                &world,
+                &controls
+            ),
+            Vec::<Cmd>::new()
+        );
+        let (x, z) = ground_point(&camera_for(world.cam), 16.0 / 9.0, [0.0, 0.0]).unwrap();
+        let keys = [
+            KeyCode::KeyA,
+            KeyCode::KeyG,
+            KeyCode::Numpad1,
+            KeyCode::KeyX,
+        ];
+        assert_eq!(
+            mapped_input(&keys, &[], &mut prev, &world, &controls),
+            vec![
+                Cmd::Cast { slot: 0, x, z },
+                Cmd::Spell { slot: 0, x, z },
+                Cmd::UseItem { slot: 0 },
+                Cmd::Move { x: -40.0, z: 1.0 },
+            ]
+        );
+        assert_eq!(
+            mapped_input(&keys, &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        for modifier in [
+            KeyCode::ControlLeft,
+            KeyCode::ControlRight,
+            KeyCode::ShiftLeft,
+            KeyCode::ShiftRight,
+        ] {
+            assert_eq!(
+                mapped_input(&[], &[], &mut prev, &world, &controls),
+                Vec::<Cmd>::new()
+            );
+            assert_eq!(
+                mapped_input(
+                    &[modifier, KeyCode::KeyA],
+                    &[],
+                    &mut prev,
+                    &world,
+                    &controls
+                ),
+                vec![Cmd::Rank { slot: 0 }]
+            );
+        }
+        // Shop is present in the settings map but never emits a Rust command.
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyB], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+    }
+
+    #[test]
+    fn settings_pause_blocks_mouse_and_keyboard_until_a_fresh_press() {
+        let world = live_world();
+        let mut controls = Controls::DEFAULT;
+        let mut prev = Prev::default();
+        let keys = [KeyCode::KeyQ, KeyCode::KeyD, KeyCode::Digit1, KeyCode::KeyS];
+        controls.set_enabled(false);
+        assert_eq!(
+            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        controls.set_enabled(true);
+        assert_eq!(
+            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        let commands = mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls);
+        assert!(matches!(
+            commands.as_slice(),
+            [
+                Cmd::Move { .. },
+                Cmd::Cast { slot: 0, .. },
+                Cmd::Spell { slot: 0, .. },
+                Cmd::UseItem { slot: 0 },
+                Cmd::Move { .. }
+            ]
+        ));
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        // Even a pause wholly between frames invalidates pending presses.
+        controls.set_enabled(false);
+        controls.set_enabled(true);
+        assert_eq!(
+            mapped_input(&[], &[MouseButton::Right], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert!(matches!(
+            mapped_input(&[], &[MouseButton::Right], &mut prev, &world, &controls).as_slice(),
+            [Cmd::Move { .. }]
+        ));
+    }
+
+    #[test]
+    fn rebinding_a_held_key_requires_release_and_does_not_cast_twice() {
+        let world = live_world();
+        let mut controls = Controls::DEFAULT;
+        let mut prev = Prev::default();
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        controls.set_json(r#"{"q":"KeyA"}"#).unwrap();
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert!(matches!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls).as_slice(),
+            [Cmd::Cast { slot: 0, .. }]
+        ));
     }
 }

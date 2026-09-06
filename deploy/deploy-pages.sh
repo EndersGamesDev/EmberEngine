@@ -21,7 +21,8 @@
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
-#   games/league/v1/      live UltimateLegue build (one lane, 1v1 and 3v3)
+#   games/league/v2/      live UltimateLegue build (selected from games.json)
+#   games/league/v1/      frozen first UltimateLegue build
 #   games/what-is-this/v1/ live browser and hardware diagnostic
 #   labs/julibrot/        live four-dimensional slice viewer lab
 #   games/pong/v1/        archived first web build (materialized from history)
@@ -49,6 +50,20 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 # gh-pages commit holding the original first web build (auto-run pong).
 V1_COMMIT="e7b85e8"
+
+# League's catalog selects the version we replace. Validate before using it
+# in a filesystem path; all its other version directories remain frozen.
+LEAGUE_LIVE="$("$PY" - web/games.json <<'PY'
+import json, re, sys
+catalog = json.load(open(sys.argv[1], encoding="utf-8"))
+live = [v for g in catalog["games"] if g.get("id") == "league"
+        for v in g["versions"] if v.get("live") is True]
+if len(live) != 1 or not re.fullmatch(r"games/league/v[1-9][0-9]*/", live[0].get("path", "")):
+    raise SystemExit("FAILED: League catalog must select exactly one safe live version path")
+print(live[0]["path"].rstrip("/"))
+PY
+)"
+LEAGUE_LIVE="${LEAGUE_LIVE//$'\r'/}"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     missing=()
@@ -132,7 +147,6 @@ ARENA_LIVE="games/arena/v31"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
-LEAGUE_LIVE="games/league/v1"
 WHAT_LIVE="games/what-is-this/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
@@ -164,7 +178,32 @@ cp "web/$ARENA_LIVE/settings.js" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
-cp "web/$LEAGUE_LIVE/index.html" web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
+# Version-local UI, images and provenance sidecars are runtime assets too.
+# Never reuse a version-local pkg: the tested bindings come from web/pkg below.
+"$PY" - "web/$LEAGUE_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" <<'PY'
+import pathlib, shutil, sys
+source, dest = map(pathlib.Path, sys.argv[1:])
+if not (source / "index.html").is_file():
+    raise SystemExit(f"FAILED: missing live League page: {(source / 'index.html').as_posix()}")
+for parent in [source, *source.parents]:
+    if parent.is_symlink():
+        raise SystemExit(f"FAILED: League source contains a symlink: {parent}")
+for path in sorted(source.rglob("*")):
+    if path.is_symlink():
+        raise SystemExit(f"FAILED: League source contains a symlink: {path}")
+    relative = path.relative_to(source)
+    if relative.parts[0] == "pkg" or relative.as_posix() == "version.json":
+        continue
+    target = dest / relative
+    if path.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+    elif path.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+    else:
+        raise SystemExit(f"FAILED: League source is not a regular file: {path}")
+PY
+cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
 # lab.js is not optional furniture: main.js imports it statically, so a deploy
 # that omits it resolves the import to a missing file and the whole module graph

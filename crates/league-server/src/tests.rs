@@ -182,6 +182,7 @@ fn host_handoff_starts_the_match_and_live_disconnects_become_bots() {
     hub.join(2, "squad");
     assert!(rejected(&hub.msg(2, C2S::StartMatch)));
     hub.msg(1, C2S::LeaveLobby);
+    assert!(!rejected(&hub.pick(2, 1)));
     let replies = hub.msg(2, C2S::StartMatch);
     assert!(!rejected(&replies));
     assert_eq!(hub.lobbies["squad"].m.phase, Phase::Live);
@@ -191,6 +192,8 @@ fn host_handoff_starts_the_match_and_live_disconnects_become_bots() {
             .any(|m| matches!(m, S2C::State { champs, .. } if champs.len() == 6))
     );
     hub.lobbies.get_mut("squad").unwrap().m.fx.push(proto::Fx {
+        champ: proto::UNKNOWN_PRESENTATION,
+        ability: proto::UNKNOWN_PRESENTATION,
         k: 8,
         x: 0.0,
         z: 0.0,
@@ -200,7 +203,11 @@ fn host_handoff_starts_the_match_and_live_disconnects_become_bots() {
     });
     let replies = hub.join(3, "squad");
     assert!(replies.iter().any(|m| matches!(m, S2C::State { .. })));
-    assert_eq!(hub.lobbies["squad"].m.fx.len(), 1, "a joining client must not consume effects owed to existing players");
+    assert_eq!(
+        hub.lobbies["squad"].m.fx.len(),
+        1,
+        "a joining client must not consume effects owed to existing players"
+    );
     handle_event(
         Ev::Disconnected { id: 2 },
         &mut hub.conns,
@@ -247,7 +254,9 @@ fn squad_draft_rejects_teammate_duplicates_and_accepts_mirror_picks() {
             runes: [0, 0, 2]
         }
     )));
-    hub.msg(1, C2S::StartMatch);
+    assert!(!rejected(&hub.pick(2, 1)));
+    assert!(!rejected(&hub.pick(3, 2)));
+    assert!(!rejected(&hub.msg(1, C2S::StartMatch)));
     assert!(rejected(&hub.pick(4, 1)));
     for team in 0..2 {
         let mut picks: Vec<u8> = hub.lobbies["squad"]
@@ -260,6 +269,71 @@ fn squad_draft_rejects_teammate_duplicates_and_accepts_mirror_picks() {
         picks.sort_unstable();
         picks.dedup();
         assert_eq!(picks.len(), 3);
+    }
+}
+
+#[test]
+fn early_start_waits_for_every_human_pick_and_fills_only_bot_seats() {
+    for mode in [1, 3] {
+        for humans in 1..=mode * 2 {
+            let mut hub = Hub::default();
+            for human in 1..=humans {
+                let id = u64::from(human);
+                hub.connect(id, Some(proto::PROTO_VERSION));
+                let replies = if human == 1 {
+                    hub.create(id, "draft", mode)
+                } else {
+                    hub.join(id, "draft")
+                };
+                assert!(!rejected(&replies));
+            }
+            let draft_left = hub.lobbies["draft"].m.left;
+            for human in 1..=humans {
+                // The existing protocol-1 request must reject without starting
+                // the sim while even the last human remains unpicked.
+                let start: C2S = serde_json::from_str(r#"{"t":"start_match"}"#).unwrap();
+                let replies = hub.msg(1, start);
+                assert!(
+                    rejected(&replies),
+                    "mode={mode}, humans={humans}, next pick={human}"
+                );
+                assert!(!replies.iter().any(|m| matches!(m, S2C::State { .. })));
+                let lobby = &hub.lobbies["draft"];
+                assert_eq!(lobby.m.phase, Phase::Select);
+                assert_eq!(lobby.m.left, draft_left);
+                assert_eq!(
+                    lobby.m.roster.iter().filter(|r| r.picked).count(),
+                    usize::from(human - 1)
+                );
+                // Unique within each team; opponents may mirror the pick.
+                assert!(!rejected(&hub.pick(u64::from(human), (human - 1) % mode)));
+            }
+            let replies = hub.msg(1, C2S::StartMatch);
+            assert!(!rejected(&replies), "mode={mode}, humans={humans}");
+            assert!(replies.iter().any(|m| matches!(
+                m,
+                S2C::Phase {
+                    phase: Phase::Live,
+                    ..
+                }
+            )));
+            assert!(replies.iter().any(|m| matches!(
+                m,
+                S2C::State { champs, .. } if champs.len() == usize::from(mode * 2)
+            )));
+            let lobby = &hub.lobbies["draft"];
+            assert_eq!(lobby.m.phase, Phase::Live);
+            assert!(lobby.m.roster.iter().all(|r| r.picked));
+            assert_eq!(
+                lobby.m.roster.iter().filter(|r| r.bot).count(),
+                usize::from(mode * 2 - humans)
+            );
+            for human in 1..=humans {
+                let slot = &lobby.m.roster[usize::from(human - 1)];
+                assert!(!slot.bot);
+                assert_eq!(slot.champ, (human - 1) % mode);
+            }
+        }
     }
 }
 
