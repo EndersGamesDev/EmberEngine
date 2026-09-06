@@ -85,6 +85,20 @@ PROMPTS = {
         "camera, luxurious painterly game environment concept art, playable open space in center, "
         "rich detail on edges, harmonious teal gold palette, no text, no UI, no characters."
     ),
+    "arch": (
+        "(One complete freestanding stone gateway:1.3), isometric miniature game prop, "
+        "(whole object fully visible with generous empty space around it:1.3), two square "
+        "ivory stone pillars connected by one semicircular arch, small turquoise crystal at "
+        "the top, dark bronze trim, weathered moss, hand painted fantasy 3D game asset, "
+        "isolated on plain gray studio background, soft even lighting, small centered object."
+    ),
+    "tree": (
+        "One stylized ancient fantasy garden tree, thick twisting dark brown trunk, strong exposed "
+        "roots and a broad low umbrella canopy of dense jade green leaves, clusters of tiny amber "
+        "flowers, sculptural rounded foliage clumps, hand painted 3D strategy game asset, "
+        "single whole tree isolated centered fully visible on plain gray studio background, "
+        "three quarter view, soft even diffuse light, no ground plane."
+    ),
 }
 ORDER = list(PROMPTS)
 

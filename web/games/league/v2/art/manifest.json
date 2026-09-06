@@ -150,6 +150,36 @@
       "sha256": "8fb3d88e366a0b65b4b6aac28e887397710320dff75e6873c7bf056948a34187",
       "elapsed_seconds": 14.69,
       "review": "Reviewed wide garden-citadel splash for menu backdrop; concept art, not an in-game screenshot."
+    },
+    {
+      "name": "tree",
+      "generator": "SDXL 1.0 / LAN specht32 ComfyUI",
+      "prompt": "One stylized ancient fantasy garden tree, thick twisting dark brown trunk, strong exposed roots and a broad low umbrella canopy of dense jade green leaves, clusters of tiny amber flowers, sculptural rounded foliage clumps, hand painted 3D strategy game asset, single whole tree isolated centered fully visible on plain gray studio background, three quarter view, soft even diffuse light, no ground plane.",
+      "seed": 6090611,
+      "steps": 32,
+      "cfg": 7,
+      "negative": "text, watermark, logo, blurry, low quality, cropped, duplicate character, multiple views, photograph, modern gun, display stand, pedestal, decorative frame, border, picture frame, character sheet, design sheet, detached props, floating objects, accessories sheet",
+      "width": 1024,
+      "height": 1024,
+      "output": "web/games/league/v2/art/tree.webp",
+      "sha256": "56472dc8c94f360b73786a7c8f3bc274b7beb036b240e954f839f47904497ac0",
+      "elapsed_seconds": 14.61,
+      "review": "Selected amber-flowered jade canopy tree for sparse perimeter clusters."
+    },
+    {
+      "name": "arch",
+      "generator": "SDXL 1.0 / LAN specht32 ComfyUI",
+      "prompt": "(One complete freestanding stone gateway:1.3), isometric miniature game prop, (whole object fully visible with generous empty space around it:1.3), two square ivory stone pillars connected by one semicircular arch, small turquoise crystal at the top, dark bronze trim, weathered moss, hand painted fantasy 3D game asset, isolated on plain gray studio background, soft even lighting, small centered object.",
+      "seed": 6090620,
+      "steps": 32,
+      "cfg": 7,
+      "negative": "text, watermark, logo, blurry, low quality, cropped, duplicate character, multiple views, photograph, modern gun, display stand, pedestal, decorative frame, border, picture frame, character sheet, design sheet, detached props, floating objects, accessories sheet",
+      "width": 1024,
+      "height": 1024,
+      "output": "web/games/league/v2/art/arch.webp",
+      "sha256": "d35b4b680eb7ea24dc5f8e35c6e40c9ffd9756d305c2ca2338d882a3a064ba7d",
+      "elapsed_seconds": 14.59,
+      "review": "Selected complete freestanding gateway for decorative perimeter placement. Earlier cropped revision rejected."
     }
   ]
 }
