@@ -1,5 +1,11 @@
-const ABI = 3;
-globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1";
+// The page is one client of the lab module, not the only way into the lab. Everything below is
+// this document's own business — its controls, its two view boxes, its storage, its facts grid —
+// and everything that is the lab's own business is on the other side of `openLab`: the boot, the
+// worker URL, the ABI probe and the frame loop. A driver running the same module runs the same
+// loop over the same boundary, so the page a person moves and the frame a script measures cannot
+// come apart.
+import { openLab } from "./lab.js?v=1";
+
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");
@@ -17,19 +23,10 @@ let BOOT_FACTS = Object.freeze({});
 // The page's own pan-versus-click threshold, which mirrors the boundary's box-versus-click one: a
 // gesture too short to be a translation is the click it looked like, and the app decides the rest.
 const CLICK_THRESHOLD_PX = 4;
-// The frame loop must not be able to latch. A `requestAnimationFrame` queued while the tab or the
-// pane is not painting is never called, so a flag set at schedule time and cleared only inside that
-// callback outlives the frame it was guarding: every later schedule returns immediately while
-// `app_needs_refresh` still answers true, and the picture sleeps on a transient frame until a
-// control move happens to reach `guarded`. The flag is therefore cleared on frame entry, retired
-// whenever the page becomes visible or focused again, and backed by a low-rate timer that runs the
-// turn the animation callback did not. Whichever path arrives first for a schedule clears the flag
-// and runs it, so a healthy `requestAnimationFrame` and the timer can never both drive one turn.
-const FRAME_FALLBACK_MS = 250;
-let RAF_PENDING = false;
-let FRAME_TICKET = 0;
-let FRAME_FALLBACK_TIMER = null;
-const FRAME_COUNTS = { schedules: 0, raf: 0, fallback: 0, latch_clears: 0, wakeups: 0 };
+// The frame loop, its anti-latch rules and its counters live in the lab module, because the page
+// and a driver must not be able to run two different loops over one wasm boundary. What the page
+// keeps is the right to be told after each turn, which is what `onTurn` is for.
+let LAB = null;
 let STORAGE_STATUS = "available";
 
 // One key per box, and one more for the named rows and the two selections. Every access goes
@@ -184,11 +181,7 @@ function pageFacts() {
     morph_t: MORPH.disabled ? null : Number(MORPH.value),
     view_box_storage: STORAGE_STATUS,
     named_rows_held: ROWS.named.length,
-    frame_schedules: FRAME_COUNTS.schedules,
-    frames_from_raf: FRAME_COUNTS.raf,
-    frames_from_fallback: FRAME_COUNTS.fallback,
-    frame_latch_clears: FRAME_COUNTS.latch_clears,
-    frame_loop_wakeups: FRAME_COUNTS.wakeups,
+    ...(LAB === null ? {} : LAB.counts()),
   };
 }
 
@@ -222,7 +215,8 @@ const ORIGIN = [
 const ROW_CONTROL_ALIAS = { height_scale: "height", zoom_log2: "scale" };
 const controlFor = field => document.getElementById(ROW_CONTROL_ALIAS[field] ?? field.replaceAll("_", "-"));
 
-function bindControls(api) {
+function bindControls(lab) {
+  const api = lab.api;
   // The crosshair is a projection, never a memory of a pixel: the app is asked where the stored
   // point falls under the current map, and the marker goes there. That is what makes it an
   // accuracy oracle — pan, zoom, or let a reference land, and it stays on its feature or it does
@@ -240,78 +234,28 @@ function bindControls(api) {
     TARGET.hidden = !crosshair.crosshair_on_surface;
     return crosshair;
   };
-  const refreshFacts = () => {
-    const facts = Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair());
+  const refreshFacts = appFacts => {
+    const facts = Object.assign(appFacts ?? lab.facts(), BOOT_FACTS, pageFacts(), drawCrosshair());
     renderFacts(facts);
     return facts;
   };
-  // The app answers false only once its loop has stopped for a typed cause, so a refusal it
-  // survived still schedules the next turn; a throw from the query itself is treated as stopped.
-  const stillTurning = () => {
-    try {
-      return api.app_needs_refresh();
-    } catch (error) {
-      console.error(error);
-      return false;
-    }
-  };
-  // One turn per schedule, whichever path arrives with it. A stale animation callback carries an
-  // older ticket, and the timer behind a callback that already ran finds the flag clear, so neither
-  // can run a turn twice; the flag is cleared before the body so the turn may schedule the next.
-  const runFrame = (ticket, nowMs, viaFallback) => {
-    if (!RAF_PENDING || ticket !== FRAME_TICKET) return;
-    RAF_PENDING = false;
-    if (viaFallback) FRAME_COUNTS.fallback += 1;
-    else FRAME_COUNTS.raf += 1;
-    try {
-      api.app_refresh(nowMs);
-      const facts = refreshFacts();
-      if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);
-      else showStatus(liveStatus(facts));
-      if (stillTurning()) scheduleFrame();
-    } catch (error) {
-      fail(error);
+  const scheduleFrame = () => lab.schedule();
+  // One turn of the shared loop has run: the overlay is the page's own reading of it, and a stopped
+  // loop is reported once, from the reason the app published, rather than restated every turn.
+  lab.onTurn((appFacts, failure) => {
+    if (failure) {
+      fail(failure);
       try {
-        renderFacts(JSON.parse(api.app_facts_json()));
+        renderFacts(appFacts ?? lab.facts());
       } catch (factsError) {
         console.error(factsError);
       }
-      if (stillTurning()) scheduleFrame();
+      return;
     }
-  };
-  const scheduleFrame = () => {
-    if (RAF_PENDING) return;
-    RAF_PENDING = true;
-    FRAME_COUNTS.schedules += 1;
-    const ticket = (FRAME_TICKET += 1);
-    requestAnimationFrame(nowMs => runFrame(ticket, nowMs, false));
-    if (FRAME_FALLBACK_TIMER !== null) clearTimeout(FRAME_FALLBACK_TIMER);
-    // The low rate is the point: it is a floor under a loop the browser has stopped painting for,
-    // not a second animation clock. Arriving after a healthy callback it does nothing at all, and
-    // arriving with nothing due it still releases the flag, because the callback it was waiting on
-    // may never be called and the next control move must be able to schedule.
-    FRAME_FALLBACK_TIMER = setTimeout(() => {
-      FRAME_FALLBACK_TIMER = null;
-      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;
-      if (stillTurning()) {
-        runFrame(ticket, performance.now(), true);
-      } else {
-        RAF_PENDING = false;
-        FRAME_COUNTS.latch_clears += 1;
-      }
-    }, FRAME_FALLBACK_MS);
-  };
-  // Returning to a page the browser stopped painting for retires the schedule outright rather than
-  // waiting on a callback that may never be called, and asks for a turn if one is still due.
-  const wakeFrameLoop = () => {
-    FRAME_COUNTS.wakeups += 1;
-    RAF_PENDING = false;
-    FRAME_TICKET += 1;
-    if (stillTurning()) scheduleFrame();
-  };
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) wakeFrameLoop(); });
-  window.addEventListener("pageshow", wakeFrameLoop);
-  window.addEventListener("focus", wakeFrameLoop);
+    const facts = refreshFacts(appFacts);
+    if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);
+    else showStatus(liveStatus(facts));
+  });
   const guarded = operation => {
     try {
       operation();
@@ -634,7 +578,7 @@ function bindControls(api) {
       api.app_set_scene_mode(event.target.checked ? 1 : 0);
       const facts = refreshFacts();
       showStatus(liveStatus(facts));
-      if (stillTurning()) scheduleFrame();
+      scheduleFrame();
     } catch (error) {
       fail(error);
     }
@@ -666,11 +610,9 @@ async function artifactBytes(path) {
 
 async function boot() {
   try {
-    const api = await import("./pkg/ember_lab_julibrot.js?v=1");
-    await api.default("./pkg/ember_lab_julibrot_bg.wasm?v=1");
-    const mainVersion = api.julibrot_abi_version();
-    if (mainVersion !== ABI) throw new Error(`VersionSkew: main wasm ${mainVersion}, loader ${ABI}`);
-    await api.start_julibrot("julibrot", "status");
+    const lab = await openLab({ canvas: CANVAS, statusId: "status" });
+    LAB = lab;
+    const api = lab.api;
     const timer = timerProbe();
     BOOT_FACTS = Object.freeze({
       timer_quantum_ms: timer.quantum_ms,
@@ -680,10 +622,10 @@ async function boot() {
       javascript_bundle_bytes: await artifactBytes("./pkg/ember_lab_julibrot.js?v=1"),
       wasm_instance_count: 2,
     });
-    const facts = Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS);
+    const facts = Object.assign(lab.facts(), BOOT_FACTS);
     renderFacts(facts);
     showStatus("waiting for first completed scene");
-    bindControls(api);
+    bindControls(lab);
   } catch (error) {
     fail(error);
   }

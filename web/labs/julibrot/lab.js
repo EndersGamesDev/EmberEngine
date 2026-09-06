@@ -1,10 +1,10 @@
 // The lab as a module rather than as a page.
 //
 // A lab that can only be driven through its control page cannot be measured by a script: every
-// proof of a frame has had to load the whole document, write a row into localStorage, reload, click
-// a button, poll the text of a facts grid, and read the canvas through a shim inserted into a
-// private copy of the page. The shim is the worst of it, because a readback that needs an edit to
-// the page edits the thing it is measuring.
+// proof of a frame has had to load the whole document, write a row into the browser's own stored
+// views, reload, click a button, poll the text of a facts grid, and read the canvas through a shim
+// inserted into a private copy of the page. The shim is the worst of it, because a readback that
+// needs an edit to the page edits the thing it is measuring.
 //
 // This module is the entry that removes all of that. It owns the boot, the worker URL, the ABI
 // probe and the frame loop, and it hands back one object: apply a row, move a control, read the
@@ -13,7 +13,7 @@
 // driver run the same loop over the same wasm boundary and cannot drift apart.
 //
 // Nothing in here touches the DOM beyond the canvas element it is handed, and nothing in here
-// reads or writes localStorage. Those are the page's own concerns and they stay in the page.
+// reads or writes the browser's stored views. Those are the page's own concerns and stay there.
 
 const ABI = 3;
 
@@ -68,7 +68,7 @@ class SettleError extends Error {
  * canvas and nothing else, and a typed startup failure still reaches the console and the returned
  * promise's rejection. The control page passes its own canvas and gets the identical object.
  */
-export async function openLab({ canvas, pkgUrl, workerUrl, wasmUrl, version } = {}) {
+export async function openLab({ canvas, pkgUrl, workerUrl, wasmUrl, version, statusId } = {}) {
   if (!canvas || typeof canvas.getContext !== "function") {
     throw new Error("openLab needs a canvas element");
   }
@@ -81,7 +81,10 @@ export async function openLab({ canvas, pkgUrl, workerUrl, wasmUrl, version } = 
   if (moduleVersion !== ABI) {
     throw new Error(`VersionSkew: main wasm ${moduleVersion}, loader ${ABI}`);
   }
-  await api.start_julibrot_on_canvas(canvas);
+  // A document that owns a status paragraph keeps the contract that names it, and is started by
+  // the same call it has always been started by; a driver page has a canvas and nothing else.
+  if (statusId) await api.start_julibrot(canvas.id, statusId);
+  else await api.start_julibrot_on_canvas(canvas);
   return new Lab(api, canvas);
 }
 

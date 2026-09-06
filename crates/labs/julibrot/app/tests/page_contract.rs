@@ -4,6 +4,8 @@ use ember_lab_julibrot::{SavedView, preset_row};
 
 const INDEX: &str = include_str!("../../../../../web/labs/julibrot/index.html");
 const MAIN: &str = include_str!("../../../../../web/labs/julibrot/main.js");
+const LAB: &str = include_str!("../../../../../web/labs/julibrot/lab.js");
+const DRIVE: &str = include_str!("../../../../../web/labs/julibrot/drive.html");
 const STYLE: &str = include_str!("../../../../../web/labs/julibrot/style.css");
 const WORKER: &str = include_str!("../../../../../web/labs/julibrot/worker.js");
 const MANIFEST: &str = include_str!("../Cargo.toml");
@@ -163,6 +165,7 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
         assert!(
             INDEX.contains(required)
                 || MAIN.contains(required)
+                || LAB.contains(required)
                 || WORKER.contains(required)
                 || WORKER_OWNER.contains(required),
             "missing version contract: {required}"
@@ -170,19 +173,28 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
-    assert!(MAIN.contains("const ABI = 3;"));
+    // The boot lives in the lab module now, so the ABI probe and the versioned URLs are pinned
+    // there. One loader version answers for the whole lab: bumping it would strand every cached
+    // bundle in the field on files that no longer answer, so the module states it as a constant.
+    assert!(LAB.contains("const ABI = 3;"));
+    assert!(LAB.contains("const LOADER_VERSION = \"1\";"));
     assert!(WORKER.contains("const ABI = 3;"));
     assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 3;"));
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
-    assert_eq!(MAIN.matches("./worker.js?v=1").count(), 1);
-    let worker_url = MAIN
-        .find("globalThis.JULIBROT_WORKER_URL = \"./worker.js?v=1\"")
-        .expect("page publishes the worker URL");
-    let module_import = MAIN
-        .find("import(\"./pkg/ember_lab_julibrot.js")
-        .expect("page imports the main wasm module");
+    assert_eq!(LAB.matches("./worker.js?v=1").count(), 1);
+    assert!(!MAIN.contains("./worker.js?v=1"));
+    let worker_url = LAB
+        .find("globalThis.JULIBROT_WORKER_URL =")
+        .expect("the lab module publishes the worker URL");
+    let module_import = LAB
+        .find("await import(versioned(pkgUrl")
+        .expect("the lab module imports the main wasm module");
     assert!(worker_url < module_import);
+    // Both pages reach the lab through the one module, at the one loader version.
+    assert!(INDEX.contains("./main.js?v=1"));
+    assert!(MAIN.contains("import { openLab } from \"./lab.js?v=1\";"));
+    assert!(DRIVE.contains("import { openLab } from \"./lab.js?v=1\";"));
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
     assert!(WORKER_OWNER.contains("const WORKER_URL_GLOBAL: &str = \"JULIBROT_WORKER_URL\""));
@@ -622,7 +634,7 @@ fn boot_draws_the_default_seahorse_valley_target() {
     assert!(STATE.contains("crosshair: Some(target),"));
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains(
-        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+        "Object.assign(appFacts ?? lab.facts(), BOOT_FACTS, pageFacts(), drawCrosshair())"
     ));
     assert!(MAIN.contains("TARGET.hidden = !crosshair.crosshair_on_surface;"));
 }
@@ -759,7 +771,7 @@ fn immutable_boot_facts_are_merged_into_every_refresh() {
     assert!(MAIN.contains("let BOOT_FACTS = Object.freeze({});"));
     assert!(MAIN.contains("BOOT_FACTS = Object.freeze({"));
     assert!(MAIN.contains(
-        "Object.assign(JSON.parse(api.app_facts_json()), BOOT_FACTS, pageFacts(), drawCrosshair())"
+        "Object.assign(appFacts ?? lab.facts(), BOOT_FACTS, pageFacts(), drawCrosshair())"
     ));
     for field in [
         "wasm_bundle_bytes:",
@@ -862,13 +874,14 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     assert!(!refresh.contains("presenter.poll"));
     assert!(FRAME.contains("KernelMode::for_zoom"));
     assert!(FRAME.contains("presenter.poll_once(now_ms)"));
-    assert!(MAIN.contains("requestAnimationFrame"));
-    assert!(MAIN.contains("return api.app_needs_refresh();"));
+    assert!(LAB.contains("requestAnimationFrame"));
+    assert!(LAB.contains("return this.#api.app_needs_refresh();"));
     assert_eq!(
-        MAIN.matches("if (stillTurning()) scheduleFrame();").count(),
-        4,
-        "the loader re-schedules from the completed turn, the caught throw, the wake-up, and automatic scene re-entry"
+        LAB.matches("if (this.turning()) this.schedule();").count(),
+        2,
+        "the module re-schedules from the finished turn, whether or not it threw, and from the wake-up"
     );
+    assert!(MAIN.contains("const scheduleFrame = () => lab.schedule();"));
     assert!(FRAME.contains("runtime.complete_warp"));
 }
 
@@ -876,44 +889,56 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
 fn the_frame_loop_cannot_latch_on_a_frame_that_never_ran() {
     // The flag is cleared on the way into the turn, not on the way out of a callback that a page
     // the browser has stopped painting for may never receive.
-    assert!(MAIN.contains(
-        "  const runFrame = (ticket, nowMs, viaFallback) => {\n    if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n    RAF_PENDING = false;\n"
+    assert!(LAB.contains(
+        "  #runTurn(ticket, nowMs, viaFallback) {\n    if (!this.#rafPending || ticket !== this.#ticket) return;\n    this.#rafPending = false;\n"
     ));
-    // One low-rate timer stands behind the animation callback, and it is the only timer on the
-    // page: a second `setTimeout` would be a second clock rather than a floor under a stopped one.
-    assert!(MAIN.contains("const FRAME_FALLBACK_MS = 250;"));
-    assert_eq!(MAIN.matches("setTimeout(").count(), 1);
-    assert_eq!(MAIN.matches("requestAnimationFrame(").count(), 1);
-    assert!(MAIN.contains("requestAnimationFrame(nowMs => runFrame(ticket, nowMs, false));"));
-    assert!(MAIN.contains("runFrame(ticket, performance.now(), true);"));
+    // One low-rate timer stands behind the animation callback, and the page itself owns no clock at
+    // all: a timer in the document would be a second clock rather than a floor under a stopped one.
+    assert!(LAB.contains("const FRAME_FALLBACK_MS = 250;"));
+    assert_eq!(
+        LAB.matches("setTimeout(").count(),
+        2,
+        "the fallback floor under the animation callback, and the settle deadline that bounds a wait"
+    );
+    assert_eq!(
+        LAB.matches("requestAnimationFrame(").count(),
+        2,
+        "the loop's own turn, and the one a frame copy waits on"
+    );
+    assert_eq!(MAIN.matches("setTimeout(").count(), 0);
+    assert_eq!(MAIN.matches("requestAnimationFrame(").count(), 0);
+    assert!(LAB.contains("requestAnimationFrame(nowMs => this.#runTurn(ticket, nowMs, false));"));
+    assert!(LAB.contains("this.#runTurn(ticket, performance.now(), true);"));
     // The timer runs a turn only when one is due and the callback did not arrive for this
     // schedule, so a healthy animation callback leaves `frames_from_fallback` at zero.
-    assert!(MAIN.contains(
-        "      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n      if (stillTurning()) {"
+    assert!(LAB.contains(
+        "      if (!this.#rafPending || ticket !== this.#ticket) return;\n      if (this.turning()) {"
     ));
     // Returning to a painting page retires the schedule rather than waiting on it.
     for required in [
-        "const wakeFrameLoop = () => {",
-        "document.addEventListener(\"visibilitychange\", () => { if (!document.hidden) wakeFrameLoop(); });",
-        "window.addEventListener(\"pageshow\", wakeFrameLoop);",
-        "window.addEventListener(\"focus\", wakeFrameLoop);",
+        "this.#wake = () => {",
+        "document.addEventListener(\"visibilitychange\", this.#visibility);",
+        "window.addEventListener(\"pageshow\", this.#wake);",
+        "window.addEventListener(\"focus\", this.#wake);",
     ] {
-        assert!(MAIN.contains(required), "missing wake-up law: {required}");
+        assert!(LAB.contains(required), "missing wake-up law: {required}");
     }
     // The counters are page facts, so which path drove a turn is a reported number rather than a
     // claim: schedules against turns says the loop is alive, and the split says which clock did it.
+    // They are counted where the loop is and published where the facts are.
     for required in [
-        "frame_schedules: FRAME_COUNTS.schedules,",
-        "frames_from_raf: FRAME_COUNTS.raf,",
-        "frames_from_fallback: FRAME_COUNTS.fallback,",
-        "frame_latch_clears: FRAME_COUNTS.latch_clears,",
-        "frame_loop_wakeups: FRAME_COUNTS.wakeups,",
+        "frame_schedules: 0,",
+        "frames_from_raf: 0,",
+        "frames_from_fallback: 0,",
+        "frame_latch_clears: 0,",
+        "frame_loop_wakeups: 0,",
     ] {
         assert!(
-            MAIN.contains(required),
+            LAB.contains(required),
             "missing frame-loop counter: {required}"
         );
     }
+    assert!(MAIN.contains("...(LAB === null ? {} : LAB.counts()),"));
 }
 
 #[test]
@@ -958,4 +983,124 @@ fn a_transient_fence_refusal_is_survived_rather_than_ending_the_page() {
         LIB.contains("if self.frame_loop.stopped_reason().is_some() {"),
         "a stopped loop must answer false to needs_refresh"
     );
+}
+
+/// A script can open the lab, settle it, and read the frame without touching the control page.
+///
+/// The proofs this lane was opened for all had the same shape: load the whole document, write a row
+/// into storage, reload, click a button, read the text of a facts grid, and take the pixels through
+/// a context flag set in a private copy of the page. Every one of those is an edit to the thing
+/// being measured. The module below is the entry that removes them, and what it must keep is a
+/// contract rather than a convenience: one loop shared with the page, a settle that states what
+/// finished means, and a readback that needs no edit to the page it reads.
+#[test]
+fn the_lab_can_be_opened_settled_and_read_by_a_script() {
+    for required in [
+        "export async function openLab({ canvas",
+        "applyRow(row) {",
+        "set(field, value) {",
+        "facts() {",
+        "settle({ level = \"Final\", timeoutMs = SETTLE_TIMEOUT_MS } = {}) {",
+        "async frame({ timeoutMs = SETTLE_TIMEOUT_MS } = {}) {",
+        "requestMeasurement() {",
+        "stop() {",
+        "onTurn(listener) {",
+    ] {
+        assert!(LAB.contains(required), "missing lab entry: {required}");
+    }
+    // Settling is three conditions and no fewer: the delivered level is the one asked for, nothing
+    // is pending, and no scene is in flight. A number read off a moving frame is a number about a
+    // picture that no longer exists.
+    assert!(LAB.contains("facts.refinement_level === level &&"));
+    assert!(LAB.contains("facts.refinement_pending === false &&"));
+    assert!(LAB.contains("facts.scene_update_pending === false &&"));
+    assert!(LAB.contains("facts.in_flight_scene_id === null"));
+    assert!(LAB.contains("if (facts.loop_stopped_reason) {"));
+    // The module is the lab, not a second page: the document beyond the canvas it is handed, and
+    // the storage the control page keeps its boxes in, are none of its business.
+    for forbidden in ["getElementById", "localStorage", "querySelector"] {
+        assert!(
+            !LAB.contains(forbidden),
+            "the lab module reaches into the document: {forbidden}"
+        );
+    }
+    // A canvas with no status paragraph beside it is a page a driver can serve.
+    assert!(LIB.contains("pub async fn start_julibrot_on_canvas("));
+    assert!(RUNTIME.contains("pub async fn start_on_canvas("));
+    assert!(LAB.contains("else await api.start_julibrot_on_canvas(canvas);"));
+}
+
+/// The frame is copied by the renderer, so no page has to be edited to be measured.
+#[test]
+fn the_presented_frame_is_read_back_without_a_context_flag() {
+    const READBACK: &str = include_str!("../../present/src/gpu/device/readback.rs");
+    // The flag that used to be needed is named nowhere: a readback that requires the page to be
+    // rebuilt with a different context cannot claim to report what the page draws.
+    for source in [INDEX, MAIN, LAB, DRIVE, WORKER, RUNTIME, LIB] {
+        assert!(!source.contains("preserveDrawingBuffer"));
+    }
+    for required in [
+        "pub fn request_frame_readback(&mut self, texture: &wgpu::Texture)",
+        "pub fn take_frame_readback(&mut self)",
+        "encoder.copy_texture_to_buffer(",
+        "wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ",
+        "map_async(wgpu::MapMode::Read",
+        "fn padded_bytes_per_row(",
+        "fn pack_rows(",
+    ] {
+        assert!(
+            READBACK.contains(required),
+            "missing readback law: {required}"
+        );
+    }
+    // The copy happens where the frame texture exists and nowhere else: between the acquisition of
+    // the surface image and its presentation.
+    let capture = FRAME
+        .find("runtime.complete_warp_capturing(measurement.id, |texture| {")
+        .expect("the copy is offered at present time");
+    let present = FRAME.find("observed.presented = true;").expect("present");
+    assert!(capture < present);
+    assert!(RUNTIME.contains("capture(&frame.texture);"));
+    assert!(RUNTIME.contains("frame_copy_supported"));
+    // On request only. A loop that copied the surface every turn would spend its budget measuring
+    // its own readback rather than the picture.
+    assert!(LIB.contains("pub fn app_request_frame_capture()"));
+    assert!(LIB.contains("pub fn app_take_frame_rgba()"));
+    assert!(LIB.contains("pub fn app_frame_capture_json()"));
+    assert!(FRAME.contains("let armed =\n                            self.frame_capture.armed && !self.presenter.frame_readback_pending();"));
+}
+
+/// The driver page is a canvas, a report, and nothing a person has to move.
+#[test]
+fn the_driver_page_states_the_row_and_prints_the_census_beside_the_facts() {
+    for required in [
+        r#"<canvas id="julibrot" width="960" height="540"></canvas>"#,
+        r#"<pre id="report">"#,
+        "globalThis.lab = lab;",
+        "lab.applyRow(row)",
+        "await lab.settle(options)",
+        "await lab.frame()",
+        "function census(rgba)",
+    ] {
+        assert!(
+            DRIVE.contains(required),
+            "missing driver contract: {required}"
+        );
+    }
+    // The four classes the proofs count, in the order they must be tested: the pass clear is an
+    // exact colour that also satisfies the exterior band, so an exact test running second would
+    // never fire and the clear would be reported as exterior.
+    let sky = DRIVE.find("r === 13 && g === 13 && b === 13").expect("sky");
+    let clear = DRIVE
+        .find("r === 255 && g === 129 && b === 129")
+        .expect("pass clear");
+    let exterior = DRIVE
+        .find("r > 200 && g > 100 && g < 190 && b > 90 && b < 170")
+        .expect("exterior");
+    assert!(sky < clear && clear < exterior);
+    assert!(DRIVE.contains("else counts.other += 1;"));
+    // A row arrives from the query string or from a message; nothing is typed into a control.
+    assert!(DRIVE.contains("new URLSearchParams(globalThis.location.search)"));
+    assert!(DRIVE.contains("event.data.kind === \"JulibrotRow\""));
+    assert!(!DRIVE.contains("localStorage"));
 }
