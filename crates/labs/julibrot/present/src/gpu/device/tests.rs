@@ -1157,8 +1157,7 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     )
     .expect("the record height is valid")
     .expect("the redraw vertex projects");
-    let destination_pixel_scale =
-        f64::from(destination.grid_width) / f64::from(source.extent[0]);
+    let destination_pixel_scale = f64::from(destination.grid_width) / f64::from(source.extent[0]);
     let actual_destination_px = actual
         .0
         .map(|coordinate| coordinate * destination_pixel_scale);

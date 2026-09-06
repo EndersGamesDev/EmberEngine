@@ -20,7 +20,7 @@ pub(super) const fn retain_relief_plan_during_scene(
     scene_in_flight: bool,
     presented_kind: Option<WarpKind>,
 ) -> bool {
-    planned_kind == WarpKind::ReliefRedraw
+    matches!(planned_kind, WarpKind::ReliefRedraw)
         && !records_ready
         && scene_in_flight
         && matches!(presented_kind, Some(WarpKind::ReliefRedraw))

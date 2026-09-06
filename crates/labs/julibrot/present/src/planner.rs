@@ -273,8 +273,7 @@ pub fn relief_redraw_source_pose(
     let PoseMap::Mapped(destination_map) = destination.map else {
         return None;
     };
-    if source_extent.contains(&0)
-        || [destination.grid_width, destination.grid_height].contains(&0)
+    if source_extent.contains(&0) || [destination.grid_width, destination.grid_height].contains(&0)
     {
         return None;
     }

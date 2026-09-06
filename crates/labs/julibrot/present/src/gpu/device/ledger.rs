@@ -66,9 +66,7 @@ fn relief_requested_points(
                 source_point[0].abs() <= half_source[0] && source_point[1].abs() <= half_source[1]
             })
             .and_then(|source_point| apply_homography(redraw_map.rows, source_point))
-            .map(|redraw_chart| {
-                redraw_chart.map(|coordinate| coordinate / redraw_chart_scale)
-            })
+            .map(|redraw_chart| redraw_chart.map(|coordinate| coordinate / redraw_chart_scale))
             .and_then(|chart| apply_homography(destination_map.inverse, chart))
             .map(|actual_destination| {
                 presented_pixel(actual_destination, lattice.destination(), presented_extent)
