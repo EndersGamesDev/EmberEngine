@@ -1017,6 +1017,43 @@ impl Match {
             }
             self.regen_and_buffs(ui);
             self.step_order(ui);
+        } else if matches!(kind, Kind::CoreBlue | Kind::CoreRed) && !self.units[ui].dead {
+            self.step_core(ui);
+        }
+    }
+
+    /// Minions absorb core fire before champions; keep shooting the same
+    /// valid target within that priority so damage is not spread at random.
+    fn step_core(&mut self, ui: usize) {
+        self.units[ui].atk_cd = (self.units[ui].atk_cd - crate::DT).max(0.0);
+        let core = &self.units[ui];
+        let target = self
+            .units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| {
+                !unit.dead
+                    && unit.team != core.team
+                    && matches!(unit.kind, Kind::Champ | Kind::Melee | Kind::Caster)
+                    && dist(core.x, core.z, unit.x, unit.z) <= data::CORE_ATTACK_RANGE
+            })
+            .min_by(|(_, a), (_, b)| {
+                (a.kind == Kind::Champ)
+                    .cmp(&(b.kind == Kind::Champ))
+                    .then_with(|| (a.id != core.target).cmp(&(b.id != core.target)))
+                    .then_with(|| {
+                        dist(core.x, core.z, a.x, a.z).total_cmp(&dist(core.x, core.z, b.x, b.z))
+                    })
+                    .then_with(|| a.id.cmp(&b.id))
+            })
+            .map(|(index, _)| index);
+        if let Some(target) = target {
+            self.units[ui].target = self.units[target].id;
+            if self.units[ui].atk_cd <= 0.0 {
+                self.do_attack(ui, target);
+            }
+        } else {
+            self.units[ui].target = 0;
         }
     }
 
@@ -1300,6 +1337,7 @@ impl Match {
             Kind::Champ | Kind::Clone => data::CHAMPS[usize::from(u.def.min(4))].range,
             Kind::Melee => 1.6,
             Kind::Caster => 7.0,
+            Kind::CoreBlue | Kind::CoreRed => data::CORE_ATTACK_RANGE,
             _ => 0.0,
         }
     }
@@ -1326,6 +1364,11 @@ impl Match {
                 .unwrap_or_default();
             s.ad *= pct;
             s
+        } else if matches!(kind, Kind::CoreBlue | Kind::CoreRed) {
+            data::Stats {
+                ad: data::CORE_ATTACK_DAMAGE,
+                ..data::Stats::ZERO
+            }
         } else {
             let waves = (self.tick / (60 * 120)) as f32;
             let scale = 1.0 + 0.15 * waves;
@@ -1426,6 +1469,7 @@ impl Match {
             Kind::Champ | Kind::Clone => data::CHAMPS[usize::from(u.def.min(4))].atk_cd,
             Kind::Melee => 1.1,
             Kind::Caster => 1.2,
+            Kind::CoreBlue | Kind::CoreRed => data::CORE_ATTACK_CD,
             _ => 1.0,
         }
     }
@@ -2314,9 +2358,13 @@ mod tests {
     #[test]
     fn the_core_falls_the_match_over() {
         let mut m = duel();
-        // no waves: this is the endgame shape — one champion at a naked
-        // core, swinging until it breaks
+        // A champion can land the finishing blow on a damaged core.
         m.wave_left = 1e9;
+        m.units
+            .iter_mut()
+            .find(|unit| unit.kind == Kind::CoreRed)
+            .unwrap()
+            .hp = 50.0;
         let blue = m.champ_by_slot(0).unwrap();
         m.units[blue].x = data::CORE_X - 2.0;
         m.units[blue].z = 0.0;

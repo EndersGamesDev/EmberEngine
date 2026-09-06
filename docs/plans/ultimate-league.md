@@ -14,7 +14,7 @@ The three founding champions and their kits are the user's; two more (Bog Maw, T
 
 One lane along X. Blue core at x=-62, red at x=+62; lane corridor z∈[-7,7]; whole field x∈[-68,68], z∈[-40,40]. The fountain is an axis-aligned box around your core, with half-extents 7 along X and 6 along Z (`abs(x - core_x) <= 7` and `abs(z) <= 6`); it restores 6% maximum HP + 5% maximum mana per second.
 
-- **Cores** (win condition): 3200 HP, +0.4 HP/s regen while no enemy unit within 18. Enemy core dies, you win.
+- **Cores** (win condition): 3200 HP, +0.4 HP/s regen while no enemy unit within 18. Each living core fires a visible homing attack for 150 base damage every 1.2 s at an enemy champion or minion within 9 units of its center. Minions take priority; the core keeps its current target within that priority while it remains alive and in range. Holograms do not draw core fire. Enemy core dies, you win.
 - **Courts** (the objective on each side of the lane): North Court at (0, +16), South Court at (0, -16). 1400 HP, respawn 150 s. Killing blow team gets 150 gold each and a 100 s boon: North = +12% damage, South = +15% ability haste and +15% gold. Only champions damage courts.
 - **Minions**: a wave per team every 30 s (first at 10 s): 3 melee + 1 caster, capped at 16 alive. They march the lane, fight anything hostile within 8, scale +15% every 2 min. They do not attack courts.
 
@@ -48,6 +48,8 @@ Start 500 gold, passive 1.2/s. Melee minion 25 / caster 30 on last hit; minion X
 
 `Select (60 s, host may start early when all humans picked) → Live → Over (12 s) → Select`. Slots: mode is 1 or 3 per team; a human joining takes the lowest free slot; the lowest connected human slot hosts, and unfilled slots become deterministic bots. Teams: slots 0..ts blue, ts..2ts red. Picks must be unique within each team; opposing teams may mirror champions, so all six seats can draft from the five-champion roster. A human who times out or disconnects gets a hashed pick, and a disconnected champion becomes a bot mid-game. Passive XP (2/s) ensures progression even without last hits.
 
+Bots retreat below 28% HP and continue returning to or recovering in their fountain until at least 75% HP, so a small regeneration tick cannot cancel the retreat and send them back into core fire.
+
 ## Wire (PROTO_VERSION 1)
 
 House style: `#[serde(tag="t", rename_all="snake_case")]`, text frames, `#[serde(default)]` on late additions, 64 KiB cap, `ping/pong` every 5 s, 30 s silent-peer drop, listing ungated at proto 0.
@@ -61,7 +63,7 @@ State is 20 Hz (`STATE_EVERY_TICKS = 3`). Units is one flat struct with `#[serde
 
 ## Client
 
-Camera: fixed-yaw perspective from (0, 30, 14) above your champion, fov 40, looking along −Z so the lane reads left to right. Click ground = move (ray/plane from `cursor_ndc`), click an enemy = attack (CPU screen-space pick, nearest within threshold); both mouse buttons work. QWER aim at the cursor; self/ally skills cast on self in 1v1 or the ally nearest the cursor. Shift+QWER spends a skill point. D/F, 1–6, B (shop panel — page side). `capture_mouse: false`.
+Camera: fixed-yaw perspective from (0, 24, 16) above your champion, FOV 40°, looking along −Z at a pitch of 56.3° so the lane reads left to right. Click ground = move (ray/plane from `cursor_ndc`), click an enemy = attack (CPU screen-space pick, nearest within threshold); both mouse buttons work. QWER aim at the cursor; self/ally skills cast on self in 1v1 or the ally nearest the cursor. Shift+QWER spends a skill point. D/F, 1–6, B (shop panel — page side). `capture_mouse: false`.
 
 `cmd_json(json)` queues page commands (pick/start/buy/use/lock), `state_json()` is polled each rAF: everything the page shows. Minimap is a page-side 2D canvas drawn from the same JSON.
 
@@ -75,6 +77,8 @@ Native bin `league-app`: local match against bots with instant random picks (dev
 - `web/games.json`: league entry, v1 live, `handover: true` (the page honors `ember-pending`).
 
 The release work was coordinated with Fable through Barza. Core/server validation includes all twenty abilities, economy and assists, revival and buff timing, projectile/zone serialization, real two- and six-player WebSocket matches, and ten complete deterministic bot matches. Exact deployment revision, task state, browser results, and public proof are recorded in the final release handoff below when verified.
+
+Fable's Barza #125 capture identified that cores originally had no retaliation. The response adds the core attack above without raising core HP/regen or changing fountain healing. In the regression fixture, three level-1 champions with starter swords and Fury/Vigor/Cruelty runes lose their first assault after 17.3 s, leaving the core at 325.7 HP; the same squad escorted by one four-minion wave wins in 12.4 s. This verifies that the escort changes the outcome, not that every possible early dive is impossible. All ten seeded bot matches still finish: 1v1 in 337.0–842.6 simulated seconds and 3v3 in 122.7–569.6 seconds. The exact unattended native squad seed `0x1ea9_e67b` ends at 331.2 simulated seconds including its 60-second draft; an inactive player can still lose. Verified on this change: 47 core tests passed in 5.82 s, and core Clippy across all targets passed in 0.95 s, both at minimum process priority. Actual browser/native rendering of the new core attacks and post-change server/browser gates are separate release checks.
 
 ## v1 does not have (deliberately)
 

@@ -46,13 +46,17 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
     } else {
         data::CORE_X - 4.0
     };
-    if (u.x - home_x).abs() <= 3.0
-        && u.z.abs() <= 6.0
-        && let Some(item) = shop_pick(m, ui)
-    {
+    let at_home = (u.x - home_x).abs() <= 3.0 && u.z.abs() <= 6.0;
+    if at_home && let Some(item) = shop_pick(m, ui) {
         return Some(Cmd::Buy { item });
     }
-    if u.hp < u.max_hp * 0.28 {
+    // Preserve a retreat until the fountain has repaired the champion.
+    // Crossing the initial threshold through lane regeneration must not
+    // immediately send a nearly dead bot back into core fire.
+    let returning_home =
+        u.order == sim::Order::Move && (u.ox - home_x).abs() < 0.01 && u.oz.abs() < 0.01;
+    let recovering = (returning_home || at_home) && u.hp < u.max_hp * 0.75;
+    if u.hp < u.max_hp * 0.28 || recovering {
         let enemies_nea = (0..m.units.len()).any(|i| {
             let o = &m.units[i];
             o.kind == Kind::Champ

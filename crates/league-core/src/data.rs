@@ -14,6 +14,10 @@ pub const COURT_POS: [[f32; 2]; 2] = [[0.0, 16.0], [0.0, -16.0]];
 /// A fountain is this close to your own core.
 pub const FOUNTAIN_R: f32 = 7.0;
 pub const CORE_HP: f32 = 3200.0;
+/// Core defense covers every champion's attack reach against its body.
+pub const CORE_ATTACK_RANGE: f32 = 9.0;
+pub const CORE_ATTACK_DAMAGE: f32 = 150.0;
+pub const CORE_ATTACK_CD: f32 = 1.2;
 pub const COURT_HP: f32 = 1400.0;
 /// Seconds a boon lasts and how long a dead court sleeps.
 pub const BOON_SECS: f32 = 100.0;

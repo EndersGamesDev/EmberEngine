@@ -755,3 +755,195 @@ fn bot_duels_and_squads_reach_a_destroyed_core() {
         }
     }
 }
+
+#[test]
+#[allow(clippy::print_stdout)]
+fn fresh_champion_only_rush_fails_but_a_minion_escort_can_finish_the_core() {
+    for escorted in [false, true] {
+        let mut game = game(3);
+        if escorted {
+            game.wave_left = 0.0;
+            game.step();
+            game.units
+                .retain(|unit| !matches!(unit.kind, Kind::Melee | Kind::Caster) || unit.team == 0);
+            for minion in game
+                .units
+                .iter_mut()
+                .filter(|unit| matches!(unit.kind, Kind::Melee | Kind::Caster))
+            {
+                minion.x = data::CORE_X - 2.0;
+            }
+        }
+        game.wave_left = 1e9;
+        let core = game
+            .units
+            .iter()
+            .position(|unit| unit.kind == Kind::CoreRed)
+            .unwrap();
+        let target = game.units[core].id;
+        for unit in game
+            .units
+            .iter_mut()
+            .filter(|unit| unit.kind == Kind::Champ)
+        {
+            if unit.team == 0 {
+                unit.x = data::CORE_X - 6.0;
+                unit.z = (f32::from(unit.slot) - 1.0) * 1.2;
+                unit.items[0] = 1;
+            } else {
+                unit.x = 0.0;
+                unit.z = 30.0;
+            }
+        }
+        for slot in 0..3u8 {
+            let champion = game.champ_by_slot(slot).unwrap();
+            game.units[champion].runes = [0, 1, 6];
+            let (hp, mana) = game.champ_maxes(&game.units[champion]);
+            game.units[champion].hp = hp;
+            game.units[champion].max_hp = hp;
+            game.units[champion].mana = mana;
+            game.units[champion].max_mana = mana;
+        }
+        let mut died = [false; 3];
+        let start_tick = game.tick;
+        for _ in 0..60 * 45 {
+            for slot in 0..3u8 {
+                let champion = game.champ_by_slot(slot).unwrap();
+                died[usize::from(slot)] |= game.units[champion].dead;
+                if !died[usize::from(slot)] {
+                    game.command(slot, Cmd::Attack { target });
+                }
+            }
+            game.step();
+            if game.phase == Phase::Over || died.iter().all(|dead| *dead) {
+                break;
+            }
+        }
+        if escorted {
+            assert_eq!(
+                game.phase,
+                Phase::Over,
+                "one escorted squad must be able to take the core; remaining HP {}",
+                game.units[core].hp
+            );
+            assert_eq!(game.winner, 0);
+            assert!(
+                game.units
+                    .iter()
+                    .any(|unit| unit.kind == Kind::Champ && unit.team == 0 && !unit.dead)
+            );
+        } else {
+            assert_eq!(game.phase, Phase::Live);
+            assert!(game.units[core].hp > 0.0);
+            assert_eq!(
+                died, [true; 3],
+                "the core must punish a fresh champion-only assault"
+            );
+        }
+        println!(
+            "escorted={escorted}, core HP {:.1}, assault {:.1}s",
+            game.units[core].hp,
+            f64::from(u32::try_from(game.tick - start_tick).unwrap()) / 60.0
+        );
+    }
+}
+
+#[test]
+fn core_defense_prefers_minions_has_limited_range_and_emits_visible_projectiles() {
+    let mut game = game(1);
+    game.wave_left = 0.0;
+    game.step();
+    let core = game
+        .units
+        .iter()
+        .position(|unit| unit.kind == Kind::CoreRed)
+        .unwrap();
+    game.units[0].x = data::CORE_X - data::CORE_ATTACK_RANGE - 1.0;
+    game.step();
+    assert!(
+        game.projs
+            .iter()
+            .all(|projectile| projectile.owner != game.units[core].id)
+    );
+    game.units[0].x = data::CORE_X - 3.0;
+    let minion = game
+        .units
+        .iter()
+        .position(|unit| unit.kind == Kind::Melee && unit.team == 0)
+        .unwrap();
+    game.units[minion].x = data::CORE_X - 5.0;
+    let minion_id = game.units[minion].id;
+    game.step();
+    assert_eq!(game.units[core].target, minion_id);
+    let projectile = game
+        .projs
+        .iter()
+        .find(|projectile| projectile.owner == game.units[core].id)
+        .unwrap();
+    assert_eq!(projectile.homing, minion_id);
+    assert_eq!(projectile.dmg, data::CORE_ATTACK_DAMAGE);
+    let projectile_id = projectile.id;
+    let league_core::proto::S2C::State { projs, .. } = game.snapshot() else {
+        panic!("expected state")
+    };
+    assert!(projs.iter().any(|projectile| projectile.id == projectile_id
+        && projectile.k == 0
+        && projectile.t == 1));
+}
+
+#[test]
+fn retreating_bots_recover_in_the_fountain_before_rejoining_the_lane() {
+    let mut game = game(1);
+    game.units[0].points = 0;
+    game.units[0].gold = 0;
+    game.units[0].x = 0.0;
+    game.units[0].hp = game.units[0].max_hp * 0.2;
+    let command = league_core::ai::think(&game, 0).unwrap();
+    assert_eq!(
+        command,
+        Cmd::Move {
+            x: -data::CORE_X + 4.0,
+            z: 0.0
+        }
+    );
+    game.command(0, command);
+    game.step();
+    game.units[0].hp = game.units[0].max_hp * 0.3;
+    assert_eq!(league_core::ai::think(&game, 0), Some(command));
+    game.units[0].x = -data::CORE_X + 4.0;
+    game.units[0].order = Order::Hold;
+    game.units[0].hp = game.units[0].max_hp * 0.5;
+    assert_eq!(league_core::ai::think(&game, 0), Some(command));
+    game.units[0].hp = game.units[0].max_hp * 0.8;
+    assert_ne!(league_core::ai::think(&game, 0), Some(command));
+}
+
+#[test]
+#[allow(clippy::print_stdout)]
+fn unattended_native_squad_can_resolve_with_defended_cores() {
+    let mut game = Match::new(3, 0x1ea9_e67b);
+    game.join("you");
+    for tick in 0..60 * 60 * 30 {
+        if game.phase == Phase::Live {
+            for slot in 1..6 {
+                if let Some(command) = league_core::ai::think(&game, slot) {
+                    game.command(slot, command);
+                }
+            }
+        }
+        game.step();
+        if tick % 3 == 0 {
+            game.fx.clear();
+            game.log.clear();
+        }
+        if game.phase == Phase::Over {
+            break;
+        }
+    }
+    assert_eq!(game.phase, Phase::Over);
+    println!(
+        "AFK native squad winner {}, {:.1}s including 60s draft",
+        game.winner,
+        f64::from(u32::try_from(game.tick).unwrap()) / 60.0
+    );
+}
