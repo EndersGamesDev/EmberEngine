@@ -559,17 +559,31 @@ mod tests {
         assert_eq!(glitch.record.escaped, 0.0);
     }
 
-    /// Pins what a reference orbit that escapes before the cap can still answer exactly.
+    /// Pins what a reference orbit that escapes before the cap can still answer.
     ///
-    /// The delta iteration is only defined while the reference orbit it is expanded around exists,
-    /// so a reference that escapes at iteration k is not a reference that renders nothing: every
-    /// pixel whose own orbit leaves the bailout radius at an iteration the reference still covers
-    /// reads the same escape count it would read from a full-cap reference, and a pixel that
-    /// outruns the reference carries the reference-exhausted record rather than a number nothing
-    /// supports. That is the whole picture such a reference can honestly deliver, and it is a
-    /// picture: partly exact, and the rest named as uncertain.
+    /// The claim is comparative, not a claim of exactness. The delta iteration is defined only
+    /// while the reference orbit it is expanded around exists, so the reference's own escape costs
+    /// nothing below it: for a pixel that reaches the bailout radius at an iteration the reference
+    /// still covers, a reference truncated at its escape gives what a full-cap reference at the
+    /// same point would give, because the records consumed are the same records. Whether that
+    /// number is itself exact is a separate question this test does not answer, and seven other
+    /// exits can return a glitch before the escape test is reached: a non-finite iterate, the
+    /// Pauldelbrot cancellation test, the rebase limit, a negation that cannot be represented, the
+    /// accumulated-error limit, and either of the two renormalization failures. The fixture is the
+    /// no-rebase case, where none of those fire; a rebased pixel restarts at record zero and can
+    /// outlive the reference by any amount, so the reach of a short reference is wider than this
+    /// test measures rather than narrower.
+    ///
+    /// The second half pins the other side: a pixel that outruns the reference carries the
+    /// reference-exhausted record rather than a number nothing supports. Partly answered and the
+    /// rest named as uncertain is a picture; refusing to draw it is not.
+    ///
+    /// Lengths here are record counts, which is also what the app publishes as `orbit_length`:
+    /// `ComputedOrbit` reports `length` as `records.len()` and carries the escape index separately,
+    /// one lower. The fixture builds records until the iterate passes the bailout and counts them,
+    /// so its length is the app's convention and not the escape index.
     #[test]
-    fn a_reference_that_escapes_early_answers_every_pixel_that_escapes_first() {
+    fn a_reference_that_escapes_early_answers_every_pixel_that_escapes_below_it() {
         const CAP: u32 = 512;
         let uniforms_for_length = |length: u32| uniform(CAP, length);
         let bailout = f64::from(uniforms_for_length(1).bailout);
@@ -615,7 +629,7 @@ mod tests {
             assert_eq!(
                 sample.escape_index,
                 Some(oracle),
-                "an escape the reference covers is the direct iteration's own count"
+                "an escape below the reference's own is the count the same records give"
             );
         }
 
