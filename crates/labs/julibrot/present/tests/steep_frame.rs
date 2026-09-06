@@ -35,7 +35,8 @@
 
 use ember_julibrot_kernels::{EscapeParams, escape_shallow_point};
 use ember_julibrot_math::{
-    ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, pixel_scale, screen_to_plane,
+    BigCentre, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px, construct_plane,
+    pixel_scale, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::{CLASSIC_PALETTE, exterior_zero, grid_screen, shade_escape_record};
 
@@ -98,6 +99,34 @@ fn pose_with(view: ViewControls) -> Pose {
         map,
         centre_from_reference_px: [0.0, 0.0],
     }
+}
+
+/// The 2026-09-06 row: the same pose and the same mesh, two record fields apart.
+///
+/// The row is the accepted steep row with exactly two fields changed, `zoom_log2` and the centre.
+/// Neither reaches [`scene_vertex`]: the screen map is zoom-free by
+/// `screen_to_plane`'s own contract, and the centre enters only where a pixel is turned into a
+/// four-dimensional point. So the mesh this pose draws is bit-identical to the steep row's mesh
+/// and every difference in the picture is a difference in the records that mesh is lifted and
+/// painted by.
+const ZOOM_LOG2: f64 = 1.259_194_831_013_92;
+const ZOOM_CENTRE: [f64; 4] = [
+    -0.446_045_388_951_547_5,
+    -0.036_447_606_537_045_21,
+    1.027_888_715_651_299_5,
+    -0.205_307_539_517_433_4,
+];
+const CENTRE_BITS: u32 = 1024;
+
+fn zoom_pose(height_scale: f64) -> Pose {
+    let mut pose = pose_with(steep_view(height_scale));
+    let centre = BigCentre::from_f64(ZOOM_CENTRE, CENTRE_BITS).expect("row centre");
+    let reference = BigCentre::from_f64(PLANE_ORIGIN, CENTRE_BITS).expect("row origin");
+    pose.zoom_log2 = ZOOM_LOG2;
+    pose.centre_from_reference_px =
+        centre_from_reference_px(&centre, &reference, &pose.plane, ZOOM_LOG2, EXTENT[0])
+            .expect("the row's centre lies in the row's own plane");
+    pose
 }
 
 fn pixel_screen(column: u32, row: u32) -> [f64; 2] {
@@ -690,4 +719,83 @@ fn the_curtain_grows_with_the_height_control_from_a_flat_frame_that_has_none() {
         }
         previous = measured.busy_columns;
     }
+}
+
+/// The zoomed row's sampling map round-trips one pixel through the app's own two functions.
+///
+/// `sample_pose` composes three things the app composes: the screen map from `screen_to_plane`,
+/// the pixel scale from `pixel_scale`, and the centre offset the app carries as
+/// `centre_from_reference_px`. This walks one pixel forward to the four-dimensional point the
+/// kernel is asked about and back through `plane_to_screen`, so a wrong zoom, a wrong centre or a
+/// wrong basis projection would land somewhere else. It also states the two numbers the browser
+/// published for this row, the scale mantissa and exponent, from the same `pixel_scale` input.
+#[test]
+fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_functions() {
+    let pose = zoom_pose(3.565);
+    let scale = pixel_scale(pose.zoom_log2, pose.grid_width).expect("row scale");
+    let split = ember_julibrot_math::scaled_pixel_scale(pose.zoom_log2, pose.grid_width)
+        .expect("row scale split");
+    assert_eq!(split.exponent, -9, "the browser published scale_exponent -9");
+    assert!(
+        (f64::from(split.mantissa) - 0.891_257_7).abs() <= 5.0e-8,
+        "mantissa {} against the browser's 0.8912577",
+        split.mantissa
+    );
+
+    let PoseMap::Mapped(map) = pose.map else {
+        panic!("this row's pose is not edge-on");
+    };
+    let screen = pixel_screen(720, 200);
+    let offset = map_plane_offset(&pose, screen).expect("a mapped pixel");
+    let coordinate = [
+        pose.centre_from_reference_px[0] + offset[0],
+        pose.centre_from_reference_px[1] + offset[1],
+    ];
+    let point: [f64; 4] = core::array::from_fn(|axis| {
+        scale.mul_add(
+            f64::from(pose.plane.basis_u[axis]).mul_add(
+                coordinate[0],
+                f64::from(pose.plane.basis_v[axis]) * coordinate[1],
+            ),
+            pose.plane_origin[axis],
+        )
+    });
+    // Back: project the four-dimensional point onto the plane basis, divide out the scale, remove
+    // the centre, and ask the forward homography which pixel that plane offset belongs to.
+    let delta: [f64; 4] = core::array::from_fn(|axis| point[axis] - pose.plane_origin[axis]);
+    let recovered_coordinate = [
+        delta
+            .iter()
+            .zip(pose.plane.basis_u)
+            .fold(0.0, |sum, (value, basis)| f64::from(basis).mul_add(*value, sum))
+            / scale,
+        delta
+            .iter()
+            .zip(pose.plane.basis_v)
+            .fold(0.0, |sum, (value, basis)| f64::from(basis).mul_add(*value, sum))
+            / scale,
+    ];
+    let recovered_offset = [
+        recovered_coordinate[0] - pose.centre_from_reference_px[0],
+        recovered_coordinate[1] - pose.centre_from_reference_px[1],
+    ];
+    let recovered_screen = plane_to_screen(&map, recovered_offset).expect("a mapped plane offset");
+    assert!(
+        (recovered_screen[0] - screen[0]).hypot(recovered_screen[1] - screen[1]) <= 1.0e-6,
+        "pixel (720,200) came back at {recovered_screen:?} from {screen:?}"
+    );
+
+    // The residual of the same displacement off the plane is zero: the row's centre lies in the
+    // row's own plane, which is why one basis projection recovers it.
+    let residual: f64 = (0..4)
+        .map(|axis| {
+            let reconstructed = scale
+                * f64::from(pose.plane.basis_u[axis]).mul_add(
+                    recovered_coordinate[0],
+                    f64::from(pose.plane.basis_v[axis]) * recovered_coordinate[1],
+                );
+            (delta[axis] - reconstructed).abs()
+        })
+        .fold(0.0, f64::max);
+    assert!(residual <= 1.0e-12, "off-plane residual {residual}");
 }
