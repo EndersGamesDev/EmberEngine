@@ -5,9 +5,9 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, grid_screen,
-    height_for_record, project_scene_point, project_scene_vertex, relief_redraw_source_pose,
-    shade_lit_escape_record,
+    RELIEF_REDRAW_MAX_EXPOSED_FRACTION, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpRefusalReason,
+    WarpValidation, apply_homography, grid_screen, height_for_record, project_scene_point,
+    project_scene_vertex, relief_redraw_source_pose, shade_lit_escape_record,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -30,6 +30,11 @@ enum Expected {
     },
     /// Source records are deliberately stale in resolution but are placed by their source chart.
     ReliefApprox,
+    /// The retained source footprint exceeds the relief-redraw admission ceiling.
+    ReliefRefused {
+        exposed_samples: u32,
+        total_samples: u32,
+    },
 }
 
 const fn expected_relief() -> Expected {
@@ -623,8 +628,35 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         return;
     }
     if plan.kind == WarpKind::ClearOnly {
-        assert_eq!(expected, Expected::Clear, "{name}: unexpectedly cleared");
         assert!(!plan.source_valid, "{name}: clear plan retained a source");
+        if let Expected::ReliefRefused {
+            exposed_samples,
+            total_samples,
+        } = expected
+        {
+            let expected_fraction = f64::from(exposed_samples) / f64::from(total_samples);
+            let Some(reason @ WarpRefusalReason::ReliefExposure {
+                predicted_fraction,
+                limit,
+            }) = plan.refusal_reason
+            else {
+                panic!(
+                    "{name}: expected a measured relief exposure refusal, got {:?}",
+                    plan.refusal_reason
+                );
+            };
+            assert_eq!(predicted_fraction.to_bits(), expected_fraction.to_bits(), "{name}");
+            assert_eq!(
+                limit.to_bits(),
+                RELIEF_REDRAW_MAX_EXPOSED_FRACTION.to_bits(),
+                "{name}"
+            );
+            eprintln!(
+                "oracle fixture | {name} | cleared | reason={reason} | exposed={exposed_samples}/{total_samples} | predicted={predicted_fraction:.12}"
+            );
+            return;
+        }
+        assert_eq!(expected, Expected::Clear, "{name}: unexpectedly cleared");
         if let Some(maximum) = plan.approx_max_error_px {
             eprintln!("oracle fixture | {name} | cleared | homography={maximum:.6} px");
         } else {
@@ -916,7 +948,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &observer_relief,
         1.0,
-        Expected::ReliefApprox,
+        Expected::ReliefRefused {
+            exposed_samples: 359,
+            total_samples: 4_225,
+        },
     );
 
     for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
