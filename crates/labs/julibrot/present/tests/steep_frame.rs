@@ -148,11 +148,7 @@ fn screen_centred_zoom_destination(from: &Pose, zoom_delta: f64) -> Pose {
 }
 
 /// Carries the saved row's absolute sampling centre through the same screen-centred zoom.
-fn screen_centred_sampling_pose(
-    from: &Pose,
-    destination: &Pose,
-    zoom_delta: f64,
-) -> Pose {
+fn screen_centred_sampling_pose(from: &Pose, destination: &Pose, zoom_delta: f64) -> Pose {
     let zoom_scale = zoom_delta.exp2();
     let mut to = *from;
     to.zoom_log2 += zoom_delta;
@@ -272,8 +268,7 @@ fn relief_redraw_pose(from: &Pose, to: &Pose) -> Pose {
         rows,
         inverse,
         condition_number: from_map.condition_number,
-        apron_scale: to_map.apron_scale * f64::from(from.grid_width)
-            / f64::from(to.grid_width),
+        apron_scale: to_map.apron_scale * f64::from(from.grid_width) / f64::from(to.grid_width),
     });
     redraw
 }
@@ -947,7 +942,10 @@ fn classes_agree(left: RecordClass, right: RecordClass) -> bool {
 }
 
 fn broad_classes_agree(left: RecordClass, right: RecordClass) -> bool {
-    matches!((left, right), (RecordClass::Escape(_), RecordClass::Escape(_))) || left == right
+    matches!(
+        (left, right),
+        (RecordClass::Escape(_), RecordClass::Escape(_))
+    ) || left == right
 }
 
 fn records_equal(left: [f32; 4], right: [f32; 4]) -> bool {
@@ -956,7 +954,6 @@ fn records_equal(left: [f32; 4], right: [f32; 4]) -> bool {
         .all(|(left, right)| left.to_bits() == right.to_bits())
 }
 
-#[derive(Debug)]
 struct ReliefRedrawMeasurement {
     zoom_delta: f64,
     agree: u64,
@@ -980,6 +977,37 @@ struct ReliefRedrawMeasurement {
     requested_anchor_truth_px: [f64; 2],
     requested_anchor_redraw_px: [f64; 2],
     requested_anchor_error_px: f64,
+}
+
+impl core::fmt::Display for ReliefRedrawMeasurement {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "zoom_delta={:.1}\ncounts agree={} hole={} occluded_wrong={} resolution_only={}\nresolution_detail agree_record_changed={} same_broad_class={} class_changed={}\nhole_detail largest_connected={}\nchart_detail maximum_separation_px={:.12} source_texel_reach_px={:.12}\nfractions agree={:.12} hole={:.12} occluded_wrong={:.12} resolution_only={:.12} exposed={:.12}\ncentre truth_px={:?} redraw_px={:?} error_px={:.12}\nanchor truth_px={:?} redraw_px={:?} error_px={:.12}",
+            self.zoom_delta,
+            self.agree,
+            self.hole,
+            self.occluded_wrong,
+            self.resolution_only,
+            self.agree_record_changed,
+            self.resolution_same_broad_class,
+            self.resolution_class_changed,
+            self.largest_connected_hole,
+            self.maximum_same_pixel_chart_separation_px,
+            self.source_texel_reach_px,
+            self.agree_fraction,
+            self.hole_fraction,
+            self.occluded_wrong_fraction,
+            self.resolution_only_fraction,
+            self.exposed_fraction,
+            self.requested_centre_truth_px,
+            self.requested_centre_redraw_px,
+            self.requested_centre_error_px,
+            self.requested_anchor_truth_px,
+            self.requested_anchor_redraw_px,
+            self.requested_anchor_error_px,
+        )
+    }
 }
 
 fn largest_connected_region(mask: &[bool]) -> u64 {
@@ -1043,11 +1071,7 @@ fn relief_redraw_position(from: &Pose, to: &Pose, target: [f64; 2]) -> [f64; 2] 
     plane_to_screen(&to_map, redrawn_chart).expect("the redraw chart point projects to the surface")
 }
 
-fn placement(
-    from: &Pose,
-    to: &Pose,
-    target: [f64; 2],
-) -> ([f64; 2], [f64; 2], f64) {
+fn placement(from: &Pose, to: &Pose, target: [f64; 2]) -> ([f64; 2], [f64; 2], f64) {
     let truth = presented_pixel(target);
     let redraw = presented_pixel(relief_redraw_position(from, to, target));
     let error = (redraw[0] - truth[0]).hypot(redraw[1] - truth[1]);
@@ -1082,10 +1106,11 @@ fn measure_relief_redraw(
             }
             (true, false) => occluded_wrong = occluded_wrong.saturating_add(1),
             (true, true) => {
-                let redrawn_chart = redraw.chart[index].expect("a redrawn fragment has a chart point");
+                let redrawn_chart =
+                    redraw.chart[index].expect("a redrawn fragment has a chart point");
                 let true_chart = truth.chart[index].expect("a true fragment has a chart point");
-                let separation = (redrawn_chart[0] - true_chart[0])
-                    .hypot(redrawn_chart[1] - true_chart[1]);
+                let separation =
+                    (redrawn_chart[0] - true_chart[0]).hypot(redrawn_chart[1] - true_chart[1]);
                 maximum_same_pixel_chart_separation_px =
                     maximum_same_pixel_chart_separation_px.max(separation);
                 if separation > source_texel_reach_px + 1.0e-9 {
@@ -1104,8 +1129,7 @@ fn measure_relief_redraw(
                 } else {
                     resolution_only = resolution_only.saturating_add(1);
                     if broad_classes_agree(redrawn_class, true_class) {
-                        resolution_same_broad_class =
-                            resolution_same_broad_class.saturating_add(1);
+                        resolution_same_broad_class = resolution_same_broad_class.saturating_add(1);
                     } else {
                         resolution_class_changed = resolution_class_changed.saturating_add(1);
                     }
@@ -1187,21 +1211,16 @@ fn measured_relief_zoom_redraw_reports_the_native_pixel_oracle() {
         );
         let true_records = steep_records(&sampling_to);
         let redraw = render_relief_redraw(&from, &to, &source_records);
-        let truth = render_frame(
-            &to,
-            &true_records,
-            Rule::Fixed,
-            Mapping::InteriorAtFloor,
-        );
+        let truth = render_frame(&to, &true_records, Rule::Fixed, Mapping::InteriorAtFloor);
         reports.push(measure_relief_redraw(
-            &from,
-            &to,
-            &redraw,
-            &truth,
-            zoom_delta,
+            &from, &to, &redraw, &truth, zoom_delta,
         ));
     }
-    panic!("native relief redraw measurements:\n{reports:#?}");
+    assert_eq!(reports.len(), 2, "both zoom deltas must be measured");
+    panic!(
+        "native relief redraw measurements:\n{}\n{}",
+        reports[0], reports[1]
+    );
 }
 
 /// This render lands in the band the browser read back, which is a calibration, not a proof.
