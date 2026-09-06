@@ -287,7 +287,11 @@ echo "== deploy-pages.sh is the book's OTHER writer, and refuses one too =="
 # lifted out of the script as it ships rather than copied here, so the test
 # cannot drift from what actually runs.
 STAMP="$TMP/pages-stamp.py"
-awk '/^"\$PY" - /{f=1;next} f && /^EOF$/{exit} f' "$DEPLOY/deploy-pages.sh" > "$STAMP"
+# The book writer is the `"$PY" -` heredoc terminated by EOF. deploy-pages.sh
+# has grown other python blocks (terminated by PY) that start the same way,
+# so the start line is matched by its own terminator marker; `[$]` rather
+# than `\$`, which awks disagree about.
+awk '/^"[$]PY" - .*<<.EOF.$/{f=1;next} f && /^EOF$/{exit} f' "$DEPLOY/deploy-pages.sh" > "$STAMP"
 if [ -s "$STAMP" ] && grep -q 'kings_proto' "$STAMP"; then
     ok "the deploy-pages.sh book writer was extracted"
 else
