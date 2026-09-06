@@ -8,7 +8,8 @@
 //! Most shipped weapon meshes are fused GLB nodes, so they cannot eject a real
 //! magazine independently. The authored support glove follows the magazine /
 //! receiver operation, while the separate revolver cylinder and RPG round can
-//! use the two part-stage fields. No invented detachable geometry is required.
+//! use the part-stage fields. Breach-12 additionally owns a separate authored
+//! box magazine, whose translation follows the support palm during exchange.
 
 use ember_engine::glam::{Quat, Vec3};
 
@@ -27,6 +28,9 @@ pub struct ReloadPose {
     /// It stays fully seated through the return to rest; non-reload rendering
     /// continues to use the authoritative loaded/ammo state.
     pub rocket_load: f32,
+    /// Breach-12's separately authored box magazine moves with the support
+    /// palm during withdrawal/reinsertion. Zero for all legacy weapon nodes.
+    pub magazine_offset: Vec3,
 }
 
 impl ReloadPose {
@@ -37,6 +41,7 @@ impl ReloadPose {
         left_rotation: Quat::IDENTITY,
         cylinder_open: 0.0,
         rocket_load: 0.0,
+        magazine_offset: Vec3::ZERO,
     };
 
     /// Transform the static weapon-local glove about its authored palm. The
@@ -154,6 +159,18 @@ const fn keys(weapon: u8) -> [Key; 7] {
             key(0.90, [-0.070,-0.040, 0.000], [ 0.10, 0.02, 0.06], [0.12, 0.03,-0.010], [0.00, 0.00, 0.05]),
             Key::rest(1.0),
         ],
+        // Breach-12: expose the box magazine toward screen-left, forward of
+        // the eye. A short clear withdrawal avoids dropping the support hand
+        // out of view or forcing the remote reach projection up to the face.
+        8 => [
+            Key::rest(0.0),
+            key(0.15, [ 0.070, 0.035,-0.040], [ 0.35, 0.08,-0.02], [-0.10,-0.04,-0.025], [0.00, 0.03,-0.10]),
+            key(0.32, [ 0.120, 0.055,-0.060], [ 0.60, 0.16,-0.03], [-0.19,-0.12,-0.025], [0.02, 0.04,-0.14]),
+            key(0.53, [ 0.150, 0.080,-0.080], [ 0.68, 0.18,-0.035],[-0.21,-0.26,-0.025], [0.02, 0.04,-0.14]),
+            key(0.72, [ 0.120, 0.055,-0.060], [ 0.60, 0.16,-0.03], [-0.19,-0.12,-0.025], [0.02, 0.04,-0.14]),
+            key(0.90, [ 0.050, 0.025,-0.030], [ 0.20, 0.05,-0.01], [-0.24, 0.10, 0.085], [0.08,-0.32, 0.22]),
+            Key::rest(1.0),
+        ],
         // Pistol: compact chest-high magazine reach, seat and overhand rack.
         _ => [
             Key::rest(0.0),
@@ -208,6 +225,9 @@ pub fn pose(weapon: u8, progress: f32) -> ReloadPose {
         result.cylinder_open = ramp(progress, 0.16, 0.30) * (1.0 - ramp(progress, 0.76, 0.88));
     } else if weapon == 7 {
         result.rocket_load = ramp(progress, 0.35, 0.78);
+    } else if weapon == 8 {
+        let withdrawn = ramp(progress, 0.32, 0.53) * (1.0 - ramp(progress, 0.53, 0.72));
+        result.magazine_offset = Vec3::new(-0.02, -0.14, 0.0) * withdrawn;
     }
     result
 }
@@ -222,11 +242,12 @@ mod tests {
         assert_eq!(value.rotation, Quat::IDENTITY);
         assert_eq!(value.left_rotation, Quat::IDENTITY);
         assert_eq!(value.cylinder_open, 0.0);
+        assert_eq!(value.magazine_offset, Vec3::ZERO);
     }
 
     #[test]
     fn endpoints_do_not_leave_the_gun_or_glove_displaced() {
-        for weapon in 1..=7 {
+        for weapon in 1..=8 {
             for p in [-1.0, 0.0, 1.0, 2.0, f32::NAN, f32::INFINITY] {
                 assert_rest(pose(weapon, p));
             }
@@ -235,7 +256,7 @@ mod tests {
 
     #[test]
     fn every_weapon_has_a_distinct_complete_motion() {
-        for weapon in 1..=7 {
+        for weapon in 1..=8 {
             for other in 1..weapon {
                 let signature = |id| {
                     [0.2, 0.4, 0.6, 0.8]
@@ -254,7 +275,7 @@ mod tests {
 
     #[test]
     fn all_samples_are_finite_metric_and_normalized() {
-        for weapon in 1..=7 {
+        for weapon in 1..=8 {
             for tick in 0..=1000_u16 {
                 let value = pose(weapon, f32::from(tick) / 1000.0);
                 assert!(value.offset.is_finite() && value.offset.length() < 0.25);
@@ -264,6 +285,7 @@ mod tests {
                 }
                 assert!((0.0..=1.0).contains(&value.cylinder_open));
                 assert!((0.0..=1.0).contains(&value.rocket_load));
+                assert!(value.magazine_offset.is_finite() && value.magazine_offset.length() < 0.25);
             }
         }
     }
@@ -271,13 +293,14 @@ mod tests {
     #[test]
     fn pose_and_velocity_are_continuous_across_each_authored_phase() {
         let h = 0.0001;
-        for weapon in 1..=7 {
+        for weapon in 1..=8 {
             for key in keys(weapon) {
                 let before = pose(weapon, key.at - h);
                 let at = pose(weapon, key.at);
                 let after = pose(weapon, key.at + h);
                 assert!((after.offset - before.offset).length() < 0.00001);
                 assert!((after.left_offset - before.left_offset).length() < 0.00001);
+                assert!((after.magazine_offset - before.magazine_offset).length() < 0.00001);
                 // Zero derivatives at the knots, including entry/exit. Compare
                 // quaternion components rather than acos near exactly one.
                 assert!((after.rotation - before.rotation).length() < 0.00001);
@@ -294,7 +317,7 @@ mod tests {
         let base = Vec3::new(4.0, 2.0, -3.0);
         let weapon_rotation = Quat::from_rotation_y(0.8) * Quat::from_rotation_z(-0.4);
         let palm = Vec3::new(0.24, -0.11, -0.07);
-        for weapon in 1..=7 {
+        for weapon in 1..=8 {
             for tick in 0..=100_u8 {
                 let value = pose(weapon, f32::from(tick) / 100.0);
                 let (hand_base, hand_rotation) = value.left_hand(base, weapon_rotation, palm);
@@ -318,6 +341,48 @@ mod tests {
             let value = pose(weapon, 0.5);
             assert_eq!(value.cylinder_open, 0.0);
             assert_eq!(value.rocket_load, 0.0);
+        }
+    }
+
+    #[test]
+    fn shotgun_magazine_tracks_the_support_palm_during_exchange() {
+        let grabbed = pose(8, 0.32);
+        for p in [0.32, 0.4, 0.53, 0.62, 0.72] {
+            let sample = pose(8, p);
+            assert!(
+                (sample.left_offset - grabbed.left_offset - sample.magazine_offset).length()
+                    < 0.00001
+            );
+        }
+        assert_eq!(pose(8, 0.0).magazine_offset, Vec3::ZERO);
+        assert_eq!(pose(8, 0.53).magazine_offset, Vec3::new(-0.02, -0.14, 0.0));
+        assert_eq!(pose(8, 1.0).magazine_offset, Vec3::ZERO);
+        for weapon in 1..=7 {
+            assert_eq!(pose(weapon, 0.53).magazine_offset, Vec3::ZERO);
+        }
+    }
+
+    #[test]
+    fn shotgun_exchange_keeps_palms_and_magazine_inside_the_hip_view() {
+        let hip = Vec3::new(0.60, -0.24, 0.212);
+        let half_fov = (crate::feel::HIP_FOV * 0.5).to_radians().tan();
+        for tick in 32..=72_u8 {
+            let reload = pose(8, f32::from(tick) / 100.0);
+            let project = |point: Vec3| {
+                let camera = hip + reload.offset + reload.rotation * point;
+                assert!(camera.x > 0.15);
+                assert!((camera.y / (camera.x * half_fov)).abs() < 0.92);
+                assert!((camera.z / (camera.x * half_fov * 16.0 / 9.0)).abs() < 0.92);
+            };
+            project(Vec3::new(-0.073_887, -0.011_812, 0.028_618));
+            project(Vec3::new(0.358_626, -0.004_903, -0.016_754) + reload.left_offset);
+            for x in [0.107, 0.224] {
+                for y in [-0.255, 0.028] {
+                    for z in [-0.046, 0.046] {
+                        project(Vec3::new(x, y, z) + reload.magazine_offset);
+                    }
+                }
+            }
         }
     }
 }

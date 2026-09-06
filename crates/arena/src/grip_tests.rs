@@ -119,7 +119,7 @@ fn every_rendered_weapon_selects_its_own_gloves_or_the_same_sidearm_fallback() {
             assert!(actual.mesh > 0 && usize::try_from(actual.mesh).unwrap() <= meshes.len());
         }
         assert_ne!(selected.right.mesh, selected.left.mesh);
-        if own {
+        if own && id != arena_core::shooter::SHOTGUN {
             assert!(
                 authored_meshes.insert(selected.right.mesh),
                 "weapon {id} reuses a right glove"
@@ -130,6 +130,15 @@ fn every_rendered_weapon_selects_its_own_gloves_or_the_same_sidearm_fallback() {
             );
         }
     }
+    // The new shotgun is authored in the AK's unchanged hold frame. Sharing
+    // this proven glove pair is deliberate; the shotgun itself has its own mesh.
+    let shotgun = assets.grip_of(arena_core::shooter::SHOTGUN).unwrap();
+    let ak = assets.grip_of(3).unwrap();
+    assert!(assets.weapon_parts(arena_core::shooter::SHOTGUN).1);
+    assert_eq!(shotgun.right.mesh, ak.right.mesh);
+    assert_eq!(shotgun.left.mesh, ak.left.mesh);
+    assert_eq!(shotgun.right.wrist, ak.right.wrist);
+    assert_eq!(shotgun.left.wrist, ak.left.wrist);
     // M4 has no authored gun today: weapon, muzzle AND hands must agree on
     // the sidearm fallback, instead of attaching an M4 grip to that mesh.
     assert!(!assets.weapon_parts(4).1);

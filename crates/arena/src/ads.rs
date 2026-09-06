@@ -29,6 +29,7 @@ pub const fn sight(weapon: u8, own_mesh: bool) -> Sight {
             5 => Vec3::new(0.0, 0.116, 0.0),
             6 => Vec3::new(0.0, 0.194, 0.0),
             7 => Vec3::new(0.0, 0.177, -0.015),
+            8 => Vec3::new(0.0, 0.165, 0.0),
             _ => Vec3::new(0.0, 0.061, 0.0),
         }
     } else {
@@ -41,6 +42,7 @@ pub const fn sight(weapon: u8, own_mesh: bool) -> Sight {
         5 => (0.58, -0.055, 0.035),
         6 => (0.55, -0.100, -0.050),
         7 => (0.82, -0.110, 0.055),
+        8 => (0.62, -0.085, -0.035),
         _ => (0.50, -0.045, 0.025),
     };
     Sight {
@@ -85,7 +87,7 @@ mod tests {
             (blend(0.0), blend(1.0), settle(0.0), settle(1.0)),
             (0.0, 1.0, 0.0, 0.0)
         );
-        for id in 1..=7 {
+        for id in 1..=arena_core::shooter::WEAPON_COUNT {
             let s = sight(id, id != 4);
             assert!(s.point.is_finite() && (0.0..0.3).contains(&s.point.y));
             assert!((0.4..0.9).contains(&s.distance));

@@ -17,7 +17,7 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v30/      live Killshot build — inventory, supplies and loadouts (page + frozen pkg)
+#   games/arena/v31/      live Killshot build — Breach-12 shotgun (page + frozen pkg)
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
@@ -128,7 +128,7 @@ if release.exists():
 PY
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v30"
+ARENA_LIVE="games/arena/v31"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
