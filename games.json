@@ -4,12 +4,20 @@
       "id": "arena",
       "title": "Killshot",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "Killshot is Ember's online first-person shooter for up to eight players. Read LIFE and ammunition at a glance, collect health and ammo boxes, and keep collected weapons in rebindable slots 1–9 until death. Every weapon has its own reload animation with a circular countdown. Classic starts with a sidearm; Custom loadout lets the host choose a shared starting weapon independently of free for all, 4v4 team deathmatch or king of the hill. Slide, slide-jump and chain wall kicks through three hand-authored maps, including the vertical 96 × 96 m Breakwater Harbor with enterable port buildings and rooftop routes. Seven weapons have individual sights, zoom and accuracy, with five HP, head-sized headshots and a timed shield. Sunlight, shadows, clouds, weather, spatial sound and gamepad support. Settings includes sensitivity, key bindings and fullscreen.",
+      "desc": "Killshot is Ember's online first-person shooter for up to eight players. The new Breach-12 shotgun joins eight weapons with individual sights, zoom, accuracy and reload animations. Read LIFE and ammunition at a glance, collect health and ammo boxes, and keep collected weapons in rebindable slots 1–9 until death. A circular countdown shows reload progress. Classic starts with a sidearm; Custom loadout lets the host choose a shared starting weapon independently of free for all, 4v4 team deathmatch or king of the hill. Slide, slide-jump and chain wall kicks through three hand-authored maps, including the vertical 96 × 96 m Breakwater Harbor with enterable port buildings and rooftop routes. Five HP, head-sized headshots and a timed shield. Sunlight, shadows, clouds, weather, spatial sound and gamepad support. Settings includes sensitivity, key bindings and fullscreen.",
       "versions": [
+        {
+          "v": "v31",
+          "path": "games/arena/v31/",
+          "live": true,
+          "proto": 24,
+          "handover": true,
+          "note": "Breach-12 shotgun: eight pellets per shell, six-shell magazine, pump action and individual reload; slot 8 pickups and custom starting loadout with existing Killshot HUD and controls preserved"
+        },
         {
           "v": "v30",
           "path": "games/arena/v30/",
-          "live": true,
+          "live": false,
           "proto": 23,
           "handover": true,
           "note": "Killshot: LIFE and ammo HUD, health and ammo boxes, per-weapon reload animations and circular timer, retained weapon slots 1–9, Classic or custom starting loadout"
