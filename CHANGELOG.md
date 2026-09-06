@@ -4,6 +4,8 @@ Every version the launcher (`web/games.json`) lists, in one place: what a player
 
 **A release's source commit is the commit its build stamp names.** `deploy/deploy-pages.sh` runs `deploy/stamp-version.sh` before publishing, writing `web/version.json` — `r<commit count>`, the deploy's short sha and that commit's subject — and those bytes travel to the published branch with the build. So the stamp, not the commit that froze the page tree in this repository, is what the release was compiled from; where the two differ the entry says so. A stamp reading `+dirty` means the published bytes correspond to no commit at all, and the entry says that too. Where a release was published on its own rather than in a whole-hub deploy, the publication's own message names the source and is taken over the stamp.
 
+The hub stamp is one file at the root, so a publication that touches only one game leaves it reading the previous game's release. A release that writes its own `version.json` inside its page tree is therefore the stronger record, and where one exists it is what the entry uses: it names the full source sha rather than a short one, and it can carry the hash of the bundle beside it, which makes the claim checkable against the published bytes rather than merely recorded next to them.
+
 **Tags.** The first game owns the bare names (`docs/hosts.md` §3): arena releases are `vNN`, every other game is `<id>-vNN`. Tags are annotated and signed, and an existing tag is never moved — where a tag sits somewhere other than the entry's source commit, the entry records both. Four releases have no tag, each for a stated reason.
 
 The full evidence for every row, including the freeze commits and the publication commits, is the release ledger this file was built from.
@@ -291,6 +293,24 @@ no proto · stamp r437 · source `f9c40d62` · tag `v0`
 The original local game — the pong classic. Two players, one keyboard, first to 7; the paddle simulation runs entirely in the client and there is no online pong.
 
 The page itself is older than its arena path: it entered as `web/games/pong/v2/index.html` with the games hub at `b4a9ad1e` and was renamed under `web/games/arena/v0/` at `11d6ab2d`, "rename: move pong lineage under arena paths". The arena-path bytes were first published in the hub deploy stamped `f9c40d62`, the same deploy that carried v12. This rename is also why the launcher has no arena v2: the number belonged to the pong lineage and was not re-used.
+
+## UltimateLegue (league)
+
+### v1 — 2026-09-06
+
+proto 1 · stamp r1554 · source `4e069d5a` · tag `league-v1`
+
+First build: one lane, five champions, a draft with rune pages and summoner spells, courts, cores, a shop, and bots. 1v1 and 3v3, online or against bots.
+
+One lane along X with a core at each end; killing the enemy core wins. Two courts, one on each side of the lane, are the objective: the team that lands the killing blow takes gold and a timed boon — damage from the north, ability haste and gold from the south. Minion waves march every thirty seconds, champions level to twelve on last hits and passive experience, and eighteen shop items across three tiers fill six slots. A rune page is any three of eight, saved per browser and chosen in champion select; two summoner spells are picked at the same time. Five champions, three of them with authored kits, and picks are unique within a team but may be mirrored across teams, so all six seats draft from a roster of five. An unfilled or disconnected seat becomes a deterministic bot. **Protocol 1**, the join gate being exact equality as everywhere else in this repository, on its own port and its own address-book keys.
+
+Everything is server-authoritative — the client never simulates an ability — which is why the `f32` transcendentals in movement and aim cannot desync a peer: only one peer simulates. The only randomness is `hash(tick, who, salt)`, so there is no per-tick RNG state. The client is a top-down camera and procedural meshes; every piece of text — HUD, shop, champion select, rune pages, scoreboard, minimap — is the page's, because the scene pass draws none.
+
+The title ships spelled *UltimateLegue*; that is the product name under game id `league`, not a typo awaiting a fix.
+
+This is the first release in this repository to carry its own stamp inside its page tree: `games/league/v1/version.json` names `r1554`, the full source sha and the SHA-256 of the shipped bundle, and the published `league_bg.wasm` hashes to exactly that value. The publication's own message agrees. The page tree entered the repository earlier, at `7ef5bf53`, as an unfinished import; `4e069d5a` is what was built and served.
+
+Verified at the source: 47 core tests and all-target core Clippy, all twenty abilities, economy and assists, revival and buff timing, projectile and zone serialisation, real two- and six-player WebSocket matches, and ten complete deterministic bot matches, all finishing. A regression fixture pins the core's retaliation: three level-one champions lose an unescorted assault at 17.3 s leaving the core at 325.7 HP, and win in 12.4 s with one minion wave escorting — which shows the escort changes the outcome, not that no early dive can succeed. Deliberately absent in v1: wards and vision, towers beyond the core, client-side prediction or rollback, item recipes, rune trees, spectators, and mid-match disconnect restore. Design and release record: `docs/plans/ultimate-league.md`.
 
 ## Fire Racer
 

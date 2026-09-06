@@ -2,6 +2,8 @@
 
 A one-lane, top-down MOBA on ember: 1v1 and 3v3, an authoritative `league-server` running the same `league-core` sim the client renders, champion select with rune pages and summoner spells before the game, and a DOM page for everything with text (the scene pass has none).
 
+What v1 actually shipped — its protocol, build stamp and source commit — is the `v1` entry under UltimateLegue in `CHANGELOG.md`.
+
 The three founding champions and their kits are the user's; two more (Bog Maw, Tessera) are ours. The game ships as **UltimateLegue**, id `league`, retaining the spelling in the owner's request.
 
 ## Shape
