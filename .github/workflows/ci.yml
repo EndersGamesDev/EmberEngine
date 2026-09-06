@@ -65,8 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: syntax, publish-host, host-pids, host-kings, republish-host, pages, ssh-deploys, watchdog
-        run: bash deploy/tests/run.sh syntax publish-host host-pids host-kings republish-host pages ssh-deploys watchdog
+      - name: syntax, publish-host, host-pids, host-kings, host-timer, republish-host, pages, ssh-deploys, watchdog
+        run: bash deploy/tests/run.sh syntax publish-host host-pids host-kings host-timer republish-host pages ssh-deploys watchdog
 
   promote:
     name: promote to ci-passed

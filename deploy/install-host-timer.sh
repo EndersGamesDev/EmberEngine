@@ -14,6 +14,8 @@
 # What the tick does with EMBER_REF=ci-passed: the host follows the branch
 # pointer .github/workflows/ci.yml moves when a main commit's tests pass, and
 # never main itself - a red run keeps the last good build running.
+# Stopping this timer/service is NOT stopping the game servers: host.sh owns
+# their PID/start-time lifecycle. Use deploy/host.sh down to stop the games.
 set -euo pipefail
 
 USER_NAME="$(id -un)"
@@ -36,6 +38,11 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# host.sh owns and validates the background server/tunnel PIDs. The default
+# control-group mode would kill them when this successful oneshot exits.
+# Deliberate external-PID-owner integration: stopping the timer/service does
+# not stop games; use deploy/host.sh down for that operation.
+KillMode=process
 User=$USER_NAME
 Group=$USER_NAME
 WorkingDirectory=$EMBER_HOME
@@ -59,4 +66,5 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now ember-host.timer
 echo "ember-host.timer enabled: $TICK every 2 minutes as $USER_NAME (log: $EMBER_HOME/log/tick.log)"
+echo "Stopping the timer does not stop servers; use deploy/host.sh down to stop games."
 systemctl list-timers ember-host.timer --no-pager | head -2

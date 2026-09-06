@@ -14,6 +14,7 @@
 #   host-pids     host.sh's process control, against real `sleep` processes —
 #                 instant
 #   host-kings    host.sh's three-game wiring against fake build products
+#   host-timer    generated unit lifecycle and isolated tick lock inheritance
 #   republish-host workstation fetch/merge and unchanged no-push behaviour
 #   host-loopback host.sh up/status/update/down for real on loopback; builds
 #                 all three servers, so minutes on a cold target directory
@@ -22,7 +23,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax pages publish-host ssh-deploys watchdog host-pids host-kings republish-host host-loopback}"
+SUITES="${*:-syntax pages publish-host ssh-deploys watchdog host-pids host-kings host-timer republish-host host-loopback}"
 
 T0="$(date +%s)"
 failed=""

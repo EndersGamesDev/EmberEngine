@@ -21,6 +21,8 @@
 #
 # Serialised with a lock. Quiet ticks log nothing; everything else goes to
 # $EMBER_HOME/log/tick.log.
+# Descriptor9 belongs only to this tick: host.sh and its background children
+# must not inherit it, or retained servers would hold the tick lock forever.
 set -uo pipefail
 
 # The host's own configuration, read the way host.sh reads it.
@@ -68,7 +70,7 @@ for id in arena fire kings; do
 done
 if [ -n "$dead" ]; then
     tlog "down:$dead - running host.sh up"
-    if bash "$HOST_SH" up >> "$LOGS/tick.log" 2>&1; then
+    if bash "$HOST_SH" up 9>&- >> "$LOGS/tick.log" 2>&1; then
         tlog "up done"
     else
         tlog "up FAILED (rc $?)"
@@ -76,7 +78,7 @@ if [ -n "$dead" ]; then
     exit 0
 fi
 
-out="$(bash "$HOST_SH" update 2>&1)"
+out="$(bash "$HOST_SH" update 9>&- 2>&1)"
 rc=$?
 case "$out" in
     *"nothing to do"*) ;;
