@@ -669,6 +669,11 @@ mod browser {
         last_warp_source: Option<u64>,
         pending_warp_view: Option<(u64, ViewStamp)>,
         presented_view: Option<ViewStamp>,
+        /// The scene the image now on the canvas was warped from.
+        ///
+        /// Recorded when a warp is PRESENTED, not when one is submitted: the submitted source says
+        /// what is being drawn, and only the presented one says what is being looked at.
+        presented_scene_id: Option<u64>,
         last_status: RefreshStatus,
         level_timings: LevelTimingLedger,
         precision_mode: PrecisionMode,
@@ -837,6 +842,7 @@ mod browser {
                 last_warp_source: None,
                 pending_warp_view: None,
                 presented_view: None,
+                presented_scene_id: None,
                 last_status: RefreshStatus::Waiting,
                 level_timings: LevelTimingLedger::default(),
                 precision_mode: applied_precision_mode,
@@ -1396,6 +1402,8 @@ mod browser {
                             }
                         }) {
                             observed.presented = true;
+                            // What is now on the canvas, as opposed to what was last submitted.
+                            self.presented_scene_id = measurement.source_scene_id;
                             if let Some((warp_id, stamp)) = self.pending_warp_view
                                 && warp_id == measurement.id
                             {

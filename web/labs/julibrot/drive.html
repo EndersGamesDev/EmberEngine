@@ -74,13 +74,20 @@
       const facts = await lab.settle(options);
       say("copying the frame");
       const frame = await lab.frame();
+      // The census is about one row or it is about nothing. The copy names the scene it came from
+      // and the facts name the scene that has completed; a report that did not say they agree
+      // would be a set of numbers with no row attached to them.
+      const after = lab.facts();
+      if (frame.scene_id !== (after.completed_scene_id ?? null)) {
+        throw new Error(`the copy is of scene ${frame.scene_id} and the completed scene is ${after.completed_scene_id}`);
+      }
       const counts = census(frame.rgba);
       const total = frame.width * frame.height;
       const share = value => (total === 0 ? 0 : value / total);
       say(
         [
           `settled ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}`,
-          `frame ${frame.width}x${frame.height} rgba ${frame.rgba.length} bytes, ${frame.route}, scene ${frame.scene_id}`,
+          `frame ${frame.width}x${frame.height} rgba ${frame.rgba.length} bytes, ${frame.route}, scene ${frame.scene_id} = completed scene ${after.completed_scene_id}`,
           `census sky ${counts.sky} (${share(counts.sky).toFixed(4)}) passclear ${counts.passclear} (${share(counts.passclear).toFixed(4)}) exterior ${counts.exterior} (${share(counts.exterior).toFixed(4)}) other ${counts.other} (${share(counts.other).toFixed(4)})`,
           "",
           JSON.stringify(facts),

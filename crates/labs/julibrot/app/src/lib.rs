@@ -268,16 +268,33 @@ pub struct PictureState {
     pub scene_in_flight: bool,
     /// The presented image belongs to an older requested view.
     pub presented_view_stale: bool,
+    /// The image on screen was warped from the completed scene rather than from an earlier one.
+    ///
+    /// A scene completes on one turn and reaches the canvas on a later present, so between those
+    /// two moments every other reading says finished while the eye is still on the previous
+    /// picture. A caller that copies the frame at that moment copies the wrong row.
+    pub presented_scene_is_completed: bool,
+    /// The presenter is holding an unmoved older picture instead of showing this one.
+    pub warp_holds_stale: bool,
 }
 
 impl PictureState {
-    /// Whether the picture is finished and is the picture the current controls ask for.
+    /// Whether the picture on the canvas is finished and is the picture the controls ask for.
+    ///
+    /// The first three readings say the ladder has nothing left to do. The fourth says the pose on
+    /// screen is the pose being asked for. The last two say the pixels on screen are the finished
+    /// scene's: a scene completes one turn before its warp is presented, and a warp the presenter
+    /// refused to move is an older picture standing in for this one. A caller who is about to copy
+    /// the frame needs all six, because "the render finished" and "the finished render is on
+    /// screen" are one present apart and the copy lands in between.
     #[must_use]
     pub const fn finished(self) -> bool {
         !self.refinement_pending
             && !self.scene_update_pending
             && !self.scene_in_flight
             && !self.presented_view_stale
+            && self.presented_scene_is_completed
+            && !self.warp_holds_stale
     }
 }
 

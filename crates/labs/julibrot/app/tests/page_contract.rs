@@ -29,7 +29,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 120] = [
+const PAGE_FACT_FIELDS: [&str; 121] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -119,6 +119,7 @@ const PAGE_FACT_FIELDS: [&str; 120] = [
     "completed_scene_id",
     "in_flight_scene_id",
     "warp_source_scene_id",
+    "presented_scene_id",
     "reprojected_per_scene",
     "relief_redraw_count",
     "warp_hold_count",
@@ -906,14 +907,35 @@ fn the_frame_loop_cannot_latch_on_a_frame_that_never_ran() {
     assert!(LAB.contains("const FRAME_FALLBACK_MS = 250;"));
     assert_eq!(
         LAB.matches("setTimeout(").count(),
-        2,
-        "the fallback floor under the animation callback, and the settle deadline that bounds a wait"
+        3,
+        "the fallback floor under the animation callback, the settle deadline, and the re-check behind a waiter whose loop has stopped"
     );
+    // Exactly one animation frame is asked for in the whole module, and it is the loop's own turn.
+    // A page the browser is not painting is never given one — `requestAnimationFrame` does not fire
+    // late in a hidden tab, it does not fire at all — so a waiter built on it hangs forever on a
+    // page whose loop is meanwhile turning perfectly well on the fallback timer, which is the
+    // ordinary condition of a driver page. Every waiter therefore completes on a loop turn.
     assert_eq!(
         LAB.matches("requestAnimationFrame(").count(),
-        2,
-        "the loop's own turn, and the one a frame copy waits on"
+        1,
+        "the loop's scheduler asks for an animation frame; nothing else in the module may"
     );
+    let scheduler = LAB
+        .find("requestAnimationFrame(nowMs => this.#runTurn(ticket, nowMs, false));")
+        .expect("the one animation frame is the scheduler's");
+    let waiter = LAB
+        .find("#nextTurn() {")
+        .expect("waiters go through one turn helper");
+    assert!(scheduler < waiter);
+    assert!(LAB.contains("await this.#nextTurn();"));
+    assert!(LAB.contains("release = this.onTurn(finish);"));
+    // The settle waiter is the same shape: a turn listener and a deadline, and no animation frame.
+    let settle = LAB.find("settle({ level").expect("settle exists");
+    let settle_body = &LAB[settle..];
+    let settle_end = settle_body
+        .find("async frame(")
+        .unwrap_or(settle_body.len());
+    assert!(!settle_body[..settle_end].contains("requestAnimationFrame"));
     assert_eq!(MAIN.matches("setTimeout(").count(), 0);
     assert_eq!(MAIN.matches("requestAnimationFrame(").count(), 0);
     assert!(LAB.contains("requestAnimationFrame(nowMs => this.#runTurn(ticket, nowMs, false));"));
@@ -1010,7 +1032,7 @@ fn the_lab_can_be_opened_settled_and_read_by_a_script() {
         "set(field, value) {",
         "facts() {",
         "settle({ level = \"Final\", timeoutMs = SETTLE_TIMEOUT_MS, requireNewScene = false } = {}) {",
-        "async frame({ timeoutMs = SETTLE_TIMEOUT_MS } = {}) {",
+        "async frame({ timeoutMs = SETTLE_TIMEOUT_MS, allowOlderScene = false } = {}) {",
         "requestMeasurement() {",
         "stop() {",
         "onTurn(listener) {",
@@ -1181,6 +1203,8 @@ fn a_finished_picture_is_finished_at_the_current_view_and_not_merely_at_a_delive
         scene_update_pending: false,
         scene_in_flight: false,
         presented_view_stale: false,
+        presented_scene_is_completed: true,
+        warp_holds_stale: false,
     };
     // The state the moment a row lands on a delivered Final: the ladder looks idle and the level
     // still reads Final, and the answer is false because the presented image is the old row's.
@@ -1215,6 +1239,35 @@ fn a_finished_picture_is_finished_at_the_current_view_and_not_merely_at_a_delive
         }
         .finished()
     );
+    // A scene completes one turn before its warp is presented. In that gap every other reading
+    // says finished and the eye is still on the previous picture, so a caller who copies the frame
+    // there copies the wrong row — measured: a row applied at height zero settled with scene 5 and
+    // the copy taken immediately came back as scene 3 with the previous row's census.
+    assert!(
+        !PictureState {
+            presented_scene_is_completed: false,
+            ..IDLE
+        }
+        .finished()
+    );
+    // A warp the presenter refused to move is an older picture standing in for this one.
+    assert!(
+        !PictureState {
+            warp_holds_stale: true,
+            ..IDLE
+        }
+        .finished()
+    );
+    // The two new readings come from what was PRESENTED, not from what was last submitted: the
+    // submitted source says what is being drawn and only the presented one says what is being
+    // looked at.
+    assert!(FRAME.contains("self.presented_scene_id = measurement.source_scene_id;"));
+    assert!(FACTS.contains("presented_scene_is_completed: present.completed_scene_id.is_some()"));
+    assert!(FACTS.contains("loop_facts.presented_scene_id() == present.completed_scene_id,"));
+    assert!(FACTS.contains("ember_julibrot_present::WarpKind::HoldStale"));
+    // And a copy of an older scene is a refusal with both numbers in it, never quietly older bytes.
+    assert!(LAB.contains("if (!allowOlderScene && copied !== completed) {"));
+    assert!(DRIVE.contains("if (frame.scene_id !== (after.completed_scene_id ?? null)) {"));
     // The fact is composed once, in the app, from exactly those four readings, so the page and a
     // driver cannot each assemble their own idea of finished.
     assert!(FACTS.contains("picture_finished: crate::PictureState {"));

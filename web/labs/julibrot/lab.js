@@ -410,9 +410,11 @@ class Lab {
    * call over the same state with nothing able to land between the two draws.
    *
    * It is valid to call at any time and it is only worth reading when the picture is finished: call
-   * it after `settle` resolves.
+   * it after `settle` resolves. The copy carries the scene it was taken from, and a scene that has
+   * completed since is a refusal rather than a quietly older picture; `allowOlderScene` is for a
+   * caller who wants the bytes anyway and will say so in what it reports.
    */
-  async frame({ timeoutMs = SETTLE_TIMEOUT_MS } = {}) {
+  async frame({ timeoutMs = SETTLE_TIMEOUT_MS, allowOlderScene = false } = {}) {
     const capture = JSON.parse(this.#api.app_frame_capture_json());
     if (!capture.frame_capture_supported) {
       throw new Error(`this device cannot copy a presented frame: ${capture.frame_capture_status}`);
@@ -434,6 +436,15 @@ class Lab {
           if (bytes.length !== expected) {
             throw new Error(`the frame copy is ${bytes.length} bytes, not the ${expected} its extent needs`);
           }
+          // The copy is of the picture that was on screen when it was taken, and a scene that has
+          // completed since means the picture has moved on. Handing those bytes back as though
+          // they were the current frame is how a measurement gets attributed to the wrong row, so
+          // it is a refusal with both numbers in it rather than a quietly older picture.
+          const completed = this.facts().completed_scene_id ?? null;
+          const copied = state.frame_capture_scene_id ?? null;
+          if (!allowOlderScene && copied !== completed) {
+            throw new Error(`the frame copy is of scene ${copied} and the completed scene is now ${completed}; settle again and take another copy`);
+          }
           return {
             width: state.frame_capture_width,
             height: state.frame_capture_height,
@@ -446,11 +457,39 @@ class Lab {
       if (performance.now() > deadline) {
         throw new Error(`no frame was copied in ${timeoutMs} ms`);
       }
-      // One turn of the loop per wait, on the loop's own clock: the copy completes on a turn, so a
-      // waiter that does not let a turn run is a waiter that spins forever.
-      this.schedule();
-      await new Promise(resume => requestAnimationFrame(resume));
+      await this.#nextTurn();
     }
+  }
+
+  /**
+   * Resolves on the next turn of the loop, having asked for one.
+   *
+   * Every waiter in this module goes through here, and none of them waits on an animation frame.
+   * A page the browser is not painting is never given one: `requestAnimationFrame` does not fire
+   * late in a hidden tab, it does not fire at all, so a waiter built on it waits forever on a page
+   * whose loop is meanwhile turning perfectly well on the fallback timer. That is not a corner
+   * case for a driver — a driver page is usually the hidden one.
+   *
+   * The timer beside the listener is not a second clock. It is there because a stopped loop runs
+   * no turns and clears its listeners, and a waiter must still come back to re-read its own
+   * deadline rather than hang on a turn that is never coming.
+   */
+  #nextTurn() {
+    return new Promise(resume => {
+      let release = null;
+      let timer = null;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (release) release();
+        if (timer !== null) clearTimeout(timer);
+        resume();
+      };
+      release = this.onTurn(finish);
+      timer = setTimeout(finish, FRAME_FALLBACK_MS);
+      this.schedule();
+    });
   }
 
   /**

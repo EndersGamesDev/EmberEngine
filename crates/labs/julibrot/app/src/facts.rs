@@ -193,6 +193,8 @@ pub struct PageFacts<'a> {
     pub completed_scene_id: Option<u64>,
     pub in_flight_scene_id: Option<u64>,
     pub warp_source_scene_id: Option<u64>,
+    /// The scene the image now on the canvas was warped from, as opposed to the one last submitted.
+    pub presented_scene_id: Option<u64>,
     pub reprojected_per_scene: Option<u32>,
     pub relief_redraw_count: u64,
     pub warp_hold_count: u64,
@@ -292,6 +294,12 @@ impl<'a> PageFacts<'a> {
                 scene_update_pending: loop_facts.scene_update_pending(),
                 scene_in_flight: present.in_flight_scene_id.is_some(),
                 presented_view_stale: loop_facts.presented_view_is_stale(app.viewer()),
+                presented_scene_is_completed: present.completed_scene_id.is_some()
+                    && loop_facts.presented_scene_id() == present.completed_scene_id,
+                warp_holds_stale: matches!(
+                    present.warp_kind,
+                    ember_julibrot_present::WarpKind::HoldStale
+                ),
             }
             .finished(),
             scene_mode: loop_facts.scene_mode().as_str(),
@@ -361,6 +369,7 @@ impl<'a> PageFacts<'a> {
             completed_scene_id: present.completed_scene_id,
             in_flight_scene_id: present.in_flight_scene_id,
             warp_source_scene_id: loop_facts.last_warp_source(),
+            presented_scene_id: loop_facts.presented_scene_id(),
             reprojected_per_scene: present.reprojected_per_scene,
             relief_redraw_count: present.relief_redraw_count,
             warp_hold_count: present.warp_hold_count,
