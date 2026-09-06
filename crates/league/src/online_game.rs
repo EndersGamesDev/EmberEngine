@@ -216,8 +216,8 @@ impl OnlineGame {
         reason = "Preserve the existing byte-valued pick bridge; the authoritative server validates champion, spell, and rune ids"
     )]
     fn drain_ui(&mut self) {
-        for json in uiq::drain() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
+        for queued in uiq::drain() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&queued.json) else {
                 continue;
             };
             if let Some(p) = v.get("pick") {
@@ -244,7 +244,9 @@ impl OnlineGame {
             if let Some(open) = v.get("shop").and_then(serde_json::Value::as_bool) {
                 self.world.shop_open = open;
             }
-            if let Some(cmd) = ui_command(&v, &self.world) {
+            if queued.gameplay_allowed()
+                && let Some(cmd) = ui_command(&v, &self.world)
+            {
                 self.send_cmd(cmd);
             }
         }
@@ -292,15 +294,16 @@ impl EmberGame for OnlineGame {
         self.world.notice = self.lost.clone().or_else(|| self.world.notice.take());
 
         self.drain_ui();
-        if self.world.phase == Phase::Live {
-            let my_alive = self
+        let my_alive = self.world.connected
+            && self
                 .world
                 .champs
                 .iter()
                 .any(|c| c.slot == self.world.my_slot && c.alive);
-            for cmd in read_input(input, &mut self.prev, &self.world, input.aspect(), my_alive) {
-                self.send_cmd(cmd);
-            }
+        // Track releases in every phase so held controls cannot leak from
+        // draft or the result screen into the next match.
+        for cmd in read_input(input, &mut self.prev, &self.world, input.aspect(), my_alive) {
+            self.send_cmd(cmd);
         }
         self.world.tick_clocks(dt);
         self.world.follow(dt);
