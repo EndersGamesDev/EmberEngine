@@ -129,13 +129,18 @@ impl BrowserFrameLoop {
                 break;
             };
             let generation = response.generation();
-            let _finished = viewer.finish_reference_submission(generation);
             let submitted = self
                 .submitted_references
                 .iter()
                 .position(|item| item.generation == generation)
                 .map(|index| self.submitted_references.swap_remove(index));
+            // The arrival is processed while the owner still holds this submission in flight.
+            // Returning the accepted orbit to a navigation goes through the same owner entry the
+            // ordinary acceptance uses, and that entry only answers the submission it named: a
+            // submission finished first is a navigation nothing can be handed to. The successor a
+            // finished submission releases is taken later in the same turn, so nothing waits.
             let processed = self.process_arrival(viewer, &response, submitted);
+            let _finished = viewer.finish_reference_submission(generation);
             let disposition = processed
                 .as_ref()
                 .map_or(OrbitDisposition::Stale, |result| result.0);
@@ -164,8 +169,14 @@ impl BrowserFrameLoop {
     /// both true and useful. The orbit is short because the reference escaped, so the levels above
     /// it carry records the kernel marks as reference-exhausted rather than silently wrong, and the
     /// ladder resumes at the level whose census asked so the correction costs one round rather than
-    /// a repaint from Preview. A refusal to take the navigation means a newer one has already been
-    /// requested, which will bring its own reference.
+    /// a repaint from Preview.
+    ///
+    /// The owner answers only the latest requested navigation, so the adoption is refused when the
+    /// gesture moved on while the correction was in flight. That refusal is not a dead end: the
+    /// newer navigation is staged and will bring its own reference, which is the pending
+    /// replacement work a hold is written for, and the reason says so. When no newer navigation
+    /// exists and the orbit still cannot be handed over there is nothing left to wait for, so the
+    /// ladder stops claiming a level it cannot serve and publishes why.
     fn retain_reference_across_discard(
         &mut self,
         viewer: &mut ViewerController,
@@ -173,8 +184,42 @@ impl BrowserFrameLoop {
         centre_revision: u32,
         level: Option<RefinementLevel>,
     ) -> Result<(), AppError> {
-        let Some(handle) = self.current_orbit else {
+        if self.adopt_orbit_for_navigation(viewer, generation, centre_revision)? {
+            self.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
+            self.main = viewer.drain_main()?.main;
+            self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
+            match level {
+                Some(level) => self.loop_state.scene_input_resumed(generation, level),
+                None => self.loop_state.scene_input_ready(generation),
+            }
+            self.prepared_level = None;
+            let requested = viewer.requested();
+            let map = viewer.screen_map(self.prepared_extent())?;
+            let plane = viewer.checked_plane();
+            self.install_main(viewer, requested.object_angles, plane, map);
             return Ok(());
+        }
+        if viewer.owner().latest_requested_generation() != generation
+            || viewer.owner().navigation_pending_depth() != 0
+        {
+            self.sampled_reference_refusal = Some(super::super::SUPERSEDED_CORRECTION_REASON);
+            return Ok(());
+        }
+        self.sampled_reference_refusal = Some(super::super::STRANDED_CORRECTION_REASON);
+        self.loop_state
+            .refuse_scene(super::super::STRANDED_CORRECTION_REASON);
+        Ok(())
+    }
+
+    /// Hands the orbit already held to one navigation, and reports whether the owner took it.
+    fn adopt_orbit_for_navigation(
+        &mut self,
+        viewer: &mut ViewerController,
+        generation: u32,
+        centre_revision: u32,
+    ) -> Result<bool, AppError> {
+        let Some(handle) = self.current_orbit else {
+            return Ok(false);
         };
         let orbit = self.orbits.get(handle).map_err(registry_error)?;
         let (orbit_length, orbit_precision_bits) = (orbit.length, orbit.precision_bits);
@@ -185,27 +230,17 @@ impl BrowserFrameLoop {
             orbit_length,
             orbit_precision_bits,
         ) {
-            return Ok(());
+            return Ok(false);
         }
-        if let Some(receipt) = self.accepted_reference_receipt.as_mut() {
-            super::super::adopt_reference_lease_for_correction(
-                &mut receipt.lease,
-                generation,
-                centre_revision,
-            );
-        }
-        self.main = viewer.drain_main()?.main;
-        self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-        match level {
-            Some(level) => self.loop_state.scene_input_resumed(generation, level),
-            None => self.loop_state.scene_input_ready(generation),
-        }
-        self.prepared_level = None;
-        let requested = viewer.requested();
-        let map = viewer.screen_map(self.prepared_extent())?;
-        let plane = viewer.checked_plane();
-        self.install_main(viewer, requested.object_angles, plane, map);
-        Ok(())
+        let Some(receipt) = self.accepted_reference_receipt.as_mut() else {
+            return Ok(false);
+        };
+        super::super::adopt_reference_lease_for_correction(
+            &mut receipt.lease,
+            generation,
+            centre_revision,
+        );
+        Ok(true)
     }
 
     fn process_arrival(

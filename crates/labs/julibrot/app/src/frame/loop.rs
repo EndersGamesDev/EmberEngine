@@ -455,6 +455,16 @@ const fn warp_presents_requested_view(kind: ember_julibrot_present::WarpKind) ->
 const DISCARDED_CORRECTION_REASON: &str =
     "census candidate orbit did not outlast the accepted reference";
 
+/// Names a correction whose navigation the gesture moved past before the orbit could return to it.
+#[cfg(target_arch = "wasm32")]
+const SUPERSEDED_CORRECTION_REASON: &str =
+    "census correction was superseded; the newer navigation carries its own reference";
+
+/// Names the one case in which the discarded correction leaves the ladder nothing to wait for.
+#[cfg(any(target_arch = "wasm32", test))]
+const STRANDED_CORRECTION_REASON: &str =
+    "the accepted orbit could not be returned to the census correction's navigation";
+
 /// Tests whether the accepted perturbation reference lease belongs to the requested scene.
 ///
 /// A freshly accepted short orbit may render once in its source generation so the existing census
