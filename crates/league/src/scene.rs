@@ -31,7 +31,7 @@
 use std::f32::consts::{PI, TAU};
 
 use ember_engine::glam::{Quat, Vec3};
-use ember_engine::{Camera, Fog, Frame, Instance, MeshData, MeshVertex};
+use ember_engine::{Camera, Environment, Fog, Frame, Instance, MeshData, MeshVertex, Weather};
 use league_core::data;
 use league_core::proto::{BuffSnap, ProjSnap};
 
@@ -56,6 +56,12 @@ pub const MESH_BLADE: u32 = 7;
 pub const MESH_GEAR: u32 = 8;
 /// A low-poly sphere, radius 1.
 pub const MESH_SPHERE: u32 = 9;
+/// Textured ground quads from `art::surfaces`, 1x1 in x/z at y=0, UVs
+/// already tiled for the field they cover: the garden floor (160 x 92),
+/// the lane paving (140 x 14) and a court yard (11 x 11).
+pub const MESH_GARDEN: u32 = 10;
+pub const MESH_LANE: u32 = 11;
+pub const MESH_COURT: u32 = 12;
 
 /// Camera height over the focus, its offset toward +Z and the vertical
 /// field of view. The pitch these give (56 degrees, the MOBA norm) is what
@@ -68,9 +74,16 @@ pub const CAM_FOV: f32 = 40.0;
 /// The camera sits high and behind the focus, looking along -Z.
 #[must_use]
 pub const fn camera_for(focus: (f32, f32)) -> Camera {
+    camera_zoomed(focus, 1.0)
+}
+
+/// The same camera pulled in by `zoom` (0.3 is a close-up of a body, 1.0
+/// the play view); the pitch is unchanged, so [`bar_tilt`] still holds.
+#[must_use]
+pub const fn camera_zoomed(focus: (f32, f32), zoom: f32) -> Camera {
     let (x, z) = focus;
     Camera {
-        eye: Vec3::new(x, CAM_HEIGHT, z + CAM_BACK),
+        eye: Vec3::new(x, CAM_HEIGHT * zoom, z + CAM_BACK * zoom),
         target: Vec3::new(x, 0.0, z),
         fov_y_deg: CAM_FOV,
     }
@@ -101,6 +114,21 @@ pub fn face(yaw: f32) -> Quat {
 #[must_use]
 pub fn bar_tilt() -> Quat {
     Quat::from_rotation_x(-CAM_HEIGHT.atan2(CAM_BACK))
+}
+
+/// The arena's light: a clear afternoon over an elevated garden, sun from
+/// the south-east so a standing body throws a short shadow toward the
+/// camera's far side, a little cloud, a shadow volume just wider than the
+/// play view. Time drives the clouds only; nothing here touches the sim.
+#[must_use]
+pub fn garden_light(time: f32) -> Environment {
+    let mut env = Environment::outdoor(Weather::Clear, time);
+    env.sun_direction = Vec3::new(0.45, 0.85, -0.3).normalize();
+    env.sun_color = Vec3::new(1.0, 0.94, 0.82);
+    env.sun_intensity = 1.05;
+    env.cloud_coverage = 0.15;
+    env.shadow_extent = 34.0;
+    env
 }
 
 // ---------------------------------------------------------------------------
@@ -150,8 +178,9 @@ fn rim_normal(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 /// The whole mesh set, in registration order: the nine procedural meshes,
-/// then every baked champion part (`art::meshes`), whose ids start at
-/// [`MESH_SPHERE`] + 1. `lib.rs` registers exactly this list.
+/// the three ground surfaces (`art::surfaces`, ids [`MESH_GARDEN`]..), then
+/// every baked champion part (`art::meshes`). `lib.rs` registers exactly
+/// this list.
 #[must_use]
 pub fn build_meshes() -> Vec<MeshData> {
     let mut meshes = vec![
@@ -165,7 +194,9 @@ pub fn build_meshes() -> Vec<MeshData> {
         gear_mesh(),
         sphere_mesh(),
     ];
-    meshes.extend(art::meshes(MESH_SPHERE + 1));
+    meshes.extend(art::surfaces());
+    debug_assert_eq!(meshes.len() as u32, MESH_SPHERE + art::SURFACE_COUNT);
+    meshes.extend(art::meshes(MESH_SPHERE + art::SURFACE_COUNT + 1));
     meshes
 }
 
@@ -418,13 +449,21 @@ fn push_ground(frame: &mut Frame) {
     let lane = [0.11, 0.11, 0.07];
     let paint = [0.4, 0.38, 0.26];
     let stone = [0.085, 0.085, 0.105];
+    // the garden floor and the lane paving are the fleet's pictures on tiled
+    // quads, drawn white so the picture is not tinted twice (the bake already
+    // darkened them for the pass); the flat colours stay as the fallback
+    // tint under a surface that failed to load
+    let _ = (field, lane);
     frame.instances.push(
-        ins(v3(0.0, -0.05, 0.0), v3(160.0, 1.0, 92.0), field).with_mesh(MESH_PLANE),
+        ins(v3(0.0, -0.05, 0.0), v3(160.0, 1.0, 92.0), [1.0, 1.0, 1.0])
+            .with_mesh(MESH_GARDEN)
+            .with_surface(0.95, 0.0),
     );
     // the lane corridor and its edges
     frame.instances.push(
-        ins(v3(0.0, -0.02, 0.0), v3(2.0 * data::CORE_X + 16.0, 1.0, 2.0 * data::LANE_Z), lane)
-            .with_mesh(MESH_PLANE),
+        ins(v3(0.0, -0.02, 0.0), v3(2.0 * data::CORE_X + 16.0, 1.0, 2.0 * data::LANE_Z), [1.0, 1.0, 1.0])
+            .with_mesh(MESH_LANE)
+            .with_surface(0.85, 0.0),
     );
     for z in [-data::LANE_Z, data::LANE_Z] {
         frame.instances.push(
@@ -470,7 +509,9 @@ fn push_ground(frame: &mut Frame) {
     for c in data::COURT_POS {
         let [cx, cz] = c;
         frame.instances.push(
-            ins(v3(cx, -0.01, cz), v3(11.0, 1.0, 11.0), mix(lane, stone, 0.5)).with_mesh(MESH_PLANE),
+            ins(v3(cx, -0.01, cz), v3(11.0, 1.0, 11.0), [1.0, 1.0, 1.0])
+                .with_mesh(MESH_COURT)
+                .with_surface(0.8, 0.0),
         );
         let path_len = cz.abs() - data::LANE_Z - 5.5;
         frame.instances.push(
@@ -689,10 +730,20 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
     let (x, z) = (u.x, u.z);
 
     // the ground ring says the team even when colours run together; mine
-    // is doubled so the eye finds it in a brawl
-    frame.instances.push(ins(v3(x, 0.05, z), v3(1.15 * wob, 1.0, 1.15 * wob), team).with_mesh(MESH_RING));
+    // is doubled so the eye finds it in a brawl. A baked body is bigger
+    // than the procedural ones, so its ring and cue grow with it, and a
+    // disc in the champion's own colour sits inside the ring: from above
+    // that disc is the one cue that never hides behind the body.
+    let baked = art::champion(def);
+    let ring = baked.map_or(1.15, |c| 0.62 + c.height * 0.36);
+    frame.instances.push(ins(v3(x, 0.05, z), v3(ring * wob, 1.0, ring * wob), team).with_mesh(MESH_RING).without_shadow());
+    if baked.is_some() {
+        // smaller and darker than the team ring on purpose: the ring says
+        // whose side, the disc says who, and the ring must win from far
+        frame.instances.push(ins(v3(x, 0.03, z), v3(ring * 0.6, 1.0, ring * 0.6), scale3(u.colour, 0.38)).with_mesh(MESH_DISC).without_shadow());
+    }
     if mine {
-        frame.instances.push(ins(v3(x, 0.04, z), v3(1.45, 1.0, 1.45), [0.95, 0.95, 0.9]).with_mesh(MESH_RING));
+        frame.instances.push(ins(v3(x, 0.04, z), v3(ring * 1.26, 1.0, ring * 1.26), [0.95, 0.95, 0.9]).with_mesh(MESH_RING).without_shadow());
     }
     if wear.slow {
         frame.instances.push(ins(v3(x, 0.07, z), v3(0.85, 1.0, 0.85), [0.55, 0.8, 1.0]).with_mesh(MESH_DISC));
@@ -739,8 +790,21 @@ fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, we
         frame.instances.push(
             Instance::new(origin + body * (p - swing * p), scale, Vec3::from(paint))
                 .with_rot(body * swing)
-                .with_mesh(part.mesh),
+                .with_mesh(part.mesh)
+                .with_surface(0.65, 0.2),
         );
+    }
+    if u.def == data::SWARM {
+        // the swarm around the orb stays procedural: three drones in orbit
+        for i in 0..3 {
+            let a = t * 2.4 + TAU * (i as f32) / 3.0 + u.id as f32;
+            let h = lift + 0.9 + 0.25 * (t * 3.0 + i as f32 * 2.0).sin();
+            frame.instances.push(
+                ins(v3(u.x + a.cos() * 1.05, h, u.z + a.sin() * 1.05), v3(0.13, 0.13, 0.13), mix(col, [1.0, 1.0, 1.0], 0.35))
+                    .with_rot(Quat::from_rotation_y(-a))
+                    .with_mesh(MESH_OCTA),
+            );
+        }
     }
 }
 
@@ -961,16 +1025,18 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
     }
     let (w, y) = match u.k {
         // a baked body carries its own height in the sidecar; the bar rides
-        // a hand above it, the procedural bodies keep their tuned constant
-        0 | 3 => (1.4, art::champion(u.def).map_or(2.55, |c| c.height + 1.15)),
+        // a hand above it and widens with it, the procedural bodies keep
+        // their tuned constants
+        0 | 3 => art::champion(u.def).map_or((1.4, 2.55), |c| (1.2 + c.height * 0.3, c.height + 1.1)),
         4 | 5 => (2.4, 7.2),
         6 | 7 => (3.0, 5.9),
         _ => (0.7, 1.8),
     };
     let tilt = bar_tilt();
     let h = if objective { 0.16 } else { 0.12 };
+    // bars are HUD, not world: they cast no shadow
     frame.instances.push(
-        ins(v3(u.x, y, u.z), v3(w + 0.08, h + 0.06, 0.03), [0.04, 0.04, 0.05]).with_rot(tilt).with_mesh(0),
+        ins(v3(u.x, y, u.z), v3(w + 0.08, h + 0.06, 0.03), [0.04, 0.04, 0.05]).with_rot(tilt).with_mesh(0).without_shadow(),
     );
     let col = if u.t == 2 {
         [0.85, 0.78, 0.4]
@@ -981,14 +1047,14 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
     };
     // the fill grows from the left edge; local +X is screen right
     frame.instances.push(
-        ins(v3(u.x - w * (1.0 - frac) / 2.0, y, u.z), v3(w * frac, h, 0.035), col).with_rot(tilt).with_mesh(0),
+        ins(v3(u.x - w * (1.0 - frac) / 2.0, y, u.z), v3(w * frac, h, 0.035), col).with_rot(tilt).with_mesh(0).without_shadow(),
     );
     if (u.k == 0 || u.k == 3) && u.mm > 0.0 {
         let mf = (u.mn / u.mm).clamp(0.0, 1.0);
         // the mana sliver hangs just under the bar, in the card's own plane
         let down = tilt * Vec3::new(0.0, -0.13, 0.0);
         frame.instances.push(
-            ins(v3(u.x - w * (1.0 - mf) / 2.0, y, u.z) + down, v3(w * mf, 0.05, 0.035), [0.35, 0.55, 1.0]).with_rot(tilt).with_mesh(0),
+            ins(v3(u.x - w * (1.0 - mf) / 2.0, y, u.z) + down, v3(w * mf, 0.05, 0.035), [0.35, 0.55, 1.0]).with_rot(tilt).with_mesh(0).without_shadow(),
         );
     }
 }
@@ -1314,9 +1380,10 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
         camera,
         instances: Vec::with_capacity(input.units.len() * 8 + input.fx.len() * 3 + 96),
         fog: Fog {
-            color: [0.015, 0.02, 0.03],
-            density: 0.0025,
+            color: [0.55, 0.62, 0.7],
+            density: 0.0018,
         },
+        environment: garden_light(t),
         ..Frame::default()
     };
     push_ground(&mut frame);
@@ -1357,21 +1424,22 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
 // the showcase (native harness only)
 // ---------------------------------------------------------------------------
 
-/// `LEAGUE_SHOWCASE=1` lines the five champions up in front of the camera
-/// focus, turning slowly, so a baked mesh can be photographed for sign-off
-/// without waiting for a match to field it. Baked art where it exists, the
-/// procedural body otherwise, a team ring under each. Never on the web.
+/// `LEAGUE_SHOWCASE=1` lines the five champions up at mid-lane (x = -6.4,
+/// -3.2, 0, 3.2, 6.4 at z = 1, in table order), turning slowly, so a baked
+/// mesh can be photographed for sign-off without waiting for a match to
+/// field it: `LEAGUE_CAM=0,0` frames the row, `LEAGUE_CAM=-6.4,1@0.3` is a
+/// close-up of SW4RM. Baked art where it exists, the procedural body
+/// otherwise, a team ring under each. Never on the web.
 #[cfg(not(target_arch = "wasm32"))]
-fn push_showcase(frame: &mut Frame, camera: &Camera, t: f32) {
+fn push_showcase(frame: &mut Frame, _camera: &Camera, t: f32) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     if !*ON.get_or_init(|| std::env::var("LEAGUE_SHOWCASE").is_ok_and(|v| v != "0" && !v.is_empty())) {
         return;
     }
-    let (cx, cz) = (camera.target.x, camera.target.z);
     for def in 0..5u8 {
-        let x = cx + (f32::from(def) - 2.0) * 3.2;
-        let z = cz + 1.0;
+        let x = (f32::from(def) - 2.0) * 3.2;
+        let z = 1.0;
         let u = UnitLite {
             id: 9000 + u32::from(def),
             k: 0,
@@ -1413,20 +1481,27 @@ fn review_camera(input: &SceneInput<'_>) -> Option<Camera> {
         Auto,
         Slot(u8),
     }
-    static MODE: OnceLock<Option<Mode>> = OnceLock::new();
+    static MODE: OnceLock<Option<(Mode, f32)>> = OnceLock::new();
+    // `LEAGUE_CAM=<mode>[@zoom]`: `0,16@0.35` is a close-up of the North
+    // Court, `auto@0.6` a tighter fight camera
     let mode = MODE.get_or_init(|| {
         let raw = std::env::var("LEAGUE_CAM").ok()?;
         let raw = raw.trim();
+        let (raw, zoom) = raw
+            .split_once('@')
+            .map_or((raw, 1.0f32), |(m, k)| (m.trim(), k.trim().parse::<f32>().unwrap_or(1.0)));
+        let zoom = if zoom.is_finite() && zoom > 0.05 { zoom } else { 1.0 };
         if raw.eq_ignore_ascii_case("auto") {
-            return Some(Mode::Auto);
+            return Some((Mode::Auto, zoom));
         }
         if let Some(n) = raw.strip_prefix("slot:") {
-            return n.trim().parse().ok().map(Mode::Slot);
+            return n.trim().parse().ok().map(|s| (Mode::Slot(s), zoom));
         }
         let (x, z) = raw.split_once(',')?;
-        Some(Mode::Fixed(x.trim().parse().ok()?, z.trim().parse().ok()?))
+        Some((Mode::Fixed(x.trim().parse().ok()?, z.trim().parse().ok()?), zoom))
     });
-    let focus = match (*mode)? {
+    let (mode, zoom) = (*mode)?;
+    let focus = match mode {
         Mode::Fixed(x, z) => (x, z),
         Mode::Slot(s) => {
             let u = input.units.iter().find(|u| u.k == 0 && u.slot == s)?;
@@ -1434,7 +1509,7 @@ fn review_camera(input: &SceneInput<'_>) -> Option<Camera> {
         }
         Mode::Auto => action_focus(input.units)?,
     };
-    Some(camera_for(focus))
+    Some(camera_zoomed(focus, zoom))
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1539,12 +1614,21 @@ mod tests {
     fn every_mesh_has_vertices_and_normals() {
         let meshes = build_meshes();
         assert!(
-            meshes.len() as u32 >= MESH_SPHERE,
-            "the nine procedural meshes come first; baked art follows them"
+            meshes.len() as u32 >= MESH_SPHERE + art::SURFACE_COUNT,
+            "the nine procedural meshes come first, then the ground surfaces, then baked art"
         );
+        // the surfaces are textured quads on the floor (ids are 1-based:
+        // id 1 is meshes[0], the engine cube being id 0)
+        for i in MESH_GARDEN..=MESH_COURT {
+            let m = &meshes[(i - 1) as usize];
+            assert!(m.texture.is_some(), "surface {i} has no 8-bit texture");
+            assert_eq!(m.vertices.len(), 6, "surface {i} is not one quad");
+            assert!(m.vertices.iter().all(|v| v.pos[1].abs() < 1e-6), "surface {i} is not on y=0");
+            assert!(m.vertices.iter().any(|v| v.uv[0] > 1.5), "surface {i} has no tiled UVs");
+        }
         // every baked part is textured (the loader's silent 16-bit failure
         // would show up here as `None`) and sized like a champion
-        for (i, m) in meshes.iter().enumerate().skip(MESH_SPHERE as usize) {
+        for (i, m) in meshes.iter().enumerate().skip((MESH_SPHERE + art::SURFACE_COUNT) as usize) {
             assert!(m.texture.is_some(), "baked mesh {i} has no 8-bit base-colour texture");
             let top = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
             let bottom = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min);
@@ -1687,10 +1771,13 @@ mod tests {
             my_slot: Some(1),
         });
         assert!(frame.instances.len() > 150, "{} instances", frame.instances.len());
+        // every id must be one `build_meshes` registers: the nine procedural
+        // meshes plus whatever baked parts are embedded
+        let registered = build_meshes().len() as u32;
         for i in &frame.instances {
             assert!(i.position.is_finite() && i.scale.is_finite() && i.color.is_finite(), "{i:?}");
             assert!(i.rot.is_finite() && (i.rot.length() - 1.0).abs() < 1e-3, "{i:?}");
-            assert!(i.mesh <= MESH_SPHERE, "mesh id {} is not registered", i.mesh);
+            assert!(i.mesh <= registered, "mesh id {} is not registered ({registered} meshes)", i.mesh);
         }
         // the callers' entry draws the same world without wearables
         let plain = scene(&units, &zones, &fx, 1.0, camera_for((0.0, 0.0)), &projs);

@@ -46,11 +46,85 @@ struct Source {
 
 /// Champions delivered so far, in table order. Add a row when a GLB lands;
 /// the `include_bytes!` path is relative to this file.
-const SOURCES: &[Source] = &[Source {
-    def: league_core::data::SWARM,
-    glb: include_bytes!("../../../../assets/models/league/v2/swarm.glb"),
-    sidecar: include_str!("../../../../assets/models/league/v2/swarm.json"),
-}];
+const SOURCES: &[Source] = &[
+    Source {
+        def: league_core::data::SWARM,
+        glb: include_bytes!("../../../../assets/models/league/v2/swarm.glb"),
+        sidecar: include_str!("../../../../assets/models/league/v2/swarm.json"),
+    },
+    Source {
+        def: league_core::data::KNIGHT,
+        glb: include_bytes!("../../../../assets/models/league/v2/emberknight.glb"),
+        sidecar: include_str!("../../../../assets/models/league/v2/emberknight.json"),
+    },
+    Source {
+        def: league_core::data::HALLOW,
+        glb: include_bytes!("../../../../assets/models/league/v2/hallow.glb"),
+        sidecar: include_str!("../../../../assets/models/league/v2/hallow.json"),
+    },
+    Source {
+        def: league_core::data::MAW,
+        glb: include_bytes!("../../../../assets/models/league/v2/bogmaw.glb"),
+        sidecar: include_str!("../../../../assets/models/league/v2/bogmaw.json"),
+    },
+    Source {
+        def: league_core::data::TESSERA,
+        glb: include_bytes!("../../../../assets/models/league/v2/tessera.glb"),
+        sidecar: include_str!("../../../../assets/models/league/v2/tessera.json"),
+    },
+];
+
+/// Ground surfaces baked by `tools/league/art/bake_surface.py`: UV-tiled
+/// unit quads with the mirrored picture embedded. Registered BEFORE the
+/// champions, in this order, so their ids are fixed (`scene::MESH_GARDEN`,
+/// `MESH_LANE`, `MESH_COURT`).
+const SURFACES: &[(&str, &[u8])] = &[
+    ("garden", include_bytes!("../../../../assets/models/league/v2/surface-garden.glb")),
+    ("lane", include_bytes!("../../../../assets/models/league/v2/surface-lane.glb")),
+    ("court", include_bytes!("../../../../assets/models/league/v2/surface-court.glb")),
+];
+
+/// How many meshes [`surfaces`] returns, always, so the champion ids that
+/// follow never move.
+pub const SURFACE_COUNT: u32 = 3;
+
+/// The ground surfaces as meshes, one per `SURFACES` row in order. A quad
+/// whose GLB cannot be read is replaced by an untextured quad and warned
+/// about, so the ids after it stay where they are.
+#[must_use]
+pub fn surfaces() -> Vec<MeshData> {
+    SURFACES
+        .iter()
+        .map(|(name, bytes)| match load_glb(bytes) {
+            Ok(mut parts) if !parts.is_empty() => {
+                let part = parts.swap_remove(0);
+                if part.mesh.texture.is_none() {
+                    tracing::warn!(surface = name, "league art: surface has no 8-bit texture; it will draw flat");
+                }
+                part.mesh
+            }
+            Ok(_) => {
+                tracing::warn!(surface = name, "league art: surface glb has no primitive; drawing a plain quad");
+                plain_quad()
+            }
+            Err(e) => {
+                tracing::warn!(surface = name, "league art: surface glb unreadable ({e}); drawing a plain quad");
+                plain_quad()
+            }
+        })
+        .collect()
+}
+
+/// A unit quad on y=0 facing +Y, the stand-in for a surface that failed.
+fn plain_quad() -> MeshData {
+    use ember_engine::MeshVertex;
+    let n = [0.0, 1.0, 0.0];
+    let v = |x: f32, z: f32| MeshVertex { pos: [x, 0.0, z], normal: n, uv: [0.0, 0.0] };
+    MeshData {
+        vertices: vec![v(-0.5, -0.5), v(0.5, 0.5), v(0.5, -0.5), v(-0.5, -0.5), v(-0.5, 0.5), v(0.5, 0.5)],
+        texture: None,
+    }
+}
 
 /// One drawable part of a baked champion.
 #[derive(Debug, Clone)]
