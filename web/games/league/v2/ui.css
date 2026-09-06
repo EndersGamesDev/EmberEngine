@@ -154,13 +154,13 @@ label { display: inline-flex; gap: 8px; align-items: center; font-size: .9rem; }
   font: inherit;
   overflow: hidden;
 }
-.card .art { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: linear-gradient(160deg, var(--bg3), var(--bg0)); margin-bottom: 8px; }
+.card .art { display: block; position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: linear-gradient(160deg, var(--bg3), var(--bg0)); margin-bottom: 8px; }
 .card .art img { position: relative; width: 100%; height: 100%; object-fit: cover; }
 .card .art .emb { position: absolute; inset: 0; display: grid; place-items: center; font-size: 2.4rem; opacity: .8; }
 .card b { font-size: .95rem; display: block; }
 .card .title { font-size: .72rem; color: var(--ivory-dim); display: block; margin: 1px 0 7px; }
 .card .kit { font-size: .72rem; color: var(--ivory-dim); line-height: 1.5; }
-.card .kit b { color: var(--ivory); font-weight: 600; }
+.card .kit b { display: inline; font-size: inherit; color: var(--ivory); font-weight: 600; }
 .card.sel { border-color: var(--turq); box-shadow: 0 0 14px rgba(79, 216, 200, .28), inset 0 0 0 1px rgba(79, 216, 200, .2); }
 .card.taken { opacity: .4; }
 .card.taken::after { content: "TAKEN"; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) rotate(-8deg); color: var(--red); font-weight: 800; letter-spacing: .2em; font-size: .8rem; }

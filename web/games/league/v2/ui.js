@@ -99,6 +99,7 @@ const hasBindingApi = () => typeof wasm?.set_bindings_json === 'function';
 const setEnabled = (v) => { try { wasm?.set_input_enabled?.(v); } catch {} };
 
 let keysOpen = false, listening = null, conflict = null;
+let bindingRecoveryNote = '';
 let keysReturnFocus = null;
 const typingTarget = (el) => !!el?.closest?.('input, textarea, select, [contenteditable="true"]');
 const visible = (id) => !$(id).classList.contains('hidden');
@@ -126,11 +127,12 @@ function syncEngine() {
   }
   try {
     applyKeys({ ...keys });
-    setKeyStatus('');
+    setKeyStatus(bindingRecoveryNote, !!bindingRecoveryNote);
   } catch (e) {
     applyKeys({});
     persistKeys();
-    setKeyStatus('The saved bindings were invalid. Default keys have been restored.', true);
+    bindingRecoveryNote = 'The saved bindings were invalid. Default keys have been restored.';
+    setKeyStatus(bindingRecoveryNote, true);
   }
 }
 
@@ -546,8 +548,8 @@ function buildCards() {
       <img src="${ART[i]}" alt="" onerror="this.style.display='none'"></span>
       <b style="color:rgb(${CHAMP_RGB(c)})">${c.name}</b>
       <span class="title">${c.title}</span>
-      <div class="kit"><b>Q</b> ${c.q.name} — ${c.q.desc}<br><b>W</b> ${c.w.name} — ${c.w.desc}<br>
-      <b>E</b> ${c.e.name} — ${c.e.desc}<br><b>R</b> ${c.r.name} — ${c.r.desc}</div>
+      <div class="kit"><b>Q</b> ${c.q.name}<br><b>W</b> ${c.w.name}<br>
+      <b>E</b> ${c.e.name}<br><b>R</b> ${c.r.name}</div>
     </button>`).join('');
   $('cards').querySelectorAll('.card').forEach((el) => {
     el.onclick = () => { if (el.disabled) return; picked = Number(el.dataset.c); buildCardsSel(); buildDetail(); sendPick(); };
@@ -583,7 +585,7 @@ function buildDetail() {
       <div class="dstat">
         <span>HP <b>${c.hp}</b></span><span>Mana <b>${c.mana}</b></span><span>Move <b>${c.ms}</b></span>
         <span>Damage <b>${c.ad}</b></span><span>Ability power <b>${c.ap}</b></span>
-        <span>Range <b>${c.range}</b></span><span>Attack cd <b>${c.atkCd}s</b></span>
+        <span>Range <b>${Number(c.range.toFixed(2))}</b></span><span>Attack cd <b>${Number(c.atkCd.toFixed(2))}s</b></span>
       </div>
       <div class="dkit">${row('Q', c.q)}${row('W', c.w)}${row('E', c.e)}${row('R', c.r)}</div>
     </div>`;
