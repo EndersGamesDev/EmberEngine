@@ -694,6 +694,8 @@ fn project_scene_vertex_with_shortcut(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
         Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, ViewControls, construct_plane,
@@ -791,6 +793,11 @@ mod tests {
     }
 
     /// The 960x540 owner row copied by the programmatic driver on 2026-09-06.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the copied finite row no longer constructs the plane and screen map that the
+    /// page accepted, which a valid saved row cannot arrange.
     fn zoom_jump_owner_pose() -> Pose {
         let object = ObjectAngles {
             rho_12: 0.0,
@@ -828,13 +835,108 @@ mod tests {
         posed
     }
 
-    #[test]
     #[allow(
-        clippy::print_stderr,
-        reason = "the owner-row probe reports the measured 9x9 error field"
+        dead_code,
+        reason = "the diagnostic panic renders these fields through Debug"
     )]
-    fn zoom_jump_owner_row_refuses_at_the_error_ceiling() {
+    #[derive(Clone, Copy, Debug)]
+    struct ProjectionRefusalProbe {
+        stage: &'static str,
+        value: f64,
+        limit: f64,
+    }
+
+    /// Names the exact scene-vertex branch behind an already observed `None`.
+    fn projection_refusal_probe(
+        pose: &Pose,
+        screen: [f64; 2],
+        record_height: f64,
+    ) -> ProjectionRefusalProbe {
+        let PoseMap::Mapped(map) = pose.map else {
+            return ProjectionRefusalProbe {
+                stage: "edge on",
+                value: 0.0,
+                limit: 0.0,
+            };
+        };
+        let mapped_homogeneous = homogeneous(map.rows, screen);
+        if mapped_homogeneous[2] <= 0.0 || !mapped_homogeneous[2].is_finite() {
+            return ProjectionRefusalProbe {
+                stage: "chart horizon",
+                value: mapped_homogeneous[2],
+                limit: 0.0,
+            };
+        }
+        let mapped = [
+            mapped_homogeneous[0] / mapped_homogeneous[2],
+            mapped_homogeneous[1] / mapped_homogeneous[2],
+        ];
+        let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
+        let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
+        let rotated = ambient_point(
+            pose.plane,
+            [chart_scale * mapped[0], chart_scale * mapped[1]],
+            height,
+            &pose.view,
+        );
+        let denominator_five = pose.view.distance_five - rotated[4];
+        let near_five = RELIEF_NEAR_FRACTION * pose.view.distance_five;
+        if denominator_five < near_five || denominator_five <= POLE_EPSILON {
+            return ProjectionRefusalProbe {
+                stage: "fifth-dimensional near limit",
+                value: denominator_five,
+                limit: near_five.max(POLE_EPSILON),
+            };
+        }
+        let scale_five = pose.view.distance_five / denominator_five;
+        let projected_four = [
+            rotated[0] * scale_five,
+            rotated[1] * scale_five,
+            rotated[2] * scale_five,
+            rotated[3] * scale_five,
+        ];
+        let denominator_four = pose.view.distance_four - projected_four[3];
+        if denominator_four <= POLE_EPSILON {
+            return ProjectionRefusalProbe {
+                stage: "four-dimensional pole",
+                value: denominator_four,
+                limit: POLE_EPSILON,
+            };
+        }
+        let scale_four = pose.view.distance_four / denominator_four;
+        let world = [
+            projected_four[0] * scale_four,
+            projected_four[1] * scale_four,
+            projected_four[2] * scale_four,
+        ];
+        let (yaw_sine, yaw_cosine) = pose.view.camera_yaw.sin_cos();
+        let (pitch_sine, pitch_cosine) = pose.view.camera_pitch.sin_cos();
+        let yawed = [
+            yaw_cosine.mul_add(world[0], yaw_sine * world[2]),
+            world[1],
+            (-yaw_sine).mul_add(world[0], yaw_cosine * world[2]),
+        ];
+        let view_z = pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2])
+            - pose.view.distance_four;
+        let clip_w = -view_z;
+        if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
+            return ProjectionRefusalProbe {
+                stage: "observer pole",
+                value: clip_w,
+                limit: POLE_EPSILON,
+            };
+        }
+        ProjectionRefusalProbe {
+            stage: "non-finite projected point",
+            value: f64::NAN,
+            limit: f64::MAX,
+        }
+    }
+
+    #[test]
+    fn zoom_jump_owner_row_abandons_a_partly_measurable_corpus() {
         let from = zoom_jump_owner_pose();
+        let mut report = String::new();
         for zoom_delta in [0.1, 0.5] {
             let mut to = from;
             to.zoom_log2 += zoom_delta;
@@ -848,28 +950,78 @@ mod tests {
                 residual,
             )
             .expect("the owner row has a finite anchor plan");
-            let samples = sampled_errors(&from, &to, unpack_rows(raw.rows))
-                .expect("the owner row has a measurable relief corpus");
-            assert_eq!(samples.len(), 9 * 9 * HEIGHT_SAMPLES.len());
-            let screen_maxima: Vec<f64> = samples
-                .iter()
-                .copied()
-                .collect::<Vec<_>>()
-                .chunks_exact(HEIGHT_SAMPLES.len())
-                .map(|heights| heights.iter().copied().fold(0.0, f64::max))
-                .collect();
+            let approximate = unpack_rows(raw.rows);
+            let mut resolved = ErrorSamples::new();
+            let mut screen_maxima = [None; 81];
+            let mut horizons = Vec::new();
+            let mut refusals = Vec::new();
+            for row in 0..SCREEN_STEPS {
+                for column in 0..SCREEN_STEPS {
+                    let target_screen = [
+                        (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                            * f64::from(to.grid_width),
+                        (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                            * f64::from(to.grid_height),
+                    ];
+                    let source_screen = apply_homography(approximate, target_screen)
+                        .expect("the finite anchor plan maps every probe point");
+                    if !in_front_of_horizon(&to, target_screen)
+                        || !in_front_of_horizon(&from, source_screen)
+                    {
+                        horizons.push((row, column));
+                        continue;
+                    }
+                    for height in HEIGHT_SAMPLES {
+                        let destination = project_scene_point(&to, target_screen, height);
+                        let source = project_scene_point(&from, source_screen, height);
+                        match (destination, source) {
+                            (Some(destination), Some(source)) => {
+                                let approximate_source = apply_homography(approximate, destination)
+                                    .expect("the displayed map carries a resolved relief point");
+                                let error = (approximate_source[0] - source[0])
+                                    .hypot(approximate_source[1] - source[1]);
+                                resolved.push(error).expect("the fixed corpus has capacity");
+                                let index = usize::try_from(row * SCREEN_STEPS + column)
+                                    .expect("the 9x9 index fits");
+                                screen_maxima[index] = Some(
+                                    screen_maxima[index]
+                                        .map_or(error, |maximum: f64| maximum.max(error)),
+                                );
+                            }
+                            (destination, source) => refusals.push((
+                                row,
+                                column,
+                                height,
+                                destination
+                                    .is_none()
+                                    .then(|| projection_refusal_probe(&to, target_screen, height)),
+                                source.is_none().then(|| {
+                                    projection_refusal_probe(&from, source_screen, height)
+                                }),
+                            )),
+                        }
+                    }
+                }
+            }
+            let metrics = resolved
+                .clone()
+                .maximum_and_p95()
+                .expect("some owner-row samples resolve");
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
+            assert_eq!(plan.approx_max_error_px, None);
             assert!(raw.source_valid);
             assert!(residual <= MAX_CHART_RESIDUAL_PX);
-            assert!(raw.approx_max_error_px.is_some_and(|px| px > WARP_MAX_ERROR_PX));
-            eprintln!(
-                "owner zoom +{zoom_delta:.1}: chart_residual={residual:.9} max={:.9} p95={:.9} field={screen_maxima:.6?}",
-                raw.approx_max_error_px.expect("the maximum was measured"),
-                raw.approx_p95_error_px.expect("the percentile was measured"),
-            );
+            writeln!(
+                report,
+                "owner zoom +{zoom_delta:.1}: chart_residual={residual:.9} resolved={} max={:.9} p95={:.9}\nfield={screen_maxima:.6?}\nhorizons={horizons:?}\nrefusals={refusals:#?}",
+                resolved.len(),
+                metrics.0,
+                metrics.1,
+            )
+            .expect("writing to a String cannot fail");
         }
-        panic!("diagnostic measurement round: pin the printed field after server execution");
+        panic!("diagnostic measurement round:\n{report}");
     }
 
     fn frame(pose: &Pose) -> SceneFrame {
