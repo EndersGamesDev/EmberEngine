@@ -4,6 +4,11 @@ Follow-ups and known gaps, one line each; pull into a milestone plan before work
 
 Presenter and input work is planned in `docs/presenter-architecture.md` and `docs/input-latch.md`, not here and not in `docs/plans/milestone-1.md` — those two documents are the plan of record for the presenter split, the `SceneFrame` contract, the two-consumer input latch, and the capture policy, restated against the v7 renderer. Items below that they now own are marked.
 
+## Arena v29 follow-ups
+
+- At render rates above60Hz, predicted HUD spread uses per-render displacement and can briefly narrow on frames without a movement tick before authoritative spread arrives; derive its moving flag from the latest fixed-tick motion without marking a blocked player moving. Server accuracy is authoritative and unchanged.
+- Harbor roof-bridge/indoor contact shading still shows the coarse voxel interpolation bands visible in v29 WebGL2 captures; measure a budget-preserving reconstruction/filter improvement separately from map collision and parkour. No new lighting feature was claimed in v29.
+
 ## Architecture (from the v7 re-framing)
 
 - The scene and present command buffers reach the queue in one `submit` call (`crates/ember-engine/src/renderer.rs:798-799`) under a comment claiming the ATW sliced-submission rule (`crates/ember-engine/src/renderer.rs:673-675`). Splitting the call is a one-line fix worth making for the stage boundary, but it does **not** deliver sliced scheduling — on one in-order queue the present still runs behind the scene work either way, and real slicing needs the scene emitted as several separately submitted chunks (roadmap step 7). Fix the comment along with the code (`docs/presenter-architecture.md` §5).

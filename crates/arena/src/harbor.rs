@@ -47,6 +47,9 @@ pub const MESH_COUNT: usize = 11;
 // Distant terminal continuation, not a larger playable map. Its edges lie
 // beyond the camera's 500m far plane even from the authored overview views.
 const FAR_GROUND: f32 = 700.0;
+// Cosmetic concrete finish on the simulation's y=0 floor. The intersecting
+// road stripes top out at 18mm; 20mm covers them without a collision step.
+const INTERIOR_FLOOR_Y: f32 = 0.02;
 
 // White, crane blue, deep hull, red oxide, rubber, galvanized steel, safety
 // yellow, window blue, concrete, ochre, evergreen, ivory, water and markings.
@@ -287,6 +290,7 @@ pub fn harbor_meshes() -> Vec<MeshData> {
         Vec3::new(48.3, -2.1, 0.0),
         Vec3::new(0.6, 4.2, FAR_GROUND * 2.0),
     );
+    service_building_floors(&mut quay);
     let sea = water();
     let mut body20 = container_body(CONTAINER_20);
     let mut body40 = container_body(CONTAINER_40);
@@ -1010,6 +1014,24 @@ fn warehouse_details(builder: &mut Builder) {
     }
 }
 
+fn service_building_floors(builder: &mut Builder) {
+    for house in SERVICE_HOUSES {
+        let solids = house.solids();
+        let (west, east, north_lintel, south_lintel) = (solids[0], solids[1], solids[6], solids[7]);
+        // Derive the usable interior and both thresholds from actual wall
+        // faces. Nothing extends outdoors or adds geometry above ankle level.
+        builder.horizontal(
+            [west.max[0], north_lintel.max[1]],
+            [east.min[0], south_lintel.min[1]],
+            INTERIOR_FLOOR_Y,
+            4.0,
+        );
+        for lintel in [north_lintel, south_lintel] {
+            builder.horizontal(lintel.min, lintel.max, INTERIOR_FLOOR_Y, 4.0);
+        }
+    }
+}
+
 fn service_building_details(builder: &mut Builder, markings: &mut Builder) {
     for (index, house) in SERVICE_HOUSES.iter().enumerate() {
         let [x0, z0] = house.min;
@@ -1404,6 +1426,43 @@ mod tests {
                     "dressing enters a usable doorway: {:?}",
                     vertex.pos
                 );
+            }
+        }
+        // Only the explicit floor subset may use the implicit y=0 ground;
+        // wall/roof/trim dressing above retains its strict solid-backed test.
+        let mut floors = Builder::new(None);
+        service_building_floors(&mut floors);
+        assert_eq!(floors.mesh.vertices.len(), SERVICE_HOUSES.len() * 18);
+        let (house_floors, remainder) = floors.mesh.vertices.as_chunks::<18>();
+        assert!(remainder.is_empty());
+        for (house, vertices) in SERVICE_HOUSES.iter().zip(house_floors) {
+            let solids = house.solids();
+            let expected_regions = [
+                (
+                    [solids[0].max[0], solids[6].max[1]],
+                    [solids[1].min[0], solids[7].min[1]],
+                ),
+                (solids[6].min, solids[6].max),
+                (solids[7].min, solids[7].max),
+            ];
+            for (quad, (min, max)) in vertices.as_chunks::<6>().0.iter().zip(expected_regions) {
+                let mut actual_min = Vec3::splat(f32::INFINITY);
+                let mut actual_max = Vec3::splat(f32::NEG_INFINITY);
+                for vertex in quad {
+                    let [x, y, z] = vertex.pos;
+                    assert_eq!(vertex.normal, Vec3::Y.to_array());
+                    assert!(
+                        y > 0.018 && y <= 0.02,
+                        "floor must mask paint without a step"
+                    );
+                    assert!(x >= house.min[0] && x <= house.max[0]);
+                    assert!(z >= house.min[1] && z <= house.max[1]);
+                    assert!(x.abs() < HARBOR_HALF && z.abs() < HARBOR_HALF);
+                    actual_min = actual_min.min(Vec3::from_array(vertex.pos));
+                    actual_max = actual_max.max(Vec3::from_array(vertex.pos));
+                }
+                assert_eq!(actual_min, Vec3::new(min[0], INTERIOR_FLOOR_Y, min[1]));
+                assert_eq!(actual_max, Vec3::new(max[0], INTERIOR_FLOOR_Y, max[1]));
             }
         }
     }

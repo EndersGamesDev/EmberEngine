@@ -31,6 +31,8 @@ From FFA spawn 0 at `[-37, 42]`, a clear ordinary ground approach to the souther
 
 The renderer still registers eleven Harbor meshes and five batched scenery instances. Existing base-colour textures and material presets are reused; no asset download or texture allocation is added. The new painted glazing is opaque and lies on solid side walls, never in the actual door openings. Roof fascia projects only 12 mm to avoid coplanar flicker; stair nosing paint and bridge caps are similarly shallow. Solid waist parapets are deliberately not depicted as open railings over an invisible collision box. Closed glazing is not intended to be a traversable window.
 
+Each interior and its two doorway thresholds have a 20 mm-high concrete finish over the implicit ground. These nine upward quads cover the old 18 mm-high road markings without adding a collision step, mesh, texture or draw call. Their bounds derive from the actual interior wall faces and lintel footprints; the explicit floor-only test checks ground backing without weakening the wall/roof/trim collision checks.
+
 Native art invariants retain the existing limits of fewer than 200,000 vertices and 4 MB of base texture pixels across Harbor meshes, verify non-container rendered envelopes against their exact colliders, and require every added surface-detail vertex to remain within 4 cm of an authoritative solid. First-person hands, weapons, the sky, water, contact-shading implementation and all other maps are unchanged by these two map modules.
 
 ## Verification handoff

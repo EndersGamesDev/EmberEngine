@@ -21,7 +21,7 @@ const viewpoints = [
   { name: 'west-wall-route', eye: [-26, 1.65, -26], target: [-26, 3.4, -16] },
   { name: 'house-interior', eye: [-21, 1.65, -22.7], target: [-21, 1.65, -13] },
   { name: 'roof-walkway', eye: [-21, 6.2, -17.7], target: [-36, 5.2, -17.7] },
-  { name: 'pump-house', eye: [35, 9, -18], target: [23, 2.8, -6] },
+  { name: 'pump-house', eye: [12, 10, -18], target: [23, 2.8, -6] },
   { name: 'pump-wall-route', eye: [29, 1.65, -11], target: [29, 3.6, -3] },
   { name: 'overview', eye: [-62, 58, -66], target: [9, 2, 0] },
   { name: 'overview-quay', eye: [45, 32, -43], target: [0, 0, 0] },
