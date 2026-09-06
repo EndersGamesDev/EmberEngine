@@ -531,6 +531,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                         .map(|&(killer, victim)| S2C::Kill { killer, victim }),
                 )
                 .chain(sim.shots.iter().map(|s| S2C::Shot {
+                    projectile_id: s.projectile_id,
                     owner: s.owner,
                     weapon: s.weapon,
                     x0: s.from[0],
@@ -622,6 +623,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                         .bullets
                         .iter()
                         .map(|b| BState {
+                            projectile_id: b.projectile_id,
                             x: b.pos[0],
                             z: b.pos[1],
                             vx: b.vel[0],
@@ -1452,7 +1454,7 @@ mod shield_input_tests {
     fn killshot_refuses_invalid_loadouts_and_previous_protocol() {
         for (loadout, weapon) in [
             ("custom", 0),
-            ("custom", 8),
+            ("custom", 9),
             ("custom", 255),
             ("classic", 3),
             ("typo", 1),
