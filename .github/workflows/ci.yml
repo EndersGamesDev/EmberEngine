@@ -1,0 +1,89 @@
+# ci: the server-side test suite on every push to main and every pull
+# request; a green run on main moves the branch pointer `ci-passed` to that
+# commit.
+#
+# That pointer is what the hosts deploy. A host runs `deploy/host.sh update`
+# on a timer with EMBER_REF=ci-passed (deploy/install-host-timer.sh): when
+# the pointer moves it rebuilds, restarts, re-proves and republishes; when a
+# run here is red the pointer stays and the host keeps the last good build.
+# Hosts pull, so nothing here needs to reach them and no host needs a token.
+#
+# What is gated: the six crates a host actually runs or probes with (the
+# three deterministic cores and the three servers) and the deploy scripts'
+# own shim-based suites. The client, engine and wasm builds are not built
+# here; they have their own gates in the release process.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'marketing/**'
+      - '**.md'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  servers:
+    name: cores + servers (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: servers
+      - name: test
+        run: >
+          cargo test --locked
+          -p arena-core -p fire-core -p kings-core
+          -p arena-server -p fire-server -p kings-server
+      - name: the host's probes build
+        run: |
+          cargo build --locked --release -p arena-server --example wsbot
+          cargo build --locked --release -p fire-server --example probe
+          cargo build --locked --release -p kings-server --example probe
+
+  deploy-scripts:
+    name: deploy scripts (shim suites)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax, publish-host, host-pids, host-kings, republish-host, pages, ssh-deploys, watchdog
+        run: bash deploy/tests/run.sh syntax publish-host host-pids host-kings republish-host pages ssh-deploys watchdog
+
+  promote:
+    name: promote to ci-passed
+    needs: [servers, deploy-scripts]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: move ci-passed to this commit
+        run: |
+          git fetch -q origin +refs/heads/ci-passed:refs/remotes/origin/ci-passed 2>/dev/null || true
+          if git rev-parse -q --verify refs/remotes/origin/ci-passed >/dev/null \
+             && ! git merge-base --is-ancestor refs/remotes/origin/ci-passed HEAD; then
+            echo "ci-passed is not behind this commit; leaving it where it is"
+            exit 0
+          fi
+          git push origin HEAD:refs/heads/ci-passed
+          echo "ci-passed -> $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
