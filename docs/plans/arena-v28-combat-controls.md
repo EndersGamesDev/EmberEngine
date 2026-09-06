@@ -22,11 +22,7 @@ Shared combat tests: five-health spawn/respawn, head versus shoulder/edge/body r
 
 ## Status
 
-Recovery checkpoint requested by the user on 2026-09-06 because usage was near
-its limit. Implementation is saved on `codex/combat-controls`, in
-`C:/Users/end/dev/ember-controls`. **Do not publish or restart yet: actual WASM
-build and browser interaction gates are still pending.** Live v27/protocol 20 is
-unchanged. Latest base main is `7500af5d`; the earlier plan commit is `fdd024e0`.
+Checkpoint `0df4f4af` was saved/pushed at the user's request, then the user explicitly asked to continue to completion. The v28 release candidate now passes actual WASM/browser verification as recorded below; deployment and public verification are the remaining steps. Worktree: `C:/Users/end/dev/ember-controls`, branch `codex/combat-controls`, base main `7500af5d`.
 
 ### Implemented
 
@@ -77,7 +73,10 @@ unchanged. Latest base main is `7500af5d`; the earlier plan commit is `fdd024e0`
 - `bash deploy/tests/test-pages.sh`: 71/71 passed, 18.64 s wall, fully shimmed,
   no network/publish. Logs `target/v28-pages-tests.stdout.log` and stderr.log.
   Safe non-reparse TMPDIR was `C:/Users/end/AppData/Local/Temp/ember-v28-tests`.
-- `git diff --check` passed. No actual v28 browser or WASM gate has run yet.
+- All five release WASM bundles and release arena-server built successfully, including wasm-bindgen, in 18.24 s. Arena WASM SHA256: `ba5e71a490d496749c2a7ac09982b44caf102bd76ab8363bb8a883dd95f0e61d`.
+- Actual v28 browser/WASM/private protocol21 server: 25/25 interaction checks passed (7.63 s, then 7.27 s after keeping Resume pinned outside the scrolling content). Settings pure tests rerun 69/69. Only synthetic DOM events in an isolated headless Edge session; real user-gesture pointer-lock permissions and physical controllers are not claimed as verified.
+- Real WebGL2 Harbor render: 15/15 views, 101 draws/frame, zero GL/runtime errors, 21.92 s. Freight Yard and Trench City both passed real-server rendering smoke in12.28 s; each logged one ~101–102 ms initialization/frame warning. Close standing/crouching body captures passed in5.10 s and visually confirm health symbols absent. Screenshots live under `target/controls-browser`, `controls-harbor`, `controls-old-maps`, `controls-bodies`; these generated artifacts are intentionally outside git.
+- `git diff --check` passed. Remaining: source/main publish, live server update and public-artifact/health verification. The numbered list below retains the exact reproducible gates, including those now completed.
 
 ### Exact next steps
 

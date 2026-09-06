@@ -86,7 +86,7 @@
   style.textContent = `
     .arena-settings{color-scheme:dark;color:#e5edf8;background:linear-gradient(145deg,#15263c,#091523 70%);border:1px solid #3b5271;border-radius:18px;padding:0;width:min(680px,calc(100vw - 28px));max-height:88vh;max-height:88dvh;box-sizing:border-box;box-shadow:0 28px 100px #000a;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
     .arena-settings::backdrop{background:#020912ba;backdrop-filter:blur(5px)}
-    .arena-settings .settings-inner{padding:24px 26px}.arena-settings .settings-top{display:flex;align-items:start;justify-content:space-between;gap:16px}
+    .arena-settings[open]{display:flex;flex-direction:column;overflow:hidden}.arena-settings .settings-inner{padding:24px 26px;min-height:0;overflow-y:auto}.arena-settings .settings-top{display:flex;align-items:start;justify-content:space-between;gap:16px}
     .arena-settings h2{font-size:1.45rem;letter-spacing:-.03em;margin:0;color:#fff}.arena-settings .eyebrow{font-size:.7rem;text-transform:uppercase;letter-spacing:.18em;color:#f0b429;margin:0 0 5px}
     .arena-settings p{margin:6px 0 16px;color:#a8bad3}.arena-settings .settings-note{background:#f0b42910;border:1px solid #f0b42935;border-radius:9px;padding:10px 12px;color:#f0cf84;font-size:.82rem}
     .arena-settings .sensitivity-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:20px}.arena-settings label{opacity:1;color:#e5edf8;font-size:.9rem}.arena-settings output{color:#f0b429;font-weight:650;font-variant-numeric:tabular-nums}
@@ -95,7 +95,7 @@
     .arena-settings .binding-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px}.arena-settings .binding-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;background:#07111e80;border:1px solid #273b56;border-radius:8px;min-width:0}.arena-settings .binding-row>span{font-size:.8rem}
     .arena-settings button{font:inherit;border-radius:7px;border:1px solid #3a5376;background:#1a304e;color:#e5edf8;padding:7px 10px;cursor:pointer}.arena-settings button:hover{background:#254163}.arena-settings button:disabled{opacity:.5;cursor:wait}.arena-settings button:focus-visible,.arena-settings input:focus-visible{outline:2px solid #f0b429;outline-offset:3px}
     .arena-settings .binding-button{font-size:.76rem;white-space:nowrap;max-width:64%;overflow:hidden;text-overflow:ellipsis}.arena-settings .binding-button[aria-pressed=true]{border-color:#f0b429;color:#f0cf84;background:#684a1540}
-    .arena-settings .settings-feedback{min-height:2.8em;font-size:.8rem;margin:12px 0;color:#f0cf84}.arena-settings .settings-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #2b3e58;padding-top:16px}.arena-settings .resume-button{background:#eab336;color:#07101b;border-color:#eab336;font-weight:700;padding:10px 20px}.arena-settings .resume-button:hover{background:#ffd068}.arena-settings .save-caption{font-size:.7rem;color:#8ea4c2;margin:10px 0 0}
+    .arena-settings .settings-feedback{min-height:2.8em;font-size:.8rem;margin:12px 0;color:#f0cf84}.arena-settings .settings-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #2b3e58;padding:16px 26px;flex-shrink:0;background:#091523}.arena-settings .resume-button{background:#eab336;color:#07101b;border-color:#eab336;font-weight:700;padding:10px 20px}.arena-settings .resume-button:hover{background:#ffd068}.arena-settings .save-caption{font-size:.7rem;color:#8ea4c2;margin:10px 0 0}
     @media(max-width:540px){.arena-settings .settings-inner{padding:18px 16px}.arena-settings .binding-grid{grid-template-columns:1fr}.arena-settings .binding-button{max-width:60%}.arena-settings .settings-actions{align-items:stretch}.arena-settings h2{font-size:1.25rem}}
     @media(prefers-reduced-transparency:reduce){.arena-settings::backdrop{backdrop-filter:none;background:#020912ee}}
   `;
@@ -113,9 +113,8 @@
     <div id="sensitivity-help" class="range-labels"><span>0.10× · precise</span><span>1× default</span><span>3× · fast</span></div>
     <fieldset><legend>Keyboard &amp; mouse</legend><p class="binding-help" id="binding-help">Select a binding, then press one key or mouse button. Esc cancels. Browser shortcut keys and duplicate assignments are not allowed.</p><button id="binding-cancel" type="button" hidden>Cancel binding</button><div class="binding-grid" id="binding-grid"></div></fieldset>
     <p id="settings-feedback" class="settings-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
-    <div class="settings-actions"><button type="button" id="settings-reset">Restore defaults</button><button type="button" id="settings-resume" class="resume-button">Done</button></div>
     <p class="save-caption">Mouse buttons: left, middle or right. Controller bindings are unchanged.</p>
-  </div>`;
+  </div><div class="settings-actions"><button type="button" id="settings-reset">Restore defaults</button><button type="button" id="settings-resume" class="resume-button">Done</button></div>`;
   document.body.append(dialog);
   const $ = id => document.getElementById(id);
   const slider = $('arena-sensitivity'), sensitivityValue = $('arena-sensitivity-value');

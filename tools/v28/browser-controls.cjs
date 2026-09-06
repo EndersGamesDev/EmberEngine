@@ -278,12 +278,15 @@ async function preferencesBeforeMatch() {
   await frames();
   const layout = await page.evaluate(() => {
     const dialog = document.querySelector('#arena-settings'), bounds = dialog.getBoundingClientRect();
+    const content = dialog.querySelector('.settings-inner');
+    const resume = document.querySelector('#settings-resume').getBoundingClientRect();
     return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
-      width: innerWidth, height: innerHeight, scroll: dialog.scrollHeight > dialog.clientHeight,
-      overflow: getComputedStyle(dialog).overflowY };
+      width: innerWidth, height: innerHeight, scroll: content.scrollHeight > content.clientHeight,
+      overflow: getComputedStyle(content).overflowY, resumeTop: resume.top, resumeBottom: resume.bottom };
   });
   check(layout.left >= 0 && layout.right <= layout.width + 1 && layout.top >= 0 && layout.bottom <= layout.height + 1
-    && (!layout.scroll || ['auto', 'scroll'].includes(layout.overflow)), '390px settings dialog fits and can scroll', layout);
+    && layout.resumeTop >= layout.top && layout.resumeBottom <= layout.bottom
+    && (!layout.scroll || ['auto', 'scroll'].includes(layout.overflow)), '390px settings dialog fits, scrolls and keeps Resume visible', layout);
   await shot('settings-mobile');
   await page.setViewportSize({ width: 1600, height: 900 });
   await domClick('#settings-reset');
