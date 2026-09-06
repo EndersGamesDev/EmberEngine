@@ -1600,3 +1600,68 @@ fn the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_ba
         "the mirror clears more of the lower bands than the served frame, never less"
     );
 }
+
+/// The curtain at the right edge of this frame, measured the way the browser census measured it.
+///
+/// The census walked 120 columns at an eight-pixel stride, 270 samples down each at a two-pixel
+/// stride, and counted how often the relief classification flipped. It found 29 columns with six
+/// or more flips and a band at x 800..930 carrying 12 to 36 flips per column, everything left of
+/// x 792 at most six. This reproduces that walk over the oracle's own frame and prints the cause
+/// mix inside and outside that band, which is what says WHAT the curtain is made of.
+#[test]
+fn the_right_hand_curtain_is_lifted_escaped_records_and_the_census_walk_finds_it_here_too() {
+    let pose = zoom_pose(3.565);
+    let records = steep_records(&pose);
+    let frame = render_frame(&pose, &records, Rule::Fixed, Mapping::InteriorAtFloor);
+    let width = EXTENT[0] as usize;
+    let relief = |index: usize| class_of(frame.colour[index]) == Class::Other;
+    let mut busy = 0_u32;
+    let mut band_low = u32::MAX;
+    let mut band_high = 0_u32;
+    let mut band_flips: Vec<u32> = Vec::new();
+    for x in (0..width).step_by(8) {
+        let mut flips = 0_u32;
+        let mut previous = relief(x);
+        for y in (2..EXTENT[1] as usize).step_by(2) {
+            let current = relief(y * width + x);
+            if current != previous {
+                flips += 1;
+                previous = current;
+            }
+        }
+        if flips >= 6 {
+            busy += 1;
+            band_low = band_low.min(u32::try_from(x).expect("column fits"));
+            band_high = band_high.max(u32::try_from(x).expect("column fits"));
+        }
+        if (800..=930).contains(&x) {
+            band_flips.push(flips);
+        }
+    }
+    let inside = |index: usize| (800..=930).contains(&(index % width));
+    let mut inside_causes = [0_u64; 7];
+    let mut outside_causes = [0_u64; 7];
+    for (index, cause) in frame.cause.iter().enumerate() {
+        let slot = CAUSES
+            .iter()
+            .position(|candidate| candidate == cause)
+            .expect("every cause is named");
+        if inside(index) {
+            inside_causes[slot] += 1;
+        } else {
+            outside_causes[slot] += 1;
+        }
+    }
+    println!(
+        "columns with six or more relief flips: {busy} of 120, spanning x {band_low}..{band_high}; flips inside x 800..930 {band_flips:?}"
+    );
+    println!("cause inside x 800..930:  {}", columns(inside_causes));
+    println!("cause outside x 800..930: {}", columns(outside_causes));
+    let inside_lifted = inside_causes[3] as f64 / inside_causes.iter().sum::<u64>() as f64;
+    let outside_lifted = outside_causes[3] as f64 / outside_causes.iter().sum::<u64>() as f64;
+    println!("lifted share inside {inside_lifted:.4}, outside {outside_lifted:.4}");
+    assert!(
+        inside_lifted > 2.0 * outside_lifted,
+        "the curtain band must be made of lifted escaped records: {inside_lifted} against {outside_lifted}"
+    );
+}
