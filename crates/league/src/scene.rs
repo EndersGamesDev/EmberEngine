@@ -55,9 +55,11 @@ pub const MESH_GEAR: u32 = 8;
 pub const MESH_SPHERE: u32 = 9;
 
 /// Camera height over the focus, its offset toward +Z and the vertical
-/// field of view. The pitch these give is what [`bar_tilt`] faces.
-pub const CAM_HEIGHT: f32 = 30.0;
-pub const CAM_BACK: f32 = 14.0;
+/// field of view. The pitch these give (56 degrees, the MOBA norm) is what
+/// [`bar_tilt`] faces; a steeper camera flattened every body to its
+/// footprint in the first capture.
+pub const CAM_HEIGHT: f32 = 24.0;
+pub const CAM_BACK: f32 = 16.0;
 pub const CAM_FOV: f32 = 40.0;
 
 /// The camera sits high and behind the focus, looking along -Z.
@@ -71,14 +73,16 @@ pub const fn camera_for(focus: (f32, f32)) -> Camera {
     }
 }
 
-/// Team tint: blue side, red side. The page's scoreboard uses the same
-/// values divided by 255 so the two agree.
+/// Team tint: blue side, red side. Deeper than the page's HUD tints
+/// (#6ea0ff / #ff7a70) on purpose: the scene pass lifts every colour by
+/// its ambient term and tonemap, and the first captures came back lavender
+/// and pink where the eye needs blue and red.
 #[must_use]
 pub const fn team_colour(team: u8) -> [f32; 3] {
     match team {
-        0 => [0.42, 0.62, 1.0],
-        1 => [1.0, 0.42, 0.38],
-        _ => [0.75, 0.72, 0.55], // courts belong to nobody
+        0 => [0.2, 0.42, 1.0],
+        1 => [1.0, 0.22, 0.16],
+        _ => [0.75, 0.68, 0.45], // courts belong to nobody
     }
 }
 
@@ -401,10 +405,12 @@ fn ahead(x: f32, z: f32, yaw: f32, fwd: f32, side: f32) -> (f32, f32) {
 /// Static ground geometry: the dark field, the lit lane, its edge lines and
 /// distance marks, the two base plazas, the court yards and the walls.
 fn push_ground(frame: &mut Frame) {
-    let field = [0.07, 0.11, 0.07];
-    let lane = [0.17, 0.17, 0.11];
-    let paint = [0.36, 0.34, 0.24];
-    let stone = [0.24, 0.24, 0.28];
+    // dark ground on purpose: the scene pass lifts every colour with its
+    // ambient term, and the bodies have to be the brightest thing here
+    let field = [0.04, 0.07, 0.04];
+    let lane = [0.11, 0.11, 0.07];
+    let paint = [0.4, 0.38, 0.26];
+    let stone = [0.085, 0.085, 0.105];
     frame.instances.push(
         ins(v3(0.0, -0.05, 0.0), v3(160.0, 1.0, 92.0), field).with_mesh(MESH_PLANE),
     );
@@ -433,7 +439,7 @@ fn push_ground(frame: &mut Frame) {
     // base plazas: a paved disc and a ring in the owner's colour
     for team in 0..2u8 {
         let cx = if team == 0 { -data::CORE_X } else { data::CORE_X };
-        let tint = mix(stone, team_colour(team), 0.25);
+        let tint = mix(scale3(stone, 0.7), team_colour(team), 0.1);
         frame.instances.push(
             ins(v3(cx, 0.0, 0.0), v3(data::FOUNTAIN_R + 0.5, 1.0, data::FOUNTAIN_R + 0.5), tint)
                 .with_mesh(MESH_DISC),
@@ -471,7 +477,7 @@ fn push_ground(frame: &mut Frame) {
         }
     }
     // walls at the field edge, so the dark field ends somewhere
-    let wall = [0.11, 0.10, 0.17];
+    let wall = [0.05, 0.05, 0.08];
     for z in [-data::FIELD_Z, data::FIELD_Z] {
         frame.instances.push(ins(v3(0.0, 0.6, z), v3(160.0, 1.2, 1.6), wall).with_mesh(0));
     }
@@ -508,7 +514,7 @@ fn push_ground(frame: &mut Frame) {
 
 fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
     let col = if u.dead { [0.18, 0.16, 0.16] } else { team_colour(u.t) };
-    let stone = [0.30, 0.30, 0.42];
+    let stone = [0.13, 0.13, 0.19];
     let bob = if u.dead { -1.2 } else { (t * 1.4).sin() * 0.25 };
     let spin = if u.dead { 0.0 } else { t * 0.6 };
     frame.instances.push(ins(v3(u.x, 0.4, u.z), v3(2.8, 0.4, 2.8), stone).with_mesh(MESH_FRUSTUM));
@@ -533,7 +539,7 @@ fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
 }
 
 fn push_court(frame: &mut Frame, u: &UnitLite, t: f32) {
-    let stone = [0.34, 0.33, 0.30];
+    let stone = [0.17, 0.165, 0.15];
     if u.dead {
         // a taken court: a broken stump and a dark ring, waiting to respawn
         frame.instances.push(ins(v3(u.x, 0.5, u.z), v3(1.15, 0.5, 1.15), [0.22, 0.20, 0.20]).with_mesh(MESH_FRUSTUM));
@@ -969,15 +975,42 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
     let (zk, x, z, r, spin) = *zone;
     match zk {
         0 => {
-            // a tornado: a funnel of three spinning tiers over a scorched disc
-            for (i, (rr, h)) in [(0.35, 0.5), (0.6, 1.4), (0.9, 2.3)].into_iter().enumerate() {
+            // a tornado, drawn OPEN: whoever stands inside must stay visible
+            // and clickable, so there is no solid funnel. A scorched disc, a
+            // ring at the ground and a tilted ring up high, a thin bright
+            // column, and embers orbiting between them carry the motion.
+            // (Stacked gears read as one flat cog from above, and a cone
+            // hid the bodies it was meant to threaten.)
+            let pulse = 0.85 + 0.15 * (t * 9.0).sin();
+            frame.instances.push(ins(v3(x, 0.07, z), v3(r, 1.0, r), [0.55, 0.2, 0.05]).with_mesh(MESH_DISC));
+            frame.instances.push(
+                ins(v3(x, 0.16, z), v3(r, 1.0, r), [1.0 * pulse, 0.5 * pulse, 0.12])
+                    .with_rot(Quat::from_rotation_y(spin))
+                    .with_mesh(MESH_RING),
+            );
+            frame.instances.push(
+                ins(v3(x, 2.5, z), v3(r * 0.65, 1.0, r * 0.65), [1.0, 0.75 * pulse, 0.2])
+                    .with_rot(Quat::from_rotation_y(-spin * 1.5) * Quat::from_rotation_x(0.3))
+                    .with_mesh(MESH_RING),
+            );
+            frame.instances.push(
+                ins(v3(x, 1.4, z), v3(r * 0.12, 1.4, r * 0.12), [1.0, 0.85, 0.4]).with_mesh(MESH_FRUSTUM),
+            );
+            for i in 0..8 {
+                let a = spin * 2.0 + TAU * (i as f32) / 8.0;
+                let rr = r * (i as f32 * 1.7).sin().mul_add(0.25, 0.7);
+                let h = (i as f32 * 0.9 + t * 0.7).sin().mul_add(1.0, 1.4);
+                let hot = i % 2 == 0;
                 frame.instances.push(
-                    ins(v3(x, h, z), v3(r * rr, 0.45, r * rr), [1.0, 0.45 + 0.1 * i as f32, 0.12])
-                        .with_rot(Quat::from_rotation_y(spin * (1.0 + i as f32 * 0.5)))
-                        .with_mesh(MESH_GEAR),
+                    ins(
+                        v3(x + a.cos() * rr, h, z + a.sin() * rr),
+                        v3(0.18, 0.18, 0.18),
+                        if hot { [1.0, 0.6, 0.15] } else { [0.3, 0.14, 0.06] },
+                    )
+                    .with_rot(Quat::from_rotation_y(a * 3.0))
+                    .with_mesh(if hot { MESH_OCTA } else { 0 }),
                 );
             }
-            frame.instances.push(ins(v3(x, 0.07, z), v3(r, 1.0, r), [0.55, 0.2, 0.05]).with_mesh(MESH_DISC));
         }
         1 => {
             // a chrono trap: a low violet plate with four teeth at the rim
@@ -1298,8 +1331,10 @@ fn review_camera(_input: &SceneInput<'_>) -> Option<Camera> {
 }
 
 /// Where the fight is: the midpoint of the closest pair of opposing living
-/// champions, else the centroid of every living champion. Native only,
-/// like the review camera that is its one caller.
+/// champions when they are within [`ENGAGE_RANGE`] of each other, else the
+/// living champion that has pushed furthest from its own core (the one
+/// about to make something happen). Native only, like the review camera
+/// that is its one caller.
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]
 pub fn action_focus(units: &[UnitLite]) -> Option<(f32, f32)> {
@@ -1316,18 +1351,21 @@ pub fn action_focus(units: &[UnitLite]) -> Option<(f32, f32)> {
             }
         }
     }
-    if let Some((p, _)) = best {
+    if let Some((p, d)) = best
+        && d <= ENGAGE_RANGE * ENGAGE_RANGE
+    {
         return Some(p);
     }
-    if champs.is_empty() {
-        return None;
-    }
-    let n = champs.len() as f32;
-    Some((
-        champs.iter().map(|u| u.x).sum::<f32>() / n,
-        champs.iter().map(|u| u.z).sum::<f32>() / n,
-    ))
+    let home = |u: &UnitLite| if u.t == 0 { -data::CORE_X } else { data::CORE_X };
+    champs
+        .iter()
+        .max_by(|a, b| (a.x - home(a)).abs().total_cmp(&(b.x - home(b)).abs()))
+        .map(|u| (u.x, u.z))
 }
+
+/// Two opposing champions this close are a fight worth framing together.
+#[cfg(not(target_arch = "wasm32"))]
+pub const ENGAGE_RANGE: f32 = 26.0;
 
 // ---------------------------------------------------------------------------
 // picking
@@ -1448,9 +1486,14 @@ mod tests {
         let (x, z) = action_focus(&units).unwrap();
         assert!((x - 5.0).abs() < 1e-5 && z.abs() < 1e-5);
         assert!(action_focus(&[]).is_none());
+        // one side only: the champion furthest from its own core
         let one_side = [unit(1, 0, 0, 0, -30.0, 4.0, 0), unit(2, 0, 0, 1, -10.0, 0.0, 1)];
         let (cx, cz) = action_focus(&one_side).unwrap();
-        assert!((cx + 20.0).abs() < 1e-5 && (cz - 2.0).abs() < 1e-5);
+        assert!((cx + 10.0).abs() < 1e-5 && cz.abs() < 1e-5);
+        // a duel with the two far apart frames the pusher, not empty lane
+        let apart = [unit(1, 0, 0, 0, -58.0, 0.0, 0), unit(2, 0, 1, 1, -20.0, 3.0, 1)];
+        let (px, pz) = action_focus(&apart).unwrap();
+        assert!((px + 20.0).abs() < 1e-5 && (pz - 3.0).abs() < 1e-5);
     }
 
     #[test]
