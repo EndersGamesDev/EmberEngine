@@ -616,3 +616,41 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |J29|ACCEPTED|Withdraws 144-byte palette and adopts present’s three exact 48-byte records.|
 |J30|SUPERSEDED|Used a math-defined `ViewMode` re-exported by present; the view is no longer an enum, and math defines `ViewControls` in its place.|
 |J31|ACCEPTED|Uses separate present-owned fences and delays app presentation until the matching completed warp event, outside the measured region.|
+
+## 10. Programmatic entry
+
+The lab has one boundary a script can hold, so that measuring a frame no longer means driving the control page.
+
+Every pixel proof taken before this entry existed had the same shape: load `web/labs/julibrot/index.html` with all of its controls, write a row into the browser's stored views, reload so the page reads the box at initialisation, click Load B, poll the text of the facts grid until it stops changing, and read the canvas through a WebGL context flag that only exists in a privately rebuilt copy of the page. The first five steps are slow and fragile; the last one is worse than that, because a readback that requires the page to be rebuilt is a reading of a page that nobody is running. The entry below removes all six.
+
+### 10.1 `openLab`
+
+`web/labs/julibrot/lab.js` exports `openLab({ canvas, pkgUrl, workerUrl, wasmUrl, version, statusId })`. It publishes the worker URL global, imports the wasm module and initialises it, refuses on ABI skew, starts the runtime on the given canvas, and returns one object. `canvas` is an element. `statusId`, when given, starts through `start_julibrot(canvas.id, statusId)` and keeps the control page's own contract; when absent the module starts through `start_julibrot_on_canvas(canvas)`, which is the path a page with no status paragraph takes. The URL options default to the repository's `?v=1` files and `version` replaces that query, so a driver serving a build from elsewhere states its version rather than editing a path.
+
+The returned object owns the frame loop and nothing else in the document: `applyRow(row)` takes an object or a JSON string in the saved-view row format and applies it through the one navigation transaction, clearing the stored slice point first; `set(field, value)` moves a single control by the name the row carries for it, reaching the same app setter the matching slider reaches and refusing a name it has no setter for; `facts()` parses the app's honest snapshot; `settle(...)` is below; `frame()` is below; `requestFrame()`, `requestMeasurement()` and `updateScene()` queue the corresponding app requests; `onTurn(listener)` registers a listener called with the facts after every turn and returns its own remover; `counts()` returns the five frame-loop counters; `stop()` retires the loop and its listeners without claiming anything about the picture.
+
+The loop itself moved out of `main.js` and into this module, because the page and a driver running two loops over one wasm boundary would carry the anti-latch ticket, the low-rate fallback floor and the wake-up handlers twice, and the first divergence between the two copies would appear as a measurement of a picture the page was not showing. The page keeps its controls, its view boxes, its storage, its crosshair, its facts grid and its status line, and reads the loop through `onTurn` and `counts()`.
+
+### 10.2 The settle contract
+
+`settle({ level = "Final", timeoutMs = 120000 })` resolves with the facts when three conditions hold together: `refinement_level` is the level named, `refinement_pending` is false, and no scene is in flight (`in_flight_scene_id` is null, with `scene_update_pending` false). Fewer than three is not settled. A moving frame may be inaccurate, so a number read off one is a number about a picture that no longer exists.
+
+It rejects with a `SettleError` carrying the facts it saw in three cases: the app published a `loop_stopped_reason`; the loop went quiet without reaching the level, which is a state nothing will leave on its own; or the timeout expired. The bound exists because an unbounded wait is a hang with a nicer name.
+
+### 10.3 `frame()` and what it reads
+
+`frame()` resolves with `{ width, height, rgba }`, where `rgba` is packed RGBA, four bytes a pixel, rows top-down, `width * height * 4` bytes long. The bytes are the eight-bit values the surface holds, which is what a screenshot of the canvas shows; a blue-first surface is returned red-first so a caller counting colours need not know which of the two eight-bit formats the browser handed the device.
+
+The copy is made inside the renderer. `Presenter::request_frame_readback(texture)` encodes `copy_texture_to_buffer` into a mapped buffer with the row stride padded to the copy alignment, and `take_frame_readback` returns the packed rows once the map completes. It is called from `BrowserRuntime::complete_warp_capturing`, between the acquisition of the surface image and its presentation, because that is the only moment the frame the page is about to show exists as a texture the renderer can read. What comes back is therefore the frame itself and not a second render of the same inputs, and no page has to be edited to obtain it: the context flag that used to be required is named nowhere in the tree.
+
+It costs one full surface transfer — 2,073,600 bytes at 960 by 540 — plus the readback buffer's own allocation while the copy is in flight, so it happens **on request only and never per frame**. The app arms one copy, the loop takes it on the turn that presents, `needs_refresh` stays true until the bytes have been read, and `app_take_frame_rgba` consumes the copy so two readers cannot both believe they hold the frame.
+
+Two things bound its availability. The surface asks for the copy usage only when its capabilities offer it, because a surface configured with a usage it does not expose is a refused configuration and the picture matters more than the readback; `app_frame_capture_json` publishes `frame_capture_supported` and `frame_capture_status` so a driver learns that before asking. And a copy is only worth reading when the picture is finished: call `frame()` after `settle` resolves.
+
+### 10.4 The driver page
+
+`web/labs/julibrot/drive.html` is a canvas, a `pre` and one module script. It reads a row from `?row=` in the query string or from a `{ kind: "JulibrotRow", row }` message, calls `applyRow`, `settle` and `frame()`, and writes into the `pre` the settled level and extent, the frame's byte count, the four-class pixel census, and the facts JSON. It publishes the lab object as `globalThis.lab`, so a driver that wants to keep moving controls after the first settle can.
+
+The census classes are the ones the lab's pixel proofs count, and the order they are tested in is part of the definition because they overlap: sky is exactly `(13,13,13)`, the pass clear is exactly `(255,129,129)`, the exterior band is `r > 200` with `100 < g < 190` and `90 < b < 170`, and everything else is `other`, which is the relief palette. The pass clear also satisfies the exterior band, so an exact test running second would never fire and the clear would be reported as exterior.
+
+The page uses the same `?v=1` loader convention as `index.html` and carries no storage, no sliders and no clock of its own.
