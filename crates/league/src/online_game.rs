@@ -6,9 +6,9 @@
 use ember_engine::{EmberGame, Frame, InputState};
 use league_core::proto::{C2S, Cmd, Phase, S2C};
 
-use crate::game::{read_input, ui_command, uiq, Prev};
+use crate::game::{Prev, read_input, ui_command, uiq};
 use crate::net::{Inbox, Net, Status};
-use crate::world::{feed_line, FxLite, World};
+use crate::world::{FxLite, World, feed_line};
 
 /// What the page hands to `start_online`.
 #[derive(Debug, Clone)]
@@ -42,7 +42,10 @@ impl Config {
             .filter(|value| !value.is_empty());
         let handle = get("handle");
         let lobby = get("lobby");
-        let mode = v.get("mode").and_then(serde_json::Value::as_u64).unwrap_or(3);
+        let mode = v
+            .get("mode")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(3);
         Ok(Self {
             ws,
             handle: if handle.is_empty() {
@@ -119,12 +122,7 @@ impl OnlineGame {
                 self.world.notice = None;
             }
             S2C::PlayerJoined { slot } => {
-                if let Some(i) = self
-                    .world
-                    .roster
-                    .iter()
-                    .position(|r| r.slot == slot.slot)
-                {
+                if let Some(i) = self.world.roster.iter().position(|r| r.slot == slot.slot) {
                     self.world.roster[i] = slot;
                 }
             }
@@ -193,7 +191,9 @@ impl OnlineGame {
                         if self.world.feed.len() > 8 {
                             self.world.feed.remove(0);
                         }
-                        self.world.feed.push(crate::world::FeedLine { text, left: 7.0 });
+                        self.world
+                            .feed
+                            .push(crate::world::FeedLine { text, left: 7.0 });
                     }
                 }
             }
@@ -219,7 +219,10 @@ impl OnlineGame {
                     }
                 }
                 let msg = C2S::Pick {
-                    champ: p.get("champ").and_then(serde_json::Value::as_u64).unwrap_or(0) as u8,
+                    champ: p
+                        .get("champ")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0) as u8,
                     d: p.get("d").and_then(serde_json::Value::as_u64).unwrap_or(0) as u8,
                     f: p.get("f").and_then(serde_json::Value::as_u64).unwrap_or(1) as u8,
                     runes,

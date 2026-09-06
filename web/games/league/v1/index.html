@@ -129,7 +129,7 @@
   <div class="hero"><div><div class="eyebrow">EMBER ORIGINAL · SINGLE LANE MOBA</div><h2>One lane.<br>Make it yours.</h2><p>Five champions. Two rival cores. Fight a 1v1 duel or build a 3v3 squad, claim the Courts, and turn every level into an advantage.</p><span class="pill">Free browser game</span> <span class="pill">Mouse + keyboard</span></div><div class="lane-art" aria-hidden="true"><span>ULTIMATE<br>LEGUE</span><small>BLUE → THE LANE ← RED</small></div></div>
   <p class="note">Destroy the enemy core to win. The North Court grants damage; the South Court grants haste. Return to your fountain to recover health and mana.
   Click enemies to attack them, right-click or left-click the ground to walk, <b>Q W E R</b> cast at the cursor, <b>D F</b> summoner spells,
-  <b>1-6</b> drink potions, <b>B</b> the shop. Level-up points go in with the little <b>+</b> on each ability, or <b>Ctrl + Q/W/E/R</b>. <b>S</b> stops moving.</p>
+  <b>1-6</b> drink potions, <b>B</b> the shop. Level-up points go in with the little <b>+</b> on each ability, or <b>Shift + Q/W/E/R</b>. <b>S</b> stops moving.</p>
   <div class="panel">
     <label>handle <input id="handle" maxlength="20"></label>
     <button id="btn-practice" class="go">Practice 1v1</button>
@@ -248,7 +248,7 @@ addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'b') { e.preventDefault(); setShop(!shopOpen); }
   if (e.key === 'Escape') setShop(false);
   if (e.key.toLowerCase() === 's') wasm_cmd({stop:true});
-  if (e.ctrlKey && 'qwer'.includes(e.key.toLowerCase())) e.preventDefault();
+  if ((e.ctrlKey || e.shiftKey) && 'qwer'.includes(e.key.toLowerCase())) e.preventDefault();
 });
 document.addEventListener('pointermove', e => {
   if (!e.target.matches('#ember-root canvas')) return;
@@ -526,7 +526,7 @@ function render(h) {
       const i = Number(el.dataset.abil);
       const rank = me.rk[i], champ = DATA.champs[me.champ], ability = champ?.[['q','w','e','r'][i]];
       el.classList.toggle('unlearned', !rank);
-      el.title = `${['Q','W','E','R'][i]} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0,rank-1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or Ctrl+key ranks up.`;
+      el.title = `${['Q','W','E','R'][i]} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0,rank-1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or Shift+key ranks up.`;
       el.querySelector('.rk').textContent = rank ? '●'.repeat(rank) : '';
       const cd = el.querySelector('.cd');
       if (!rank) { cd.classList.remove('hidden'); cd.textContent = i === 3 ? 'Lv 6' : 'Learn'; }

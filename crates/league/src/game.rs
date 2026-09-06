@@ -12,7 +12,7 @@ use league_core::proto::{Cmd, Phase, S2C};
 use league_core::sim::Match;
 
 use crate::scene::{self, camera_for, ground_point, project};
-use crate::world::{feed_line, FxLite, World};
+use crate::world::{FxLite, World, feed_line};
 
 /// Commands queued by the page (`cmd_json`); both game modes drain this.
 pub mod uiq {
@@ -31,7 +31,10 @@ pub mod uiq {
     }
 
     pub fn drain() -> Vec<String> {
-        QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
+        QUEUE
+            .lock()
+            .map(|mut q| std::mem::take(&mut *q))
+            .unwrap_or_default()
     }
 }
 
@@ -42,27 +45,58 @@ pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
     if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
         return u16::try_from(item).ok().map(|item| Cmd::Buy { item });
     }
-    if let Some(slot) = v.get("use").and_then(serde_json::Value::as_u64).filter(|s| *s < 6) {
+    if let Some(slot) = v
+        .get("use")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|s| *s < 6)
+    {
         return Some(Cmd::UseItem { slot: slot as u8 });
     }
-    if let Some(slot) = v.get("rank").and_then(serde_json::Value::as_u64).filter(|s| *s < 4) {
+    if let Some(slot) = v
+        .get("rank")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|s| *s < 4)
+    {
         return Some(Cmd::Rank { slot: slot as u8 });
     }
-    let aim = v.get("aim").and_then(serde_json::Value::as_array).and_then(|a| {
-        let x = a.first()?.as_f64()? as f32;
-        let y = a.get(1)?.as_f64()? as f32;
-        let aspect = v.get("aspect").and_then(serde_json::Value::as_f64).unwrap_or(16.0 / 9.0) as f32;
-        if x.is_finite() && y.is_finite() && aspect.is_finite() && aspect > 0.0 {
-            ground_point(&camera_for(world.cam), aspect, [x, y])
-        } else {
-            None
-        }
-    }).or_else(|| world.my_unit().map(|u| (u.x, u.z)));
-    if let Some(slot) = v.get("cast").and_then(serde_json::Value::as_u64).filter(|s| *s < 4) {
-        return aim.map(|(x, z)| Cmd::Cast { slot: slot as u8, x, z });
+    let aim = v
+        .get("aim")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|a| {
+            let x = a.first()?.as_f64()? as f32;
+            let y = a.get(1)?.as_f64()? as f32;
+            let aspect = v
+                .get("aspect")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(16.0 / 9.0) as f32;
+            if x.is_finite() && y.is_finite() && aspect.is_finite() && aspect > 0.0 {
+                ground_point(&camera_for(world.cam), aspect, [x, y])
+            } else {
+                None
+            }
+        })
+        .or_else(|| world.my_unit().map(|u| (u.x, u.z)));
+    if let Some(slot) = v
+        .get("cast")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|s| *s < 4)
+    {
+        return aim.map(|(x, z)| Cmd::Cast {
+            slot: slot as u8,
+            x,
+            z,
+        });
     }
-    if let Some(slot) = v.get("spell").and_then(serde_json::Value::as_u64).filter(|s| *s < 2) {
-        return aim.map(|(x, z)| Cmd::Spell { slot: slot as u8, x, z });
+    if let Some(slot) = v
+        .get("spell")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|s| *s < 2)
+    {
+        return aim.map(|(x, z)| Cmd::Spell {
+            slot: slot as u8,
+            x,
+            z,
+        });
     }
     if v.get("stop").and_then(serde_json::Value::as_bool) == Some(true) {
         return world.my_unit().map(|u| Cmd::Move { x: u.x, z: u.z });
@@ -106,14 +140,24 @@ pub fn read_input(
     // Remember key releases even when dead, shopping, or off the canvas.
     // Otherwise a held key can unexpectedly cast when play resumes.
     let aim = cursor.and_then(|ndc| ground_point(&camera, aspect, ndc));
-    let ctrl = input.down(KeyCode::ControlLeft) || input.down(KeyCode::ControlRight);
-    for (idx, key) in [KeyCode::KeyQ, KeyCode::KeyW, KeyCode::KeyE, KeyCode::KeyR].into_iter().enumerate() {
+    let rank_modifier = input.down(KeyCode::ShiftLeft)
+        || input.down(KeyCode::ShiftRight)
+        || input.down(KeyCode::ControlLeft)
+        || input.down(KeyCode::ControlRight);
+    for (idx, key) in [KeyCode::KeyQ, KeyCode::KeyW, KeyCode::KeyE, KeyCode::KeyR]
+        .into_iter()
+        .enumerate()
+    {
         let down = input.down(key);
         if my_alive && down && !prev.abil[idx] {
-            if ctrl {
+            if rank_modifier {
                 out.push(Cmd::Rank { slot: idx as u8 });
             } else if let Some((x, z)) = aim {
-                out.push(Cmd::Cast { slot: idx as u8, x, z });
+                out.push(Cmd::Cast {
+                    slot: idx as u8,
+                    x,
+                    z,
+                });
             }
         }
         prev.abil[idx] = down;
@@ -122,12 +166,26 @@ pub fn read_input(
         let down = input.down(key);
         if my_alive && down && !prev.spell[idx] {
             if let Some((x, z)) = aim {
-                out.push(Cmd::Spell { slot: idx as u8, x, z });
+                out.push(Cmd::Spell {
+                    slot: idx as u8,
+                    x,
+                    z,
+                });
             }
         }
         prev.spell[idx] = down;
     }
-    for (idx, key) in [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6].into_iter().enumerate() {
+    for (idx, key) in [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let down = input.down(key);
         if my_alive && down && !prev.item[idx] {
             out.push(Cmd::UseItem { slot: idx as u8 });
@@ -217,11 +275,16 @@ impl LocalGame {
                 continue;
             };
             if let Some(p) = v.get("pick") {
-                let champ = p.get("champ").and_then(serde_json::Value::as_u64).unwrap_or(0) as u8;
+                let champ = p
+                    .get("champ")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u8;
                 let d = p.get("d").and_then(serde_json::Value::as_u64).unwrap_or(0) as u8;
                 let f = p.get("f").and_then(serde_json::Value::as_u64).unwrap_or(1) as u8;
                 let runes: [u8; 3] = match p.get("runes").and_then(serde_json::Value::as_array) {
-                    Some(a) if a.len() == 3 => std::array::from_fn(|i| a[i].as_u64().unwrap_or(0) as u8),
+                    Some(a) if a.len() == 3 => {
+                        std::array::from_fn(|i| a[i].as_u64().unwrap_or(0) as u8)
+                    }
                     _ => [u8::MAX; 3],
                 };
                 self.m.set_pick(self.human, champ, d, f, runes);
@@ -318,7 +381,9 @@ impl LocalGame {
                 if self.world.feed.len() > 8 {
                     self.world.feed.remove(0);
                 }
-                self.world.feed.push(crate::world::FeedLine { text, left: 7.0 });
+                self.world
+                    .feed
+                    .push(crate::world::FeedLine { text, left: 7.0 });
             }
         }
     }
@@ -357,5 +422,72 @@ impl EmberGame for LocalGame {
             camera_for(self.world.cam),
             &self.world.projs,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use league_core::proto::UnitSnap;
+
+    #[test]
+    fn picking_rejects_an_enemy_elsewhere_on_the_same_screen_row() {
+        let mut world = World::new(1);
+        world.set_units(&[UnitSnap {
+            id: 7,
+            k: 0,
+            t: 1,
+            x: -40.0,
+            z: 0.0,
+            ..UnitSnap::default()
+        }]);
+        let camera = camera_for(world.cam);
+        let aspect = 16.0 / 9.0;
+        let (x, y) = project(&camera, aspect, -40.0, 1.0, 0.0);
+        assert_eq!(pick_enemy(&camera, aspect, &world, [x, y]), Some(7));
+        assert_eq!(pick_enemy(&camera, aspect, &world, [x + 0.4, y]), None);
+        world.units[0].t = 0;
+        assert_eq!(pick_enemy(&camera, aspect, &world, [x, y]), None);
+    }
+
+    #[test]
+    fn ctrl_rank_needs_no_cursor_and_keys_rearm_after_death() {
+        let mut world = World::new(1);
+        world.phase = Phase::Live;
+        let mut prev = Prev::default();
+        let input = InputState::from_parts(
+            &[KeyCode::ControlLeft, KeyCode::KeyQ],
+            &[],
+            (0.0, 0.0),
+            None,
+        );
+        assert_eq!(
+            read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
+            vec![Cmd::Rank { slot: 0 }]
+        );
+        assert!(read_input(&input, &mut prev, &world, 16.0 / 9.0, true).is_empty());
+        let empty = InputState::default();
+        assert!(read_input(&empty, &mut prev, &world, 16.0 / 9.0, false).is_empty());
+        assert_eq!(
+            read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
+            vec![Cmd::Rank { slot: 0 }]
+        );
+        world.shop_open = true;
+        assert!(read_input(&empty, &mut prev, &world, 16.0 / 9.0, true).is_empty());
+        assert!(read_input(&input, &mut prev, &world, 16.0 / 9.0, true).is_empty());
+    }
+
+    #[test]
+    fn page_commands_reject_invalid_slots_and_share_cursor_projection() {
+        let world = World::new(1);
+        assert_eq!(ui_command(&serde_json::json!({"rank": 256}), &world), None);
+        assert_eq!(ui_command(&serde_json::json!({"use": 6}), &world), None);
+        assert_eq!(ui_command(&serde_json::json!({"buy": 65536}), &world), None);
+        let command = ui_command(
+            &serde_json::json!({"cast": 1, "aim": [0.0, 0.0], "aspect": 16.0/9.0}),
+            &world,
+        );
+        let (x, z) = ground_point(&camera_for(world.cam), 16.0 / 9.0, [0.0, 0.0]).unwrap();
+        assert_eq!(command, Some(Cmd::Cast { slot: 1, x, z }));
     }
 }

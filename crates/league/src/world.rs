@@ -7,7 +7,9 @@
 //! a tunnel.
 
 use league_core::data;
-use league_core::proto::{self, BuffSnap, ChampView, Phase, ProjSnap, SlotInfo, UnitSnap, ZoneSnap};
+use league_core::proto::{
+    self, BuffSnap, ChampView, Phase, ProjSnap, SlotInfo, UnitSnap, ZoneSnap,
+};
 
 /// A unit as the renderer and the page need it.
 #[derive(Clone, Copy, Debug)]
@@ -17,6 +19,8 @@ pub struct UnitLite {
     pub t: u8,
     /// Roster seat for champions; `u8::MAX` for everything else.
     pub slot: u8,
+    /// Champion definition id from the authoritative snapshot.
+    pub def: u8,
     pub x: f32,
     pub z: f32,
     pub fa: f32,
@@ -132,6 +136,7 @@ impl World {
                 k: r.k,
                 t: r.t,
                 slot: r.slot,
+                def: r.def,
                 x: r.x,
                 z: r.z,
                 fa: r.fa,
@@ -183,38 +188,54 @@ impl World {
     #[must_use]
     pub fn state_json(&self) -> String {
         use serde_json::json;
-        let me = self.champs.iter().find(|c| c.slot == self.my_slot).map(|c| {
-            let u = self.my_unit();
-            let roster = self.roster.iter().find(|r| r.slot == self.my_slot);
-            let def = roster.map_or(0, |r| r.champ.min(4));
-            let mut stats = data::champ_stats(def, c.level);
-            if let Some(r) = roster {
-                stats.add(&data::rune_stats(&r.runes));
-            }
-            for item in c.items.iter().filter_map(|id| data::item(*id)) {
-                stats.add(&item.flat);
-            }
-            stats.clamp_odds();
-            json!({
-                "slot": c.slot, "uid": u.map_or(0, |u| u.id), "champ": def, "team": c.team,
-                "alive": c.alive, "resp": c.resp,
-                "hp": u.map_or(0.0, |u| u.hp), "mh": u.map_or(0.0, |u| u.mh),
-                "mn": u.map_or(0.0, |u| u.mn), "mm": u.map_or(0.0, |u| u.mm),
-                "x": u.map_or(0.0, |u| u.x), "z": u.map_or(0.0, |u| u.z),
-                "lv": c.level, "g": c.gold, "pt": c.points,
-                "rk": c.ranks, "cd": c.cds, "scd": c.scds,
-                "items": c.items, "charges": c.charges, "d": c.d, "f": c.f,
-                "stats": {"ad": stats.ad, "ap": stats.ap, "haste": stats.haste,
-                    "crit": stats.crit, "critd": stats.critd,
-                    "attackSpeed": (1.0 + stats.aspd) / data::CHAMPS[usize::from(def)].atk_cd}
+        let me = self
+            .champs
+            .iter()
+            .find(|c| c.slot == self.my_slot)
+            .map(|c| {
+                let u = self.my_unit();
+                let roster = self.roster.iter().find(|r| r.slot == self.my_slot);
+                let def = roster.map_or(0, |r| r.champ.min(4));
+                let mut stats = data::champ_stats(def, c.level);
+                if let Some(r) = roster {
+                    stats.add(&data::rune_stats(&r.runes));
+                }
+                for item in c.items.iter().filter_map(|id| data::item(*id)) {
+                    stats.add(&item.flat);
+                }
+                stats.clamp_odds();
+                json!({
+                    "slot": c.slot, "uid": u.map_or(0, |u| u.id), "champ": def, "team": c.team,
+                    "alive": c.alive, "resp": c.resp,
+                    "hp": u.map_or(0.0, |u| u.hp), "mh": u.map_or(0.0, |u| u.mh),
+                    "mn": u.map_or(0.0, |u| u.mn), "mm": u.map_or(0.0, |u| u.mm),
+                    "x": u.map_or(0.0, |u| u.x), "z": u.map_or(0.0, |u| u.z),
+                    "lv": c.level, "g": c.gold, "pt": c.points,
+                    "rk": c.ranks, "cd": c.cds, "scd": c.scds,
+                    "items": c.items, "charges": c.charges, "d": c.d, "f": c.f,
+                    "stats": {"ad": stats.ad, "ap": stats.ap, "haste": stats.haste,
+                        "crit": stats.crit, "critd": stats.critd,
+                        "attackSpeed": (1.0 + stats.aspd) / data::CHAMPS[usize::from(def)].atk_cd}
+                })
+            });
+        let units: Vec<_> = self
+            .units
+            .iter()
+            .map(|u| {
+                let fraction = if u.mh > 0.0 {
+                    (u.hp / u.mh).clamp(0.0, 1.0) * 100.0
+                } else {
+                    0.0
+                };
+                json!([u.k, u.t, u.x, u.z, fraction, u.slot])
             })
-        });
-        let units: Vec<_> = self.units.iter().map(|u| {
-            let fraction = if u.mh > 0.0 { (u.hp / u.mh).clamp(0.0, 1.0) * 100.0 } else { 0.0 };
-            json!([u.k, u.t, u.x, u.z, fraction, u.slot])
-        }).collect();
-        let cores: Vec<_> = self.units.iter().filter(|u| u.k == 6 || u.k == 7)
-            .map(|u| json!({"t": u.t, "hp": u.hp, "mh": u.mh})).collect();
+            .collect();
+        let cores: Vec<_> = self
+            .units
+            .iter()
+            .filter(|u| u.k == 6 || u.k == 7)
+            .map(|u| json!({"t": u.t, "hp": u.hp, "mh": u.mh}))
+            .collect();
         json!({
             "phase": self.phase, "left": self.left, "mode": self.mode,
             "slot": self.my_slot, "me": me, "secs": self.secs,
@@ -225,7 +246,8 @@ impl World {
             "feed": self.feed.iter().map(|l| &l.text).collect::<Vec<_>>(),
             "buffs": self.buffs.iter().map(|b| json!([b.u, b.k, b.ttl])).collect::<Vec<_>>(),
             "cores": cores
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
@@ -253,7 +275,8 @@ pub fn json_escape(s: &str) -> String {
 #[must_use]
 pub fn data_json() -> String {
     use serde_json::json;
-    let ability = |a: &data::Ability| json!({"name": a.name, "desc": a.desc, "mana": a.mana, "cd": a.cd});
+    let ability =
+        |a: &data::Ability| json!({"name": a.name, "desc": a.desc, "mana": a.mana, "cd": a.cd});
     json!({
         "champs": data::CHAMPS.iter().map(|c| json!({
             "key": c.key, "name": c.name, "title": c.title, "hp": c.hp0, "mana": c.mn0,
@@ -300,7 +323,11 @@ pub fn feed_line(w: &World, ev: &proto::LogEv) -> Option<String> {
         2 => Some(format!(
             "{} took the {}",
             if ev.a == 0 { "blue" } else { "red" },
-            if ev.b == 4 { "North Court" } else { "South Court" },
+            if ev.b == 4 {
+                "North Court"
+            } else {
+                "South Court"
+            },
         )),
         3 => Some(format!(
             "{} lost their core — {} wins",
@@ -332,9 +359,37 @@ mod tests {
 
     #[test]
     fn state_json_is_parseable_even_empty() {
-        let w = World::new(1);
+        let mut w = World::new(1);
+        w.my_slot = 1;
         let j = w.state_json();
         let v: serde_json::Value = serde_json::from_str(&j).expect("state_json must be valid JSON");
         assert_eq!(v["phase"].as_str(), Some("select"));
+        assert_eq!(v["slot"], 1);
+        assert!(v["me"].is_null());
+        assert_eq!(j.matches("\"me\":").count(), 1);
+    }
+
+    #[test]
+    fn hud_cores_are_named_and_items_report_consumable_charges() {
+        let mut w = World::new(1);
+        w.set_units(&[UnitSnap {
+            k: 7,
+            t: 1,
+            hp: 1700.0,
+            mh: 3200,
+            ..UnitSnap::default()
+        }]);
+        let state: serde_json::Value = serde_json::from_str(&w.state_json()).unwrap();
+        assert_eq!(state["cores"][0]["t"], 1);
+        assert_eq!(state["cores"][0]["hp"], 1700.0);
+        let data: serde_json::Value = serde_json::from_str(&data_json()).unwrap();
+        assert!(
+            data["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["charges"].as_u64().unwrap() > 0)
+        );
+        assert_eq!(data["champs"][0]["q"]["mana"].as_array().unwrap().len(), 3);
     }
 }
