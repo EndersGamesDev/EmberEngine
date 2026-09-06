@@ -764,7 +764,7 @@ fn wear_of(id: u32, buffs: &[BuffSnap]) -> Wear {
 }
 
 /// One champion or hologram, with its kit's silhouette and its buffs.
-fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool) {
+fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool, pose: crate::combat::AttackPose) {
     let def = u.def;
     let team = team_colour(u.t);
     let bob = (t * 5.0 + u.id as f32).sin() * 0.04;
@@ -812,7 +812,7 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
 
     let y = bob;
     if let Some(baked) = art::champion(def) {
-        push_baked(frame, baked, u, t, wear, col, holo, wob);
+        push_baked(frame, baked, u, t, wear, col, holo, wob, pose);
     } else {
         push_procedural(frame, def, u, t, wear, col, wob, r, x, y, z);
     }
@@ -826,15 +826,15 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
 /// multiply on top. Motion is procedural: a breath bob, a lean into the
 /// facing, and a slow turn for the kits that are more orb than body.
 #[allow(clippy::too_many_arguments)]
-fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], holo: bool, wob: f32) {
+fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], holo: bool, wob: f32, pose: crate::combat::AttackPose) {
     let tinted = holo || wear.immune || wear.exhaust || (wear.demon && u.def != data::KNIGHT);
     let paint = if tinted { col } else { [1.0, 1.0, 1.0] };
     let breath = (t * 2.2 + u.id as f32).sin() * 0.015;
-    let scale = Vec3::splat(wob * (1.0 + breath));
+    let scale = Vec3::splat(wob * (1.0 + breath)) * pose.stretch;
     let spin = if u.def == data::SWARM { Quat::from_rotation_y(t * 0.35) } else { Quat::IDENTITY };
-    let body = face(u.fa) * spin;
+    let body = face(u.fa) * spin * pose.rotation;
     let lift = if u.def == data::SWARM { 0.25 + (t * 1.7 + u.id as f32).sin() * 0.06 } else { 0.0 };
-    let origin = v3(u.x, lift, u.z);
+    let origin = v3(u.x, lift, u.z) + pose.offset;
     for part in &baked.parts {
         // A part turns by `swing` about its own pivot p, then the whole body
         // by `body`: v' = body * (p + swing * (v - p)). The engine applies
@@ -1127,6 +1127,10 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
 /// A projectile in flight. `k` is `sim::ProjKind` as the wire numbers it:
 /// 0 auto-attack, 1 drone, 2 gear bolt, 3 hook.
 fn push_proj(frame: &mut Frame, p: &ProjSnap, t: f32) {
+    if p.champ < 5 || p.k != 0 {
+        crate::combat::draw_projectile(frame, p, t);
+        return;
+    }
     let (x, z) = (p.x, p.z);
     let yaw = p.dz.atan2(p.dx);
     let r = face(yaw);
@@ -1266,6 +1270,9 @@ fn push_chain(frame: &mut Frame, x: f32, z: f32, x2: f32, z2: f32, y: f32, col: 
 /// Transient effects, aged by the caller. `age` is 0..1 over the effect's
 /// short life.
 fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
+    if crate::combat::draw_fx(frame, fx, age) {
+        return;
+    }
     let fade = |c: f32| c * (1.0 - age * 0.6);
     let line_yaw = |fx: &FxLite| (fx.z2 - fx.z).atan2(fx.x2 - fx.x);
     match fx.k {
@@ -1462,7 +1469,7 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
             1 | 2 if !u.dead => push_minion(&mut frame, u, t),
             0 | 3 if !u.dead => {
                 let mine = u.k == 0 && input.my_slot == Some(u.slot);
-                push_champion(&mut frame, u, t, wear_of(u.id, input.buffs), mine);
+                push_champion(&mut frame, u, t, wear_of(u.id, input.buffs), mine, crate::combat::attack_pose(u, input.fx));
             }
             _ => {}
         }
@@ -1516,7 +1523,7 @@ fn push_showcase(frame: &mut Frame, _camera: &Camera, t: f32) {
     };
     for def in 0..5u8 {
         let u = stand_in(9000 + u32::from(def), 0, def % 2, def, (f32::from(def) - 2.0) * 3.2, 1.0, t * 0.6 + f32::from(def) * 0.4);
-        push_champion(frame, &u, t, Wear::default(), false);
+        push_champion(frame, &u, t, Wear::default(), false, crate::combat::AttackPose::default());
         push_hp_bar(frame, &u);
     }
     // the objectives are units too, and the draft has none: stand them in

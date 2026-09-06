@@ -262,7 +262,11 @@ $('btn-conflict-take').onclick = () => resolveConflict(true);
 $('btn-conflict-keep').onclick = () => resolveConflict(false);
 
 addEventListener('keydown', (e) => {
-  if (!keysOpen) return;
+  if (!keysOpen) {
+    // Winit consumes canvas key defaults. Let Tab leave the field normally.
+    if (e.code === 'Tab' && e.target.matches?.('#ember-root canvas')) e.stopImmediatePropagation();
+    return;
+  }
   if (listening) {
     e.preventDefault();
     e.stopImmediatePropagation();
