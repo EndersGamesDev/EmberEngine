@@ -588,7 +588,10 @@ mod tests {
         assert_eq!(value["scene_id"], 17);
         assert_eq!(value["level"], "Preview");
         assert_eq!(value["warp_kind"], "AnchorHomography");
-        assert_eq!(value["requested_centre_px"], serde_json::json!([480.0, 270.0]));
+        assert_eq!(
+            value["requested_centre_px"],
+            serde_json::json!([480.0, 270.0])
+        );
         assert_eq!(value["anchor_px"], serde_json::json!([0.0, 0.0]));
 
         let empty = PresentationLedger::default();

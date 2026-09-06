@@ -62,16 +62,10 @@ fn mapped_requested_points(
     ];
     let mapped = requested_points.map(|requested_point| {
         apply_homography(requested_from_source.inverse, requested_point)
-            .and_then(|source_point| {
-                apply_homography(source_delivery.covering_map(), source_point)
-            })
+            .and_then(|source_point| apply_homography(source_delivery.covering_map(), source_point))
             .and_then(|source_point| apply_homography(actual_forward, source_point))
             .map(|actual_destination| {
-                presented_pixel(
-                    actual_destination,
-                    lattice.destination(),
-                    presented_extent,
-                )
+                presented_pixel(actual_destination, lattice.destination(), presented_extent)
             })
     });
     Some([mapped[0]?, mapped[1]?])
@@ -79,9 +73,7 @@ fn mapped_requested_points(
 
 fn displayed_forward(rows: [[f32; 4]; 3], lattice: LatticePair) -> Option<[f64; 9]> {
     let inverse = core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]));
-    let half = lattice
-        .destination()
-        .map(|extent| f64::from(extent) * 0.5);
+    let half = lattice.destination().map(|extent| f64::from(extent) * 0.5);
     let destination = [
         [-half[0], -half[1]],
         [half[0], -half[1]],
