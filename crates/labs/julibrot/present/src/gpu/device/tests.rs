@@ -1130,9 +1130,14 @@ fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan 
 fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
     let presented_extent = [960, 540];
     let requested = pose_on(presented_extent);
-    let mut preview = frame_on(81, [120, 68], [120, 68]);
+    let mut preview = frame_on(81, [120, 68], presented_extent);
     preview.level = RefinementLevel::Preview;
     let preview_plan = reproject_onto(&preview, &requested);
+    let preview_lattice = preview_plan
+        .lattice
+        .expect("the Preview plan names its delivery pair");
+    assert_eq!(preview_lattice.source(), [120, 68]);
+    assert_eq!(preview_lattice.destination(), presented_extent);
     let preview_entry =
         presentation_ledger_entry(&preview_plan, &requested, Some(&preview), presented_extent);
 

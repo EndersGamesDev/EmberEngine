@@ -833,13 +833,13 @@ mod tests {
         ));
     }
 
-    /// The 960x540 owner row copied by the programmatic driver on 2026-09-06.
+    /// The 960x540 measured relief zoom row copied by the programmatic driver on 2026-09-06.
     ///
     /// # Panics
     ///
     /// Panics only if the copied finite row no longer constructs the plane and screen map that the
     /// page accepted, which a valid saved row cannot arrange.
-    fn zoom_jump_owner_pose() -> Pose {
+    fn measured_relief_zoom_pose() -> Pose {
         let object = ObjectAngles {
             rho_12: 0.0,
             rho_13: -0.163_226_878_883_618_53,
@@ -868,7 +868,8 @@ mod tests {
             distance_five: 8.0,
             distance_four: 8.0,
         };
-        let plane = construct_plane(object).expect("the owner row constructs its plane");
+        let plane = construct_plane(object)
+            .expect("the measured relief zoom row constructs its plane");
         let mut posed = object_pose(object, plane, view, [0.0; 2]);
         posed.zoom_log2 = 1.259_194_831_013_92;
         posed.plane_origin = [-0.629, 0.0, -0.083, 0.016];
@@ -880,11 +881,11 @@ mod tests {
     ///
     /// # Panics
     ///
-    /// Panics only if the copied owner row loses its finite screen-centre map, which that accepted
-    /// saved row cannot arrange.
-    fn screen_centred_owner_zoom(from: &Pose, zoom_delta: f64, extent: [u32; 2]) -> Pose {
+    /// Panics only if the copied measured relief zoom row loses its finite screen-centre map,
+    /// which that accepted saved row cannot arrange.
+    fn screen_centred_measured_relief_zoom(from: &Pose, zoom_delta: f64, extent: [u32; 2]) -> Pose {
         let PoseMap::Mapped(screen_to_plane) = from.map else {
-            panic!("the owner row has a screen map");
+            panic!("the measured relief zoom row has a screen map");
         };
         let anchor = apply_homography(screen_to_plane.rows, [0.0; 2])
             .expect("the screen centre is in front of the chart horizon");
@@ -994,10 +995,10 @@ mod tests {
     #[test]
     #[allow(
         clippy::too_many_lines,
-        reason = "the pinned 9x9 owner-row error fields are the measured regression fixture"
+        reason = "the pinned 9x9 measured relief zoom fields are the regression fixture"
     )]
-    fn owner_row_reference_anchored_zoom_pins_the_partial_error_field_and_refusal() {
-        let from = zoom_jump_owner_pose();
+    fn measured_relief_zoom_row_reference_pair_pins_partial_error_field_and_refusal() {
+        let from = measured_relief_zoom_pose();
         let expected = [
             (
                 0.1,
@@ -1186,7 +1187,7 @@ mod tests {
             let flat = warp_matrix(&from, &to).expect("a centred zoom has a finite flat map");
             let residual = chart_residual(&from, &to);
             let raw = anchor_plan(&frame(&from), &from, &to, flat.forward, residual)
-                .expect("the owner row has a finite anchor plan");
+                .expect("the measured relief zoom row has a finite anchor plan");
             let approximate = unpack_rows(raw.rows);
             let mut resolved = ErrorSamples::new();
             let mut screen_maxima = [None; 81];
@@ -1250,7 +1251,7 @@ mod tests {
             let metrics = resolved
                 .clone()
                 .maximum_and_p95()
-                .expect("some owner-row samples resolve");
+                .expect("some measured relief zoom samples resolve");
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
             assert_eq!(plan.approx_max_error_px, Some(metrics.0));
@@ -1275,21 +1276,23 @@ mod tests {
                         assert!((actual - expected).abs() < 1.0e-6);
                     }
                     (None, None) => {}
-                    _ => panic!("owner-row screen field changed: {actual:?} != {expected:?}"),
+                    _ => panic!(
+                        "measured relief zoom screen field changed: {actual:?} != {expected:?}"
+                    ),
                 }
             }
         }
     }
 
     #[test]
-    fn owner_row_screen_centred_zoom_pins_the_two_browser_refinement_poses() {
-        let from = zoom_jump_owner_pose();
+    fn measured_relief_zoom_row_screen_centred_pair_pins_browser_refinement_poses() {
+        let from = measured_relief_zoom_pose();
         let expected = [
             ([480, 270], 488.26, 296.66, [16.654_733, -3.317_900]),
             ([120, 68], 490.22, 306.24, [4.163_683, -0.829_475]),
         ];
         for (extent, expected_max, expected_p95, expected_displacement) in expected {
-            let to = screen_centred_owner_zoom(&from, 0.1, extent);
+            let to = screen_centred_measured_relief_zoom(&from, 0.1, extent);
             for (actual, expected) in to
                 .centre_from_reference_px
                 .into_iter()
