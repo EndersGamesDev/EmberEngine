@@ -943,10 +943,7 @@ mod browser {
                 self.frame_capture.in_flight_since_ms = None;
                 return;
             }
-            let since = *self
-                .frame_capture
-                .in_flight_since_ms
-                .get_or_insert(now_ms);
+            let since = *self.frame_capture.in_flight_since_ms.get_or_insert(now_ms);
             match self.presenter.take_frame_readback() {
                 Ok(None) => {
                     // A map that has not fired inside the deadline is not a slow copy: it is one

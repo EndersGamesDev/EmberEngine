@@ -1098,16 +1098,26 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
         .find("self.queue.submit([encoder.finish()]);")
         .expect("one submission");
     assert!(present_encode < capture_encode && capture_encode < submit);
-    assert!(READBACK.contains("operation: \"copy a frame whose target extent is not the presented extent\","));
+    assert!(
+        READBACK.contains(
+            "operation: \"copy a frame whose target extent is not the presented extent\","
+        )
+    );
     // Neither route answers an empty picture. A failed map is a typed refusal, a copy short of its
     // own extent is a typed refusal, a capture the pass could not encode leaves its reason behind
     // for the loop to publish, and the module refuses a byte count the extent does not justify.
     assert!(READBACK.contains("operation: \"map a presented frame copy\","));
     assert!(READBACK.contains("if rgba.len() != packed_bytes(extent) {"));
     assert!(READBACK.contains("operation: \"assemble a complete frame copy\","));
-    assert!(READBACK.contains("pub const fn take_frame_readback_refusal(&mut self) -> Option<PresentError> {"));
+    assert!(
+        READBACK.contains(
+            "pub const fn take_frame_readback_refusal(&mut self) -> Option<PresentError> {"
+        )
+    );
     assert!(WARP_SUBMIT.contains("self.frame_readback_refusal = Some(error);"));
-    assert!(FRAME.contains("if let Some(refusal) = self.presenter.take_frame_readback_refusal() {"));
+    assert!(
+        FRAME.contains("if let Some(refusal) = self.presenter.take_frame_readback_refusal() {")
+    );
     assert!(LAB.contains("if (state.frame_capture_refusal) {"));
     assert!(LAB.contains("if (bytes.length !== expected) {"));
     // On request only. A loop that copied the surface every turn would spend its budget measuring
@@ -1210,14 +1220,18 @@ fn a_finished_picture_is_finished_at_the_current_view_and_not_merely_at_a_delive
     assert!(FACTS.contains("picture_finished: crate::PictureState {"));
     assert!(FACTS.contains("loop_facts.presented_view_is_stale(app.viewer()),"));
     // And the module reads that one fact rather than reassembling it from field names.
-    assert!(LAB.contains("if (facts.refinement_level === level && facts.picture_finished === true) {"));
+    assert!(
+        LAB.contains("if (facts.refinement_level === level && facts.picture_finished === true) {")
+    );
     assert!(!LAB.contains("facts.refinement_pending === false"));
     // A verdict is never reached before a turn has run, because a row applied a moment ago has
     // changed the controls and not yet reached the loop that marks the picture stale.
     assert!(LAB.contains(
         "      // Deliberately no synchronous verdict. A row applied a moment ago has changed the controls"
     ));
-    assert!(LAB.contains("if (requireNewScene && facts.completed_scene_id === baselineScene) return false;"));
+    assert!(LAB.contains(
+        "if (requireNewScene && facts.completed_scene_id === baselineScene) return false;"
+    ));
 }
 
 /// An armed copy is taken on the present it was armed for, and on no other.
