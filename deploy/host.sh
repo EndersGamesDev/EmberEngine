@@ -16,6 +16,12 @@
 # git, a Rust toolchain, cloudflared and python3. The first build takes minutes;
 # later ones seconds.
 #
+# EMBER_PREBUILT=<dir> is the mode for a host that cannot build (docs/hosts.md
+# §8). The six products and a `stamp` file come from that directory, no
+# repository is cloned and no compiler is required; everything downstream —
+# the loopback-then-public probe order, the pid files, run/host.json — is the
+# same code. Unset, which is the default, nothing about this script changes.
+#
 # WHY THE ARENA AND FIRE NAMES GO THROUGH THE ENVIRONMENT. Those servers are
 # started with EMBER_HOST_NAME rather than a `--name` flag, because a host may
 # stay on an older commit (§7) whose binary never heard of the flag. Kings was
@@ -55,6 +61,12 @@ if [ ! -f "$CONF" ]; then
 #EMBER_FIRE_PORT=7781
 #EMBER_KINGS_PORT=7782
 
+# Run binaries somebody else built, instead of cloning and building. The
+# directory holds arena-server, fire-server, kings-server, wsbot, fire-probe,
+# kings-probe and a `stamp` file naming the build. deploy/ship-host.sh fills
+# it. Leave unset on a host that has a toolchain.
+#EMBER_PREBUILT=
+
 # Working directory: source checkout, logs, pid files.
 #EMBER_HOME=$HOME/ember-host
 
@@ -79,6 +91,7 @@ EMBER_ARENA_PORT="${EMBER_ARENA_PORT:-7780}"
 EMBER_FIRE_PORT="${EMBER_FIRE_PORT:-7781}"
 EMBER_KINGS_PORT="${EMBER_KINGS_PORT:-7782}"
 EMBER_HOME="${EMBER_HOME:-$HOME/ember-host}"
+EMBER_PREBUILT="${EMBER_PREBUILT:-}"
 DEFAULT_TUNNEL_BIN="$HOME/bin/cloudflared"
 EMBER_TUNNEL_BIN="${EMBER_TUNNEL_BIN:-$DEFAULT_TUNNEL_BIN}"
 
@@ -120,6 +133,44 @@ die() { echo "host.sh: $*" >&2; exit 1; }
 # checkout otherwise (someone copied host.sh onto a box on its own).
 helper() {
     if [ -f "$SELF_DIR/$1" ]; then echo "$SELF_DIR/$1"; else echo "$SRC/deploy/$1"; fi
+}
+
+# --- prebuilt mode ---------------------------------------------------------
+# A host that cannot build runs binaries somebody else built (docs/hosts.md
+# §8). EMBER_PREBUILT names the directory holding them and the `stamp` file
+# that says what they are. Everything downstream is the same code — the
+# loopback-then-public probe order, the pid identity, the published entry —
+# because two implementations of "is this host healthy" is one more than can
+# be kept true.
+#
+# The stamp is the ONLY statement of identity here: there is no checkout to
+# ask, and a binary cannot be asked which commit produced it without being
+# run. `update` compares `full_commit` rather than the short form, which is a
+# display convenience that grows a digit as a repository does.
+prebuilt() { [ -n "$EMBER_PREBUILT" ]; }
+
+PREBUILT_PRODUCTS="arena-server fire-server kings-server wsbot fire-probe kings-probe"
+
+stamp_field() {
+    local line
+    line="$(grep -E "^$1=" "$EMBER_PREBUILT/stamp" 2>/dev/null | head -1 || true)"
+    echo "${line#*=}"
+}
+
+# Refuse an incomplete directory up front. A product missing at the moment it
+# is needed would be found after stop_all, with the host already down and
+# nothing to bring back up.
+require_prebuilt() {
+    local product field
+    [ -d "$EMBER_PREBUILT" ] || die "EMBER_PREBUILT='$EMBER_PREBUILT' is not a directory"
+    [ -f "$EMBER_PREBUILT/stamp" ] || die "no stamp file in $EMBER_PREBUILT"
+    for product in $PREBUILT_PRODUCTS; do
+        [ -x "$EMBER_PREBUILT/$product" ] \
+            || die "$EMBER_PREBUILT/$product is missing or not executable"
+    done
+    for field in version commit full_commit arena_proto fire_proto kings_proto; do
+        [ -n "$(stamp_field "$field")" ] || die "the stamp in $EMBER_PREBUILT has no $field"
+    done
 }
 
 # --- the three games -------------------------------------------------------
@@ -168,7 +219,35 @@ game_bind()  {
 
 target_dir() { echo "${CARGO_TARGET_DIR:-$SRC/target}"; }
 
+# Where the server and its probe actually live. In prebuilt mode the names are
+# fixed — the shipper is what resolves a historical package name to
+# `arena-server`, so this side needs no checkout to ask.
+server_bin() {
+    if prebuilt; then
+        echo "$EMBER_PREBUILT/$1-server"
+    else
+        echo "$(target_dir)/release/$(game_bin "$1")"
+    fi
+}
+probe_bin() {
+    local name
+    case "$1" in
+        arena) name=wsbot ;;
+        fire)  name=fire-probe ;;
+        kings) name=kings-probe ;;
+    esac
+    if prebuilt; then
+        echo "$EMBER_PREBUILT/$name"
+    else
+        echo "$(target_dir)/release/examples/$name"
+    fi
+}
+
 proto_of() {
+    if prebuilt; then
+        stamp_field "$1_proto"
+        return 0
+    fi
     local crate; crate="$(game_crate "$1")"
     grep -oE 'PROTO_VERSION: u16 = [0-9]+' "$SRC/crates/$crate/src/proto.rs" \
         | grep -oE '[0-9]+$' | head -1
@@ -195,20 +274,16 @@ proto_of() {
 # did not answer".
 probe_game() {
     local id="$1" url="$2" label="${3:-check}" expect_commit="${4:-}" bin
+    bin="$(probe_bin "$id")"
+    [ -x "$bin" ] || die "$bin was not built"
     case "$id" in
         arena)
-            bin="$(target_dir)/release/examples/wsbot"
-            [ -x "$bin" ] || die "$bin was not built"
             "$bin" "$url" create "health-$label" - "health-$label" 6 >/dev/null
             ;;
         fire)
-            bin="$(target_dir)/release/examples/fire-probe"
-            [ -x "$bin" ] || die "$bin was not built"
             "$bin" "$url" >/dev/null
             ;;
         kings)
-            bin="$(target_dir)/release/examples/kings-probe"
-            [ -x "$bin" ] || die "$bin was not built"
             [ -n "$expect_commit" ] || die "the kings probe needs the deployed commit"
             "$bin" "$url" --expect-commit "$expect_commit" >/dev/null
             ;;
@@ -411,34 +486,45 @@ cmd_up() {
     local name; name="$(bash "$(helper host-name.sh)")"
     say "host $name"
 
-    sync_source
-    local rev; rev="$(resolve_ref)" || die "EMBER_REF='$EMBER_REF' names no commit in $EMBER_REPO"
-    git -C "$SRC" checkout -q --detach "$rev"
-    local version commit
-    version="r$(git -C "$SRC" rev-list --count HEAD)"
-    commit="$(git -C "$SRC" rev-parse --short HEAD)"
-    say "building $version · $commit from $EMBER_REF"
+    local rev version commit
+    if prebuilt; then
+        # Nothing to fetch and nothing to compile: the identity of what will
+        # run is a fact of the directory, checked before anything is stopped.
+        require_prebuilt
+        rev="$(stamp_field full_commit)"
+        version="$(stamp_field version)"
+        commit="$(stamp_field commit)"
+        say "running the prebuilt $version · $commit from $EMBER_PREBUILT"
+    else
+        sync_source
+        rev="$(resolve_ref)" || die "EMBER_REF='$EMBER_REF' names no commit in $EMBER_REPO"
+        git -C "$SRC" checkout -q --detach "$rev"
+        version="r$(git -C "$SRC" rev-list --count HEAD)"
+        commit="$(git -C "$SRC" rev-parse --short HEAD)"
+        say "building $version · $commit from $EMBER_REF"
 
-    local tb; tb="$(date +%s)"
-    (
-        cd "$SRC"
-        export EMBER_BUILD_VERSION="$version" EMBER_BUILD_COMMIT="$commit"
-        # The health probes are built HERE, in the same niced and timed step,
-        # rather than compiled by `cargo run` on first use. One invocation per
-        # package: a single multi-package `--example` line has to resolve the
-        # target name across packages and is easy to get subtly wrong.
-        # shellcheck disable=SC2086
-        $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)" -p "$(game_pkg kings)"
-        # shellcheck disable=SC2086
-        $NICE cargo build --release -p "$(game_pkg arena)" --example wsbot
-        # shellcheck disable=SC2086
-        $NICE cargo build --release -p "$(game_pkg fire)" --example probe
-        cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/fire-probe"
-        # shellcheck disable=SC2086
-        $NICE cargo build --release -p "$(game_pkg kings)" --example probe
-        cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/kings-probe"
-    ) || die "build failed"
-    echo "   built in $(( $(date +%s) - tb ))s"
+        local tb; tb="$(date +%s)"
+        (
+            cd "$SRC"
+            export EMBER_BUILD_VERSION="$version" EMBER_BUILD_COMMIT="$commit"
+            # The health probes are built HERE, in the same niced and timed
+            # step, rather than compiled by `cargo run` on first use. One
+            # invocation per package: a single multi-package `--example` line
+            # has to resolve the target name across packages and is easy to
+            # get subtly wrong.
+            # shellcheck disable=SC2086
+            $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)" -p "$(game_pkg kings)"
+            # shellcheck disable=SC2086
+            $NICE cargo build --release -p "$(game_pkg arena)" --example wsbot
+            # shellcheck disable=SC2086
+            $NICE cargo build --release -p "$(game_pkg fire)" --example probe
+            cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/fire-probe"
+            # shellcheck disable=SC2086
+            $NICE cargo build --release -p "$(game_pkg kings)" --example probe
+            cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/kings-probe"
+        ) || die "build failed"
+        echo "   built in $(( $(date +%s) - tb ))s"
+    fi
 
     say "stopping whatever was running"
     stop_all
@@ -447,7 +533,7 @@ cmd_up() {
     ts="$(date +%s)"
     for id in $(game_ids); do
         port="$(game_port "$id")"
-        bin="$(target_dir)/release/$(game_bin "$id")"
+        bin="$(server_bin "$id")"
         [ -x "$bin" ] || die "$bin was not built"
         bind="$(game_bind "$id")"
         say "starting $id on 127.0.0.1:$port"
@@ -566,9 +652,16 @@ cmd_up() {
 }
 
 cmd_update() {
-    sync_source
     local rev deployed
-    rev="$(resolve_ref)" || die "EMBER_REF='$EMBER_REF' names no commit"
+    if prebuilt; then
+        # The stamp is what moved or did not: a shipper replaced the products
+        # and said so, and there is no ref here to ask.
+        require_prebuilt
+        rev="$(stamp_field full_commit)"
+    else
+        sync_source
+        rev="$(resolve_ref)" || die "EMBER_REF='$EMBER_REF' names no commit"
+    fi
     deployed="$(cat "$RUN/deployed" 2>/dev/null || echo none)"
     local all_up=1 id
     for id in $(game_ids); do
@@ -577,8 +670,13 @@ cmd_update() {
     if [ "$rev" = "$deployed" ] && [ -n "$all_up" ]; then
         local name version commit args=()
         name="$(bash "$(helper host-name.sh)")"
-        version="r$(git -C "$SRC" rev-list --count HEAD)"
-        commit="$(git -C "$SRC" rev-parse --short HEAD)"
+        if prebuilt; then
+            version="$(stamp_field version)"
+            commit="$(stamp_field commit)"
+        else
+            version="r$(git -C "$SRC" rev-list --count HEAD)"
+            commit="$(git -C "$SRC" rev-parse --short HEAD)"
+        fi
         for id in $(game_ids); do
             args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
         done
@@ -589,7 +687,11 @@ cmd_update() {
         return 0
     fi
     if [ "$rev" = "$deployed" ]; then
-        say "ref has not moved but something is not running; bringing it back up"
+        if prebuilt; then
+            say "the stamp has not moved but something is not running; bringing it back up"
+        else
+            say "ref has not moved but something is not running; bringing it back up"
+        fi
     else
         say "${deployed:0:7} -> ${rev:0:7}; redeploying"
     fi
@@ -600,7 +702,13 @@ cmd_status() {
     local name; name="$(bash "$(helper host-name.sh)")"
     echo "host:      $name"
     echo "home:      $EMBER_HOME"
-    if [ -d "$SRC/.git" ]; then
+    if prebuilt; then
+        if [ -f "$EMBER_PREBUILT/stamp" ]; then
+            echo "prebuilt:  $EMBER_PREBUILT -> $(stamp_field commit) ($(stamp_field version))"
+        else
+            echo "prebuilt:  $EMBER_PREBUILT (no stamp there)"
+        fi
+    elif [ -d "$SRC/.git" ]; then
         echo "ref:       $EMBER_REF -> $(git -C "$SRC" rev-parse --short HEAD) (r$(git -C "$SRC" rev-list --count HEAD))"
     else
         echo "ref:       $EMBER_REF (never checked out)"
