@@ -12,6 +12,10 @@ use crate::rng;
 use crate::sim::{self, Kind, Match};
 
 /// One bot's turn of the mind, appended to the match's command queue.
+#[allow(
+    clippy::too_many_lines,
+    reason = "The ordered decision ladder returns one command; keeping priorities together makes deterministic bot behavior auditable."
+)]
 pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
     let ui = m.champ_by_slot(slot)?;
     let u = m.units.get(ui)?;

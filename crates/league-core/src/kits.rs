@@ -723,17 +723,21 @@ impl Match {
     // --- summoner spells ----------------------------------------------------
 
     /// D/F. Aim is the cursor point; flash and exhaust read it.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Spell validation, cooldown payment and the four mutually exclusive effects remain one atomic command dispatch."
+    )]
     pub(crate) fn cast_spell(&mut self, ui: usize, sp: u8, ax: f32, az: f32) {
-        let s = usize::from(sp);
+        let slot_index = usize::from(sp);
         let (spell, level, team, id, x, z) = {
             let u = &self.units[ui];
-            let spell = if s == 0 { u.d } else { u.f };
+            let spell = if slot_index == 0 { u.d } else { u.f };
             (spell, u.level, u.team, u.id, u.x, u.z)
         };
-        if spell >= 4 || self.units[ui].dead || self.units[ui].scds[s] > 0.0 {
+        if spell >= 4 || self.units[ui].dead || self.units[ui].scds[slot_index] > 0.0 {
             return;
         }
-        self.units[ui].scds[s] = data::SPELLS[usize::from(spell)].cd;
+        self.units[ui].scds[slot_index] = data::SPELLS[usize::from(spell)].cd;
         match spell {
             data::SPELL_FLASH => {
                 let (dx, dz) = sim::dir_to(x, z, ax, az);
@@ -812,7 +816,7 @@ impl Match {
                         });
                     }
                 } else {
-                    self.units[ui].scds[s] = 0.0;
+                    self.units[ui].scds[slot_index] = 0.0;
                 }
             }
             data::SPELL_EXHAUST => {
@@ -830,7 +834,7 @@ impl Match {
                         });
                     }
                 } else {
-                    self.units[ui].scds[s] = 0.0;
+                    self.units[ui].scds[slot_index] = 0.0;
                 }
             }
             _ => {}
@@ -979,6 +983,10 @@ impl Match {
         self.projs.push(p);
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Projectile initialization explicitly supplies identity, planar position/direction and combat parameters without changing their coordinate representation."
+    )]
     pub(crate) const fn blank_proj(
         &mut self,
         owner: u32,

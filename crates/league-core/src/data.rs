@@ -1,6 +1,7 @@
-//! Static game data: the lane, the five champions, the items, the runes,
-//! the summoner spells. Numbers live here and nowhere else; the sim reads
-//! this table, the page shows it through the client's `data_json`.
+//! Static game data: the lane, champions, items, runes and summoner spells.
+//!
+//! Numbers live here and nowhere else; the sim reads this table, and the
+//! page shows it through the client's `data_json`.
 
 /// Half-length of the lane: blue core at x=-62, red core at x=+62.
 pub const CORE_X: f32 = 62.0;

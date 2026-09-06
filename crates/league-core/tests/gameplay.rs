@@ -490,9 +490,9 @@ fn court_capture_pays_the_team_and_grants_the_strategic_boon() {
     game.deal_damage(court, 2000.0, 0, source, false);
     assert_eq!(game.boon, [1, 0]);
     assert_eq!(game.court_respawn[0], data::COURT_RESPAWN);
-    for slot in 0..3 {
-        assert_eq!(game.units[slot].gold, data::START_GOLD + 150);
-        assert!(game.units[slot].level > 1);
+    for champion in game.units.iter().take(3) {
+        assert_eq!(champion.gold, data::START_GOLD + 150);
+        assert!(champion.level > 1);
     }
 }
 
@@ -694,7 +694,7 @@ fn either_team_can_win_and_result_expiry_preserves_the_finished_match() {
                 ),
                 frozen
             );
-            assert!(game.pending.is_empty());
+            assert_eq!(game.pending, [] as [(u8, Cmd); 0]);
             assert!(game.units[core].dead && game.units[core].hp == 0.0);
         }
     }
