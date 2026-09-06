@@ -7,13 +7,13 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use arena_core::parkour::{MovementInput, ParkourState, step_movement};
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
     HILL_FREE, HILL_LIMIT, Hill, Level, MAX_PITCH, MELEE_COOLDOWN, Obstacle, PLAYER_R, Projectile,
     RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, advance_ads,
-    advance_shield, move_circle_in, movement_speed, step_vertical, support_height, weapon_name,
-    weapon_spread, weapon_stats,
+    advance_shield, support_height, weapon_name, weapon_spread, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Feedback, Frame, InputState, Instance, PadButton, Particle};
@@ -899,6 +899,117 @@ struct Cmd {
     sent_at: f32,
 }
 
+/// All integrator inputs, separate from camera smoothing and render clocks.
+#[derive(Clone, Copy)]
+struct PredictedMotion {
+    pos: [f32; 2],
+    y: f32,
+    vy: f32,
+    parkour: ParkourState,
+    shield: arena_core::shooter::ShieldState,
+}
+
+impl PredictedMotion {
+    fn tick(
+        &mut self,
+        mut input: MovementInput,
+        shield_released: bool,
+        obstacles: &[Obstacle],
+        arena_half: f32,
+    ) -> Option<usize> {
+        // Match the server's received release/re-press coalescing: lowering
+        // starts its full recovery on this tick, not one tick in the past.
+        let shield_dt = if shield_released && input.shield {
+            let lowered_now = self.shield.active;
+            self.shield = advance_shield(self.shield, false, 0.0);
+            if lowered_now { 0.0 } else { FIXED_DT }
+        } else {
+            FIXED_DT
+        };
+        self.shield = advance_shield(self.shield, input.shield, shield_dt);
+        input.shield = self.shield.active;
+        let stepped = step_movement(
+            self.pos,
+            self.y,
+            self.vy,
+            self.parkour,
+            input,
+            FIXED_DT,
+            obstacles,
+            arena_half,
+        );
+        self.pos = stepped.pos;
+        self.y = stepped.y;
+        self.vy = stepped.vy;
+        self.parkour = stepped.state;
+        stepped.bonked
+    }
+}
+
+struct MotionReplay {
+    motion: PredictedMotion,
+    remainder: f32,
+    jump_pending: bool,
+    shield_released: bool,
+}
+
+/// Commands share one fixed-tick accumulator. Short windows contribute time
+/// and coalesced edges to the next tick; they never invent a fractional step.
+fn replay_motion(
+    motion: PredictedMotion,
+    history: &VecDeque<Cmd>,
+    ack: u32,
+    ack_age_ticks: u16,
+    now: f32,
+    obstacles: &[Obstacle],
+    arena_half: f32,
+) -> MotionReplay {
+    let state_at = history
+        .front()
+        .filter(|c| c.seq == ack)
+        .map(|c| c.sent_at + f32::from(ack_age_ticks) * FIXED_DT);
+    let mut replay = MotionReplay {
+        motion,
+        remainder: 0.0,
+        jump_pending: false,
+        shield_released: false,
+    };
+    let mut held = motion.shield.held;
+    let mut it = history.iter().peekable();
+    while let Some(command) = it.next() {
+        let end = it.peek().map_or(now, |next| next.sent_at);
+        let start = state_at.map_or(command.sent_at, |at| command.sent_at.max(at));
+        let duration = (end - start).clamp(0.0, 0.3);
+        replay.jump_pending |= command.jump && command.seq != ack;
+        replay.shield_released |= held && !command.shield;
+        held = command.shield;
+        replay.remainder += duration;
+        // Each window contributes at most .3 s plus a prior fractional tick:
+        // 19 iterations suffice, with no unbounded floating-point loop.
+        for _ in 0..19 {
+            if replay.remainder + 1e-6 < FIXED_DT {
+                break;
+            }
+            let _bonked = replay.motion.tick(
+                MovementInput {
+                    mv: command.mv,
+                    jump: replay.jump_pending,
+                    sprint: command.sprint,
+                    crouch: command.crouch,
+                    shield: held,
+                },
+                replay.shield_released,
+                obstacles,
+                arena_half,
+            );
+            replay.jump_pending = false;
+            replay.shield_released = false;
+            replay.remainder = (replay.remainder - FIXED_DT).max(0.0);
+        }
+    }
+    replay
+}
+
 /// One short-lived visual effect: falling sparks and shards use the round
 /// puff mesh, while drifting smoke uses a soft transparent billboard.
 /// `life` is the initial ttl, so size, colour and opacity follow its lifetime.
@@ -1443,6 +1554,8 @@ pub struct ShooterGame {
     settings: Settings,
     controls_paused: bool,
     pred_shield: arena_core::shooter::ShieldState,
+    /// A sub-tick release must survive a re-press before the next physics tick.
+    pred_shield_released: bool,
     metas: HashMap<u8, PlayerMeta>,
     from: HashMap<u8, PSnap>,
     to: HashMap<u8, PSnap>,
@@ -1456,6 +1569,10 @@ pub struct ShooterGame {
     /// Predicted feet height and vertical speed (jump physics).
     pred_y: f32,
     pred_vy: f32,
+    /// Rebased with feet/velocity; never reconstructed from rendered motion.
+    pred_parkour: ParkourState,
+    /// Forward prediction ticks independently of the render frame rate.
+    movement_accumulator: f32,
     own_render: Vec2,
     /// Smoothed eye height. `pred_y` is the simulation state; this is the
     /// only thing the camera is allowed to read, so a reconciliation nudge
@@ -1474,10 +1591,8 @@ pub struct ShooterGame {
     /// The same press the server will get, held until prediction spends it.
     /// Predicting on the raw frame edge instead let the local view and the
     /// server disagree about whether a press near a landing happened at all.
-    /// Note what this is NOT: jump buffering. The spend test is "vy rose",
-    /// and a landing raises vy to zero, so a press made in the air is eaten
-    /// by the touchdown rather than carried across it - which matches the
-    /// server, since it consumes the flag after one tick and buffers nothing.
+    /// This is not landing/wall-jump buffering: every requested press is
+    /// consumed on the next fixed movement tick, successful or not.
     pred_jump: bool,
     /// When the last state was drained, and a smoothed estimate of the gap
     /// between states. Interpolating on the nominal 33.3 ms froze remotes on
@@ -1680,6 +1795,7 @@ impl ShooterGame {
             settings: Settings::default(),
             controls_paused: false,
             pred_shield: arena_core::shooter::ShieldState::default(),
+            pred_shield_released: false,
             metas: HashMap::new(),
             from: HashMap::new(),
             to: HashMap::new(),
@@ -1690,6 +1806,8 @@ impl ShooterGame {
             pred_pos: Vec2::ZERO,
             pred_y: 0.0,
             pred_vy: 0.0,
+            pred_parkour: ParkourState::READY,
+            movement_accumulator: 0.0,
             own_render: Vec2::ZERO,
             render_y_own: 0.0,
             prev_space: false,
@@ -2326,6 +2444,19 @@ impl ShooterGame {
         } else {
             String::new()
         };
+        let traversal = if !me.is_some_and(|p| p.alive) {
+            ""
+        } else if self.pred_parkour.wall_normal != [0.0, 0.0]
+            && self.pred_parkour.crouch_held
+            && self.pred_vy < 0.0
+            && !self.pred_shield.active
+        {
+            " · WALL SLIDE · jump to kick off"
+        } else if self.pred_parkour.slide_remaining > 0.0 {
+            " · SLIDING · jump to carry speed"
+        } else {
+            ""
+        };
         let mode = self.mode_line(me);
         let pad = if self.pad_status_shown == "none" {
             String::new()
@@ -2333,7 +2464,7 @@ impl ShooterGame {
             format!("   gamepad: {}", self.pad_status_shown)
         };
         format!(
-            "{life}{gun}{shield}   {mode}   {list}   ({} in arena){pad}",
+            "{life}{gun}{shield}{traversal}   {mode}   {list}   ({} in arena){pad}",
             self.latest.len()
         )
     }
@@ -2484,6 +2615,11 @@ impl EmberGame for ShooterGame {
                     self.pops.clear();
                     self.history.clear();
                     self.pred_shield = arena_core::shooter::ShieldState::default();
+                    self.pred_shield_released = false;
+                    self.pred_parkour = ParkourState::READY;
+                    self.movement_accumulator = 0.0;
+                    self.jump_pending = false;
+                    self.pred_jump = false;
                     self.reload_started = None;
                     self.was_alive = false; // first State snaps the prediction
                     self.zoom = 0.0;
@@ -2744,80 +2880,33 @@ impl EmberGame for ShooterGame {
                             while self.history.front().is_some_and(|c| c.seq < my.ack) {
                                 self.history.pop_front();
                             }
-                            let state_at = self
-                                .history
-                                .front()
-                                .filter(|c| c.seq == my.ack)
-                                .map(|c| c.sent_at + f32::from(my.ack_age_ticks) * FIXED_DT);
-                            let mut p = [server.x, server.y];
-                            // BOTH halves of the vertical state come from the
-                            // server. Seeding vy from our own prediction pairs
-                            // the server's PAST height with our PRESENT speed
-                            // and re-integrates gravity across a window the
-                            // forward prediction has already covered.
-                            let (mut y, mut vy) = (my.y, my.vy);
-                            let mut shield_state = my.shield_state;
-                            let mut it = self.history.iter().peekable();
-                            while let Some(c) = it.next() {
-                                let end = it.peek().map_or(self.time, |n| n.sent_at);
-                                // Replay only what the server has not seen
-                                // yet: the slice of this command after the
-                                // instant the state describes.
-                                let start = state_at.map_or(c.sent_at, |s| c.sent_at.max(s));
-                                let dur = (end - start).clamp(0.0, 0.3);
-                                // A press launches on one step, exactly as the
-                                // server consumes it on one tick - and the
-                                // acked command's press is already IN the
-                                // state we are rebasing on, so replaying it
-                                // would launch the same jump twice.
-                                let mut press = c.jump && c.seq != my.ack;
-                                // An input event must never be deleted by
-                                // arithmetic: if the slice trims to nothing,
-                                // still give the press one tick to happen in.
-                                let dur = if press && dur < FIXED_DT {
-                                    FIXED_DT
-                                } else {
-                                    dur
-                                };
-                                // Replay at the server's tick length. Horizontal
-                                // motion is exact under time-splitting; gravity
-                                // is not - one 50 ms step lands 2 cm from three
-                                // 16.7 ms ones, and the error compounds.
-                                let mut left = dur;
-                                while left > 1e-6 {
-                                    let step = left.min(FIXED_DT);
-                                    shield_state = advance_shield(shield_state, c.shield, step);
-                                    let speed = movement_speed(
-                                        p,
-                                        y,
-                                        vy,
-                                        press,
-                                        c.sprint,
-                                        c.crouch,
-                                        shield_state.active,
-                                        &self.obstacles,
-                                    );
-                                    p = move_circle_in(
-                                        p,
-                                        y,
-                                        c.mv,
-                                        speed,
-                                        step,
-                                        &self.obstacles,
-                                        self.arena_half,
-                                    );
-                                    let stepped =
-                                        step_vertical(p, y, vy, press, step, &self.obstacles);
-                                    press = false;
-                                    y = stepped.y;
-                                    vy = stepped.vy;
-                                    left -= step;
-                                }
-                            }
-                            let rebased = Vec2::new(p[0], p[1]);
-                            self.pred_y = y;
-                            self.pred_vy = vy;
-                            self.pred_shield = shield_state;
+                            // Rebase every integrator input, then share one
+                            // fixed clock across all unacknowledged commands.
+                            let replay = replay_motion(
+                                PredictedMotion {
+                                    pos: server.to_array(),
+                                    y: my.y,
+                                    vy: my.vy,
+                                    parkour: my.parkour,
+                                    shield: my.shield_state,
+                                },
+                                &self.history,
+                                my.ack,
+                                my.ack_age_ticks,
+                                self.time,
+                                &self.obstacles,
+                                self.arena_half,
+                            );
+                            let rebased = Vec2::from_array(replay.motion.pos);
+                            self.pred_y = replay.motion.y;
+                            self.pred_vy = replay.motion.vy;
+                            self.pred_parkour = replay.motion.parkour;
+                            self.movement_accumulator = replay.remainder;
+                            self.pred_shield = replay.motion.shield;
+                            self.pred_shield_released = replay.shield_released;
+                            // A replayed sent pulse replaces the old local
+                            // latch. Only a genuinely unsent press survives it.
+                            self.pred_jump = replay.jump_pending || self.jump_pending;
                             shield_reconciled = true;
                             if newly_alive || rebased.distance(self.pred_pos) > 4.0 {
                                 // Respawn / teleport: snap everything.
@@ -2826,6 +2915,13 @@ impl EmberGame for ShooterGame {
                                 self.render_y_own = my.y;
                                 self.history.clear();
                                 self.pred_shield = my.shield_state;
+                                self.pred_shield_released = false;
+                                self.pred_y = my.y;
+                                self.pred_vy = my.vy;
+                                self.pred_parkour = my.parkour;
+                                self.movement_accumulator = 0.0;
+                                self.pred_jump = false;
+                                self.jump_pending = false;
                                 if newly_alive {
                                     sfx.push(Play::centre(Sfx::Respawn, 0.4));
                                 }
@@ -3076,16 +3172,16 @@ impl EmberGame for ShooterGame {
         let melee_active = self
             .melee_started
             .is_some_and(|start| self.time - start < MELEE_COOLDOWN);
-        self.pred_shield = if me_latest.is_some_and(|p| p.alive) {
-            advance_shield(
-                self.pred_shield,
-                shield_held,
-                if shield_reconciled { 0.0 } else { dt },
-            )
+        if me_latest.is_some_and(|p| p.alive) {
+            self.pred_shield_released |= self.pred_shield.held && !shield_held;
         } else {
-            arena_core::shooter::ShieldState::default()
-        };
-        let shield_active = self.pred_shield.active;
+            self.pred_shield = arena_core::shooter::ShieldState::default();
+            self.pred_shield_released = false;
+        }
+        // Preview immediate intent for presentation only. Timers and movement
+        // advance together on fixed ticks below, never once per render frame.
+        let shield_active = me_latest.is_some_and(|p| p.alive)
+            && advance_shield(self.pred_shield, shield_held, 0.0).active;
         let ads_blocked = !me_latest.is_some_and(|p| p.alive && !p.reloading)
             || controls_paused
             || self.round_pause > 0.0
@@ -3165,8 +3261,6 @@ impl EmberGame for ShooterGame {
         let shield = shield_held;
         self.shield_raise += ((if shield_active { 1.0 } else { 0.0 }) - self.shield_raise)
             * (1.0 - (-dt * 16.0).exp());
-        let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
-        self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
         // The left stick is already dead-zoned and curved by the platform.
         let (ax_fwd, ax_right) = tick.as_ref().map_or_else(
@@ -3224,8 +3318,9 @@ impl EmberGame for ShooterGame {
         );
         let jump = space && !self.prev_space;
         self.prev_space = space;
+        // Multiple presses before one send are one OR-coalesced server event.
+        self.pred_jump |= jump && !self.jump_pending;
         self.jump_pending |= jump;
-        self.pred_jump |= jump;
         // Melee, latched the same way. Note what is deliberately absent: there
         // is no `pred_melee`. Movement is predicted because it is ours to
         // predict, but a kill is not - the sim resolves melee server-side for
@@ -3255,7 +3350,7 @@ impl EmberGame for ShooterGame {
                     8.0
                 };
         }
-        let bob = if moving {
+        let bob = if moving && self.pred_parkour.slide_remaining == 0.0 {
             (self.bob_t).sin() * 0.035
         } else {
             0.0
@@ -3276,6 +3371,7 @@ impl EmberGame for ShooterGame {
             let jump_press = if me_alive {
                 std::mem::take(&mut self.jump_pending)
             } else {
+                self.jump_pending = false;
                 false
             };
             if me_alive {
@@ -3335,54 +3431,62 @@ impl EmberGame for ShooterGame {
         // handler above rebases this on the server's authority.
         if me_alive {
             let was = self.pred_pos;
-            // Prediction reads the same ground/air rule the server applies,
-            // shield included — otherwise a jump or raised shield would
-            // rubber-band.
-            let speed = movement_speed(
-                self.pred_pos.to_array(),
-                self.pred_y,
-                self.pred_vy,
-                self.pred_jump,
-                sprint,
-                crouch,
-                shield_active,
-                &self.obstacles,
-            );
-            let p = move_circle_in(
-                self.pred_pos.to_array(),
-                self.pred_y,
-                [mv.x, mv.y],
-                speed,
-                dt,
-                &self.obstacles,
-                self.arena_half,
-            );
-            self.pred_pos = Vec2::new(p[0], p[1]);
-            let stepped = step_vertical(
-                p,
-                self.pred_y,
-                self.pred_vy,
-                self.pred_jump,
-                dt,
-                &self.obstacles,
-            );
-            let (y, vy) = (stepped.y, stepped.vy);
+            // Replay already advanced to this frame's time. Do not advance
+            // its momentum/gravity a second time on a received State.
+            if !shield_reconciled {
+                self.movement_accumulator += dt.clamp(0.0, 0.1);
+            }
+            let mut frame_bonk = None;
+            while self.movement_accumulator + 1e-6 >= FIXED_DT {
+                let mut motion = PredictedMotion {
+                    pos: self.pred_pos.to_array(),
+                    y: self.pred_y,
+                    vy: self.pred_vy,
+                    parkour: self.pred_parkour,
+                    shield: self.pred_shield,
+                };
+                let bonked = motion.tick(
+                    MovementInput {
+                        mv: [mv.x, mv.y],
+                        jump: self.pred_jump,
+                        sprint,
+                        crouch,
+                        shield: shield_held,
+                    },
+                    self.pred_shield_released,
+                    &self.obstacles,
+                    self.arena_half,
+                );
+                if bonked.is_some() {
+                    frame_bonk = bonked;
+                }
+                self.pred_pos = Vec2::from_array(motion.pos);
+                self.pred_y = motion.y;
+                self.pred_vy = motion.vy;
+                self.pred_parkour = motion.parkour;
+                self.pred_shield = motion.shield;
+                self.pred_shield_released = false;
+                // A jump is consumed on one fixed tick, including rejected
+                // airborne presses, just as in the authoritative server.
+                self.pred_jump = false;
+                self.movement_accumulator = (self.movement_accumulator - FIXED_DT).max(0.0);
+            }
+            let (y, vy) = (self.pred_y, self.pred_vy);
             // The predicted bump: the frame the clamp first names a block
             // while I was rising is the bonk, felt now; the server's answer
             // (the pop, or nothing because someone was 30 ms earlier)
-            // follows one round trip later. Requiring the pre-step vy > 0
-            // is the same belt-and-braces the sim applies.
+            // follows one round trip later. The shared movement result
+            // reports upward collisions, including immediate wall-kick bonks.
             // The edge alone fires twice on most bonks: the reconciliation
             // replay rewinds the arc to below the block, the edge clears
             // on the frame between, and the clamp names the block again.
             // So a bonk is also once per block per `BONK_DEBOUNCE`.
-            let bonk = stepped
-                .bonked
-                .filter(|&k| self.prev_bonked != Some(k) && self.pred_vy > 0.0)
+            let bonk = frame_bonk
+                .filter(|&k| self.prev_bonked != Some(k))
                 .filter(|&k| self.obstacles.get(k).is_some_and(|o| o.kind == Cover::Loot))
                 .and_then(|k| self.loot_slot(k))
                 .filter(|&i| bonk_is_new(self.last_bonk_at.get(i).copied().flatten(), self.time));
-            self.prev_bonked = stepped.bonked;
+            self.prev_bonked = frame_bonk;
             if let Some(i) = bonk {
                 if let Some(last) = self.last_bonk_at.get_mut(i) {
                     *last = Some(self.time);
@@ -3400,11 +3504,6 @@ impl EmberGame for ShooterGame {
                         audio.play(p.sfx, p.vol);
                     }
                 }
-            }
-            // A launch is the only thing that can raise vy, so that is the
-            // press being spent - exactly the one shot the server gets.
-            if vy > self.pred_vy {
-                self.pred_jump = false;
             }
             self.pred_y = y;
             self.pred_vy = vy;
@@ -3425,7 +3524,7 @@ impl EmberGame for ShooterGame {
             let mine = feel::Stepper {
                 who: self.my_id.unwrap_or(0),
                 alive: true,
-                crouch,
+                crouch: crouch || self.pred_parkour.slide_remaining > 0.0,
                 vy,
                 speed: moved.length(),
                 prev_phase,
@@ -3437,7 +3536,18 @@ impl EmberGame for ShooterGame {
                 self.steps.own = Some(self.time);
                 steps_queued += 1;
             }
+        } else {
+            self.pred_parkour = ParkourState::READY;
+            self.movement_accumulator = 0.0;
+            self.pred_jump = false;
+            self.jump_pending = false;
+            self.melee_pending = false;
         }
+        // A committed ground slide keeps the same low pose as authority,
+        // even if crouch is released before the slide has finished.
+        let pose_crouch = crouch || self.pred_parkour.slide_remaining > 0.0;
+        let target_eye = if pose_crouch { EYE_CROUCH } else { EYE_STAND };
+        self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
         // Tight smoothing absorbs reconciliation nudges without adding lag.
         let k = 1.0 - (-dt * 25.0).exp();
         self.own_render += (self.pred_pos - self.own_render) * k;
@@ -4476,7 +4586,7 @@ impl EmberGame for ShooterGame {
                     look,
                     right3,
                     view_scale,
-                    self.hud_spread(my_weapon, crouch, moved_for_spread),
+                    self.hud_spread(my_weapon, pose_crouch, moved_for_spread),
                 );
             }
             // The round showcase, a review aid: see `push_showcase`.
@@ -5140,6 +5250,7 @@ mod wire_tests {
             shield: false,
             weapon: 3,
             shield_state: arena_core::shooter::ShieldState::READY,
+            parkour: ParkourState::READY,
             ammo: 20,
             reserve: 30,
             reloading: false,
@@ -5269,6 +5380,438 @@ mod wire_tests {
         assert!(
             !frame.instances.iter().any(|i| i.mesh >= 1000),
             "old maps do not inherit harbor scenery"
+        );
+    }
+
+    #[test]
+    fn parkour_prediction_uses_fixed_ticks_and_held_jump_emits_one_press() {
+        let run = |hz: u16| {
+            let (chan, wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.latest.insert(2, me(2));
+            game.was_alive = true;
+            game.script = None;
+            game.arena_half = 48.0;
+            for keys in [
+                vec![KeyCode::KeyW, KeyCode::ShiftLeft],
+                vec![KeyCode::KeyW, KeyCode::ShiftLeft, KeyCode::KeyC],
+                vec![
+                    KeyCode::KeyW,
+                    KeyCode::ShiftLeft,
+                    KeyCode::KeyC,
+                    KeyCode::Space,
+                ],
+            ] {
+                let input = InputState::from_parts(&keys, &[], (0.0, 0.0), None);
+                for _ in 0..hz / 2 {
+                    game.update(&input, 1.0 / f32::from(hz));
+                }
+            }
+            assert!(game.pred_pos.x > 7.0, "slide carries meaningful speed");
+            assert!(game.pred_y > 0.1, "slide jump leaves the ground");
+            assert_eq!(
+                wire.try_iter()
+                    .filter(|m| matches!(m, C2S::Input { jump: true, .. }))
+                    .count(),
+                1,
+                "holding Space must not request repeated wall/ground jumps"
+            );
+            (game.pred_pos, game.pred_y, game.pred_vy, game.pred_parkour)
+        };
+        let at_sixty = run(60);
+        for hz in [30, 120] {
+            let other = run(hz);
+            assert!(
+                (other.0 - at_sixty.0).length() < 1e-4,
+                "horizontal motion at {hz} Hz"
+            );
+            assert!((other.1 - at_sixty.1).abs() < 1e-4, "height at {hz} Hz");
+            assert!(
+                (other.2 - at_sixty.2).abs() < 1e-4,
+                "vertical velocity at {hz} Hz"
+            );
+            assert_eq!(
+                other.3, at_sixty.3,
+                "parkour clocks and velocity at {hz} Hz"
+            );
+        }
+    }
+
+    #[test]
+    fn authoritative_parkour_snapshot_is_not_advanced_twice_on_receive() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.my_id = Some(2);
+        game.was_alive = true;
+        game.time = 5.0;
+        let state = PState {
+            x: 0.5,
+            y: 2.0,
+            vy: -1.0,
+            ack: 7,
+            ack_age_ticks: 1,
+            parkour: ParkourState {
+                velocity: [8.0, 2.0],
+                slide_remaining: 0.2,
+                slide_cooldown: 0.6,
+                wall_cooldown: 0.1,
+                last_wall_normal: [-1.0, 0.0],
+                momentum: true,
+                crouch_held: true,
+                ..ParkourState::READY
+            },
+            ..me(2)
+        };
+        game.history.push_back(Cmd {
+            seq: 7,
+            mv: [1.0, 0.0],
+            sprint: true,
+            crouch: true,
+            shield: false,
+            jump: true,
+            sent_at: 5.0,
+        });
+        inbox
+            .send(S2C::State {
+                tick: 30,
+                players: vec![state],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&InputState::default(), FIXED_DT);
+        assert_eq!(game.pred_pos, Vec2::new(state.x, state.z));
+        assert_eq!(game.pred_y, state.y);
+        assert_eq!(game.pred_vy, state.vy);
+        assert_eq!(
+            game.pred_parkour, state.parkour,
+            "acked impulse and timers must not replay again"
+        );
+    }
+
+    #[test]
+    fn replay_spans_fractional_command_windows_without_fractional_physics() {
+        let initial = PredictedMotion {
+            pos: [-2.0, 0.0],
+            y: 0.0,
+            vy: 0.0,
+            parkour: ParkourState::READY,
+            shield: arena_core::shooter::ShieldState::READY,
+        };
+        let commands = VecDeque::from([
+            Cmd {
+                seq: 1,
+                mv: [1.0, 0.0],
+                sprint: true,
+                crouch: true,
+                shield: false,
+                jump: false,
+                sent_at: 0.0,
+            },
+            Cmd {
+                seq: 2,
+                mv: [1.0, 0.0],
+                sprint: true,
+                crouch: true,
+                shield: false,
+                jump: true,
+                sent_at: 0.01,
+            },
+            Cmd {
+                seq: 3,
+                mv: [1.0, 0.0],
+                sprint: true,
+                crouch: true,
+                shield: false,
+                jump: false,
+                sent_at: 0.02,
+            },
+        ]);
+        let replay = replay_motion(initial, &commands, 1, 0, 0.035, &[], 48.0);
+        let input = MovementInput {
+            mv: [1.0, 0.0],
+            sprint: true,
+            crouch: true,
+            jump: true,
+            shield: false,
+        };
+        let first = step_movement(
+            initial.pos,
+            initial.y,
+            initial.vy,
+            initial.parkour,
+            input,
+            FIXED_DT,
+            &[],
+            48.0,
+        );
+        let second = step_movement(
+            first.pos,
+            first.y,
+            first.vy,
+            first.state,
+            MovementInput {
+                jump: false,
+                ..input
+            },
+            FIXED_DT,
+            &[],
+            48.0,
+        );
+        assert_eq!(
+            (
+                replay.motion.pos,
+                replay.motion.y,
+                replay.motion.vy,
+                replay.motion.parkour
+            ),
+            (second.pos, second.y, second.vy, second.state)
+        );
+        assert!((replay.remainder - (0.035 - 2.0 * FIXED_DT)).abs() < 1e-6);
+        assert!(
+            !replay.jump_pending,
+            "the press was consumed on exactly one real tick"
+        );
+    }
+
+    #[test]
+    fn sub_tick_replay_preserves_coalesced_jump_and_shield_release_edges() {
+        use arena_core::shooter::{SHIELD_REUSE_COOLDOWN, ShieldState};
+        let initial = PredictedMotion {
+            pos: [0.0; 2],
+            y: 0.0,
+            vy: 0.0,
+            parkour: ParkourState::READY,
+            shield: ShieldState {
+                active: true,
+                remaining: 1.0,
+                held: true,
+                ..ShieldState::READY
+            },
+        };
+        let commands = VecDeque::from([
+            Cmd {
+                seq: 1,
+                mv: [0.0; 2],
+                sprint: false,
+                crouch: false,
+                shield: true,
+                jump: true,
+                sent_at: 0.0,
+            },
+            Cmd {
+                seq: 2,
+                mv: [0.0; 2],
+                sprint: false,
+                crouch: false,
+                shield: false,
+                jump: true,
+                sent_at: 0.004,
+            },
+            Cmd {
+                seq: 3,
+                mv: [0.0; 2],
+                sprint: false,
+                crouch: false,
+                shield: true,
+                jump: false,
+                sent_at: 0.0045,
+            },
+        ]);
+        let waiting = replay_motion(initial, &commands, 1, 0, 0.005, &[], 24.0);
+        assert_eq!(
+            waiting.motion.y, 0.0,
+            "no invented tick to spend a short press"
+        );
+        assert_eq!(
+            waiting.motion.shield, initial.shield,
+            "no partial timer advance"
+        );
+        assert!(waiting.jump_pending && waiting.shield_released);
+        assert!((waiting.remainder - 0.005).abs() < 1e-6);
+        let consumed = replay_motion(initial, &commands, 1, 0, FIXED_DT, &[], 24.0);
+        assert!(
+            consumed.motion.y > 0.0,
+            "the early jump survives a later jump=false command"
+        );
+        assert!(!consumed.jump_pending && !consumed.shield_released);
+        assert!(!consumed.motion.shield.active);
+        assert_eq!(consumed.motion.shield.cooldown, SHIELD_REUSE_COOLDOWN);
+        // An acked pulse alone is already represented by the authoritative state.
+        let acked_only = VecDeque::from([Cmd {
+            seq: 1,
+            mv: [0.0; 2],
+            sprint: false,
+            crouch: false,
+            shield: true,
+            jump: true,
+            sent_at: 0.0,
+        }]);
+        let acked = replay_motion(initial, &acked_only, 1, 0, FIXED_DT, &[], 24.0);
+        assert_eq!(acked.motion.y, 0.0);
+        assert!(!acked.jump_pending);
+    }
+
+    #[test]
+    fn half_frame_sent_jump_replayed_by_snapshot_cannot_kick_the_wall_twice() {
+        let (chan, inbox, wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.my_id = Some(2);
+        game.was_alive = true;
+        game.time = 1.0;
+        game.next_seq = 2;
+        game.since_input = 0.05;
+        game.pred_pos = Vec2::new(-0.61, 0.0);
+        let state = PState {
+            x: -0.61,
+            ack: 1,
+            ..me(2)
+        };
+        game.latest.insert(2, state);
+        game.obstacles = vec![Obstacle::boxed(
+            Cover::Wall,
+            [0.0, -4.0],
+            [0.2, 4.0],
+            0.0,
+            8.0,
+        )];
+        game.history.push_back(Cmd {
+            seq: 1,
+            mv: [0.0; 2],
+            sprint: false,
+            crouch: true,
+            shield: false,
+            jump: false,
+            sent_at: 1.0,
+        });
+        let held = InputState::from_parts(&[KeyCode::Space, KeyCode::KeyC], &[], (0.0, 0.0), None);
+        game.update(&held, FIXED_DT / 2.0);
+        assert!(
+            game.pred_jump && !game.jump_pending,
+            "sent, but not yet one local physics tick"
+        );
+        inbox
+            .send(S2C::State {
+                tick: 60,
+                players: vec![state],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&held, FIXED_DT / 2.0);
+        assert!(game.pred_y > 0.0);
+        assert!(!game.pred_jump, "replay owns the sent press now");
+        let after_replay = game.pred_vy;
+        game.update(&held, FIXED_DT);
+        assert!(
+            !game.pred_parkour.momentum,
+            "one held Space cannot manufacture a second wall kick"
+        );
+        assert_eq!(game.pred_parkour.last_wall_normal, [0.0; 2]);
+        assert!(
+            (game.pred_vy - (after_replay + arena_core::shooter::GRAVITY * FIXED_DT)).abs() < 1e-5
+        );
+        assert_eq!(
+            wire.try_iter()
+                .filter(|m| matches!(m, C2S::Input { jump: true, .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn shield_expiry_inside_a_two_tick_frame_matches_two_single_tick_frames() {
+        use arena_core::shooter::{MOVE_SPEED, SHIELD_REUSE_COOLDOWN, SPRINT_MULT, ShieldState};
+        let run = |two_frames| {
+            let (chan, _wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.script = None;
+            game.my_id = Some(2);
+            game.was_alive = true;
+            game.latest.insert(2, me(2));
+            game.pred_shield = ShieldState {
+                active: true,
+                remaining: 0.02,
+                held: true,
+                ..ShieldState::READY
+            };
+            let held = InputState::from_parts(
+                &[KeyCode::KeyW, KeyCode::ShiftLeft, KeyCode::KeyQ],
+                &[],
+                (0.0, 0.0),
+                None,
+            );
+            if two_frames {
+                game.update(&held, FIXED_DT);
+                assert!(game.pred_shield.active);
+                game.update(&held, FIXED_DT);
+            } else {
+                game.update(&held, 2.0 * FIXED_DT);
+            }
+            (game.pred_pos, game.pred_parkour, game.pred_shield)
+        };
+        let long = run(false);
+        assert_eq!(long, run(true));
+        assert!(
+            (long.0.x - MOVE_SPEED * (1.0 + SPRINT_MULT) * FIXED_DT).abs() < 1e-6,
+            "first tick remains shield-limited; only the second tick can sprint"
+        );
+        assert!(!long.2.active);
+        assert_eq!(long.2.cooldown, SHIELD_REUSE_COOLDOWN);
+    }
+
+    #[test]
+    fn a_jump_pressed_while_dead_cannot_be_sent_after_respawn() {
+        let (chan, inbox, wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.my_id = Some(2);
+        game.latest.insert(
+            2,
+            PState {
+                alive: false,
+                hp: 0,
+                ..me(2)
+            },
+        );
+        let held = InputState::from_parts(&[KeyCode::Space], &[], (0.0, 0.0), None);
+        game.update(&held, FIXED_DT / 2.0);
+        assert!(!game.pred_jump && !game.jump_pending);
+        inbox
+            .send(S2C::State {
+                tick: 60,
+                players: vec![me(2)],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(&held, 0.05);
+        assert_eq!(game.pred_y, 0.0);
+        assert!(
+            wire.try_iter()
+                .all(|m| !matches!(m, C2S::Input { jump: true, .. }))
+        );
+        game.update(&InputState::default(), FIXED_DT);
+        game.update(&held, 0.05);
+        assert!(
+            wire.try_iter()
+                .any(|m| matches!(m, C2S::Input { jump: true, .. })),
+            "a genuine fresh press after respawn still works"
         );
     }
 
@@ -5636,10 +6179,11 @@ mod wire_tests {
         assert!(!game.pred_shield.active);
         assert!(game.pred_shield.held);
         assert!(
-            (game.pred_shield.cooldown - 3.88).abs() < 1e-4,
+            (game.pred_shield.cooldown - (4.0 - 7.0 * FIXED_DT)).abs() < 1e-4,
             "replay advances the shield clock once, not again during forward prediction: {:?}",
             game.pred_shield
         );
+        assert!((game.movement_accumulator - (0.12 - 7.0 * FIXED_DT)).abs() < 1e-5);
     }
 
     /// Run a client for 12 frames against [`a_busy_device`], scripted or
@@ -7313,6 +7857,7 @@ mod grip_muzzle_tests {
             alive: true,
             crouch: case.crouch,
             shield: case.shield,
+            parkour: ParkourState::READY,
             shield_state: arena_core::shooter::ShieldState {
                 active: case.shield,
                 remaining: if case.shield { 3.0 } else { 0.0 },
@@ -7767,6 +8312,7 @@ mod ads_tests {
             shield: false,
             weapon,
             shield_state: arena_core::shooter::ShieldState::READY,
+            parkour: ParkourState::READY,
             ammo: 20,
             reserve: 30,
             reloading: false,

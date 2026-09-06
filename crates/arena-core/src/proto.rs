@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::parkour::ParkourState;
 use crate::shooter::{HILL_FREE, ShieldState};
 
 /// Protocol v9 adds the reflecting off-hand shield.
@@ -237,7 +238,11 @@ use crate::shooter::{HILL_FREE, ShieldState};
 /// A v20 peer would predict unlimited blocking, sprint suppression and immediate
 /// firing on release. Defaulted state can decode but cannot make it play the same
 /// game, so create/join require the matching simulation and prediction rules.
-pub const PROTO_VERSION: u16 = 21;
+///
+/// v22 (Arena v29): momentum-bearing slides/wall kicks and vertical Harbor
+/// buildings. The entire parkour state must rebase with position; older peers
+/// would discard momentum and collide against a different harbor layout.
+pub const PROTO_VERSION: u16 = 22;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -289,6 +294,10 @@ pub struct PState {
     /// defaulted, so a pre-v10 server simply reports everyone at rest.
     #[serde(default)]
     pub vy: f32,
+    /// Authoritative horizontal momentum, slide clocks and wall-kick lock.
+    /// Defaults permit inspection of old frames, never mixed-version play.
+    #[serde(default)]
+    pub parkour: ParkourState,
     /// HORIZONTAL aim direction (normalized).
     pub ax: f32,
     pub az: f32,
@@ -958,6 +967,16 @@ mod tests {
             z: -2.0,
             y: 0.5,
             vy: -1.5,
+            parkour: ParkourState {
+                velocity: [7.0, -2.0],
+                slide_remaining: 0.35,
+                slide_cooldown: 0.6,
+                wall_cooldown: 0.15,
+                wall_normal: [1.0, 0.0],
+                last_wall_normal: [-1.0, 0.0],
+                momentum: true,
+                crouch_held: true,
+            },
             ax: 0.0,
             az: 1.0,
             pitch: 0.2,
@@ -990,6 +1009,10 @@ mod tests {
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
         assert_eq!(back.shield_state, p.shield_state);
+        assert_eq!(
+            back.parkour, p.parkour,
+            "all replay state survives the codec"
+        );
         let mut lowered = p;
         lowered.shield = false;
         lowered.shield_state = crate::shooter::advance_shield(p.shield_state, false, 0.0);
@@ -1021,12 +1044,13 @@ mod tests {
         let p: PState = serde_json::from_str(old_state).unwrap();
         assert!(!p.shield, "an absent shield reads as lowered");
         assert_eq!(p.shield_state, ShieldState::READY);
+        assert_eq!(p.parkour, ParkourState::READY);
         assert_eq!(p.ads_fraction, 0.0, "old frames decode as unsighted");
         assert_eq!(p.spread, 0.0, "old frames have no reported cone");
         assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
         assert_eq!(
-            PROTO_VERSION, 21,
-            "health, head geometry and timed shields require the matching peer"
+            PROTO_VERSION, 22,
+            "parkour state and vertical Harbor require the matching peer"
         );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();

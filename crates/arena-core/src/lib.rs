@@ -9,6 +9,7 @@
 
 pub mod freight_yard;
 pub mod harbor;
+pub mod parkour;
 pub mod proto;
 pub mod shooter;
 pub mod sim;

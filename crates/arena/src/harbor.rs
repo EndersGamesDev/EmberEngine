@@ -1,6 +1,6 @@
 //! Hand-authored working container terminal, in metres. There is no layout
 //! RNG and no generated prop placement. Collision cover is drawn from the
-//! server's boxes; scenery below head height stays outside the playable quay.
+//! server's boxes; low dressing sits against solids or outside the playable quay.
 //! The ship and cranes are batched geometry, not thousands of cube instances.
 //!
 //! Existing v13 material pixels are reused at modest resolution; the palette
@@ -19,8 +19,9 @@ use std::f32::consts::FRAC_PI_2;
 use std::sync::OnceLock;
 
 use arena_core::harbor::{
-    CONTAINER_20, CONTAINER_40, CONTAINER_H, CONTAINER_W, CRANE_CENTERS_Z, CRANE_LEGS, HARBOR_HALF,
-    WAREHOUSE, WAREHOUSE_MAX, WAREHOUSE_MIN, WAREHOUSE_ROOF_BASE,
+    CATWALKS, CLERESTORY, CONTAINER_20, CONTAINER_40, CONTAINER_H, CONTAINER_W, CRANE_CENTERS_Z,
+    CRANE_LEGS, HARBOR_HALF, ROOFTOP_COVER, SERVICE_HOUSES, STAIR_FLIGHTS, STAIR_STEPS,
+    WALKWAY_TOP, WAREHOUSE,
 };
 use arena_core::shooter::{Cover, Obstacle};
 use ember_engine::glam::{Quat, Vec3};
@@ -96,6 +97,34 @@ fn crane_leg_tint() -> Vec3 {
         Vec3::from_array(PAINT[CRANE_PAINT].map(srgb_component))
             / Vec3::from_array(STEEL_TILE_COLOR.map(srgb_component))
     })
+}
+
+fn solid_tint(obstacle: &Obstacle, crane_leg: bool) -> Vec3 {
+    let house = SERVICE_HOUSES.iter().position(|house| {
+        obstacle.min[0] >= house.min[0]
+            && obstacle.min[1] >= house.min[1]
+            && obstacle.max[0] <= house.max[0]
+            && obstacle.max[1] <= house.max[1]
+    });
+    if crane_leg {
+        crane_leg_tint()
+    } else if *obstacle == CLERESTORY {
+        Vec3::new(0.40, 0.48, 0.53)
+    } else if ROOFTOP_COVER.contains(obstacle) || CATWALKS.contains(obstacle) {
+        Vec3::new(0.48, 0.56, 0.56)
+    } else if obstacle.kind == Cover::Roof {
+        Vec3::new(0.57, 0.61, 0.61)
+    } else if obstacle.kind == Cover::Crate {
+        Vec3::new(0.55, 0.45, 0.31)
+    } else if let Some(index) = house {
+        [
+            Vec3::new(0.69, 0.66, 0.56),
+            Vec3::new(0.59, 0.65, 0.64),
+            Vec3::new(0.66, 0.60, 0.49),
+        ][index]
+    } else {
+        Vec3::new(0.64, 0.65, 0.61)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -213,15 +242,7 @@ impl HarborArt {
         } else {
             let roof = obstacle.kind == Cover::Roof;
             let crane_leg = CRANE_LEGS.contains(obstacle);
-            let color = if crane_leg {
-                crane_leg_tint()
-            } else if roof {
-                Vec3::new(0.57, 0.61, 0.61)
-            } else if obstacle.kind == Cover::Crate {
-                Vec3::new(0.55, 0.45, 0.31)
-            } else {
-                Vec3::new(0.64, 0.65, 0.61)
-            };
+            let color = solid_tint(obstacle, crane_leg);
             let roughness = if roof || crane_leg {
                 0.55
             } else if obstacle.kind == Cover::Crate {
@@ -251,6 +272,7 @@ pub fn harbor_meshes() -> Vec<MeshData> {
     }
     dock_details(&mut structure, &mut markings);
     warehouse_details(&mut structure);
+    service_building_details(&mut structure, &mut markings);
     boundary(&mut structure);
     let mut asphalt = Builder::new(Some(surface_texture(STONE, 128, [75, 79, 79])));
     asphalt.horizontal(
@@ -953,13 +975,9 @@ fn dock_details(builder: &mut Builder, markings: &mut Builder) {
 }
 
 fn warehouse_details(builder: &mut Builder) {
-    // Ridge and clerestory sit wholly above the authoritative warehouse roof.
-    let center_x = f32::midpoint(WAREHOUSE_MIN[0], WAREHOUSE_MAX[0]);
-    builder.box_paint(
-        Vec3::new(center_x, WAREHOUSE_ROOF_BASE + 0.8, 0.0),
-        Vec3::new(7.0, 0.8, 51.0),
-        14,
-    );
+    // The ridge body now comes from CLERESTORY's real collision box in
+    // push_cover. Only its shallow windows and roof seams are dressing.
+    let center_x = f32::midpoint(CLERESTORY.min[0], CLERESTORY.max[0]);
     // Folded roof seams and wall frames are shallow details against solids,
     // never beams spanning the actual north/south/east door openings.
     for z in (-27..=27).step_by(2) {
@@ -988,6 +1006,104 @@ fn warehouse_details(builder: &mut Builder) {
             Vec3::new(-39.53, 5.0, z as f32),
             Vec3::new(0.05, 0.48, 2.8),
             7,
+        );
+    }
+}
+
+fn service_building_details(builder: &mut Builder, markings: &mut Builder) {
+    for (index, house) in SERVICE_HOUSES.iter().enumerate() {
+        let [x0, z0] = house.min;
+        let [x1, z1] = house.max;
+        let center_x = f32::midpoint(x0, x1);
+        let paint = [1, 3, 9][index];
+        // Closed windows are painted glazing directly on solid side walls.
+        // Opposite end doorways remain completely open below their lintels.
+        for x in [x0 - 0.012, x1 + 0.012] {
+            for z in [z0 + 2.4, z1 - 2.4] {
+                builder.box_paint(Vec3::new(x, 2.0, z), Vec3::new(0.024, 1.05, 1.45), 5);
+                builder.box_paint(Vec3::new(x, 2.0, z), Vec3::new(0.030, 0.90, 1.29), 7);
+                builder.box_paint(Vec3::new(x, 2.0, z), Vec3::new(0.034, 0.90, 0.05), 5);
+            }
+        }
+        for z in [z0 - 0.012, z1 + 0.012] {
+            builder.box_paint(
+                Vec3::new(center_x, 3.63, z),
+                Vec3::new(x1 - x0 - 0.12, 0.19, 0.026),
+                paint,
+            );
+            builder.box_paint(
+                Vec3::new(center_x, 3.1, z),
+                Vec3::new(1.55, 0.5, 0.026),
+                paint,
+            );
+            // One/two/three white dispatch marks are authored building IDs.
+            for mark in 0..=index {
+                builder.box_paint(
+                    Vec3::new((mark as f32).mul_add(0.22, center_x - 0.27), 3.1, z),
+                    Vec3::new(0.09, 0.28, 0.035),
+                    13,
+                );
+            }
+        }
+        // Shallow fascia overlaps the slab and projects 12mm from its faces:
+        // enough to avoid coplanar flicker, not a fake walk-blocking rail.
+        for x in [x0 + 0.028, x1 - 0.028] {
+            builder.box_paint(
+                Vec3::new(x, 4.35, f32::midpoint(z0, z1)),
+                Vec3::new(0.08, 0.20, z1 - z0),
+                paint,
+            );
+        }
+        for z in [z0 + 0.028, z1 - 0.028] {
+            builder.box_paint(
+                Vec3::new(center_x, 4.35, z),
+                Vec3::new(x1 - x0, 0.20, 0.08),
+                paint,
+            );
+        }
+    }
+    for stairs in STAIR_FLIGHTS {
+        for step in 0..STAIR_STEPS {
+            let tread = stairs.tread(step);
+            let edge_z = if stairs.toward_negative_z {
+                tread.max[1] - 0.06
+            } else {
+                tread.min[1] + 0.06
+            };
+            markings.box_paint(
+                Vec3::new(
+                    f32::midpoint(tread.min[0], tread.max[0]),
+                    tread.h + 0.006,
+                    edge_z,
+                ),
+                Vec3::new(tread.max[0] - tread.min[0] - 0.10, 0.012, 0.07),
+                6,
+            );
+        }
+    }
+    for cover in ROOFTOP_COVER {
+        let x = f32::midpoint(cover.min[0], cover.max[0]);
+        for row in 0..4 {
+            builder.box_paint(
+                Vec3::new(
+                    x,
+                    (row as f32).mul_add(0.12, WALKWAY_TOP + 0.18),
+                    cover.min[1] - 0.008,
+                ),
+                Vec3::new(cover.max[0] - cover.min[0] - 0.22, 0.035, 0.016),
+                4,
+            );
+        }
+    }
+    for wall in CATWALKS.iter().filter(|part| part.kind == Cover::Wall) {
+        builder.box_paint(
+            Vec3::new(
+                f32::midpoint(wall.min[0], wall.max[0]),
+                wall.h + 0.005,
+                f32::midpoint(wall.min[1], wall.max[1]),
+            ),
+            Vec3::new(wall.max[0] - wall.min[0], 0.01, wall.max[1] - wall.min[1]),
+            6,
         );
     }
 }
@@ -1183,11 +1299,21 @@ mod tests {
     #[test]
     fn dock_scenery_does_not_add_phantom_cover_to_the_playable_routes() {
         let meshes = harbor_meshes();
+        let level = arena_core::shooter::Level::harbor();
         for vertex in &meshes[STRUCTURES as usize].vertices {
             let point = Vec3::from_array(vertex.pos);
             if point.y < 3.7 {
                 assert!(
-                    point.x.abs() >= HARBOR_HALF || point.z.abs() >= HARBOR_HALF,
+                    point.x.abs() >= HARBOR_HALF
+                        || point.z.abs() >= HARBOR_HALF
+                        || level.obstacles.iter().any(|obstacle| {
+                            point.x >= obstacle.min[0] - 0.04
+                                && point.x <= obstacle.max[0] + 0.04
+                                && point.z >= obstacle.min[1] - 0.04
+                                && point.z <= obstacle.max[1] + 0.04
+                                && point.y >= obstacle.base - 0.04
+                                && point.y <= obstacle.h + 0.04
+                        }),
                     "low scenery {point} has no authoritative obstacle"
                 );
             }
@@ -1237,6 +1363,48 @@ mod tests {
                 min.distance(Vec3::new(obstacle.min[0], obstacle.base, obstacle.min[1])) < 1e-4
             );
             assert!(max.distance(Vec3::new(obstacle.max[0], obstacle.h, obstacle.max[1])) < 1e-4);
+        }
+    }
+
+    #[test]
+    fn service_building_dressing_stays_on_real_solids_and_out_of_open_doors() {
+        let level = arena_core::shooter::Level::harbor();
+        let mut structure = Builder::new(None);
+        let mut markings = Builder::new(None);
+        service_building_details(&mut structure, &mut markings);
+        for vertex in structure
+            .mesh
+            .vertices
+            .iter()
+            .chain(&markings.mesh.vertices)
+        {
+            let [x, y, z] = vertex.pos;
+            assert!(
+                level.obstacles.iter().any(|obstacle| {
+                    x >= obstacle.min[0] - 0.04
+                        && x <= obstacle.max[0] + 0.04
+                        && z >= obstacle.min[1] - 0.04
+                        && z <= obstacle.max[1] + 0.04
+                        && y >= obstacle.base - 0.04
+                        && y <= obstacle.h + 0.04
+                }),
+                "unbacked new dressing vertex {:?}",
+                vertex.pos
+            );
+            for house in SERVICE_HOUSES {
+                let door_x = f32::midpoint(house.min[0], house.max[0]);
+                let in_door = (x - door_x).abs() < 1.1
+                    && y > 0.0
+                    && y < 2.55
+                    && [house.min[1], house.max[1]]
+                        .iter()
+                        .any(|door_z| (z - door_z).abs() < 0.4);
+                assert!(
+                    !in_door,
+                    "dressing enters a usable doorway: {:?}",
+                    vertex.pos
+                );
+            }
         }
     }
 

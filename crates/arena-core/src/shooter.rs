@@ -1967,7 +1967,7 @@ pub struct PlayerIn {
     /// Held reload intent (R).
     pub reload: bool,
     /// A jump PRESS, consumed on the tick it is applied (arena-server clears
-    /// it after each step). Only takes effect while grounded.
+    /// it after each step). Launches from ground or an eligible crouched wall contact.
     pub jump: bool,
     /// Held off-hand shield intent (Q). HELD, like every other intent here
     /// and unlike a toggle: a toggle keeps a bit of state on each side of the
@@ -2000,6 +2000,8 @@ pub struct PlayerSt {
     pub y: f32,
     /// Vertical speed; non-zero only while airborne.
     pub vy: f32,
+    /// Shared slide momentum, physical wall contact and replay latches.
+    pub parkour: crate::parkour::ParkourState,
     pub aim: [f32; 2],
     /// Aim elevation, radians, positive = up. Broadcast so remote players'
     /// weapons tilt with their actual aim instead of staying level.
@@ -2398,6 +2400,7 @@ const fn respawn(p: &mut PlayerSt, position: [f32; 2]) {
     p.pos = position;
     p.y = 0.0;
     p.vy = 0.0;
+    p.parkour = crate::parkour::ParkourState::READY;
     p.hp = MAX_HP;
     p.alive = true;
     p.cooldown = 0.3;
@@ -2531,6 +2534,7 @@ impl Sim {
             pos: position,
             y: 0.0,
             vy: 0.0,
+            parkour: crate::parkour::ParkourState::READY,
             aim: [1.0, 0.0],
             pitch: 0.0,
             hp: MAX_HP,
@@ -2746,6 +2750,7 @@ impl Sim {
                 // their first live tick after respawning, and remote clients
                 // draw it.
                 p.shield = false;
+                p.parkour = crate::parkour::ParkourState::READY;
                 p.shield_state.active = false;
                 p.shield_state.remaining = 0.0;
                 reset_handling(p);
@@ -2773,39 +2778,26 @@ impl Sim {
             // Shared movement code (also used by client prediction).
             // A jump keeps its authored air reach while the ground speed is
             // server-authoritative, so no client can claim a faster walk.
-            let speed = movement_speed(
+            let v = crate::parkour::step_movement(
                 old_pos,
                 feet_height,
                 vertical_speed,
-                input.jump,
-                input.sprint,
-                input.crouch,
-                self.players[i].shield,
-                &self.obstacles,
-            );
-            let pos = move_circle_in(
-                old_pos,
-                feet_height,
-                input.mv,
-                speed,
+                self.players[i].parkour,
+                crate::parkour::MovementInput {
+                    mv: input.mv,
+                    jump: input.jump,
+                    sprint: input.sprint,
+                    crouch: input.crouch,
+                    shield: self.players[i].shield,
+                },
                 dt,
                 &self.obstacles,
                 self.arena_half,
             );
-            let v = step_vertical(
-                pos,
-                feet_height,
-                vertical_speed,
-                input.jump,
-                dt,
-                &self.obstacles,
-            );
-            // A bonk is the clamp firing on the way UP into a loot block.
-            // Requiring the pre-step `vy > 0` is belt and braces: the clamp
-            // can only fire on the way up, because `blocked` stops a body
-            // walking into a box its head reaches.
+            let pos = v.pos;
+            // The shared step reports only upward bonks, including a wall
+            // launch whose first frame immediately reaches a loot underside.
             if let Some(k) = v.bonked
-                && vertical_speed > 0.0
                 && self.obstacles[k].kind == Cover::Loot
             {
                 bonks.push((i, k));
@@ -2814,7 +2806,8 @@ impl Sim {
             p.pos = pos;
             p.y = v.y;
             p.vy = v.vy;
-            p.crouch = input.crouch;
+            p.parkour = v.state;
+            p.crouch = v.crouch;
 
             // Aim.
             let mut aim = input.aim;
@@ -3484,6 +3477,7 @@ impl Sim {
             v.hp = v.hp.saturating_sub(dmg);
             if v.hp == 0 {
                 v.alive = false;
+                v.parkour = crate::parkour::ParkourState::READY;
                 v.shield = false;
                 v.shield_state.active = false;
                 v.shield_state.remaining = 0.0;
@@ -3660,9 +3654,13 @@ mod tests {
         assert!((normal - MOVE_SPEED).abs() < 0.2);
         assert!((sprint - MOVE_SPEED * SPRINT_MULT).abs() < 0.3);
         assert!((crouch - MOVE_SPEED * CROUCH_MULT).abs() < 0.2);
-        // Crouch wins if both are held.
+        // A fresh sprint+crouch now starts a bounded slide; after it expires
+        // a held C returns to the normal crouched pace (covered separately).
         let both = run(true, true);
-        assert!((both - crouch).abs() < 0.2);
+        assert!(
+            both > crouch + 3.0,
+            "the initial slide must actually add momentum"
+        );
     }
 
     #[test]
@@ -3692,6 +3690,46 @@ mod tests {
 
         assert!((jump_distance(false) - 6.75).abs() < 1e-3);
         assert!((jump_distance(true) - 10.8).abs() < 1e-3);
+    }
+
+    #[test]
+    fn authority_carries_slide_through_jump_reload_and_grants_but_not_new_lives() {
+        use crate::parkour::ParkourState;
+        let mut sim = Sim::new(29);
+        sim.obstacles.clear();
+        sim.add_player(0);
+        sim.players[0].pos = [-10.0, 0.0];
+        let input = PlayerIn {
+            mv: [1.0, 0.0],
+            sprint: true,
+            crouch: true,
+            ..Default::default()
+        };
+        sim.step(&|_| input);
+        assert!(sim.players[0].parkour.slide_remaining > 0.0);
+        let before_grant = sim.players[0].parkour;
+        grant(&mut sim.players[0], 3);
+        assert_eq!(sim.players[0].parkour, before_grant);
+        sim.players[0].ammo -= 1;
+        sim.step(&|_| PlayerIn {
+            jump: true,
+            reload: true,
+            ..input
+        });
+        assert!(sim.players[0].reload_t > 0.0);
+        assert!(sim.players[0].parkour.momentum);
+        assert!(sim.players[0].parkour.velocity[0] > 9.0);
+        assert!(sim.players[0].y > 0.0);
+        sim.players[0].alive = false;
+        sim.players[0].respawn_in = 1.0;
+        sim.step(&|_| input);
+        assert_eq!(sim.players[0].parkour, ParkourState::READY);
+        sim.players[0].parkour = before_grant;
+        respawn(&mut sim.players[0], [0.0, 0.0]);
+        assert_eq!(sim.players[0].parkour, ParkourState::READY);
+        sim.players[0].parkour = before_grant;
+        sim.restart_round();
+        assert_eq!(sim.players[0].parkour, ParkourState::READY);
     }
 
     #[test]
@@ -7390,17 +7428,36 @@ mod tests {
     /// Every field of a round as bits, so two sims are compared exactly and
     /// not up to a float tolerance.
     fn bullet_bits(b: &Bullet) -> Vec<u64> {
+        bullet_fingerprint(b, false)
+    }
+
+    // Millimetre / milliradian / millisecond resolution for stored cross-host
+    // goldens; same-host replay still compares every original f32 bit below.
+    fn fingerprint_float(value: f32, quantized: bool) -> u64 {
+        assert!(
+            value.is_finite(),
+            "nonfinite state must never be hidden by quantization"
+        );
+        if quantized {
+            (f64::from(value) * 1000.0).round() as i64 as u64
+        } else {
+            u64::from(value.to_bits())
+        }
+    }
+
+    fn bullet_fingerprint(b: &Bullet, quantized: bool) -> Vec<u64> {
+        let number = |value| fingerprint_float(value, quantized);
         vec![
-            u64::from(b.pos[0].to_bits()),
-            u64::from(b.pos[1].to_bits()),
-            u64::from(b.vel[0].to_bits()),
-            u64::from(b.vel[1].to_bits()),
-            u64::from(b.y.to_bits()),
-            u64::from(b.vy.to_bits()),
-            u64::from(b.ttl.to_bits()),
-            u64::from(b.from[0].to_bits()),
-            u64::from(b.from[1].to_bits()),
-            u64::from(b.from[2].to_bits()),
+            number(b.pos[0]),
+            number(b.pos[1]),
+            number(b.vel[0]),
+            number(b.vel[1]),
+            number(b.y),
+            number(b.vy),
+            number(b.ttl),
+            number(b.from[0]),
+            number(b.from[1]),
+            number(b.from[2]),
             u64::from(b.owner),
             u64::from(b.dmg),
             u64::from(b.delay),
@@ -7411,36 +7468,52 @@ mod tests {
     }
 
     fn player_bits(p: &PlayerSt) -> Vec<u64> {
+        player_fingerprint(p, false)
+    }
+
+    fn player_fingerprint(p: &PlayerSt, quantized: bool) -> Vec<u64> {
+        let number = |value| fingerprint_float(value, quantized);
         vec![
             u64::from(p.id),
-            u64::from(p.pos[0].to_bits()),
-            u64::from(p.pos[1].to_bits()),
-            u64::from(p.y.to_bits()),
-            u64::from(p.vy.to_bits()),
-            u64::from(p.aim[0].to_bits()),
-            u64::from(p.aim[1].to_bits()),
-            u64::from(p.pitch.to_bits()),
+            number(p.pos[0]),
+            number(p.pos[1]),
+            number(p.y),
+            number(p.vy),
+            number(p.aim[0]),
+            number(p.aim[1]),
+            number(p.pitch),
             u64::from(p.hp),
             u64::from(p.score),
             u64::from(p.alive),
             u64::from(p.crouch),
             u64::from(p.shield),
             u64::from(p.shield_state.active),
-            u64::from(p.shield_state.remaining.to_bits()),
-            u64::from(p.shield_state.cooldown.to_bits()),
-            u64::from(p.shield_state.fire_lock.to_bits()),
+            number(p.shield_state.remaining),
+            number(p.shield_state.cooldown),
+            number(p.shield_state.fire_lock),
             u64::from(p.shield_state.held),
             u64::from(p.weapon),
             u64::from(p.ammo),
             u64::from(p.reserve),
-            u64::from(p.reload_t.to_bits()),
+            number(p.reload_t),
             u64::from(p.death_count),
-            u64::from(p.respawn_in.to_bits()),
-            u64::from(p.cooldown.to_bits()),
-            u64::from(p.melee_cd.to_bits()),
-            u64::from(p.ads_fraction.to_bits()),
-            u64::from(p.bloom.to_bits()),
-            u64::from(p.spread.to_bits()),
+            number(p.respawn_in),
+            number(p.cooldown),
+            number(p.melee_cd),
+            number(p.ads_fraction),
+            number(p.bloom),
+            number(p.spread),
+            number(p.parkour.velocity[0]),
+            number(p.parkour.velocity[1]),
+            number(p.parkour.slide_remaining),
+            number(p.parkour.slide_cooldown),
+            number(p.parkour.wall_cooldown),
+            number(p.parkour.wall_normal[0]),
+            number(p.parkour.wall_normal[1]),
+            number(p.parkour.last_wall_normal[0]),
+            number(p.parkour.last_wall_normal[1]),
+            u64::from(p.parkour.momentum),
+            u64::from(p.parkour.crouch_held),
         ]
     }
 
@@ -9351,8 +9424,17 @@ mod tests {
 
     /// Every field of a shot event as bits.
     fn shot_bits(s: &ShotEvent) -> Vec<u64> {
+        shot_fingerprint(s, false)
+    }
+
+    fn shot_fingerprint(s: &ShotEvent, quantized: bool) -> Vec<u64> {
         let mut v = vec![u64::from(s.owner), u64::from(s.weapon)];
-        v.extend(s.from.iter().chain(&s.to).map(|x| u64::from(x.to_bits())));
+        v.extend(
+            s.from
+                .iter()
+                .chain(&s.to)
+                .map(|&x| fingerprint_float(x, quantized)),
+        );
         v.extend([u64::from(s.hit), u64::from(s.cover), u64::from(s.victim)]);
         v.extend(
             s.normal
@@ -9362,17 +9444,14 @@ mod tests {
         v
     }
 
-    /// Folds one tick of a sim into `h`: every player and every round as
-    /// bits, then the tick's kills, hits, blasts and loot payouts, then
-    /// (since v20) its shot events. The v18 fields in the v18 order, with
-    /// the shots appended last so the prefix of the fold is still the v18
-    /// fold.
+    /// Folds quantized numerical state and exact discrete gameplay events.
+    /// Exact same-platform replay remains covered by the *_bits helpers.
     fn fold_tick(h: &mut u64, sim: &Sim) {
         for p in &sim.players {
-            fold(h, player_bits(p));
+            fold(h, player_fingerprint(p, true));
         }
         for b in &sim.bullets {
-            fold(h, bullet_bits(b));
+            fold(h, bullet_fingerprint(b, true));
         }
         fold(
             h,
@@ -9390,9 +9469,9 @@ mod tests {
             h,
             sim.blasts.iter().flat_map(|&(p, w)| {
                 [
-                    u64::from(p[0].to_bits()),
-                    u64::from(p[1].to_bits()),
-                    u64::from(p[2].to_bits()),
+                    fingerprint_float(p[0], true),
+                    fingerprint_float(p[1], true),
+                    fingerprint_float(p[2], true),
                     u64::from(w),
                 ]
             }),
@@ -9404,33 +9483,26 @@ mod tests {
                 .flat_map(|&(a, b, c)| [u64::from(a), u64::from(b), u64::from(c)]),
         );
         for s in &sim.shots {
-            fold(h, shot_bits(s));
+            fold(h, shot_fingerprint(s, true));
         }
     }
 
     /// FNV-1a's offset basis: where every fold starts.
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-    /// `fold_tick` of the driver after ticks 99, 199, ... 599, computed
-    /// from the protocol-21 five-health/timed-shield tree on the Windows workstation,
-    /// after independently replaying two simulations and checking every
-    /// player's ADS fraction, recoverable bloom, effective cone and complete
-    /// shield timers/latch as well as movement, bullets and events. The pin changes
-    /// deliberately for the new head/body union and five-point health, with direct
-    /// rockets still lethal. Walking/jump speed and weapon handling stay unchanged. This is
-    /// a regression fingerprint, not identity with old gameplay.
-    /// The script and the launch go through `cos`, `sin` and
-    /// `tan`, which are the platform's, so a toolchain on another libm
-    /// could legitimately differ in the last bit; the tests have only ever
-    /// run here, and if that changes the pin is regenerated the same way,
-    /// from the tree that is being pinned.
+    /// Protocol-22 parkour checkpoints after ticks 99, 199, ... 599. Numeric
+    /// fields are rounded at 1/1000 resolution, discrete events remain exact.
+    /// The previous Windows raw-f32 pin failed Linux CI at baseline b97b87bf:
+    /// `sin`/`cos`/`tan` last bits are not a cross-platform API guarantee.
+    /// This pin covers meaningful motion/handling changes; the independent
+    /// two-sim replay below still verifies all raw bits including parkour state.
     const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
-        0x545f_4d94_5781_9e33,
-        0x48c0_ceef_10c6_e051,
-        0xeac1_1c8e_351d_7011,
-        0x3f28_8e85_b9d4_14d3,
-        0x812b_a60d_ad6d_ae9f,
-        0x2568_56e9_4f9a_e006,
+        18_363_606_916_869_280_677,
+        9_906_945_162_742_530_227,
+        16_002_300_601_109_398_104,
+        9_409_843_707_836_138_643,
+        16_050_964_335_518_442_108,
+        18_326_704_171_356_937_484,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a
@@ -9575,8 +9647,8 @@ mod tests {
 
     #[test]
     fn client_prediction_and_server_agree_on_every_bonk() {
-        // The client predicts with the bare `move_circle` and
-        // `step_vertical`; the server runs `Sim::step`. On the yard, for
+        // The client predicts with shared `step_movement`, carrying its
+        // explicit parkour state; the server runs `Sim::step`. On the yard, for
         // 600 ticks of the same inputs, feet, speed and the box the head
         // met are the same tick by tick, and the server pays out exactly
         // when the client's prediction says the head met an armed block.
@@ -9603,6 +9675,7 @@ mod tests {
             }
         };
         let (mut pos, mut y, mut vy) = (start.0, start.1, 0.0f32);
+        let mut parkour = crate::parkour::ParkourState::READY;
         let mut bonks = 0;
         let mut paid = 0;
         for tick in 0..600u64 {
@@ -9611,28 +9684,32 @@ mod tests {
                 sim.loot.iter().map(|l| l.respawn_t <= FIXED_DT).collect();
             sim.step(&|_| input);
             // The client's replay of the same tick.
-            let speed = movement_speed(
+            let v = crate::parkour::step_movement(
                 pos,
                 y,
                 vy,
-                input.jump,
-                input.sprint,
-                input.crouch,
-                input.shield,
+                parkour,
+                crate::parkour::MovementInput {
+                    mv: input.mv,
+                    jump: input.jump,
+                    sprint: input.sprint,
+                    crouch: input.crouch,
+                    shield: input.shield,
+                },
+                FIXED_DT,
                 &sim.obstacles,
+                sim.arena_half,
             );
-            let npos = move_circle(pos, y, input.mv, speed, FIXED_DT, &sim.obstacles);
-            let v = step_vertical(npos, y, vy, input.jump, FIXED_DT, &sim.obstacles);
-            let predicted = v
-                .bonked
-                .filter(|&k| vy > 0.0 && sim.obstacles[k].kind == Cover::Loot);
-            pos = npos;
+            let predicted = v.bonked.filter(|&k| sim.obstacles[k].kind == Cover::Loot);
+            pos = v.pos;
             y = v.y;
             vy = v.vy;
+            parkour = v.state;
             let p = &sim.players[0];
             assert_eq!(pos, p.pos, "tick {tick}");
             assert_eq!(y.to_bits(), p.y.to_bits(), "tick {tick}: {y} vs {}", p.y);
             assert_eq!(vy.to_bits(), p.vy.to_bits(), "tick {tick}");
+            assert_eq!(parkour, p.parkour, "tick {tick}: complete replay state");
             match predicted {
                 Some(k) => {
                     bonks += 1;

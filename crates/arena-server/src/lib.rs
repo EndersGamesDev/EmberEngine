@@ -585,6 +585,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             z: p.pos[1],
                             y: p.y,
                             vy: p.vy,
+                            parkour: p.parkour,
                             ax: p.aim[0],
                             az: p.aim[1],
                             pitch: p.pitch,

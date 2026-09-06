@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn all_three_authored_maps_fit_the_volume_budget_and_preserve_cover_bounds() {
         for (map, expected_boxes, expected_dimensions) in [
-            (MAP_HARBOR, 72, [201, 17, 201]),
+            (MAP_HARBOR, 157, [201, 17, 201]),
             (MAP_FREIGHT_YARD, 88, [105, 17, 105]),
             (MAP_TRENCH_CITY, 90, [105, 17, 105]),
         ] {

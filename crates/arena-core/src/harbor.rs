@@ -15,6 +15,191 @@ pub const CRANE_CENTERS_Z: [f32; 2] = [-18.0, 18.0];
 pub const WAREHOUSE_MIN: [f32; 2] = [-44.0, -28.0];
 pub const WAREHOUSE_MAX: [f32; 2] = [-28.0, 28.0];
 pub const WAREHOUSE_ROOF_BASE: f32 = 4.2;
+pub const WALKWAY_TOP: f32 = 4.55;
+pub const STAIR_STEPS: u16 = 14;
+// The new reachable warehouse ridge can see over the old 2.8m fronts. Keep
+// the existing pocket footprints/exits, but screen their centres from roofs.
+pub const SPAWN_SCREEN_H: f32 = 3.4;
+
+/// Enterable industrial offices and pump house, with two opposite real doors.
+#[derive(Clone, Copy, Debug)]
+pub struct ServiceHouse {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+}
+
+pub const SERVICE_HOUSES: [ServiceHouse; 3] = [
+    ServiceHouse {
+        min: [-24.0, -24.8],
+        max: [-18.0, -14.8],
+    },
+    ServiceHouse {
+        min: [-24.0, 14.8],
+        max: [-18.0, 24.8],
+    },
+    ServiceHouse {
+        min: [19.0, -9.0],
+        max: [27.0, -3.0],
+    },
+];
+
+impl ServiceHouse {
+    /// Walls, door lintels, roof and an interior workbench. The doorway is
+    /// 2.3m wide and 2.6m high; there is no painted traversable-looking door.
+    #[must_use]
+    pub fn solids(self) -> [Obstacle; 10] {
+        let [x0, z0] = self.min;
+        let [x1, z1] = self.max;
+        let x = f32::midpoint(x0, x1);
+        [
+            Obstacle::boxed(Cover::Wall, [x0, z0], [x0 + 0.35, z1], 0.0, 4.2),
+            Obstacle::boxed(Cover::Wall, [x1 - 0.35, z0], [x1, z1], 0.0, 4.2),
+            Obstacle::boxed(
+                Cover::Wall,
+                [x0 + 0.35, z0],
+                [x - 1.15, z0 + 0.35],
+                0.0,
+                4.2,
+            ),
+            Obstacle::boxed(
+                Cover::Wall,
+                [x + 1.15, z0],
+                [x1 - 0.35, z0 + 0.35],
+                0.0,
+                4.2,
+            ),
+            Obstacle::boxed(
+                Cover::Wall,
+                [x0 + 0.35, z1 - 0.35],
+                [x - 1.15, z1],
+                0.0,
+                4.2,
+            ),
+            Obstacle::boxed(
+                Cover::Wall,
+                [x + 1.15, z1 - 0.35],
+                [x1 - 0.35, z1],
+                0.0,
+                4.2,
+            ),
+            Obstacle::boxed(Cover::Wall, [x - 1.15, z0], [x + 1.15, z0 + 0.35], 2.6, 4.2),
+            Obstacle::boxed(Cover::Wall, [x - 1.15, z1 - 0.35], [x + 1.15, z1], 2.6, 4.2),
+            Obstacle::boxed(
+                Cover::Roof,
+                self.min,
+                self.max,
+                WAREHOUSE_ROOF_BASE,
+                WALKWAY_TOP,
+            ),
+            Obstacle::boxed(
+                Cover::Crate,
+                [x0 + 0.7, z0 + 1.0],
+                [x0 + 2.0, z0 + 2.2],
+                0.0,
+                0.9,
+            ),
+        ]
+    }
+}
+
+/// An ordinary walking alternative to each wall-jump route. Fourteen 32.5cm
+/// risers stay below shared `STEP_UP`; each tread is 80cm deep and 1.4m wide.
+#[derive(Clone, Copy, Debug)]
+pub struct StairFlight {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub toward_negative_z: bool,
+}
+
+pub const STAIR_FLIGHTS: [StairFlight; 3] = [
+    StairFlight {
+        min: [-17.9, -24.8],
+        max: [-16.5, -13.6],
+        toward_negative_z: true,
+    },
+    StairFlight {
+        min: [-17.9, 13.6],
+        max: [-16.5, 24.8],
+        toward_negative_z: false,
+    },
+    StairFlight {
+        min: [17.6, -14.2],
+        max: [19.0, -3.0],
+        toward_negative_z: false,
+    },
+];
+
+impl StairFlight {
+    #[must_use]
+    pub fn tread(self, index: u16) -> Obstacle {
+        let index = index.min(STAIR_STEPS - 1);
+        let depth = (self.max[1] - self.min[1]) / f32::from(STAIR_STEPS);
+        let near = if self.toward_negative_z {
+            (-f32::from(index + 1)).mul_add(depth, self.max[1])
+        } else {
+            f32::from(index).mul_add(depth, self.min[1])
+        };
+        Obstacle::boxed(
+            Cover::Wall,
+            [self.min[0], near],
+            [self.max[0], near + depth],
+            0.0,
+            WALKWAY_TOP * f32::from(index + 1) / f32::from(STAIR_STEPS),
+        )
+    }
+}
+
+/// Roof bridges over the still-open west service lane; solid waist parapets
+/// match both bullets and movement, unlike a railing drawn over an invisible box.
+pub const CATWALKS: &[Obstacle] = &[
+    Obstacle::boxed(
+        Cover::Roof,
+        [-28.5, -18.8],
+        [-23.5, -16.6],
+        4.27,
+        WALKWAY_TOP,
+    ),
+    Obstacle::boxed(
+        Cover::Wall,
+        [-28.0, -18.8],
+        [-24.0, -18.65],
+        WALKWAY_TOP,
+        5.3,
+    ),
+    Obstacle::boxed(
+        Cover::Wall,
+        [-28.0, -16.75],
+        [-24.0, -16.6],
+        WALKWAY_TOP,
+        5.3,
+    ),
+    Obstacle::boxed(Cover::Roof, [-28.5, 16.6], [-23.5, 18.8], 4.27, WALKWAY_TOP),
+    Obstacle::boxed(Cover::Wall, [-28.0, 16.6], [-24.0, 16.75], WALKWAY_TOP, 5.3),
+    Obstacle::boxed(Cover::Wall, [-28.0, 18.65], [-24.0, 18.8], WALKWAY_TOP, 5.3),
+];
+
+// This previously decorative roof ridge becomes real cover now that roofs are
+// reachable. Keep its original silhouette, but seat it directly on the roof.
+pub const CLERESTORY: Obstacle =
+    Obstacle::boxed(Cover::Roof, [-39.5, -25.5], [-32.5, 25.5], WALKWAY_TOP, 5.4);
+pub const PUMP_SCREEN: Obstacle =
+    Obstacle::boxed(Cover::Wall, [31.0, -9.0], [31.4, -3.0], 0.0, 4.2);
+pub const ROOFTOP_COVER: &[Obstacle] = &[
+    Obstacle::boxed(
+        Cover::Wall,
+        [-23.0, -22.0],
+        [-21.5, -20.5],
+        WALKWAY_TOP,
+        5.35,
+    ),
+    Obstacle::boxed(Cover::Wall, [-23.0, 20.5], [-21.5, 22.0], WALKWAY_TOP, 5.35),
+    Obstacle::boxed(Cover::Wall, [23.2, -7.0], [24.8, -5.5], WALKWAY_TOP, 5.35),
+    Obstacle::boxed(Cover::Wall, [-30.9, -9.0], [-29.5, -6.8], WALKWAY_TOP, 5.35),
+    Obstacle::boxed(Cover::Wall, [-30.9, 6.8], [-29.5, 9.0], WALKWAY_TOP, 5.35),
+];
+
+/// Centreline samples of the paired wall lanes, all with a four-metre gap.
+pub const WALL_JUMP_LANES: [[f32; 2]; 3] = [[-26.0, -21.0], [-26.0, 21.0], [29.0, -6.0]];
 
 /// A real 20/40-foot cargo box, aligned to one world axis.
 #[derive(Clone, Copy, Debug)]
@@ -158,6 +343,15 @@ impl Level {
         obstacles.extend_from_slice(WAREHOUSE);
         obstacles.extend_from_slice(CRANE_LEGS);
         obstacles.extend_from_slice(LOW_COVER);
+        for house in SERVICE_HOUSES {
+            obstacles.extend(house.solids());
+        }
+        for stairs in STAIR_FLIGHTS {
+            obstacles.extend((0..STAIR_STEPS).map(|step| stairs.tread(step)));
+        }
+        obstacles.extend_from_slice(CATWALKS);
+        obstacles.extend([CLERESTORY, PUMP_SCREEN]);
+        obstacles.extend_from_slice(ROOFTOP_COVER);
         for [x, z] in SPAWNS {
             let sign = z.signum();
             let a = 37.6 * sign;
@@ -168,7 +362,7 @@ impl Level {
                 [x - 4.5, a.min(b)],
                 [x + 4.5, a.max(b)],
                 0.0,
-                2.8,
+                SPAWN_SCREEN_H,
             ));
             for dx in [-4.5, 3.7] {
                 obstacles.push(Obstacle::boxed(
@@ -176,7 +370,7 @@ impl Level {
                     [x + dx, b.min(rear)],
                     [x + dx + 0.8, b.max(rear)],
                     0.0,
-                    2.8,
+                    SPAWN_SCREEN_H,
                 ));
             }
         }
@@ -218,7 +412,7 @@ mod tests {
     fn harbor_is_authored_metric_and_seed_independent() {
         let level = Level::harbor();
         assert_eq!(level.arena_half, 48.0);
-        assert_eq!(level.obstacles.len(), 75);
+        assert_eq!(level.obstacles.len(), 160);
         assert_eq!(level.spawns, SPAWNS);
         assert_eq!(level.hill, Some(HARBOR_HILL));
         for seed in [0, 1, 27, u64::MAX] {
@@ -322,6 +516,12 @@ mod tests {
             [38.0, -15.0],
             [7.5, 32.0],
             [7.5, -32.0],
+            [-21.0, -19.8],
+            [-21.0, 19.8],
+            [23.0, -6.0],
+            [-26.0, -21.0],
+            [-26.0, 21.0],
+            [29.0, -6.0],
         ];
         for p in SPAWNS
             .iter()
@@ -468,7 +668,11 @@ mod tests {
         let p = [-36.0, 15.0];
         assert!(!blocked_in(p, 0.0, PLAYER_R, &level.obstacles, HARBOR_HALF));
         assert_eq!(support_height(p, PLAYER_R, 0.0, &level.obstacles), 0.0);
-        assert_eq!(support_height(p, PLAYER_R, 4.55, &level.obstacles), 4.55);
+        let roof_walk = [-30.0, 15.0];
+        assert_eq!(
+            support_height(roof_walk, PLAYER_R, 4.55, &level.obstacles),
+            4.55
+        );
         assert!(!segment_hits_cover(
             [-36.0, 1.45, 10.0],
             [-36.0, 1.45, 20.0],
@@ -482,7 +686,7 @@ mod tests {
         let v = step_vertical(p, 2.3, 4.0, false, FIXED_DT, &level.obstacles);
         assert_eq!(v.y, WAREHOUSE_ROOF_BASE - BODY_H_STAND);
         assert!(v.bonked.is_some());
-        let v = step_vertical(p, 4.56, -2.0, false, FIXED_DT, &level.obstacles);
+        let v = step_vertical(roof_walk, 4.56, -2.0, false, FIXED_DT, &level.obstacles);
         assert_eq!(v.y, 4.55);
         assert!(v.grounded);
     }
@@ -513,6 +717,248 @@ mod tests {
                     ground && (y - height).abs() < 0.001,
                     "chain {sign}: {p:?} at {y}, wanted {height}"
                 );
+            }
+        }
+    }
+
+    fn walk_elevated_route(level: &Level, route: &[[f32; 3]]) {
+        let (mut pos, mut y, mut vy) = ([route[0][0], route[0][2]], route[0][1], 0.0);
+        for target in &route[1..] {
+            let mut reached = false;
+            for _ in 0..900 {
+                let mv = [
+                    (target[0] - pos[0]) / (MOVE_SPEED * FIXED_DT),
+                    (target[2] - pos[1]) / (MOVE_SPEED * FIXED_DT),
+                ];
+                pos = move_circle_in(
+                    pos,
+                    y,
+                    mv,
+                    MOVE_SPEED,
+                    FIXED_DT,
+                    &level.obstacles,
+                    HARBOR_HALF,
+                );
+                let vertical = step_vertical(pos, y, vy, false, FIXED_DT, &level.obstacles);
+                (y, vy) = (vertical.y, vertical.vy);
+                if (pos[0] - target[0]).abs() + (pos[1] - target[2]).abs() < 0.01
+                    && (y - target[1]).abs() < 0.01
+                {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(
+                reached,
+                "roof route stopped at {pos:?}, y{y}; wanted {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_service_roof_has_a_non_parkour_stair_route_and_west_bridges_connect() {
+        let level = Level::harbor();
+        assert!(WALKWAY_TOP / f32::from(STAIR_STEPS) < crate::shooter::STEP_UP);
+        for (index, (stairs, house)) in STAIR_FLIGHTS.iter().zip(SERVICE_HOUSES).enumerate() {
+            let x = f32::midpoint(stairs.min[0], stairs.max[0]);
+            let start_z = if stairs.toward_negative_z {
+                stairs.max[1] + 0.6
+            } else {
+                stairs.min[1] - 0.6
+            };
+            let mut route = vec![[x, 0.0, start_z]];
+            for step in 0..STAIR_STEPS {
+                let tread = stairs.tread(step);
+                assert!(level.obstacles.contains(&tread));
+                // The 60cm body radius already overlaps the next riser at a
+                // tread's midpoint. Sample 65cm back from the ascending edge,
+                // where only this tread (and lower ones) support the body.
+                let tread_z = if stairs.toward_negative_z {
+                    tread.min[1] + PLAYER_R + 0.05
+                } else {
+                    tread.max[1] - PLAYER_R - 0.05
+                };
+                assert_eq!(
+                    support_height([x, tread_z], PLAYER_R, tread.h, &level.obstacles),
+                    tread.h,
+                    "stair waypoint must stand on its intended tread"
+                );
+                route.push([x, tread.h, tread_z]);
+            }
+            // The office vents protect the western roof edge. Approach the
+            // bridge along the unobstructed eastern roof lane, then turn west;
+            // a centreline shortcut would correctly collide with that cover.
+            let roof_x = if index < 2 {
+                house.max[0] - 1.5
+            } else {
+                f32::midpoint(house.min[0], house.max[0])
+            };
+            route.push([roof_x, WALKWAY_TOP, route.last().unwrap()[2]]);
+            if index < 2 {
+                let bridge_z = if index == 0 { -17.7 } else { 17.7 };
+                route.extend([
+                    [roof_x, WALKWAY_TOP, bridge_z],
+                    [-25.7, WALKWAY_TOP, bridge_z],
+                    [-30.0, WALKWAY_TOP, bridge_z],
+                ]);
+            }
+            walk_elevated_route(&level, &route);
+        }
+        // The ridge separates two roof lanes; both ends are counter-flanks.
+        for sign in [-1.0, 1.0] {
+            walk_elevated_route(
+                &level,
+                &[
+                    [-30.0, WALKWAY_TOP, 17.7 * sign],
+                    [-30.0, WALKWAY_TOP, 27.0 * sign],
+                    [-41.0, WALKWAY_TOP, 27.0 * sign],
+                    [-41.0, WALKWAY_TOP, 17.7 * sign],
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn houses_have_opposite_real_doors_and_no_false_floor_or_ceiling() {
+        let level = Level::harbor();
+        for house in SERVICE_HOUSES {
+            let x = f32::midpoint(house.min[0], house.max[0]);
+            let z = f32::midpoint(house.min[1], house.max[1]);
+            let inside = [x, z];
+            assert!(!blocked_in(
+                inside,
+                0.0,
+                PLAYER_R,
+                &level.obstacles,
+                HARBOR_HALF
+            ));
+            assert_eq!(support_height(inside, PLAYER_R, 0.0, &level.obstacles), 0.0);
+            assert!(!segment_hits_cover(
+                [x, EYE_STAND, house.min[1] - 0.5],
+                [x, EYE_STAND, house.max[1] + 0.5],
+                &level.obstacles
+            ));
+            assert!(
+                segment_hits_cover(
+                    [x, 3.0, house.min[1] - 0.5],
+                    [x, 3.0, house.min[1] + 0.5],
+                    &level.obstacles
+                ),
+                "visible lintel must stop a shot"
+            );
+            assert!(segment_hits_cover(
+                [x, 3.9, z],
+                [x, 4.8, z],
+                &level.obstacles
+            ));
+            for doorway_z in [house.min[1], house.max[1]] {
+                assert!(!blocked_in(
+                    [x, doorway_z],
+                    0.0,
+                    PLAYER_R + 0.1,
+                    &level.obstacles,
+                    HARBOR_HALF
+                ));
+            }
+        }
+        assert!(
+            level.obstacles.contains(&CLERESTORY),
+            "roof ridge is now real cover"
+        );
+    }
+
+    #[test]
+    fn paired_wall_routes_have_clear_four_metre_lanes_and_real_side_contacts() {
+        let level = Level::harbor();
+        for [x, z] in WALL_JUMP_LANES {
+            for y in [0.0, 1.0, 2.0] {
+                assert!(!blocked_in(
+                    [x, z],
+                    y,
+                    PLAYER_R,
+                    &level.obstacles,
+                    HARBOR_HALF
+                ));
+                for sign in [-1.0, 1.0] {
+                    assert!(blocked_in(
+                        [x + 2.05 * sign, z],
+                        y,
+                        PLAYER_R,
+                        &level.obstacles,
+                        HARBOR_HALF
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_roof_positions_keep_spawn_centres_screened_and_offer_bounded_counters() {
+        let level = Level::harbor();
+        for from in [
+            [-21.0, WALKWAY_TOP, -20.0],
+            [-21.0, WALKWAY_TOP, 20.0],
+            [23.0, WALKWAY_TOP, -4.0],
+            [-30.0, WALKWAY_TOP, -17.7],
+            [-30.0, WALKWAY_TOP, 17.7],
+        ] {
+            for spawn in SPAWNS {
+                assert!(
+                    segment_hits_cover(
+                        [from[0], from[1] + EYE_STAND, from[2]],
+                        [spawn[0], EYE_STAND, spawn[1]],
+                        &level.obstacles
+                    ),
+                    "roof {from:?} sees spawn {spawn:?}"
+                );
+            }
+        }
+        // Pump roof has a clear local angle into the east cross street, but
+        // its west view is interrupted by cargo rather than a whole-map perch.
+        assert!(!segment_hits_cover(
+            [25.5, WALKWAY_TOP + EYE_STAND, -4.0],
+            [38.0, EYE_STAND, 0.0],
+            &level.obstacles
+        ));
+        assert!(segment_hits_cover(
+            [-21.0, WALKWAY_TOP + EYE_STAND, -20.0],
+            [-41.0, EYE_STAND, -20.0],
+            &level.obstacles
+        ));
+    }
+
+    #[test]
+    fn warehouse_roof_edges_and_reachable_ridge_keep_all_spawn_centres_screened() {
+        let level = Level::harbor();
+        for sign in [-1.0, 1.0] {
+            for (x, y, z) in [
+                (-43.0, WALKWAY_TOP, 28.45 * sign),
+                (-36.0, WALKWAY_TOP, 28.45 * sign),
+                (-29.0, WALKWAY_TOP, 28.45 * sign),
+                (-38.8, CLERESTORY.h, 26.0 * sign),
+                (-36.0, CLERESTORY.h, 26.0 * sign),
+                (-33.2, CLERESTORY.h, 26.0 * sign),
+            ] {
+                // Include centre positions supported at the slab's outer
+                // edge by the real .6m body radius, not just inset samples.
+                assert_eq!(support_height([x, z], PLAYER_R, y, &level.obstacles), y);
+                assert!(!blocked_in(
+                    [x, z],
+                    y,
+                    PLAYER_R,
+                    &level.obstacles,
+                    HARBOR_HALF
+                ));
+                for spawn in SPAWNS {
+                    assert!(
+                        segment_hits_cover(
+                            [x, y + EYE_STAND, z],
+                            [spawn[0], EYE_STAND, spawn[1]],
+                            &level.obstacles
+                        ),
+                        "roof edge [{x},{y},{z}] sees spawn {spawn:?}"
+                    );
+                }
             }
         }
     }
