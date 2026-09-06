@@ -876,6 +876,28 @@ mod tests {
         posed
     }
 
+    /// Reproduces the page's centre-anchored zoom and the later per-level HOT rescale.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the copied owner row loses its finite screen-centre map, which that accepted
+    /// saved row cannot arrange.
+    fn screen_centred_owner_zoom(from: &Pose, zoom_delta: f64, extent: [u32; 2]) -> Pose {
+        let PoseMap::Mapped(screen_to_plane) = from.map else {
+            panic!("the owner row has a screen map");
+        };
+        let anchor = apply_homography(screen_to_plane.rows, [0.0; 2])
+            .expect("the screen centre is in front of the chart horizon");
+        let displacement_scale = zoom_delta.exp2() - 1.0;
+        let extent_scale = f64::from(extent[0]) / f64::from(from.grid_width);
+        let mut to = *from;
+        to.zoom_log2 += zoom_delta;
+        set_extent(&mut to, extent);
+        to.centre_from_reference_px =
+            anchor.map(|value| value * displacement_scale * extent_scale);
+        to
+    }
+
     #[derive(Clone, Copy, Debug)]
     struct ProjectionRefusalProbe {
         stage: &'static str,
@@ -975,7 +997,7 @@ mod tests {
         clippy::too_many_lines,
         reason = "the pinned 9x9 owner-row error fields are the measured regression fixture"
     )]
-    fn zoom_jump_owner_row_pins_the_partial_error_field_and_refusal() {
+    fn owner_row_reference_anchored_zoom_pins_the_partial_error_field_and_refusal() {
         let from = zoom_jump_owner_pose();
         let expected = [
             (
@@ -1257,6 +1279,42 @@ mod tests {
                     _ => panic!("owner-row screen field changed: {actual:?} != {expected:?}"),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn owner_row_screen_centred_zoom_pins_the_two_browser_refinement_poses() {
+        let from = zoom_jump_owner_pose();
+        let expected = [
+            ([480, 270], 488.26, 296.66, [16.654_733, -3.317_900]),
+            ([120, 68], 490.22, 306.24, [4.163_683, -0.829_475]),
+        ];
+        for (extent, expected_max, expected_p95, expected_displacement) in expected {
+            let to = screen_centred_owner_zoom(&from, 0.1, extent);
+            for (actual, expected) in to
+                .centre_from_reference_px
+                .into_iter()
+                .zip(expected_displacement)
+            {
+                assert!((actual - expected).abs() < 1.0e-6);
+            }
+            let flat = warp_matrix(&from, &to).expect("the screen-centred zoom has a flat map");
+            let carried_centre = apply_homography(flat.forward, [0.0; 2])
+                .expect("the flat map carries the screen centre");
+            assert!(carried_centre.into_iter().all(|value| value.abs() < 1.0e-9));
+
+            let plan = reproject(&frame(&from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::ClearOnly);
+            assert!(
+                (plan.approx_max_error_px.expect("measured maximum") - expected_max).abs() < 0.005
+            );
+            assert!(
+                (plan.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005
+            );
+            assert!(matches!(
+                plan.refusal_reason,
+                Some(WarpRefusalReason::ErrorCeiling { .. })
+            ));
         }
     }
 

@@ -1158,7 +1158,7 @@ fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
 }
 
 #[test]
-fn a_centred_zoom_hold_keeps_the_centre_but_exposes_the_corner_correction() {
+fn a_flat_centred_zoom_hold_keeps_the_centre_but_exposes_the_corner_correction() {
     let extent = [960, 540];
     let source = frame_on(83, extent, extent);
     let mut requested = pose_on(extent);
