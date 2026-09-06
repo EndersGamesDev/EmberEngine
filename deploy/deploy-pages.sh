@@ -146,7 +146,15 @@ cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
+# lab.js is not optional furniture: main.js imports it statically, so a deploy
+# that omits it resolves the import to a missing file and the whole module graph
+# fails to load — no page, no controls, and not even the page's own error
+# handler, because the handler is inside the module that never ran. drive.html
+# is the controls-free driver the lab's pixel proofs are taken through, and it
+# is shipped for the same reason a proof is worth having: a measurement taken
+# on a locally built copy is a measurement of a build nobody is serving.
 cp "web/$LAB_JULIBROT_LIVE/index.html" "web/$LAB_JULIBROT_LIVE/main.js" \
+    "web/$LAB_JULIBROT_LIVE/lab.js" "web/$LAB_JULIBROT_LIVE/drive.html" \
     "web/$LAB_JULIBROT_LIVE/worker.js" "web/$LAB_JULIBROT_LIVE/style.css" \
     "$PAGES_DIR/$LAB_JULIBROT_LIVE/"
 cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.js" \
@@ -306,7 +314,7 @@ bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recomp
 # The checked-in lab loader stays pinned at v=1 for its page contract. Only
 # assembled copies receive the final deployment stamp after address recompute.
 DEPLOY_STAMP="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["v"])' "$PAGES_DIR/server.json")"
-for loader in index.html main.js worker.js; do
+for loader in index.html main.js lab.js drive.html worker.js; do
     assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
     if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
         echo "FAILED: Julibrot cache key rewrite matched no ?v=1 token in $loader" >&2
@@ -325,6 +333,37 @@ PY
         exit 1
     fi
 done
+
+# A module the assembly does not place is a page that never runs. A static
+# import is resolved before any code in the importing module executes, so a
+# missing target is not a caught error reported in the status line: it is a
+# blank page with a console entry nobody is watching. The list of files to copy
+# and the list of files the pages reference are two lists that drifted apart
+# once and would drift again, so the second is read out of the assembled pages
+# themselves and checked against what is on disk beside them.
+"$PY" - "$PAGES_DIR/$LAB_JULIBROT_LIVE" <<'PY'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+reference = re.compile(
+    r"""(?:from|import)\s*\(?\s*["'](\.{1,2}/[^"'?]+)"""
+    r"""|(?:src|href)\s*=\s*["'](\.{1,2}/[^"'?]+)"""
+)
+missing = []
+for page in sorted(root.rglob("*")):
+    if not page.is_file() or page.suffix not in {".js", ".html"}:
+        continue
+    text = page.read_text(encoding="utf-8")
+    for found in reference.finditer(text):
+        target = found.group(1) or found.group(2)
+        if not (page.parent / target).is_file():
+            missing.append(f"{page.relative_to(root)} references {target}")
+if missing:
+    print("FAILED: the assembled lab references files the deploy does not ship:", file=sys.stderr)
+    for entry in missing:
+        print(f"  {entry}", file=sys.stderr)
+    sys.exit(1)
+PY
 
 (
     cd "$PAGES_DIR"

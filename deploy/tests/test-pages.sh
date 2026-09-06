@@ -65,7 +65,11 @@ printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
 printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
-printf 'globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1"; import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1"); fetch("./future.js?v=10");\n' > "$REPO/web/labs/julibrot/main.js"
+# main.js imports lab.js statically, exactly as the shipped page does: the
+# fixture has to carry the same import for the assembly check to mean anything.
+printf 'import { openLab } from "./lab.js?v=1"; fetch("./future.js?v=10");\n' > "$REPO/web/labs/julibrot/main.js"
+printf 'globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1"; import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1"); export function openLab() {}\n' > "$REPO/web/labs/julibrot/lab.js"
+printf '<canvas id="julibrot"></canvas><script type="module">import { openLab } from "./lab.js?v=1";</script>\n' > "$REPO/web/labs/julibrot/drive.html"
 printf 'import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1");\n' > "$REPO/web/labs/julibrot/worker.js"
 printf 'julibrot style\n' > "$REPO/web/labs/julibrot/style.css"
 printf 'pub const PROTO_VERSION: u16 = 15;\n' > "$REPO/crates/arena-core/src/proto.rs"
@@ -104,7 +108,7 @@ for f in index.html pkg/what_is_this.js pkg/what_is_this_bg.wasm; do
         bad "assembled what-is-this is missing $f"
     fi
 done
-for f in index.html main.js worker.js style.css pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
+for f in index.html main.js lab.js drive.html worker.js style.css pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/labs/julibrot/$f" ]; then
         ok "assembled Julibrot $f"
     else
@@ -114,7 +118,7 @@ done
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
-for f in index.html main.js worker.js; do
+for f in index.html main.js lab.js drive.html worker.js; do
     contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/$f")" "?v=$STAMP" "Julibrot $f uses the deploy stamp"
     if grep -qE '\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/labs/julibrot/$f"; then
         bad "assembled Julibrot $f retained ?v=1"
@@ -127,8 +131,9 @@ for f in index.html main.js worker.js; do
         bad "Julibrot source $f was rewritten"
     fi
 done
-contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "JULIBROT_WORKER_URL = \"./worker.js?v=$STAMP\"" "the worker bootstrap URL uses the deploy stamp"
+contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/lab.js")" "JULIBROT_WORKER_URL = \"./worker.js?v=$STAMP\"" "the worker bootstrap URL uses the deploy stamp"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "./future.js?v=10" "a future two-digit cache key is not partly rewritten"
+contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "from \"./lab.js?v=$STAMP\"" "the page's static import of the lab module is stamped"
 is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get("kind") == "lab" for v in g["versions"] if v.get("live")][0]')" "labs/julibrot/" "the live Julibrot catalog path was published"
 
 mkdir -p "$EXPECTED"
@@ -179,6 +184,35 @@ else
     tail -40 "$TMP/prebuilt.log" >&2
 fi
 if grep -Eq '^(cargo|wasm-bindgen)' "$SHIM_LOG"; then bad "complete prebuilt mode invoked a build tool"; else ok "complete prebuilt mode invoked no build tool"; fi
+
+echo "== a statically imported module the deploy does not ship is refused =="
+printf 'import { openLab } from "./lab.js?v=1"; import nowhere from "./nowhere.js?v=1";\n' > "$REPO/web/labs/julibrot/main.js"
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/unshipped.log" 2>&1; then
+    bad "a page importing a module the deploy does not ship was accepted"
+else
+    ok "a page importing a module the deploy does not ship was refused"
+fi
+contains "$(cat "$TMP/unshipped.log")" "main.js references ./nowhere.js" "the failure names the page and the module it cannot resolve"
+
+echo "== dropping the lab module from the copy list is refused =="
+printf 'import { openLab } from "./lab.js?v=1";\n' > "$REPO/web/labs/julibrot/main.js"
+"$PY" - "$REPO/deploy/deploy-pages.sh" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+old = '"web/$LAB_JULIBROT_LIVE/lab.js" "web/$LAB_JULIBROT_LIVE/drive.html" \\\n    '
+assert text.count(old) == 1
+with open(p, "w", encoding="utf-8", newline="") as fh:
+    fh.write(text.replace(old, ""))
+PY
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/unshipped-lab.log" 2>&1; then
+    bad "a deploy that omits the statically imported lab module was accepted"
+else
+    ok "a deploy that omits the statically imported lab module was refused"
+fi
+cp "$DEPLOY/deploy-pages.sh" "$REPO/deploy/"
 
 echo "== every live catalog path must be assembled =="
 "$PY" - "$REPO/web/games.json" <<'PY'
