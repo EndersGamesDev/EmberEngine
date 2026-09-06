@@ -392,6 +392,96 @@ const fn renew_reference_lease_identity(
     lease.precision_mode = precision_mode;
 }
 
+/// Hands the accepted orbit to the navigation a discarded census correction created.
+///
+/// The correction asks for a reference at another orbit point on the view already being drawn: its
+/// navigation delta is zero, and the owner's exact-edit path still spends one requested generation
+/// and one centre revision staging it. Discarding the arrival for not outlasting the accepted orbit
+/// therefore leaves that navigation with no reference at all unless the orbit already held is given
+/// to it, because a lease still naming the navigation before the correction matches nothing the
+/// loop will ask about again. The source generation moves across with the rest: it says the orbit
+/// is this navigation's own reference rather than one renewed over a change of view, and no view
+/// changed, so the conservative full-cap renewal rule has nothing here to protect.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn adopt_reference_lease_for_correction(
+    lease: &mut ReferenceLeaseIdentity,
+    generation: u32,
+    centre_revision: u32,
+) {
+    lease.main_generation = generation;
+    lease.source_generation = generation;
+    lease.centre_revision = centre_revision;
+}
+
+/// Whether an idle ladder facing a stale presented view has work to start.
+///
+/// A completed scene reaches the canvas one warp after it completes, and while the loop is holding
+/// the previous picture no warp stamps the requested view at all, so the moment the last level
+/// completes the view on screen is honestly not the view being asked for and yet nothing is
+/// missing: the picture for that view exists and the next warp draws it. Restarting there spends a
+/// whole ladder repainting a scene that was one present away.
+///
+/// Manual refinement is exempt because it starts no work here. The observation only records that
+/// the pose moved, and the page's own update decides when a scene is drawn; withholding the record
+/// would lose the bookkeeping without saving the repaint, so a manual page still marks its pending
+/// update on every stale turn as it did before this rule existed.
+///
+/// The scene identities answer one question: is the picture on the canvas the completed scene? A
+/// hold names the retained frame as its source, so during a hold both readings are that frame and
+/// the rule fires as it always did. A clear names no source at all, so a blank canvas beside a
+/// completed scene reads as the one-present gap and waits — which is what it is at page load, where
+/// the opening warps clear and the first scene completes a turn before its own warp runs. That arm
+/// is safe only while a clear cannot strand a completed scene at a stale view: a clear replaces a
+/// hold exactly when nothing is pending, which is the state this rule restarts from, so the turn
+/// that would produce the stranded blank is the turn the ladder restarts on.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn stale_view_needs_a_new_scene(
+    scene_mode: SceneMode,
+    refinement_pending: bool,
+    view_stale: bool,
+    completed_scene_id: Option<u64>,
+    presented_scene_id: Option<u64>,
+) -> bool {
+    if refinement_pending || !view_stale {
+        return false;
+    }
+    match scene_mode {
+        SceneMode::Manual => true,
+        SceneMode::Auto => match (completed_scene_id, presented_scene_id) {
+            (Some(completed), Some(presented)) => completed == presented,
+            (None, _) => true,
+            (Some(_), None) => false,
+        },
+    }
+}
+
+/// Whether a submitted warp puts the requested view on the canvas.
+///
+/// A held warp draws the last completed picture unmoved, so what reaches the canvas is the view
+/// already there and not the view being asked for. Stamping the requested view against a hold
+/// makes the loop report the held picture as current, which is the one reading a hold exists to
+/// keep honest: the hold is only defensible while the replacement work it waits for is pending,
+/// and a caller cannot see that the wait has gone wrong if the stamp says nothing is stale.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn warp_presents_requested_view(kind: ember_julibrot_present::WarpKind) -> bool {
+    !matches!(kind, ember_julibrot_present::WarpKind::HoldStale)
+}
+
+/// Names why one census correction bought nothing, for the facts row.
+#[cfg(target_arch = "wasm32")]
+const DISCARDED_CORRECTION_REASON: &str =
+    "census candidate orbit did not outlast the accepted reference";
+
+/// Names a correction whose navigation the gesture moved past before the orbit could return to it.
+#[cfg(target_arch = "wasm32")]
+const SUPERSEDED_CORRECTION_REASON: &str =
+    "census correction was superseded; the newer navigation carries its own reference";
+
+/// Names the one case in which the discarded correction leaves the ladder nothing to wait for.
+#[cfg(any(target_arch = "wasm32", test))]
+const STRANDED_CORRECTION_REASON: &str =
+    "the accepted orbit could not be returned to the census correction's navigation";
+
 /// Tests whether the accepted perturbation reference lease belongs to the requested scene.
 ///
 /// A freshly accepted short orbit may render once in its source generation so the existing census
@@ -647,6 +737,7 @@ mod browser {
         sampled_request_at_length: Option<u32>,
         sampled_reference_rounds: u32,
         sampled_reference_discards: u32,
+        sampled_reference_refusal: Option<&'static str>,
         sampled_resume_level: Option<RefinementLevel>,
         submitted_references: Vec<SubmittedReference>,
         reference_upload: Vec<u8>,
@@ -820,6 +911,7 @@ mod browser {
                 sampled_request_at_length: None,
                 sampled_reference_rounds: 0,
                 sampled_reference_discards: 0,
+                sampled_reference_refusal: None,
                 sampled_resume_level: None,
                 submitted_references: Vec::with_capacity(2),
                 reference_upload,
@@ -1083,7 +1175,13 @@ mod browser {
             self.main = hot.state.main;
             self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             self.observe_scene_selection(viewer);
-            if !self.loop_state.refinement_pending() && self.presented_view_is_stale(viewer) {
+            if super::stale_view_needs_a_new_scene(
+                self.loop_state.scene_mode(),
+                self.loop_state.refinement_pending(),
+                self.presented_view_is_stale(viewer),
+                self.presenter.facts().completed_scene_id,
+                self.presented_scene_id,
+            ) {
                 self.loop_state.scene_changed(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
@@ -1258,7 +1356,10 @@ mod browser {
                                 runtime.release_unsubmitted_warp(self.loop_state.generation());
                             return Err(error);
                         }
-                        self.pending_warp_view = Some((receipt.warp_id, self.view_stamp(viewer)));
+                        if super::warp_presents_requested_view(self.presenter.facts().warp_kind) {
+                            self.pending_warp_view =
+                                Some((receipt.warp_id, self.view_stamp(viewer)));
+                        }
                         self.loop_state.warp_submitted();
                     }
                     Err(AppError::SurfaceSkipped { .. }) => {

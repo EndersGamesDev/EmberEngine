@@ -108,6 +108,16 @@ impl BrowserFrameLoop {
         self.sampled_reference_discards
     }
 
+    /// Returns why the last census correction bought nothing, while that verdict still stands.
+    ///
+    /// A discard is a limit on the picture, not a loop failure: the reference stays as short as it
+    /// escaped, so the levels drawn from it carry reference-exhausted records. Naming the reason is
+    /// what lets a reader tell that limit from a correction that has not been tried.
+    #[must_use]
+    pub const fn sampled_reference_refusal(&self) -> Option<&'static str> {
+        self.sampled_reference_refusal
+    }
+
     pub(super) fn service_arrivals(
         &mut self,
         viewer: &mut ViewerController,
@@ -119,13 +129,18 @@ impl BrowserFrameLoop {
                 break;
             };
             let generation = response.generation();
-            let _finished = viewer.finish_reference_submission(generation);
             let submitted = self
                 .submitted_references
                 .iter()
                 .position(|item| item.generation == generation)
                 .map(|index| self.submitted_references.swap_remove(index));
+            // The arrival is processed while the owner still holds this submission in flight.
+            // Returning the accepted orbit to a navigation goes through the same owner entry the
+            // ordinary acceptance uses, and that entry only answers the submission it named: a
+            // submission finished first is a navigation nothing can be handed to. The successor a
+            // finished submission releases is taken later in the same turn, so nothing waits.
             let processed = self.process_arrival(viewer, &response, submitted);
+            let _finished = viewer.finish_reference_submission(generation);
             let disposition = processed
                 .as_ref()
                 .map_or(OrbitDisposition::Stale, |result| result.0);
@@ -138,6 +153,94 @@ impl BrowserFrameLoop {
             applied |= arrival_applied;
         }
         Ok(applied)
+    }
+
+    /// Returns the accepted orbit to the navigation a discarded census correction created.
+    ///
+    /// The correction's request is a navigation with a zero delta: it moves the orbit point and
+    /// nothing the picture depends on, yet the owner stages a new generation and a new centre
+    /// revision for it. Discarding the arrival without answering that navigation leaves the
+    /// accepted lease naming the state before the correction, and the scene gate then reads the
+    /// reference as belonging to an older selection for as long as the page is open: a level stays
+    /// due, no dispatch is allowed, refinement reports pending with nothing in flight, and the
+    /// presenter goes on holding the previous picture under a rule written for pending work.
+    ///
+    /// Handing the orbit already held to that navigation ends the round in the only state that is
+    /// both true and useful. The orbit is short because the reference escaped, so the levels above
+    /// it carry records the kernel marks as reference-exhausted rather than silently wrong, and the
+    /// ladder resumes at the level whose census asked so the correction costs one round rather than
+    /// a repaint from Preview.
+    ///
+    /// The owner answers only the latest requested navigation, so the adoption is refused when the
+    /// gesture moved on while the correction was in flight. That refusal is not a dead end: the
+    /// newer navigation is staged and will bring its own reference, which is the pending
+    /// replacement work a hold is written for, and the reason says so. When no newer navigation
+    /// exists and the orbit still cannot be handed over there is nothing left to wait for, so the
+    /// ladder stops claiming a level it cannot serve and publishes why.
+    fn retain_reference_across_discard(
+        &mut self,
+        viewer: &mut ViewerController,
+        generation: u32,
+        centre_revision: u32,
+        level: Option<RefinementLevel>,
+    ) -> Result<(), AppError> {
+        if self.adopt_orbit_for_navigation(viewer, generation, centre_revision)? {
+            self.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
+            self.main = viewer.drain_main()?.main;
+            self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
+            match level {
+                Some(level) => self.loop_state.scene_input_resumed(generation, level),
+                None => self.loop_state.scene_input_ready(generation),
+            }
+            self.prepared_level = None;
+            let requested = viewer.requested();
+            let map = viewer.screen_map(self.prepared_extent())?;
+            let plane = viewer.checked_plane();
+            self.install_main(viewer, requested.object_angles, plane, map);
+            return Ok(());
+        }
+        if viewer.owner().latest_requested_generation() != generation
+            || viewer.owner().navigation_pending_depth() != 0
+        {
+            self.sampled_reference_refusal = Some(super::super::SUPERSEDED_CORRECTION_REASON);
+            return Ok(());
+        }
+        self.sampled_reference_refusal = Some(super::super::STRANDED_CORRECTION_REASON);
+        self.loop_state
+            .refuse_scene(super::super::STRANDED_CORRECTION_REASON);
+        Ok(())
+    }
+
+    /// Hands the orbit already held to one navigation, and reports whether the owner took it.
+    fn adopt_orbit_for_navigation(
+        &mut self,
+        viewer: &mut ViewerController,
+        generation: u32,
+        centre_revision: u32,
+    ) -> Result<bool, AppError> {
+        let Some(handle) = self.current_orbit else {
+            return Ok(false);
+        };
+        let orbit = self.orbits.get(handle).map_err(registry_error)?;
+        let (orbit_length, orbit_precision_bits) = (orbit.length, orbit.precision_bits);
+        if !viewer.owner_mut().accept_navigation_with_orbit(
+            generation,
+            centre_revision,
+            handle.id,
+            orbit_length,
+            orbit_precision_bits,
+        ) {
+            return Ok(false);
+        }
+        let Some(receipt) = self.accepted_reference_receipt.as_mut() else {
+            return Ok(false);
+        };
+        super::super::adopt_reference_lease_for_correction(
+            &mut receipt.lease,
+            generation,
+            centre_revision,
+        );
+        Ok(true)
     }
 
     fn process_arrival(
@@ -160,7 +263,14 @@ impl BrowserFrameLoop {
         };
         if submitted.sampled && response.length() <= self.main.orbit_length {
             self.sampled_reference_discards = self.sampled_reference_discards.saturating_add(1);
-            self.sampled_resume_level = None;
+            self.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
+            let level = self.sampled_resume_level.take();
+            self.retain_reference_across_discard(
+                viewer,
+                response.generation(),
+                response.centre_revision(),
+                level,
+            )?;
             return Ok((OrbitDisposition::Stale, false));
         }
         let upload_started_us = monotonic_now_us();
@@ -253,6 +363,7 @@ impl BrowserFrameLoop {
             self.sampled_references = 0;
             self.sampled_reference_rounds = 0;
             self.sampled_reference_discards = 0;
+            self.sampled_reference_refusal = None;
             self.sampled_resume_level = None;
         }
         self.main = viewer.drain_main()?.main;

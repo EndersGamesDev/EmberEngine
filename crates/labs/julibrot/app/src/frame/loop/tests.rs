@@ -3033,3 +3033,402 @@ fn accepted_reference_facts_keep_verification_separate_from_escalations() {
     assert_eq!(deferred_after_escalation.consumed_word_error_ulps, None);
     assert_eq!(deferred_after_escalation.precision_escalations, 2);
 }
+
+/// Reproduces the escaped-reference deadlock: a discarded census correction leaves the loop with
+/// no reference any later dispatch will accept.
+///
+/// At a centre outside the set the reference orbit escapes after a handful of iterations, so the
+/// census asks for a correction at another orbit point. That request is a navigation: it moves
+/// only the orbit point, and its delta is zero, but the owner's exact-edit path still advances
+/// both the requested generation and the staged centre revision. When the arrival does not
+/// outlive the accepted orbit the loop discards it and returns, leaving the accepted lease naming
+/// the generation and centre revision from before the correction. Every later dispatch tests that
+/// lease against the correction's own navigation and reads it as out of date, so the scene gate
+/// refuses for ever: the schedule keeps its due level with nothing in flight, refinement stays
+/// pending, and the presenter holds the previous picture under the pending-work hold.
+#[test]
+fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() {
+    const CAP: u32 = 512;
+    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    const ESCAPED_AT: u32 = 4;
+    const ACCEPTED_GENERATION: u32 = 42;
+    const ACCEPTED_CENTRE_REVISION: u32 = 316;
+    const PRECISION_BITS: u32 = 110;
+
+    let plane = Plane {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+    let accepted = ReferenceLeaseIdentity {
+        main_generation: ACCEPTED_GENERATION,
+        source_generation: ACCEPTED_GENERATION,
+        centre_revision: ACCEPTED_CENTRE_REVISION,
+        plane,
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: PRECISION_BITS,
+        orbit_length: ESCAPED_AT,
+    };
+    // A short orbit does serve the generation it was fetched for, which is why exactly one level
+    // is drawn before the ladder stops, and that level's census then asks for the correction.
+    assert!(perturbation_reference_is_current(
+        ACCEPTED_GENERATION,
+        ACCEPTED_CENTRE_REVISION,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        PRECISION_BITS,
+        CAP,
+        Some(accepted)
+    ));
+    assert!(
+        super::sampled_reference_due(true, CAP, ESCAPED_AT, 0, None),
+        "a cap that outlasts the escaped orbit asks the census for a longer reference"
+    );
+
+    // The correction's navigation: a zero delta that still advances both counters by one.
+    let correction_generation = ACCEPTED_GENERATION + 1;
+    let correction_centre_revision = ACCEPTED_CENTRE_REVISION + 1;
+
+    // The discard hands the orbit already held to the navigation the correction created.
+    let mut after_discard = accepted;
+    super::adopt_reference_lease_for_correction(
+        &mut after_discard,
+        correction_generation,
+        correction_centre_revision,
+    );
+    assert!(
+        perturbation_reference_is_current(
+            correction_generation,
+            correction_centre_revision,
+            plane,
+            PrecisionMode::PictureFast as u32,
+            PRECISION_BITS,
+            CAP,
+            Some(after_discard)
+        ),
+        "a discarded correction must leave the accepted orbit serving the navigation the \
+         correction itself created; that navigation is the same view, so refusing it strands \
+         every later dispatch"
+    );
+
+    // The orbit that was already too short is still too short, so the levels above it draw
+    // reference-exhausted records rather than nothing: the lease keeps its escaped length.
+    assert_eq!(after_discard.orbit_length, ESCAPED_AT);
+    // The navigation before the correction is not served by the adopted lease: the orbit answers
+    // one navigation, and moving it forward is not the same as renewing it across a view change.
+    assert!(!perturbation_reference_is_current(
+        ACCEPTED_GENERATION,
+        ACCEPTED_CENTRE_REVISION,
+        plane,
+        PrecisionMode::PictureFast as u32,
+        PRECISION_BITS,
+        CAP,
+        Some(after_discard)
+    ));
+
+    // The schedule the discard leaves behind: the level whose census asked is due again under the
+    // correction's generation, so the round costs one resumed level rather than a repaint from
+    // Preview, and no state is reachable in which a level is due that no dispatch may serve.
+    let mut ladder = FrameLoop::default();
+    ladder.restart(ACCEPTED_GENERATION);
+    ladder.submitted(7, RefinementLevel::Preview);
+    assert!(ladder.completed(7, ACCEPTED_GENERATION, RefinementLevel::Preview));
+    assert_eq!(ladder.due(), Some(RefinementLevel::Interactive));
+    ladder.scene_input_resumed(correction_generation, RefinementLevel::Interactive);
+    assert_eq!(ladder.due(), Some(RefinementLevel::Interactive));
+    assert_eq!(ladder.generation(), correction_generation);
+    assert!(ladder.refinement_pending());
+}
+
+/// Pins when an idle ladder facing a stale view starts another one.
+///
+/// A hold stamps no view, so the requested view reads stale for the whole time the previous picture
+/// stands in for it, including the turn its replacement completes on. The restart rule has to tell
+/// that turn from the case it exists for: a completed scene one present from the canvas is not a
+/// missing scene, while a view that moved on after its scene was shown is.
+///
+/// The scene identities come from the warp plan's source. A hold names the retained frame, which is
+/// also the frame the completed reading names, so a persisting hold leaves the two equal and the
+/// rule keeps working through it. A clear names nothing, so a blank canvas beside a completed scene
+/// is the one-present gap the opening frames of every page are in.
+#[test]
+fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
+    use super::SceneMode::Auto;
+    assert!(
+        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(5)),
+        "the completed scene has not been presented yet, so the picture for this view exists"
+    );
+    assert!(
+        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), None),
+        "a clear names no source: the completed scene has not reached the canvas yet"
+    );
+    assert!(
+        super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(7)),
+        "the completed scene is what is on screen and the view has still moved on"
+    );
+    assert!(
+        super::stale_view_needs_a_new_scene(Auto, false, true, None, None),
+        "an opening frame with no scene at all starts the first ladder"
+    );
+    assert!(
+        super::stale_view_needs_a_new_scene(Auto, false, true, None, Some(5)),
+        "no completed scene exists, so nothing is on its way for this view"
+    );
+    assert!(!super::stale_view_needs_a_new_scene(
+        Auto, true, true, None, None
+    ));
+    assert!(!super::stale_view_needs_a_new_scene(
+        Auto,
+        false,
+        false,
+        Some(7),
+        Some(7)
+    ));
+}
+
+/// Pins that manual refinement still records every stale turn.
+///
+/// A manual page holds unconditionally, so under the scene-identity test its ladder would go
+/// unobserved for as long as the hold lasted and the pending-update flag the page shows would never
+/// be set. Manual refinement starts no work in this rule, so there is nothing for the test to save:
+/// the observation is bookkeeping, and it is kept. What the observation then does is unchanged —
+/// manual mode marks the update pending and waits, auto mode restarts.
+#[test]
+fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
+    use super::SceneMode::{Auto, Manual};
+    assert!(
+        super::stale_view_needs_a_new_scene(Manual, false, true, Some(7), Some(5)),
+        "a manual page records the moved pose in the very gap auto refinement waits through"
+    );
+    assert!(super::stale_view_needs_a_new_scene(
+        Manual,
+        false,
+        true,
+        Some(7),
+        None
+    ));
+    assert!(
+        !super::stale_view_needs_a_new_scene(Manual, true, true, Some(7), Some(7)),
+        "a pending ladder is already the record that work is due"
+    );
+    assert!(!super::stale_view_needs_a_new_scene(
+        Manual,
+        false,
+        false,
+        Some(7),
+        Some(7)
+    ));
+
+    // What the observation does in each mode: manual marks the update and stays paused.
+    let mut manual = FrameLoop::default();
+    manual.set_scene_mode(SceneMode::Manual, 7, true);
+    manual.scene_changed(7);
+    assert!(manual.scene_update_pending());
+    assert!(!manual.refinement_pending());
+    let mut auto = FrameLoop::default();
+    auto.set_scene_mode(Auto, 7, true);
+    auto.scene_changed(7);
+    assert_eq!(auto.due(), Some(RefinementLevel::Preview));
+}
+
+/// Pins the stale reading a hold must not clear./// Pins the stale reading a hold must not clear.
+///
+/// The loop stamps the view it expects the next presented image to reproduce when it submits the
+/// warp that will draw it. A held warp draws the last completed picture unmoved, so the image that
+/// reaches the canvas belongs to the view that was already there; stamping the requested view
+/// against it makes the loop report a picture of another zoom as the current view, and every
+/// caller that asks whether the picture is finished is told yes about the wrong picture.
+#[test]
+fn a_held_warp_does_not_stamp_the_requested_view_as_presented() {
+    assert!(!super::warp_presents_requested_view(WarpKind::HoldStale));
+    for kind in [
+        WarpKind::AnchorHomography,
+        WarpKind::ClearOnly,
+        WarpKind::ReliefRedraw,
+    ] {
+        assert!(
+            super::warp_presents_requested_view(kind),
+            "{kind:?} draws for the requested view and stamps it"
+        );
+    }
+}
+
+/// Builds the owner state the owner's zoom row reaches: a burst of navigations, an accepted
+/// reference whose orbit escaped after four iterations, and the census correction in flight.
+fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeaseIdentity) {
+    const WIDTH: u32 = 960;
+    const HEIGHT: u32 = 540;
+    const CAP: u32 = 512;
+    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    const ESCAPED_AT: u32 = 4;
+    const ORBIT_ID: u32 = 7;
+
+    let mut viewer = ViewerController::new([WIDTH, HEIGHT]).expect("canonical viewer");
+    let initial = viewer
+        .take_reference_submission()
+        .expect("startup navigation");
+    assert!(viewer.owner_mut().accept_navigation_without_orbit(
+        initial.navigation.generation,
+        initial.navigation.centre_revision,
+    ));
+
+    // The gesture: forty slider inputs from 1.259 to 60 in 1.2 s, each one a navigation.
+    for step in 1..=40 {
+        let zoom = 1.259 + (60.0 - 1.259) * f64::from(step) / 40.0;
+        viewer.set_zoom_log2(zoom).expect("burst step");
+    }
+    let accepted = viewer
+        .take_reference_submission()
+        .expect("the burst releases its coalesced navigation");
+    let precision = precision_for(60.0, WIDTH, CAP).expect("zoom sixty precision");
+    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+        accepted.navigation.generation,
+        accepted.navigation.centre_revision,
+        ORBIT_ID,
+        ESCAPED_AT,
+        precision.requested_bits,
+    ));
+    let lease = ReferenceLeaseIdentity {
+        main_generation: accepted.navigation.generation,
+        source_generation: accepted.navigation.generation,
+        centre_revision: accepted.navigation.centre_revision,
+        plane: viewer.checked_plane(),
+        precision_mode: PrecisionMode::PictureFast as u32,
+        precision_bits: precision.requested_bits,
+        orbit_length: ESCAPED_AT,
+    };
+
+    // The census correction: another orbit point on the same view, which still spends a
+    // generation and a centre revision.
+    let _generation = viewer
+        .request_reference_for_pixel(0, [WIDTH, HEIGHT])
+        .expect("the census candidate names a reference point");
+    let correction = viewer
+        .take_reference_submission()
+        .expect("the correction is released as its own submission");
+    assert_ne!(
+        correction.reference_centre, correction.navigation.centre,
+        "the correction moves the orbit point, not the view"
+    );
+    assert_ne!(
+        correction.navigation.generation,
+        accepted.navigation.generation
+    );
+    assert_ne!(
+        correction.navigation.centre_revision,
+        accepted.navigation.centre_revision
+    );
+    (
+        viewer,
+        correction.navigation.generation,
+        correction.navigation.centre_revision,
+        lease,
+    )
+}
+
+/// Reproduces the escaped-reference deadlock over the owner the browser loop actually drives.
+///
+/// The owner answers a navigation only through the submission it named: `finish_navigation_submission`
+/// clears the in-flight generation, and every acceptance entry that takes a navigation requires it.
+/// A discard handled after its submission has been finished therefore has nothing it can hand the
+/// accepted orbit to, however the discard path is written, and the accepted lease goes on naming the
+/// centre revision from before the correction. The perturbation gate reads that lease against the
+/// correction's own navigation, refuses, and the ladder keeps a level due that no dispatch may serve.
+#[test]
+fn a_discarded_correction_can_only_adopt_while_its_submission_is_in_flight() {
+    const CAP: u32 = 512;
+
+    // Finishing the submission first, which is the order the deadlock was measured under.
+    let (mut finished_first, generation, centre_revision, lease) = burst_to_an_escaped_reference();
+    assert!(finished_first.finish_reference_submission(generation));
+    assert!(
+        !finished_first.owner_mut().accept_navigation_with_orbit(
+            generation,
+            centre_revision,
+            7,
+            lease.orbit_length,
+            lease.precision_bits,
+        ),
+        "a finished submission is a navigation the owner will not answer"
+    );
+    let stranded = finished_first.owner().drain_main().main;
+    assert!(
+        !perturbation_reference_is_current(
+            stranded.generation_applied,
+            stranded.centre_revision,
+            lease.plane,
+            lease.precision_mode,
+            lease.precision_bits,
+            CAP,
+            Some(lease)
+        ),
+        "the lease left behind serves no navigation the loop will ask about again"
+    );
+
+    // Adopting while the submission is still in flight, which is what the loop must do.
+    let (mut adopted, generation, centre_revision, lease) = burst_to_an_escaped_reference();
+    assert!(
+        adopted.owner_mut().accept_navigation_with_orbit(
+            generation,
+            centre_revision,
+            7,
+            lease.orbit_length,
+            lease.precision_bits,
+        ),
+        "the orbit already held answers the navigation the correction created"
+    );
+    let mut adopted_lease = lease;
+    super::adopt_reference_lease_for_correction(&mut adopted_lease, generation, centre_revision);
+    let main = adopted.owner().drain_main().main;
+    assert_eq!(main.generation_applied, generation);
+    assert_eq!(main.centre_revision, centre_revision);
+    assert_eq!(
+        main.orbit_length, lease.orbit_length,
+        "the reference stays as short as it escaped"
+    );
+    assert!(
+        perturbation_reference_is_current(
+            main.generation_applied,
+            main.centre_revision,
+            adopted_lease.plane,
+            adopted_lease.precision_mode,
+            adopted_lease.precision_bits,
+            CAP,
+            Some(adopted_lease)
+        ),
+        "the adopted lease serves the navigation the correction created, so a level can dispatch"
+    );
+}
+
+/// Pins the refusal end state: a ladder that cannot be served stops saying replacement work is due.
+///
+/// A due level with nothing in flight is what the presenter's hold of the previous picture rests
+/// on. When the reference that level needs cannot be made current and no newer navigation is on the
+/// way, the claim is false, so the ladder stands down, the reason is published, and the stale-view
+/// rule does not re-arm the same level on the next turn. New scene input clears the verdict.
+#[test]
+fn a_ladder_that_cannot_be_served_stands_down_and_says_why() {
+    let mut refused = FrameLoop::default();
+    refused.restart(42);
+    assert!(refused.refinement_pending());
+    refused.refuse_scene(super::STRANDED_CORRECTION_REASON);
+    assert!(
+        !refused.refinement_pending(),
+        "the hold has nothing to wait for"
+    );
+    assert_eq!(
+        refused.scene_refusal(),
+        Some(super::STRANDED_CORRECTION_REASON)
+    );
+    refused.scene_changed(42);
+    assert!(
+        !refused.refinement_pending(),
+        "a stale view does not re-arm a level the loop just refused"
+    );
+    refused.scene_input_ready(43);
+    assert_eq!(refused.due(), Some(RefinementLevel::Preview));
+    assert_eq!(
+        refused.scene_refusal(),
+        None,
+        "new scene input retires the verdict"
+    );
+}

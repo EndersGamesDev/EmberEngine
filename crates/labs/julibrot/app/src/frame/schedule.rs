@@ -365,6 +365,7 @@ pub(super) struct FrameLoop {
     pub(super) last_transient_text: Option<Arc<str>>,
     pub(super) stopped: Option<AppError>,
     pub(super) stopped_text: Option<Arc<str>>,
+    pub(super) scene_refusal: Option<&'static str>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -490,6 +491,7 @@ impl FrameLoop {
         self.ladder_round = self.ladder_round.saturating_add(1);
         self.schedule.restart(generation);
         self.restart_after_scene = None;
+        self.scene_refusal = None;
         if self.requested_run {
             self.completed_run = false;
         }
@@ -498,7 +500,7 @@ impl FrameLoop {
     pub(super) const fn scene_changed(&mut self, generation: u32) {
         match self.scene_mode {
             SceneMode::Auto => {
-                if !self.schedule.pending() {
+                if !self.schedule.pending() && self.scene_refusal.is_none() {
                     self.restart(generation);
                 }
             }
@@ -743,6 +745,26 @@ impl FrameLoop {
         self.last_transient = Some(error);
         self.requested_run = true;
         self.completed_run = !self.schedule.pending();
+    }
+
+    /// Stops claiming a level no dispatch can serve, and publishes why.
+    ///
+    /// A due level with nothing in flight is the loop's statement that replacement work is coming,
+    /// and the presenter's hold of the previous picture rests on it. When the reference that level
+    /// needs cannot be made current and no newer navigation is on the way, that statement is false:
+    /// the ladder stands down so the hold ends, and the reason stays published until new input
+    /// restarts refinement, which is also what keeps the stale-view rule from re-arming the same
+    /// level on the next turn.
+    pub(super) const fn refuse_scene(&mut self, reason: &'static str) {
+        self.schedule.pause();
+        self.restart_after_scene = None;
+        self.scene_refusal = Some(reason);
+        self.completed_run = self.requested_run;
+    }
+
+    /// Returns why the ladder stood down, while that verdict still stands.
+    pub(super) const fn scene_refusal(&self) -> Option<&'static str> {
+        self.scene_refusal
     }
 
     /// Latches the first terminal refusal; a later one never overwrites the cause.
