@@ -56,3 +56,25 @@ test('only the eight Arena release paths are eligible for publication', () => {
   assert(!scope.allowed.some(file => file.includes('/fire/') || file.includes('/v30/')));
   assert(scope.allowed.includes('games/arena/v31/pkg/arena_bg.wasm'));
 });
+
+test('public release accepts v31 protocol24 and rejects protocol23 in either book or client', () => {
+  const { source } = fixture();
+  assert.equal(scope.PROTO, 24);
+  assert.equal(scope.assertLive({ proto: 24 }, source), source.games[0].versions[0]);
+  assert.throws(() => scope.assertLive({ proto: 23 }, source), /address book/);
+  const oldProtocol = structuredClone(source); oldProtocol.games[0].versions[0].proto = 23;
+  assert.throws(() => scope.assertLive({ proto: 24 }, oldProtocol), /client protocol/);
+});
+
+test('public release rejects duplicate identities, duplicate live versions and stale paths', () => {
+  for (const mutate of [
+    value => value.games.push(structuredClone(value.games[0])),
+    value => value.games[0].versions.push(structuredClone(value.games[0].versions[0])),
+    value => { value.games[0].versions[0].path = 'games/arena/v30/'; },
+    value => { value.games[0].versions[0].v = 'v30'; },
+    value => { value.games[0].versions[0].live = false; },
+  ]) {
+    const { source } = fixture(); mutate(source);
+    assert.throws(() => scope.assertLive({ proto: 24 }, source));
+  }
+});

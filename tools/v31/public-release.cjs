@@ -9,6 +9,7 @@ const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const { readyHost, arenaBook } = require('./release-book.cjs');
 const scope = require('./release-scope.cjs');
+const entry = scope.ENTRY;
 const publication = JSON.parse(fs.readFileSync('target/killshot-v31-publish/results.json'));
 assert(publication.pushed && publication.pagesCommit, 'A successful publication report is required');
 const preserved = process.env.EMBER_QA_PRESERVED_PAGES || publication.base;
@@ -41,20 +42,18 @@ async function main() {
     .map(async file => JSON.parse(await get(file))));
   assert.deepEqual(version, JSON.parse(released('version.json')), 'Published build stamp differs from release commit');
   assert.deepEqual(version, publication.version, 'Build stamp differs from publication attestation');
-  assert.equal(book.proto, 23);
+  scope.assertLive(book, catalog);
   const oldBook = JSON.parse(git('show', `${preserved}:server.json`));
   assert.deepEqual(book, arenaBook(oldBook, { host: { ws: book.ws } }, book.v), 'Only Arena legacy address/protocol/cache may change');
-  const live = catalog.games.find(game => game.id === 'arena').versions.filter(version => version.live);
-  assert.equal(live.length, 1); assert.equal(live[0].path, 'games/arena/v31/'); assert.equal(live[0].proto, 23);
-  const html = String(released('games/arena/v31/index.html'));
-  const settings = released('games/arena/v31/settings.js');
+  const html = String(released(`${entry}/index.html`));
+  const settings = released(`${entry}/settings.js`);
   assert.equal(sha(settings), publication.settingsSha256, 'Released settings differ from tested publication');
   assert.equal(html.split(`./settings.js?v=${sha(settings).slice(0, 12)}`).length, 2, 'v31 page/settings cache token');
   assert(/Killshot/i.test(html) && /killshot-hud/.test(html) && /killshot-reload/.test(html) && /Breach-12/.test(html), 'Killshot HUD/reload/shotgun shell missing');
-  await checkFile('games/arena/v31/index.html', Buffer.from(html));
-  await checkFile('games/arena/v31/settings.js', settings);
+  await checkFile(`${entry}/index.html`, Buffer.from(html));
+  await checkFile(`${entry}/settings.js`, settings);
   for (const file of ['arena.js', 'arena_bg.wasm']) {
-    const remote = `games/arena/v31/pkg/${file}`, expected = released(remote);
+    const remote = `${entry}/pkg/${file}`, expected = released(remote);
     if (file.endsWith('.wasm')) assert.equal(sha(expected), publication.wasmSha256, 'Released WASM differs from tested publication');
     await checkFile(remote, expected);
   }

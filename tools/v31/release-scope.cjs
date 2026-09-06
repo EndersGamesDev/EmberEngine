@@ -23,6 +23,18 @@ function oneArena(catalog, label) {
   return games[0];
 }
 
+function assertLive(book, value) {
+  assert.equal(book?.proto, PROTO, 'Public address book must use the current release protocol');
+  const arena = oneArena(value, 'public');
+  assert.equal(arena.title, 'Killshot', 'Public game title differs');
+  const live = arena.versions.filter(version => version.live);
+  assert.equal(live.length, 1, 'Public Arena must have exactly one live version');
+  assert.equal(live[0].v, ENTRY.split('/').at(-1), 'Public live version differs');
+  assert.equal(live[0].path, `${ENTRY}/`, 'Public live path differs');
+  assert.equal(live[0].proto, PROTO, 'Public live client protocol differs');
+  return live[0];
+}
+
 function catalog(previous, source) {
   const oldArena = oneArena(previous, 'published');
   const newArena = oneArena(source, 'source');
@@ -47,4 +59,4 @@ function catalog(previous, source) {
   return next;
 }
 
-module.exports = { ENTRY, PREVIOUS, PROTO, allowed, launcher, catalog };
+module.exports = { ENTRY, PREVIOUS, PROTO, allowed, launcher, catalog, assertLive };
