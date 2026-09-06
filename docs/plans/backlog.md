@@ -314,3 +314,10 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - `docs/weapon-handling.md` should carry the recorded property that the footstep cue cadence is floored per gait against a 6 rad/m leg cycle (`crates/arena/src/feel.rs:1556`, `:1564`, selected at `:1570`), so cues plant about eight a second walking and twelve sprinting; a slower leg cycle is a separate animation change.
 - needs: a formatter run on a build server to say whether the tree is clean under the workspace format check; two of the five crates the last measurement named no longer exist, no compact style was adopted, and no format gate exists in `.github/workflows/ci.yml`.
 - needs: a build server to run a Windows-target workspace check with all targets and enumerate the residual errors under the denied-warnings law; the commit that closed the underlying breakage records the same debt in its own message.
+
+## UltimateLegue
+
+- League scene: an attack order has no target mark in the world (the sim does not put `Unit.target` on the wire); a red ring under the unit my champion is chasing would tell a player their click landed.
+- League scene: the camera follows the own champion only; edge-pan and a space-to-recentre toggle are the MOBA norm and both need `world.cam` (client) rather than `scene.rs`.
+- League review harness: `tools/league/review.ps1` photographs the SCREEN like the arena harness, so a window dragged over the client lands in the picture; an off-screen capture written by the client itself would need no screen space.
+- League review harness: the human seat idles at its fountain in a practice run because the harness sends no input by rule; a `LEAGUE_BOT_ME=1` that hands the own seat to the bot brain would put the review camera in a real 3v3 instead of a 3v2 plus a bystander.
