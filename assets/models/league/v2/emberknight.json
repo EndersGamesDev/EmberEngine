@@ -1,0 +1,36 @@
+{
+  "name": "emberknight",
+  "pivot": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "forward": "+x",
+  "up": "+y",
+  "height": 2.3,
+  "extents": {
+    "min": [
+      -0.6095779974585656,
+      0.0,
+      -0.9003442981947053
+    ],
+    "max": [
+      0.6095779974585656,
+      2.3,
+      0.9003442981947053
+    ]
+  },
+  "faces": {
+    "source": 73279,
+    "shipped": 6000
+  },
+  "atlas": {
+    "size": 512,
+    "png_bytes": 346200
+  },
+  "glb_bytes": 571892,
+  "bake_wall_seconds": 2.1,
+  "part_order": [
+    "emberknight"
+  ]
+}
