@@ -174,6 +174,7 @@
     const RAW_SAMPLE_CAP = 120;
     const REPORT_BYTE_CAP = 52 * 1024;
     const JULIBROT_FACT_SAMPLE_CAP = 12;
+    const JULIBROT_REPORT_BYTE_BUDGET_FLOOR = 20 * 1024;
     const JULIBROT_FACT_FRAME_DEADLINE_MS = 1_000;
     const JULIBROT_STAGE_DEADLINE_MS = 240_000;
     const JULIBROT_SETTLE_DEADLINE_MS = 30_000;
@@ -1461,15 +1462,59 @@
       return current >= previous ? current - previous : current;
     }
 
-    function appendedJulibrotTimings(baselineKeys, finalTimings) {
-      const finalKeys = finalTimings.map(record => JSON.stringify(record));
-      if (!baselineKeys.length) return finalTimings;
-      if (finalKeys.length >= baselineKeys.length && baselineKeys.every((key, index) => finalKeys[index] === key)) {
-        return finalTimings.slice(baselineKeys.length);
+    function julibrotTimingOverlap(previous, current, identity) {
+      for (let count = Math.min(previous.length, current.length); count > 0; count -= 1) {
+        const previousStart = previous.length - count;
+        if (current.slice(0, count).every((record, index) => identity(record) === identity(previous[previousStart + index]))) return count;
       }
-      const baselineTail = baselineKeys[baselineKeys.length - 1];
-      const tailIndex = finalKeys.lastIndexOf(baselineTail);
-      return tailIndex < 0 ? finalTimings : finalTimings.slice(tailIndex + 1);
+      return 0;
+    }
+
+    function julibrotTimingTracker(baselineFacts) {
+      let previous = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings : [];
+      let previousIndexes = previous.map(() => null);
+      const records = [];
+      let overflowed = false;
+      const exactIdentity = record => JSON.stringify(record);
+      const stableIdentity = record => JSON.stringify([record?.edit ?? null, record?.level ?? null]);
+      return {
+        observe(facts) {
+          const current = Array.isArray(facts.level_timings) ? facts.level_timings : [];
+          if (!current.length) return;
+          let overlap = julibrotTimingOverlap(previous, current, exactIdentity);
+          if (!overlap) overlap = julibrotTimingOverlap(previous, current, stableIdentity);
+          if (previous.length && !overlap) {
+            overflowed = true;
+            previous = current;
+            previousIndexes = current.map(() => null);
+            return;
+          }
+          const currentIndexes = [];
+          const previousStart = previous.length - overlap;
+          for (let index = 0; index < overlap; index += 1) {
+            const recordIndex = previousIndexes[previousStart + index];
+            currentIndexes.push(recordIndex);
+            if (recordIndex !== null) records[recordIndex] = current[index];
+          }
+          for (let index = overlap; index < current.length; index += 1) {
+            currentIndexes.push(records.length);
+            records.push(current[index]);
+          }
+          previous = current;
+          previousIndexes = currentIndexes;
+        },
+        finish() {
+          return { records, overflowed };
+        },
+      };
+    }
+
+    function julibrotTimingFieldSample(records, field, legacyFields = []) {
+      for (const source of [field, ...legacyFields]) {
+        const values = cappedNumbers(records.map(record => record[source]));
+        if (values.length) return { values, source };
+      }
+      return { values: null, source: null };
     }
 
     function julibrotCollector(spec, baselineFacts) {
@@ -1480,7 +1525,7 @@
       let lastCompleted = baselineFacts.completed_scene_id;
       let lastReferenceRequests = Number.isInteger(baselineFacts.sampled_reference_requests) ? baselineFacts.sampled_reference_requests : null;
       let referenceRequestsIssued = 0;
-      const baselineTimingKeys = Array.isArray(baselineFacts.level_timings) ? baselineFacts.level_timings.map(record => JSON.stringify(record)) : [];
+      const timingTracker = julibrotTimingTracker(baselineFacts);
       let lastFrameCounters = julibrotFrameCounters(baselineFacts);
       let finalFacts = baselineFacts;
       return {
@@ -1489,6 +1534,7 @@
         },
         observe(facts) {
           finalFacts = facts;
+          timingTracker.observe(facts);
           frames.sample_count += 1;
           const counters = julibrotFrameCounters(facts);
           if (!counters || !lastFrameCounters) {
@@ -1517,23 +1563,20 @@
           }
         },
         finish(scriptedHoldWallMs = null) {
-          const finalTimings = Array.isArray(finalFacts.level_timings) ? finalFacts.level_timings : [];
-          const levelTimings = appendedJulibrotTimings(baselineTimingKeys, finalTimings);
-          const sample = field => cappedNumbers(levelTimings.map(record => record[field]));
-          const optional = field => {
-            const values = sample(field);
-            return values.length ? values : null;
+          const { records: levelTimings, overflowed: recordsOverflowed } = timingTracker.finish();
+          const wallMeasurements = {
+            worker_generation_us: julibrotTimingFieldSample(levelTimings, 'worker_generation_us', ['worker_reference_us']),
+            credit_wait_us: julibrotTimingFieldSample(levelTimings, 'credit_wait_us'),
+            request_transfer_us: julibrotTimingFieldSample(levelTimings, 'request_transfer_us'),
+            worker_round_trip_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'worker_round_trip_callback_observation_us'),
+            acceptance_us: julibrotTimingFieldSample(levelTimings, 'acceptance_us'),
+            reference_upload_us: julibrotTimingFieldSample(levelTimings, 'reference_upload_us'),
+            scene_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'scene_callback_observation_us', ['scene_us']),
+            warp_callback_observation_us: julibrotTimingFieldSample(levelTimings, 'warp_callback_observation_us', ['warp_us']),
+            dispatch_us: julibrotTimingFieldSample(levelTimings, 'dispatch_us'),
           };
-          const fence = cappedNumbers(levelTimings.flatMap(record => [record.scene_us, record.warp_us]));
-          const walls = {
-            worker_reference_us: optional('worker_reference_us'),
-            credit_wait_us: optional('credit_wait_us'),
-            transfer_us: null,
-            packing_us: null,
-            upload_us: null,
-            dispatch_us: optional('dispatch_us'),
-            fence_us: fence.length ? fence : null,
-          };
+          const walls = Object.fromEntries(Object.entries(wallMeasurements).map(([field, measurement]) => [field, measurement.values]));
+          const wallSources = Object.fromEntries(Object.entries(wallMeasurements).map(([field, measurement]) => [field, measurement.source]));
           const denominator = frames.observed || 1;
           return {
             scenario_id: spec.scenario_id,
@@ -1556,7 +1599,9 @@
             reference_requests_issued: null,
             sampled_reference_requests_issued: lastReferenceRequests === null ? null : referenceRequestsIssued,
             timing_records_observed: levelTimings.length,
+            records_overflowed: recordsOverflowed,
             walls_us: walls,
+            wall_sources: wallSources,
             scripted_hold_wall_ms: Number.isFinite(scriptedHoldWallMs) ? roundJulibrot(scriptedHoldWallMs, 2) : null,
             game_side_wall_ms: gameSideWallMs,
           };
@@ -1618,6 +1663,11 @@
       return new TextEncoder().encode(JSON.stringify(value)).byteLength;
     }
 
+    function julibrotReportByteBudget() {
+      const bundledBudget = Number(wasm?.julibrot_report_byte_budget?.());
+      return Number.isInteger(bundledBudget) && bundledBudget > 0 ? Math.max(JULIBROT_REPORT_BYTE_BUDGET_FLOOR, bundledBudget) : JULIBROT_REPORT_BYTE_BUDGET_FLOOR;
+    }
+
     function parseJulibrotNote(record) {
       try {
         return JSON.parse(record.notes[0]);
@@ -1648,7 +1698,7 @@
     }
 
     function truncateJulibrotRawSample(records) {
-      const record = records.filter(candidate => candidate.raw_samples.length).sort((left, right) => right.raw_samples.length - left.raw_samples.length)[0];
+      const record = records.filter(candidate => candidate.raw_samples.length > 1).sort((left, right) => encodedBytes(right) - encodedBytes(left))[0];
       if (!record) return false;
       record.raw_samples.shift();
       markKernelTruncation(record, 1, 0);
@@ -1656,19 +1706,17 @@
     }
 
     function truncateJulibrotNoteDetail(records) {
-      const wallFields = ['fence_us', 'worker_reference_us', 'credit_wait_us', 'dispatch_us'];
-      for (const record of records) {
+      for (const record of records.slice().sort((left, right) => encodedBytes(right) - encodedBytes(left))) {
         const note = parseJulibrotNote(record);
         if (!note) continue;
+        const wallFields = Object.entries(note.walls_us || {}).filter(([, samples]) => Array.isArray(samples) && samples.length).sort((left, right) => right[1].length - left[1].length).map(([field]) => field);
         for (const field of wallFields) {
           const samples = note.walls_us?.[field];
-          if (Array.isArray(samples) && samples.length) {
-            samples.shift();
-            if (!samples.length) note.walls_us[field] = null;
-            writeJulibrotNote(record, note);
-            markKernelTruncation(record, 0, 1);
-            return true;
-          }
+          samples.shift();
+          if (!samples.length) note.walls_us[field] = null;
+          writeJulibrotNote(record, note);
+          markKernelTruncation(record, 0, 1);
+          return true;
         }
         if (Array.isArray(note.completed_scene_ids) && note.completed_scene_ids.length) {
           note.completed_scene_ids.shift();
@@ -1798,7 +1846,7 @@
       }
       const partialReason = failure ? reason(failure) : null;
       setJulibrotStageProgress(records, records.length, specs.length, partialReason);
-      fitJulibrotRecordsToBudget(records, wasm.julibrot_report_byte_budget());
+      fitJulibrotRecordsToBudget(records, julibrotReportByteBudget());
       run.kernels.push(...records);
       run.julibrotSummary = { available: true, partialReason, records, retirement };
       const progress = partialReason ? `${records.length} of ${specs.length} scenarios completed before the stage stopped: ${partialReason}` : 'all fixed Julibrot scenarios completed';

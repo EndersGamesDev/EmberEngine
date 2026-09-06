@@ -93,6 +93,29 @@ export function app_facts_json() {
 }
 
 /**
+ * Reports whether the frame can be copied, whether one is pending, and its extent.
+ * @returns {string}
+ */
+export function app_frame_capture_json() {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ret = wasm.app_frame_capture_json();
+        var ptr1 = ret[0];
+        var len1 = ret[1];
+        if (ret[3]) {
+            ptr1 = 0; len1 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
  * Returns the row `t` of the way from one stored row to another.
  * @param {string} from_json
  * @param {string} to_json
@@ -207,6 +230,19 @@ export function app_refresh(now_ms) {
  */
 export function app_request_frame() {
     const ret = wasm.app_request_frame();
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
+ * Arms one copy of the next presented frame.
+ *
+ * The copy is on request only and never per frame: it is a full surface-sized transfer, and a
+ * loop that paid it every turn would spend its budget measuring its own readback.
+ */
+export function app_request_frame_capture() {
+    const ret = wasm.app_request_frame_capture();
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
@@ -458,6 +494,26 @@ export function app_set_view_angles(theta_1, theta_2) {
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
+}
+
+/**
+ * Returns the copied frame's packed RGBA bytes, top-down, or nothing while none is ready.
+ *
+ * Reading takes the copy: a second call answers nothing until another one is asked for, so
+ * two readers cannot both believe they hold the frame.
+ * @returns {Uint8Array | undefined}
+ */
+export function app_take_frame_rgba() {
+    const ret = wasm.app_take_frame_rgba();
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    let v1;
+    if (ret[0] !== 0) {
+        v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    }
+    return v1;
 }
 
 /**
@@ -777,6 +833,20 @@ export function start_julibrot(canvas_id, status_id) {
     const ptr1 = passStringToWasm0(status_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
     const ret = wasm.start_julibrot(ptr0, len0, ptr1, len1);
+    return ret;
+}
+
+/**
+ * Starts the same runtime on a canvas element, for a page with no controls beside it.
+ *
+ * The control page keeps [`start_julibrot`] and its status paragraph. A driver has a canvas
+ * and nothing else, and inventing a status element for it would put a page contract in the
+ * way of a measurement rather than in the way of a bug.
+ * @param {HTMLCanvasElement} canvas
+ * @returns {Promise<void>}
+ */
+export function start_julibrot_on_canvas(canvas) {
+    const ret = wasm.start_julibrot_on_canvas(canvas);
     return ret;
 }
 
@@ -2926,27 +2996,27 @@ function __wbg_get_imports() {
             arg0.writeTexture(arg1, arg2, arg3, arg4);
         }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2694, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 2701, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_622e9445b6bb02a6___convert__closures_____invoke___wasm_bindgen_622e9445b6bb02a6___JsValue__core_2f68d491536bd501___result__Result_____wasm_bindgen_622e9445b6bb02a6___JsError___true_);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 908, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 915, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_622e9445b6bb02a6___convert__closures_____invoke___wasm_bindgen_622e9445b6bb02a6___JsValue______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("GPUUncapturedErrorEvent")], shim_idx: 908, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("GPUUncapturedErrorEvent")], shim_idx: 915, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_622e9445b6bb02a6___convert__closures_____invoke___wasm_bindgen_622e9445b6bb02a6___JsValue______true__2);
             return ret;
         },
         __wbindgen_cast_0000000000000004: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 137, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 144, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_622e9445b6bb02a6___convert__closures_____invoke___web_sys_be7c5a5569dbd456___features__gen_MessageEvent__MessageEvent______true_);
             return ret;
         },
         __wbindgen_cast_0000000000000005: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 614, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 621, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen_622e9445b6bb02a6___convert__closures_____invoke_______true_);
             return ret;
         },
