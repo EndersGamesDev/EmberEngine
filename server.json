@@ -1,6 +1,6 @@
 {
   "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788716398",
+  "v": "1788717652",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -31,11 +31,15 @@
       "version": "r1511",
       "commit": "05aeea2b",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-06T17:39:23Z",
+      "updated": "2026-09-06T18:00:52Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
-      "fire_commit": "86086a2"
+      "fire_commit": "86086a2",
+      "league_ws": "wss://hosting-spirit-primary-des.trycloudflare.com",
+      "league_proto": 1,
+      "league_version": "r1554",
+      "league_commit": "4e069d5ab7813768d7fd10b262fd3f5d4bbf5a9a"
     },
     {
       "name": "quiet-egret",
