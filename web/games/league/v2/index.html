@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UltimateLegue v2 · Ember</title>
+<meta name="description" content="Five champions. One lane. Free 1v1 and 3v3 MOBA battles in your browser.">
+<link rel="stylesheet" href="./ui.css">
+</head>
+<body>
+<header class="col top">
+  <a class="back" href="../../../">&larr; games</a>
+  <h1>UltimateLegue <small>v2</small> <span class="orn" aria-hidden="true">◆</span></h1>
+  <span id="host-chip" class="chip"></span>
+</header>
+
+<div id="menu" class="col">
+  <section class="hero">
+    <div class="hero-copy">
+      <div class="eyebrow">EMBER ORIGINAL · CRYSTALFORGE</div>
+      <h2>One lane.<br>Make it yours.</h2>
+      <p>Five champions. Two rival cores. Fight a 1v1 duel or build a 3v3 squad, claim the Courts, and turn every level into an advantage.</p>
+      <div class="pills"><span class="pill">Free browser game</span><span class="pill">Mouse + keyboard</span><span class="pill">1v1 · 3v3</span></div>
+    </div>
+    <div class="arena" id="arena-art" aria-hidden="true">
+      <img src="art/arena.webp" alt="" onerror="this.remove()" onload="this.nextElementSibling.style.display='none'">
+      <div class="arena-fallback"><span>ULTIMATE<br>LEGUE</span><small>BLUE → THE LANE ← RED</small></div>
+    </div>
+  </section>
+  <p class="note">Destroy the enemy core to win. The North Court grants damage; the South Court grants haste. Return to your fountain to recover health and mana.
+  Click enemies to attack them, click the ground to walk, cast at the cursor with your ability keys, use your spells, drink potions with your item keys, and open the shop with <b>B</b>.
+  Rank up with the <b>+</b> on an ability, or hold <b>Shift</b>/<b>Ctrl</b> and press its key. Remap every key in <b>Keybinds</b>.</p>
+  <section class="panel">
+    <label>handle <input id="handle" maxlength="20"></label>
+    <div class="btnrow">
+      <button disabled id="btn-practice" class="go">Practice 1v1</button>
+      <button disabled id="btn-practice3">Practice 3v3</button>
+      <button disabled id="btn-quick" class="go">Quick match</button>
+      <button id="btn-keys">Keybinds</button>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="btnrow">
+      <input id="newlobby" maxlength="24" placeholder="lobby name">
+      <select id="newmode"><option value="3">3 v 3</option><option value="1">1 v 1</option></select>
+      <input id="newpass" type="password" maxlength="40" placeholder="password (optional)">
+      <button disabled id="btn-create" class="go">create lobby</button>
+      <button id="btn-refresh">refresh</button>
+    </div>
+    <ul id="lobbies"></ul>
+    <div id="lobby-note" class="note"></div>
+  </section>
+  <div id="engine-note" class="note" role="status">Loading game…</div>
+</div>
+
+<div id="draft" class="col hidden">
+  <div class="draft-head">
+    <h2>Choose your champion <small><span id="draft-left"></span></small></h2>
+    <div id="teams"></div>
+  </div>
+  <div id="cards"></div>
+  <div id="detail" class="panel"><p class="note">Pick a champion to inspect their kit.</p></div>
+  <div class="panel draft-bottom">
+    <div class="btnrow">
+      <label>D <select id="pickd"></select></label>
+      <label>F <select id="pickf"></select></label>
+      <span class="kbd">Rune pages: <button id="pgA" class="chip">A</button> <button id="pgB" class="chip">B</button> <button id="pgC" class="chip">C</button></span>
+      <span class="kbd">Choose three runes. Each page saves automatically.</span>
+    </div>
+    <div id="runebox"></div>
+    <div class="btnrow"><button id="btn-start" class="go">start match</button><span id="draft-note" class="note"></span></div>
+  </div>
+</div>
+
+<div id="status" class="col hidden" role="status"><span id="status-text"></span><button id="btn-recover">Return to lobby</button></div>
+<div id="stage-tools" class="col hidden">
+  <button id="btn-shop">Shop [B]</button>
+  <button id="btn-keys2">Keybinds</button>
+  <button id="btn-leave">Leave match</button>
+  <span id="stats"></span>
+</div>
+
+<div id="stage" class="col hidden">
+  <div id="ember-root"><span id="loading">loading engine&hellip;</span></div>
+  <div id="hud">
+    <div id="topstrip" class="p">
+      <div class="team blue"><span class="tag">BLUE</span><span class="corebar"><i id="corehp0"></i></span><span class="coretxt" id="coretxt0"></span></div>
+      <div id="tcenter"><span id="timer">0:00</span><span id="kills">0 : 0</span></div>
+      <div class="team red"><span class="coretxt" id="coretxt1"></span><span class="corebar"><i id="corehp1"></i></span><span class="tag">RED</span></div>
+      <span id="boons"></span>
+    </div>
+    <div id="feed" class="p hidden"></div>
+    <div id="score" class="p"><table><tbody id="score-body"></tbody></table></div>
+    <div id="bar" class="p">
+      <div id="me">
+        <div id="portrait-wrap"><span id="portrait-emb" aria-hidden="true"></span><img id="portrait" alt=""></div>
+        <div class="vitals">
+          <div class="b" title="health"><i id="hp"></i></div>
+          <div class="b" title="mana"><i id="mn"></i></div>
+          <div class="kbd" id="vitals"></div>
+          <div class="kbd" id="lvl">lv 1 · 0 g</div>
+        </div>
+      </div>
+      <div id="abils">
+        <div class="slot abil" data-abil="0"><span class="key"></span><span class="face">Q</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot abil" data-abil="1"><span class="key"></span><span class="face">W</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot abil" data-abil="2"><span class="key"></span><span class="face">E</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+        <div class="slot abil" data-abil="3"><span class="key"></span><span class="face">R</span><small class="rk"></small><div class="cd hidden"></div><div class="up hidden">+</div></div>
+      </div>
+      <div id="spells">
+        <div class="slot spell" data-spell="0"><span class="key"></span><span class="face">D</span><div class="cd hidden"></div></div>
+        <div class="slot spell" data-spell="1"><span class="key"></span><span class="face">F</span><div class="cd hidden"></div></div>
+      </div>
+      <div id="islots">
+        <div class="slot item" data-item="0"><span class="key"></span>1</div>
+        <div class="slot item" data-item="1"><span class="key"></span>2</div>
+        <div class="slot item" data-item="2"><span class="key"></span>3</div>
+        <div class="slot item" data-item="3"><span class="key"></span>4</div>
+        <div class="slot item" data-item="4"><span class="key"></span>5</div>
+        <div class="slot item" data-item="5"><span class="key"></span>6</div>
+      </div>
+    </div>
+    <canvas id="mini" width="260" height="150"></canvas>
+    <div id="shop" class="p hidden"></div>
+    <div id="respawn" class="p hidden"></div>
+  </div>
+  <div id="pause" class="overlay hidden"><div class="box">
+    <h3>Menu</h3>
+    <div class="colbtns">
+      <button id="btn-resume" class="go">Resume</button>
+      <button id="btn-help">Controls</button>
+      <button id="btn-keys3">Keybinds</button>
+      <button id="btn-leave2">Leave match</button>
+    </div>
+  </div></div>
+  <div id="help" class="overlay hidden"><div class="box">
+    <h3>Controls</h3>
+    <ul id="help-keys" class="help-list"></ul>
+    <button id="btn-help-close" class="go">Done</button>
+  </div></div>
+  <div id="result" class="overlay hidden"><div class="box">
+    <h2 id="result-who"></h2>
+    <p id="result-stats" class="note"></p>
+    <p id="result-countdown" class="kbd"></p>
+    <button onclick="location.reload()">Return to lobby</button>
+  </div></div>
+</div>
+
+<div id="keys" class="overlay hidden"><div class="box keys-box">
+  <h3>Keybinds</h3>
+  <p class="note">Click <b>change</b>, then press a key. <b>B</b> is fixed for the shop, <b>Esc</b> for menus, <b>Shift</b>/<b>Ctrl</b> rank abilities — they cannot be remapped. Changes save to this browser.</p>
+  <div id="key-rows"></div>
+  <div id="key-conflict" class="conflict hidden">
+    <span id="key-conflict-text"></span>
+    <button id="btn-conflict-take" class="go">Take it over</button>
+    <button id="btn-conflict-keep">Keep as is</button>
+  </div>
+  <div id="key-status" class="note"></div>
+  <div class="btnrow"><button id="btn-keys-reset">Reset to defaults</button><button id="btn-keys-close" class="go">Done</button></div>
+</div></div>
+
+<script type="module" src="./ui.js"></script>
+</body>
+</html>
