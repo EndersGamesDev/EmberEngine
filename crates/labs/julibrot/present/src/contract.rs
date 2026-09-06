@@ -234,12 +234,16 @@ pub struct WarpPlan {
     pub source_scene_id: Option<u64>,
     /// Retained texture identity against which the plan was solved.
     pub source_texture_index: Option<u32>,
+    /// Destination pose used to project retained records, present only for a relief redraw.
+    pub destination_pose: Option<Pose>,
     /// Whether sampling the retained texture is honest.
     pub source_valid: bool,
     /// Whether the destination pose is the physical edge-on all-sky state.
     pub edge_on: bool,
     /// Whether any destination surface region has no retained source sample.
     pub exposed: bool,
+    /// Conservative share of destination pixels at stale-resolution or source-coverage risk.
+    pub predicted_exposed_fraction: Option<f64>,
     /// Exact, approximate, or clear-only plan kind.
     pub kind: WarpKind,
     /// Planner branch that refused the image warp, absent when the plan was accepted.
@@ -278,6 +282,13 @@ pub enum WarpRefusalReason {
         /// Number of non-horizon height samples refused by either pose.
         refused_samples: u16,
     },
+    /// The retained source footprint exceeds the measured relief-redraw admission ceiling.
+    ReliefExposure {
+        /// Conservative predicted share at stale-resolution or source-coverage risk.
+        predicted_fraction: f64,
+        /// Maximum admitted share.
+        limit: f64,
+    },
     /// The destination is the physical all-sky edge-on state.
     EdgeOn,
 }
@@ -296,6 +307,13 @@ impl std::fmt::Display for WarpRefusalReason {
             Self::ErrorCorpus { refused_samples } => {
                 write!(formatter, "ErrorCorpus(refused_samples={refused_samples})")
             }
+            Self::ReliefExposure {
+                predicted_fraction,
+                limit,
+            } => write!(
+                formatter,
+                "ReliefExposure(predicted_fraction={predicted_fraction:.4},limit={limit:.4})"
+            ),
             Self::EdgeOn => formatter.write_str("EdgeOn"),
         }
     }
@@ -635,15 +653,23 @@ impl PresentFacts {
     /// Records the planner and exposure facts from one warp plan.
     ///
     /// Early clear-only and exact-flat plans have no sampled tumbled corpus, so both error facts
-    /// stay absent. An error-ceiling clear keeps the finite subset that caused its refusal.
+    /// stay absent. An error-ceiling clear keeps the finite subset that caused its refusal. A
+    /// relief redraw has no image homography error, so it clears both error facts even when the
+    /// rejected image plan that selected it had measurements.
     pub const fn record_warp_plan(&mut self, plan: &WarpPlan, exposed_fraction: Option<f64>) {
         self.chart_residual = if plan.source_valid {
             Some(plan.chart_residual)
         } else {
             None
         };
-        self.warp_max_error_px = plan.approx_max_error_px;
-        self.warp_p95_error_px = plan.approx_p95_error_px;
+        self.warp_max_error_px = match plan.kind {
+            WarpKind::ReliefRedraw => None,
+            _ => plan.approx_max_error_px,
+        };
+        self.warp_p95_error_px = match plan.kind {
+            WarpKind::ReliefRedraw => None,
+            _ => plan.approx_p95_error_px,
+        };
         self.warp_kind = plan.kind;
         self.warp_refusal_reason = plan.refusal_reason;
         self.warp_exposed = plan.exposed;
@@ -842,9 +868,11 @@ mod tests {
             lattice: crate::LatticePair::new([120, 68], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
+            destination_pose: None,
             source_valid: true,
             edge_on: false,
             exposed: false,
+            predicted_exposed_fraction: None,
             kind: WarpKind::AnchorHomography,
             refusal_reason: None,
             chart_residual: 0.25,
@@ -881,7 +909,7 @@ mod tests {
     }
 
     #[test]
-    fn relief_coverage_stays_absent_until_submit_validation() {
+    fn relief_facts_publish_planned_coverage_and_no_homography_error() {
         let mut facts = PresentFacts {
             warp_exposed_fraction: Some(0.125),
             ..PresentFacts::default()
@@ -891,17 +919,21 @@ mod tests {
             lattice: crate::LatticePair::new([960, 540], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
+            destination_pose: None,
             source_valid: true,
             edge_on: false,
             exposed: true,
+            predicted_exposed_fraction: Some(0.25),
             kind: WarpKind::ReliefRedraw,
             refusal_reason: None,
             chart_residual: 0.0,
             approx_max_error_px: Some(2.0),
             approx_p95_error_px: Some(1.0),
         };
-        facts.record_warp_plan(&relief, None);
-        assert_eq!(facts.warp_exposed_fraction, None);
+        facts.record_warp_plan(&relief, relief.predicted_exposed_fraction);
+        assert_eq!(facts.warp_exposed_fraction, Some(0.25));
+        assert_eq!(facts.warp_max_error_px, None);
+        assert_eq!(facts.warp_p95_error_px, None);
         facts.record_relief_coverage(Some(0.25));
         assert_eq!(facts.warp_exposed_fraction, Some(0.25));
     }

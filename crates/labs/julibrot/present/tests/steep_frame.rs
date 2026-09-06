@@ -39,7 +39,8 @@ use ember_julibrot_math::{
     construct_plane, pixel_scale, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, SceneUniform, exterior_zero, grid_screen, shade_escape_record,
+    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SceneUniform, exterior_zero, grid_screen,
+    relief_redraw_source_pose, shade_escape_record,
 };
 
 const EXTENT: [u32; 2] = [960, 540];
@@ -1257,6 +1258,22 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         );
         let true_records = steep_records(&sampling_to);
         let redraw = render_relief_redraw(&from, &to, &source_records);
+        let device_pose = relief_redraw_source_pose(&from, EXTENT, &to)
+            .expect("the device path composes the measured source and destination poses");
+        let device_redraw = render_frame(
+            &device_pose,
+            &source_records,
+            Rule::Fixed,
+            Mapping::InteriorAtFloor,
+        );
+        assert_eq!(
+            device_redraw.covered, redraw.covered,
+            "the device source-map split changes coverage at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_redraw.cause, redraw.cause,
+            "the device source-map split changes the visible record at zoom delta {zoom_delta}"
+        );
         let truth = render_frame(&to, &true_records, Rule::Fixed, Mapping::InteriorAtFloor);
         reports.push(measure_relief_redraw(
             &from, &to, &redraw, &truth, zoom_delta,
@@ -1319,11 +1336,11 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
 
     // Eight percent is the smallest round policy boundary with useful headroom over the measured
     // worst case: +0.1 is 7.1952%, leaving 0.8048 percentage point before a redraw becomes a hold.
-    const MAX_ACCEPTED_EXPOSED_FRACTION: f64 = 0.08;
+    assert_eq!(RELIEF_REDRAW_MAX_EXPOSED_FRACTION, 0.08);
     assert!(
         reports
             .iter()
-            .all(|report| report.exposed_fraction < MAX_ACCEPTED_EXPOSED_FRACTION)
+            .all(|report| report.exposed_fraction < RELIEF_REDRAW_MAX_EXPOSED_FRACTION)
     );
 }
 

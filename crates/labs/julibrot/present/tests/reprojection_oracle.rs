@@ -6,7 +6,8 @@ use ember_julibrot_math::{
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
     WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, grid_screen,
-    height_for_record, project_scene_point, project_scene_vertex, shade_lit_escape_record,
+    height_for_record, project_scene_point, project_scene_vertex, relief_redraw_source_pose,
+    shade_lit_escape_record,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -26,16 +27,16 @@ enum Expected {
         compared: u32,
         uncertain: u32,
         disoccluded: u32,
-        maximum_millipixels: u32,
     },
+    /// Source records are deliberately stale in resolution but are placed by their source chart.
+    ReliefApprox,
 }
 
-const fn expected_relief(maximum_millipixels: u32) -> Expected {
+const fn expected_relief() -> Expected {
     Expected::Relief {
         compared: 181,
         uncertain: 0,
         disoccluded: 0,
-        maximum_millipixels,
     }
 }
 
@@ -411,12 +412,12 @@ fn barycentric(point: [f64; 2], triangle: [RedrawVertex; 3]) -> Option<[f64; 3]>
 }
 
 fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Option<RedrawVertex>> {
-    let mut redraw_pose = *to;
-    redraw_pose.plane = from.plane;
-    redraw_pose.object = from.object;
-    redraw_pose.map = from.map;
-    redraw_pose.grid_width = from.grid_width;
-    redraw_pose.grid_height = from.grid_height;
+    let redraw_pose = relief_redraw_source_pose(
+        from,
+        [from.grid_width, from.grid_height],
+        to,
+    )
+    .expect("the oracle's relief pair composes a source-lattice pose");
     retained
         .iter()
         .enumerate()
@@ -585,7 +586,7 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
     );
     if plan.kind == WarpKind::ReliefRedraw {
         assert!(
-            matches!(expected, Expected::Relief { .. }),
+            matches!(expected, Expected::Relief { .. } | Expected::ReliefApprox),
             "{name}: unexpectedly selected a relief redraw"
         );
         assert!(
@@ -598,32 +599,30 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         );
         assert_eq!(plan.source_scene_id, Some(7), "{name}");
         assert_eq!(plan.source_texture_index, Some(1), "{name}");
-        let maximum = plan
-            .approx_max_error_px
-            .expect("a relief redraw is measured, never unmeasurable");
-        assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
+        assert_eq!(plan.approx_max_error_px, None, "{name}");
+        assert_eq!(plan.approx_p95_error_px, None, "{name}");
+        assert_eq!(plan.refusal_reason, None, "{name}");
+        assert_eq!(plan.destination_pose, Some(*to), "{name}");
+        assert!(
+            plan.predicted_exposed_fraction
+                .is_some_and(|fraction| fraction <= 0.08),
+            "{name}: relief exposure was not admitted"
+        );
         let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
-        let Expected::Relief {
+        if let Expected::Relief {
             compared: expected_compared,
             uncertain: expected_uncertain,
             disoccluded: expected_disoccluded,
-            maximum_millipixels,
         } = expected
-        else {
-            unreachable!("the relief branch checked its expected kind")
-        };
-        assert_eq!(
-            (compared, uncertain, disoccluded),
-            (expected_compared, expected_uncertain, expected_disoccluded,),
-            "{name}: relief coverage tuple"
-        );
-        let expected_maximum = f64::from(maximum_millipixels) / 1_000.0;
-        assert!(
-            (maximum - expected_maximum).abs() < 0.0005,
-            "{name}: measured {maximum} px, expected {expected_maximum} px"
-        );
+        {
+            assert_eq!(
+                (compared, uncertain, disoccluded),
+                (expected_compared, expected_uncertain, expected_disoccluded,),
+                "{name}: relief coverage tuple"
+            );
+        }
         eprintln!(
-            "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
+            "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded}"
         );
         return;
     }
@@ -835,44 +834,49 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &retained_relief,
         &relief_rotation,
         1.0,
-        expected_relief(9_179),
+        expected_relief(),
     );
 
-    let owner_height = ViewControls {
+    let measured_height = ViewControls {
         height_scale: 2.165,
         distance_five: 8.0,
         ..ViewControls::NEUTRAL
     };
-    let owner_height_to = pose(
+    let measured_height_to = pose(
         ObjectAngles::JULIA,
-        owner_height,
+        measured_height,
         BASE_ORIGIN,
         0.0,
         [0.0; 2],
     );
-    let footprint = scene_footprint(&ObjectAngles::JULIA, &owner_height, EXTENT[0], EXTENT[1])
-        .expect("owner height has a finite backdrop footprint");
+    let footprint = scene_footprint(
+        &ObjectAngles::JULIA,
+        &measured_height,
+        EXTENT[0],
+        EXTENT[1],
+    )
+    .expect("the measured height has a finite backdrop footprint");
     assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
     assert_eq!(footprint.uncovered_fraction, 0.0);
     assert_fixture(
         "height 0 -> 2.165 at the floor",
         &base,
-        &owner_height_to,
+        &measured_height_to,
         1.0,
-        expected_relief(64_977),
+        expected_relief(),
     );
 
     let lifted_camera_expectations = [
         Expected::Agree,
-        Expected::Clear,
+        Expected::ReliefApprox,
         Expected::Agree,
-        Expected::Clear,
+        Expected::ReliefApprox,
         Expected::Agree,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
     ];
     for (index, lifted_expected) in lifted_camera_expectations.into_iter().enumerate() {
         let mut flat_view = ViewControls::NEUTRAL;
@@ -921,7 +925,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &observer_relief,
         1.0,
-        Expected::Clear,
+        Expected::ReliefApprox,
     );
 
     for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
@@ -941,9 +945,9 @@ fn retained_warp_matches_independent_fresh_scenes() {
         }
         let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         let lifted_expected = if field == 5 {
-            expected_relief(5_433)
+            expected_relief()
         } else {
-            Expected::Clear
+            Expected::ReliefApprox
         };
         assert_fixture(
             &format!("{name} h1"),
@@ -962,7 +966,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &height_to,
         1.0,
-        expected_relief(8_203),
+        expected_relief(),
     );
 
     let mut translated_view = relief();
@@ -1040,7 +1044,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &pole,
         &pole_moved,
         1.0,
-        Expected::Clear,
+        Expected::ReliefApprox,
     );
 
     observer_bars();
@@ -1058,7 +1062,13 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.03,
         [0.2, -0.15],
     );
-    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Clear);
+    assert_fixture(
+        "cross terms",
+        &relief_from,
+        &cross,
+        1.0,
+        Expected::ReliefApprox,
+    );
 }
 
 /// The Mandelbrot preset row's own plane origin, where the canonical flat pair is exact.
@@ -1237,7 +1247,7 @@ fn observer_bars() {
                 view
             },
             Expected::Agree,
-            expected_relief(9_179),
+            expected_relief(),
         ),
         (
             "distance four",
@@ -1285,7 +1295,7 @@ fn observer_bars() {
         &flat_from,
         &lifted_from,
         1.0,
-        expected_relief(18_358),
+        expected_relief(),
     );
     let half = pose(
         ObjectAngles::JULIA,
@@ -1302,7 +1312,7 @@ fn observer_bars() {
         &lifted_from,
         &half,
         1.0,
-        expected_relief(10_490),
+        expected_relief(),
     );
 }
 
@@ -1311,7 +1321,7 @@ fn observer_bars() {
     clippy::print_stderr,
     reason = "the requested two-row oracle reports its exact planner classification table"
 )]
-fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family() {
+fn thirty_hertz_height_drag_keeps_both_measured_rows_inside_the_exact_redraw_family() {
     const DRAG_FRAMES: u32 = 90;
     const ANGLE: f64 = -1.316_653_720_171_549_4;
     const CAMERA_ANGLE: f64 = -0.254_142_606_623_347_1;
@@ -1330,7 +1340,7 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
     assert_eq!(camera[8], 0.0, "q35");
 
     for (distance_five, expected_clear_only, expected_relief_redraws, expected_homographies) in
-        [(8.0, 24, 65, 1), (2.0, 81, 9, 0)]
+        [(8.0, 0, 89, 1), (2.0, 0, 90, 0)]
     {
         let flat_view = ViewControls {
             camera,

@@ -218,9 +218,11 @@ pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::Warp
         lattice: None,
         source_scene_id: None,
         source_texture_index: None,
+        destination_pose: None,
         source_valid: false,
         edge_on,
         exposed,
+        predicted_exposed_fraction: None,
         kind: WarpKind::ClearOnly,
         refusal_reason: if edge_on {
             Some(crate::WarpRefusalReason::EdgeOn)
