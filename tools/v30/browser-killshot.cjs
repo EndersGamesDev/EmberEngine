@@ -665,8 +665,8 @@ async function killshotInventoryAndHud() {
     await page.waitForFunction(() => !document.querySelector('#killshot-reload').hidden);
     await completeReload('AK-47', first.before, first.fired);
 
-    const frames = await page.evaluate(() => window.__qa.stateFrames);
-    const byTick = new Map(frames.map(state => [state.tick, state]));
+    const observedFrames = await page.evaluate(() => window.__qa.stateFrames);
+    const byTick = new Map(observedFrames.map(state => [state.tick, state]));
     const id = await page.evaluate(() => window.__qa.joined.id);
     const same = [];
     for (const frame of peer.received.frames) {
