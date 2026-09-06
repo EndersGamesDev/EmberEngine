@@ -10,16 +10,13 @@ use std::sync::Arc;
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
-    HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, PLAYER_R,
-    Projectile, RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT,
-    advance_ads, move_circle_in, movement_speed, step_vertical, support_height, weapon_name,
+    HILL_FREE, HILL_LIMIT, Hill, Level, MAX_PITCH, MELEE_COOLDOWN, Obstacle, PLAYER_R, Projectile,
+    RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, advance_ads,
+    advance_shield, move_circle_in, movement_speed, step_vertical, support_height, weapon_name,
     weapon_spread, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
-use ember_engine::{
-    Camera, EmberGame, Feedback, Frame, InputState, Instance, KeyCode, MouseButton, PadButton,
-    Particle,
-};
+use ember_engine::{Camera, EmberGame, Feedback, Frame, InputState, Instance, PadButton, Particle};
 use serde::Deserialize;
 
 use crate::contact;
@@ -29,8 +26,13 @@ use crate::harbor::HarborArt;
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
 use crate::script;
+use crate::settings::{Action as ControlAction, Settings};
 use crate::sound::{Audio, BUDGET, Dist, Sfx};
 use crate::weather;
+#[cfg(test)]
+use arena_core::shooter::MAX_HP;
+#[cfg(test)]
+use ember_engine::{KeyCode, MouseButton};
 
 /// What a part does when the weapon fires (v15). Decided by the part's
 /// node name, which is the asset's contract with this file: `cylinder*`
@@ -1336,15 +1338,23 @@ const HAND_REACH: f32 = 0.55;
 const MUZZLE_SANITY: f32 = 2.5;
 
 /// The heights a remote body is drawn at, above its own feet: the body
-/// box's full height, the head, the gun hand and the hp pips. Crouching
-/// pulls all four down. One table, read by the render pass and by
+/// box's full height, the head and the gun hand. Crouching
+/// pulls all three down. One table, read by the render pass and by
 /// `ShooterGame::drawn_muzzle`, so a flash cannot land somewhere the gun
 /// is not.
-const fn body_heights(crouch: bool) -> (f32, f32, f32, f32) {
+const fn body_heights(crouch: bool) -> (f32, f32, f32) {
     if crouch {
-        (0.75, 0.95, 0.62, 1.5)
+        (
+            0.75,
+            arena_core::shooter::head_lo(true) + arena_core::shooter::HEAD_H * 0.5,
+            0.62,
+        )
     } else {
-        (1.1, 1.35, 0.85, 2.0)
+        (
+            1.1,
+            arena_core::shooter::head_lo(false) + arena_core::shooter::HEAD_H * 0.5,
+            0.85,
+        )
     }
 }
 
@@ -1430,6 +1440,9 @@ pub struct ShooterGame {
     /// Immutable static contact field, rebuilt only after changed level joins.
     occlusion: Option<Arc<ember_engine::OcclusionField>>,
     occlusion_cache: contact::Cache,
+    settings: Settings,
+    controls_paused: bool,
+    pred_shield: arena_core::shooter::ShieldState,
     metas: HashMap<u8, PlayerMeta>,
     from: HashMap<u8, PSnap>,
     to: HashMap<u8, PSnap>,
@@ -1664,6 +1677,9 @@ impl ShooterGame {
             obstacles: Vec::new(),
             occlusion: None,
             occlusion_cache: contact::Cache::default(),
+            settings: Settings::default(),
+            controls_paused: false,
+            pred_shield: arena_core::shooter::ShieldState::default(),
             metas: HashMap::new(),
             from: HashMap::new(),
             to: HashMap::new(),
@@ -2135,7 +2151,7 @@ impl ShooterGame {
             );
             return Some(mount.base + mount.rotation * a.muzzle_of(shown_weapon(p.weapon)));
         }
-        let (_, _, hand_y, _) = body_heights(p.crouch);
+        let (_, _, hand_y) = body_heights(p.crouch);
         let hand = hand_at(self.render_pos(id), self.render_y(id), aim, hand_y);
         let yaw = -aim.y.atan2(aim.x);
         Some(
@@ -2295,16 +2311,21 @@ impl ShooterGame {
             .collect::<Vec<_>>()
             .join("  ·  ");
         let me = self.my_id.and_then(|id| self.latest.get(&id));
-        let hp = me
-            .map(|p| {
-                if p.alive {
-                    "♥".repeat(p.hp as usize) + &"♡".repeat(MAX_HP.saturating_sub(p.hp) as usize)
-                } else {
-                    "respawning…".into()
-                }
-            })
-            .unwrap_or_default();
+        let life = if me.is_some_and(|p| !p.alive) {
+            "respawning…  "
+        } else {
+            ""
+        };
         let gun = me.map(gun_line).unwrap_or_default();
+        let shield = if !me.is_some_and(|p| p.alive) {
+            String::new()
+        } else if self.pred_shield.active {
+            format!(" · shield {:.1}s", self.pred_shield.remaining)
+        } else if self.pred_shield.cooldown > 0.0 {
+            format!(" · shield ready in {:.1}s", self.pred_shield.cooldown)
+        } else {
+            String::new()
+        };
         let mode = self.mode_line(me);
         let pad = if self.pad_status_shown == "none" {
             String::new()
@@ -2312,7 +2333,7 @@ impl ShooterGame {
             format!("   gamepad: {}", self.pad_status_shown)
         };
         format!(
-            "{hp}  {gun}   {mode}   {list}   ({} in arena){pad}",
+            "{life}{gun}{shield}   {mode}   {list}   ({} in arena){pad}",
             self.latest.len()
         )
     }
@@ -2353,6 +2374,24 @@ impl EmberGame for ShooterGame {
         clippy::too_many_lines
     )]
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
+        self.settings.refresh();
+        let controls_paused = self.settings.paused;
+        if controls_paused != self.controls_paused {
+            // Send a neutral command immediately, even inside the 50 ms send window.
+            self.since_input = 0.05;
+            self.controls_paused = controls_paused;
+        }
+        if controls_paused {
+            self.jump_pending = false;
+            self.pred_jump = false;
+            self.melee_pending = false;
+            self.prev_space = false;
+            self.prev_e = false;
+            self.prev_fire = false;
+            self.prev_l3 = false;
+            self.sprint_latch = false;
+        }
+        let mut shield_reconciled = false;
         self.time += dt;
         self.since_input += dt;
         self.since_ping += dt;
@@ -2444,6 +2483,7 @@ impl EmberGame for ShooterGame {
                     self.last_bonk_at = vec![None; self.loot_index.len()];
                     self.pops.clear();
                     self.history.clear();
+                    self.pred_shield = arena_core::shooter::ShieldState::default();
                     self.reload_started = None;
                     self.was_alive = false; // first State snaps the prediction
                     self.zoom = 0.0;
@@ -2456,6 +2496,9 @@ impl EmberGame for ShooterGame {
                     // client ignores clicks and never takes the cursor.
                     status_event = Some(if self.script.is_some() {
                         "in the arena — driven by EMBER_SCRIPT · keyboard, mouse and pad ignored"
+                            .into()
+                    } else if cfg!(target_arch = "wasm32") {
+                        "in the arena — choose Resume game in Settings · Esc opens your controls"
                             .into()
                     } else {
                         "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · Q shield (reflects!) · click fire".to_string()
@@ -2713,6 +2756,7 @@ impl EmberGame for ShooterGame {
                             // and re-integrates gravity across a window the
                             // forward prediction has already covered.
                             let (mut y, mut vy) = (my.y, my.vy);
+                            let mut shield_state = my.shield_state;
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
                                 let end = it.peek().map_or(self.time, |n| n.sent_at);
@@ -2742,6 +2786,7 @@ impl EmberGame for ShooterGame {
                                 let mut left = dur;
                                 while left > 1e-6 {
                                     let step = left.min(FIXED_DT);
+                                    shield_state = advance_shield(shield_state, c.shield, step);
                                     let speed = movement_speed(
                                         p,
                                         y,
@@ -2749,7 +2794,7 @@ impl EmberGame for ShooterGame {
                                         press,
                                         c.sprint,
                                         c.crouch,
-                                        c.shield,
+                                        shield_state.active,
                                         &self.obstacles,
                                     );
                                     p = move_circle_in(
@@ -2772,12 +2817,15 @@ impl EmberGame for ShooterGame {
                             let rebased = Vec2::new(p[0], p[1]);
                             self.pred_y = y;
                             self.pred_vy = vy;
+                            self.pred_shield = shield_state;
+                            shield_reconciled = true;
                             if newly_alive || rebased.distance(self.pred_pos) > 4.0 {
                                 // Respawn / teleport: snap everything.
                                 self.pred_pos = server;
                                 self.own_render = server;
                                 self.render_y_own = my.y;
                                 self.history.clear();
+                                self.pred_shield = my.shield_state;
                                 if newly_alive {
                                     sfx.push(Play::centre(Sfx::Respawn, 0.4));
                                 }
@@ -2987,7 +3035,12 @@ impl EmberGame for ShooterGame {
         }
 
         // ---- the pad, merged with the keys: either device at any moment ----
-        let pad = if scripted { None } else { input.pad() };
+        let tick = tick.filter(|_| !controls_paused);
+        let pad = if scripted || controls_paused {
+            None
+        } else {
+            input.pad()
+        };
         if pad.is_some() && self.pad_status_shown != input.pad_status() {
             self.pad_status_shown = input.pad_status();
             status_event = Some(format!("gamepad: {}", self.pad_status_shown));
@@ -2998,7 +3051,7 @@ impl EmberGame for ShooterGame {
 
         // ---- ADS (RMB or LT): tighter FOV, the look slowed to match ----
         let aim_held = tick.as_ref().map_or_else(
-            || input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5),
+            || ControlAction::Ads.down(&self.settings, input) || pad.is_some_and(|p| p.lt > 0.5),
             |t| t.held.down(script::Hold::Ads),
         );
         // The gun I am drawn with decides the field of view, and the field
@@ -3009,24 +3062,35 @@ impl EmberGame for ShooterGame {
         let my_weapon = shown_weapon(me_latest.map_or(SIDEARM, |p| p.weapon));
         let my_feel = weapon_feel(my_weapon);
         let reload_held = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyR) || pad_down(PadButton::West),
+            || ControlAction::Reload.down(&self.settings, input) || pad_down(PadButton::West),
             |t| t.held.down(script::Hold::Reload),
         );
         let shield_held = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyQ) || pad_down(PadButton::LB),
+            || ControlAction::Shield.down(&self.settings, input) || pad_down(PadButton::LB),
             |t| t.held.down(script::Hold::Shield),
         );
         let melee_held = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyE) || pad_down(PadButton::RB),
+            || ControlAction::Melee.down(&self.settings, input) || pad_down(PadButton::RB),
             |t| t.held.down(script::Hold::Melee),
         );
         let melee_active = self
             .melee_started
             .is_some_and(|start| self.time - start < MELEE_COOLDOWN);
+        self.pred_shield = if me_latest.is_some_and(|p| p.alive) {
+            advance_shield(
+                self.pred_shield,
+                shield_held,
+                if shield_reconciled { 0.0 } else { dt },
+            )
+        } else {
+            arena_core::shooter::ShieldState::default()
+        };
+        let shield_active = self.pred_shield.active;
         let ads_blocked = !me_latest.is_some_and(|p| p.alive && !p.reloading)
+            || controls_paused
             || self.round_pause > 0.0
             || reload_held
-            || shield_held
+            || shield_active
             || melee_held
             || melee_active;
         let aiming = aim_held && !ads_blocked;
@@ -3047,10 +3111,10 @@ impl EmberGame for ShooterGame {
         let look_scale = feel::look_scale(fov_now);
 
         // ---- first-person look: mouse deltas and the right stick -> yaw/pitch ----
-        let sens = LOOK_SENS * look_scale;
+        let sens = LOOK_SENS * look_scale * self.settings.sensitivity;
         // The device's raw motion, or nothing at all while a script drives:
         // this is the read that used to hand the operator's mouse our camera.
-        let (mdx, mdy) = if scripted {
+        let (mdx, mdy) = if scripted || controls_paused {
             (0.0, 0.0)
         } else {
             input.mouse_delta()
@@ -3089,22 +3153,18 @@ impl EmberGame for ShooterGame {
             self.sprint_latch = false;
         }
         let sprint = tick.as_ref().map_or_else(
-            || {
-                input.down(KeyCode::ShiftLeft)
-                    || input.down(KeyCode::ShiftRight)
-                    || self.sprint_latch
-            },
+            || ControlAction::Sprint.down(&self.settings, input) || self.sprint_latch,
             |t| t.held.down(script::Hold::Sprint),
         );
         let crouch = tick.as_ref().map_or_else(
-            || input.down(KeyCode::KeyC) || pad_down(PadButton::East),
+            || ControlAction::Crouch.down(&self.settings, input) || pad_down(PadButton::East),
             |t| t.held.down(script::Hold::Crouch),
         );
         // Held, like every other intent: there is no local toggle state that
         // a dropped input packet could leave disagreeing with the server.
         let shield = shield_held;
-        self.shield_raise +=
-            ((if shield { 1.0 } else { 0.0 }) - self.shield_raise) * (1.0 - (-dt * 16.0).exp());
+        self.shield_raise += ((if shield_active { 1.0 } else { 0.0 }) - self.shield_raise)
+            * (1.0 - (-dt * 16.0).exp());
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
         self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
@@ -3112,8 +3172,12 @@ impl EmberGame for ShooterGame {
         let (ax_fwd, ax_right) = tick.as_ref().map_or_else(
             || {
                 (
-                    input.axis(KeyCode::KeyS, KeyCode::KeyW) + stick_l[1],
-                    input.axis(KeyCode::KeyA, KeyCode::KeyD) + stick_l[0],
+                    self.settings
+                        .axis(ControlAction::Backward, ControlAction::Forward, input)
+                        + stick_l[1],
+                    self.settings
+                        .axis(ControlAction::Left, ControlAction::Right, input)
+                        + stick_l[0],
                 )
             },
             |t| (t.held.fwd, t.held.right),
@@ -3124,7 +3188,7 @@ impl EmberGame for ShooterGame {
         }
         let moving = mv.length_squared() > 0.01;
         let fire = tick.as_ref().map_or_else(
-            || input.mouse_down(MouseButton::Left) || pad.is_some_and(|p| p.rt > 0.5),
+            || ControlAction::Fire.down(&self.settings, input) || pad.is_some_and(|p| p.rt > 0.5),
             |t| t.held.down(script::Hold::Fire),
         );
         // The dry trigger: once per press, while the magazine is out for a
@@ -3155,7 +3219,7 @@ impl EmberGame for ShooterGame {
         // held key re-launched the player off every surface they touched.
         // The pad's South button is the same latch.
         let space = tick.as_ref().map_or_else(
-            || input.down(KeyCode::Space) || pad_down(PadButton::South),
+            || ControlAction::Jump.down(&self.settings, input) || pad_down(PadButton::South),
             |t| t.held.down(script::Hold::Jump),
         );
         let jump = space && !self.prev_space;
@@ -3281,7 +3345,7 @@ impl EmberGame for ShooterGame {
                 self.pred_jump,
                 sprint,
                 crouch,
-                shield,
+                shield_active,
                 &self.obstacles,
             );
             let p = move_circle_in(
@@ -3406,7 +3470,7 @@ impl EmberGame for ShooterGame {
         // the machine — but "the client reads no device" has to be true
         // without an asterisk, or the next reader will not believe the rest.
         let tab = tick.as_ref().map_or_else(
-            || input.down(KeyCode::Tab) || pad_down(PadButton::Start),
+            || ControlAction::Scoreboard.down(&self.settings, input) || pad_down(PadButton::Start),
             |_| false,
         ) || self.round_pause > 0.0;
         if tab && self.my_id.is_some() {
@@ -3759,7 +3823,15 @@ impl EmberGame for ShooterGame {
             let feet_y = self.render_y(id);
             let color = self.player_color(id);
             let aim = Vec2::new(p.ax, p.az);
-            let (body_h, head_y, hand_y, pip_y) = body_heights(p.crouch);
+            let (body_h, head_y, hand_y) = body_heights(p.crouch);
+            let head =
+                arena_core::shooter::head_origin([pos.x, feet_y, pos.y], [p.ax, p.az], p.crouch);
+            let head_center = Vec3::new(head[0], head[1] + head_y, head[2]);
+            let head_size = Vec3::new(
+                arena_core::shooter::HEAD_R * 2.0,
+                arena_core::shooter::HEAD_H,
+                arena_core::shooter::HEAD_R * 2.0,
+            );
             // Hitbox truth ring: a flat plate exactly the server's hit
             // circle footprint (radius PLAYER_R) — what you aim at is real.
             let flash = self.flash.get(&id).copied().unwrap_or(0.0) / 0.18;
@@ -3857,14 +3929,9 @@ impl EmberGame for ShooterGame {
                     )
                     .with_mesh(env),
                 );
-                frame.instances.push(
-                    Instance::new(
-                        Vec3::new(pos.x, feet_y + head_y, pos.y),
-                        Vec3::splat(0.55),
-                        color * 0.7,
-                    )
-                    .with_mesh(env),
-                );
+                frame
+                    .instances
+                    .push(Instance::new(head_center, head_size, color * 0.7).with_mesh(env));
             } else {
                 inst(
                     &mut frame,
@@ -3872,14 +3939,9 @@ impl EmberGame for ShooterGame {
                     Vec3::new(1.0, body_h, 1.0),
                     color,
                 );
-                inst(
-                    &mut frame,
-                    Vec3::new(pos.x, feet_y + head_y, pos.y),
-                    Vec3::splat(0.55),
-                    color * 0.7,
-                );
+                inst(&mut frame, head_center, head_size, color * 0.7);
             }
-            // hand_y and pip_y are heights above the FEET, so both need this
+            // hand_y is a height above the FEET, so it needs this
             // player's own feet height added. Without it someone standing on
             // a crate carried their gun down at floor level.
             let hand = attachment.map_or_else(|| hand_at(pos, feet_y, aim, hand_y), |m| m.base);
@@ -3940,24 +4002,6 @@ impl EmberGame for ShooterGame {
                 }
             } else {
                 push_gun(&mut frame, hand, aim, accent);
-            }
-            // Hp pips: green, or the team's colour in team deathmatch so
-            // the pips over a head say whose head it is before the body
-            // reads.
-            let pip = if self.mode == GameMode::Tdm {
-                color
-            } else {
-                Vec3::new(0.3, 0.9, 0.4)
-            };
-            for h in 0..p.hp {
-                frame.instances.push(
-                    Instance::new(
-                        Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
-                        Vec3::splat(0.16),
-                        pip,
-                    )
-                    .without_shadow(),
-                );
             }
         }
 
@@ -5095,6 +5139,7 @@ mod wire_tests {
             crouch: false,
             shield: false,
             weapon: 3,
+            shield_state: arena_core::shooter::ShieldState::READY,
             ammo: 20,
             reserve: 30,
             reloading: false,
@@ -5389,6 +5434,212 @@ mod wire_tests {
                 ..ember_engine::PadState::default()
             }),
         )
+    }
+
+    #[test]
+    fn controls_menu_neutralizes_every_intent_but_keeps_the_connection_ticking() {
+        let (chan, wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.settings.paused = true;
+        game.jump_pending = true;
+        game.pred_jump = true;
+        game.melee_pending = true;
+        game.sprint_latch = true;
+        game.yaw = 0.7;
+        game.pitch = 0.2;
+        for _ in 0..12 {
+            game.update(&a_busy_device(), 0.02);
+        }
+        let mut sent = 0;
+        for message in wire.try_iter() {
+            if let C2S::Input {
+                mx,
+                my,
+                fire,
+                sprint,
+                crouch,
+                reload,
+                jump,
+                shield,
+                melee,
+                ads,
+                pitch,
+                ..
+            } = message
+            {
+                sent += 1;
+                assert_eq!((mx, my), (0.0, 0.0));
+                assert!(!(fire || sprint || crouch || reload || jump || shield || melee || ads));
+                assert_eq!(pitch, 0.2);
+            }
+        }
+        assert!(
+            sent >= 4,
+            "neutral commands still keep the live match connected"
+        );
+        assert_eq!((game.yaw, game.pitch), (0.7, 0.2));
+        assert!(!game.score_shown);
+        assert!(!game.jump_pending && !game.pred_jump && !game.melee_pending);
+        assert!(!game.sprint_latch);
+        // Resuming with released controls must not replay a queued edge.
+        game.settings.paused = false;
+        game.update(&InputState::default(), 0.05);
+        assert!(wire.try_iter().all(|m| !matches!(
+            m,
+            C2S::Input { fire: true, .. }
+                | C2S::Input { jump: true, .. }
+                | C2S::Input { melee: true, .. }
+        )));
+    }
+
+    #[test]
+    fn rebound_controls_and_sensitivity_reach_real_client_packets() {
+        let (chan, wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.settings = Settings::from_json(
+            r#"{"sensitivity":2,"bindings":{"forward":["KeyI"],"fire":["Mouse1"]}}"#,
+        );
+        game.update(
+            &InputState::from_parts(&[KeyCode::KeyW], &[MouseButton::Left], (0.0, 0.0), None),
+            0.05,
+        );
+        assert!(
+            wire.try_iter()
+                .all(|m| !matches!(m, C2S::Input { fire: true, .. })
+                    && !matches!(m, C2S::Input { mx, my, .. } if mx != 0.0 || my != 0.0))
+        );
+        game.update(
+            &InputState::from_parts(&[KeyCode::KeyI], &[MouseButton::Middle], (10.0, 0.0), None),
+            0.05,
+        );
+        assert!((game.yaw - LOOK_SENS * 20.0).abs() < 1e-6);
+        assert!(wire.try_iter().any(|m| matches!(m, C2S::Input {
+            mx, my, fire: true, ..
+        } if mx * mx + my * my > 0.9)));
+    }
+
+    #[test]
+    fn player_health_changes_neither_geometry_nor_a_life_bar() {
+        let render = |hp| {
+            let (chan, _wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.latest.insert(2, PState { hp, ..me(2) });
+            game.latest.insert(
+                3,
+                PState {
+                    x: 5.0,
+                    hp,
+                    ..me(3)
+                },
+            );
+            game.was_alive = true;
+            let frame = game.update(&InputState::default(), 0.0);
+            (frame, game.scoreboard())
+        };
+        let (low, low_text) = render(1);
+        let (full, full_text) = render(5);
+        assert_eq!(low_text, full_text, "status text is not a life bar");
+        assert!(!full_text.contains('♥') && !full_text.contains('❤'));
+        assert_eq!(low.instances.len(), full.instances.len());
+        for (a, b) in low.instances.iter().zip(&full.instances) {
+            assert_eq!(a.position, b.position);
+            assert_eq!(a.scale, b.scale);
+            assert_eq!(a.color, b.color);
+        }
+    }
+
+    #[test]
+    fn shield_prediction_expires_and_cooldown_does_not_hold_the_gun_down() {
+        use arena_core::shooter::{SHIELD_REUSE_COOLDOWN, ShieldState};
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        let held = InputState::from_parts(&[KeyCode::KeyQ], &[], (0.0, 0.0), None);
+        for _ in 0..180 {
+            game.update(&held, FIXED_DT);
+        }
+        assert!(!game.pred_shield.active);
+        assert!((game.pred_shield.cooldown - SHIELD_REUSE_COOLDOWN).abs() < 1e-4);
+        let aim_while_held =
+            InputState::from_parts(&[KeyCode::KeyQ], &[MouseButton::Right], (0.0, 0.0), None);
+        for _ in 0..60 {
+            game.update(&aim_while_held, FIXED_DT);
+        }
+        assert!(!game.pred_shield.active);
+        assert!(
+            game.zoom > 0.99,
+            "spent shield does not block weapon aiming"
+        );
+        assert!(
+            game.shield_raise < 0.001,
+            "viewmodel actually lowers after exhaustion"
+        );
+        // A round-end pause does not grant a free second shield.
+        game.round_pause = 2.0;
+        let before = game.pred_shield.cooldown;
+        game.update(&held, FIXED_DT);
+        assert!(game.pred_shield.cooldown > before - 0.02);
+        assert_ne!(game.pred_shield, ShieldState::READY);
+    }
+
+    #[test]
+    fn authoritative_shield_cooldown_survives_held_input_replay() {
+        use arena_core::shooter::ShieldState;
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.time = 1.0;
+        game.history.push_back(Cmd {
+            seq: 7,
+            mv: [0.0, 0.0],
+            sprint: true,
+            crouch: false,
+            shield: true,
+            jump: false,
+            sent_at: 0.9,
+        });
+        inbox
+            .send(S2C::State {
+                tick: 60,
+                players: vec![PState {
+                    ack: 7,
+                    shield_state: ShieldState {
+                        cooldown: 4.0,
+                        held: true,
+                        ..ShieldState::READY
+                    },
+                    ..me(2)
+                }],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: Vec::new(),
+                team_score: [0, 0],
+                hill: HILL_FREE,
+                round_pause: 0.0,
+            })
+            .unwrap();
+        game.update(
+            &InputState::from_parts(&[KeyCode::KeyQ], &[], (0.0, 0.0), None),
+            0.02,
+        );
+        assert!(!game.pred_shield.active);
+        assert!(game.pred_shield.held);
+        assert!(
+            (game.pred_shield.cooldown - 3.88).abs() < 1e-4,
+            "replay advances the shield clock once, not again during forward prediction: {:?}",
+            game.pred_shield
+        );
     }
 
     /// Run a client for 12 frames against [`a_busy_device`], scripted or
@@ -6117,8 +6368,8 @@ mod wire_tests {
             (crouched - drawn_tip(&frame)).length() < 0.03,
             "still on the drawn barrel when crouched: {crouched}"
         );
-        let (_, _, stand_y, _) = body_heights(false);
-        let (_, _, crouch_y, _) = body_heights(true);
+        let (_, _, stand_y) = body_heights(false);
+        let (_, _, crouch_y) = body_heights(true);
         assert!(
             ((standing.y - crouched.y) - (stand_y - crouch_y)).abs() < 1e-4,
             "it dropped by exactly the hand: {} against {}",
@@ -6576,9 +6827,7 @@ mod wire_tests {
         }
     }
 
-    /// In team deathmatch a remote body and its pips wear the team's
-    /// colour and the id colour from `PlayerMeta` appears nowhere; in free
-    /// for all the id colour is back and the pips are green.
+    /// Team-colored bodies retain identification without health pips.
     #[test]
     fn team_colours_replace_id_colours_in_tdm() {
         let frame_for = |mode: GameMode| {
@@ -6604,18 +6853,19 @@ mod wire_tests {
         let count = |f: &Frame, c: Vec3| f.instances.iter().filter(|i| i.color == c).count();
         let tdm = frame_for(GameMode::Tdm);
         assert!(
-            count(&tdm, red) >= 4,
-            "the body and three pips in red: {}",
+            count(&tdm, red) >= 1,
+            "the body remains red: {}",
             count(&tdm, red)
         );
         assert_eq!(count(&tdm, green), 0, "no id colour in a team game");
-        assert_eq!(count(&tdm, pip_green), 0, "pips take the team colour");
+        assert_eq!(count(&tdm, pip_green), 0, "health pips are absent");
         let ffa = frame_for(GameMode::Ffa);
         assert!(count(&ffa, green) >= 1, "the id colour outside a team game");
         assert_eq!(count(&ffa, red), 0);
-        assert!(
-            count(&ffa, pip_green) >= 3,
-            "green pips outside a team game"
+        assert_eq!(
+            count(&ffa, pip_green),
+            0,
+            "health pips are absent in FFA too"
         );
     }
 
@@ -7063,6 +7313,12 @@ mod grip_muzzle_tests {
             alive: true,
             crouch: case.crouch,
             shield: case.shield,
+            shield_state: arena_core::shooter::ShieldState {
+                active: case.shield,
+                remaining: if case.shield { 3.0 } else { 0.0 },
+                held: case.shield,
+                ..arena_core::shooter::ShieldState::READY
+            },
             weapon: case.weapon,
             ammo: 1,
             reserve: 30,
@@ -7510,6 +7766,7 @@ mod ads_tests {
             crouch: false,
             shield: false,
             weapon,
+            shield_state: arena_core::shooter::ShieldState::READY,
             ammo: 20,
             reserve: 30,
             reloading: false,

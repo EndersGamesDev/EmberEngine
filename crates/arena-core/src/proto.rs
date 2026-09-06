@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::shooter::HILL_FREE;
+use crate::shooter::{HILL_FREE, ShieldState};
 
 /// Protocol v9 adds the reflecting off-hand shield.
 ///
@@ -231,7 +231,13 @@ use crate::shooter::HILL_FREE;
 /// its own 48 m half-extent through movement, prediction and bullet collision.
 /// A v19 client would hit invisible 24 m walls and predict the wrong speed.
 /// Eight-player team spawn allocation also no longer aliases teammate slots.
-pub const PROTO_VERSION: u16 = 20;
+///
+/// v21: five-point health, head-sized horizontal headshot geometry, and a
+/// timed shield with a press latch, trigger recovery and reuse cooldown.
+/// A v20 peer would predict unlimited blocking, sprint suppression and immediate
+/// firing on release. Defaulted state can decode but cannot make it play the same
+/// game, so create/join require the matching simulation and prediction rules.
+pub const PROTO_VERSION: u16 = 21;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -300,6 +306,10 @@ pub struct PState {
     /// pre-shield server simply reports everyone unshielded.
     #[serde(default)]
     pub shield: bool,
+    /// Authoritative shield timers and raw-intent latch for prediction replay.
+    /// `shield` is the visual alias of `shield_state.active`.
+    #[serde(default)]
+    pub shield_state: ShieldState,
     /// A weapon id, `1..=WEAPON_COUNT` (v14; it carried a level 1..3
     /// before, and that meaning change is what bumped the version, see
     /// `PROTO_VERSION`). Read through `weapon_stats`, whose `_` arm is the
@@ -956,6 +966,12 @@ mod tests {
             alive: true,
             crouch: false,
             shield: true,
+            shield_state: ShieldState {
+                active: true,
+                remaining: 2.5,
+                held: true,
+                ..ShieldState::READY
+            },
             weapon: 2,
             ammo: 7,
             reserve: 30,
@@ -973,6 +989,21 @@ mod tests {
         assert!(s.contains("\"team\":1"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
+        assert_eq!(back.shield_state, p.shield_state);
+        let mut lowered = p;
+        lowered.shield = false;
+        lowered.shield_state = crate::shooter::advance_shield(p.shield_state, false, 0.0);
+        let back: PState = serde_json::from_str(&serde_json::to_string(&lowered).unwrap()).unwrap();
+        assert_eq!(back.shield_state, lowered.shield_state);
+        assert_eq!(
+            back.shield_state.cooldown,
+            crate::shooter::SHIELD_REUSE_COOLDOWN
+        );
+        assert_eq!(
+            back.shield_state.fire_lock,
+            crate::shooter::SHIELD_FIRE_LOCK
+        );
+        assert!(!back.shield && !back.shield_state.active && !back.shield_state.held);
         assert_eq!(back.ads_fraction, 0.625);
         assert_eq!(back.spread, 0.012);
         assert_eq!(back.recoil_bloom, 0.025);
@@ -989,12 +1020,13 @@ mod tests {
             "hp":3,"score":0,"alive":true,"crouch":false}"#;
         let p: PState = serde_json::from_str(old_state).unwrap();
         assert!(!p.shield, "an absent shield reads as lowered");
+        assert_eq!(p.shield_state, ShieldState::READY);
         assert_eq!(p.ads_fraction, 0.0, "old frames decode as unsighted");
         assert_eq!(p.spread, 0.0, "old frames have no reported cone");
         assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
         assert_eq!(
-            PROTO_VERSION, 20,
-            "handling, movement and map bounds require the matching peer"
+            PROTO_VERSION, 21,
+            "health, head geometry and timed shields require the matching peer"
         );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();

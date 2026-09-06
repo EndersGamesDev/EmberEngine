@@ -59,7 +59,8 @@ PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf 'hub\n' > "$REPO/web/index.html"
 printf '{}\n' > "$REPO/web/version.json"
-printf 'arena live\n' > "$REPO/web/$ARENA_LIVE/index.html"
+printf 'arena live<script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
+printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
@@ -78,6 +79,8 @@ printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/kings-core/src/prot
 
 mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
 printf 'keep arena\n' > "$SEED/games/arena/v17/frozen.txt"
+printf 'archived arena<script src="./settings.js?v=archived"></script>\n' > "$SEED/games/arena/v17/index.html"
+printf 'archived controls\n' > "$SEED/games/arena/v17/settings.js"
 printf 'keep fire\n' > "$SEED/games/fire/v1/frozen.txt"
 printf 'keep kings\n' > "$SEED/games/kings/old/frozen.txt"
 printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
@@ -118,6 +121,25 @@ done
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
+if cmp -s "$REPO/web/$ARENA_LIVE/settings.js" "$SHIM_PUBLISHED/$ARENA_LIVE/settings.js"; then
+    ok "Arena settings.js is copied byte-for-byte beside its live page"
+else
+    bad "Arena settings.js was omitted or changed"
+fi
+contains "$(cat "$SHIM_PUBLISHED/$ARENA_LIVE/index.html")" "src=\"./settings.js?v=$STAMP\"" "Arena settings loader uses the final recomputed deploy stamp"
+if grep -qE '\./settings\.js\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/$ARENA_LIVE/index.html"; then
+    bad "assembled Arena settings loader retained its stale cache key"
+else
+    ok "assembled Arena settings loader has no stale cache key"
+fi
+contains "$(cat "$REPO/web/$ARENA_LIVE/index.html")" 'src="./settings.js?v=1"' "Arena source loader remains pinned at v=1"
+for f in index.html settings.js; do
+    if cmp -s "$SEED/games/arena/v17/$f" "$SHIM_PUBLISHED/games/arena/v17/$f"; then
+        ok "archived Arena $f is untouched"
+    else
+        bad "archived Arena $f was rewritten"
+    fi
+done
 for f in index.html main.js lab.js drive.html worker.js; do
     contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/$f")" "?v=$STAMP" "Julibrot $f uses the deploy stamp"
     if grep -qE '\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/labs/julibrot/$f"; then
@@ -146,6 +168,11 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     rm -rf "$EXPECTED/games/$live"
     mkdir -p "$EXPECTED/games/$live/pkg"
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
+    if [ "games/$live" = "$ARENA_LIVE" ]; then
+        # Expected output is authored independently of the publisher's rewrite.
+        printf 'arena live<script src="./settings.js?v=%s"></script>\n' "$STAMP" > "$EXPECTED/games/$live/index.html"
+        cp "$REPO/web/games/$live/settings.js" "$EXPECTED/games/$live/"
+    fi
     printf 'shim js for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/$bundle.js"
     printf 'shim wasm for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/${bundle}_bg.wasm"
 done
@@ -184,6 +211,37 @@ else
     tail -40 "$TMP/prebuilt.log" >&2
 fi
 if grep -Eq '^(cargo|wasm-bindgen)' "$SHIM_LOG"; then bad "complete prebuilt mode invoked a build tool"; else ok "complete prebuilt mode invoked no build tool"; fi
+
+echo "== a missing Arena controls script is refused before any publish =="
+mv "$REPO/web/$ARENA_LIVE/settings.js" "$TMP/settings.js.saved"
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing-settings.log" 2>&1; then
+    bad "a live Arena page without settings.js was accepted"
+else
+    ok "a live Arena page without settings.js was refused"
+fi
+contains "$(cat "$TMP/missing-settings.log")" "settings.js" "the missing-controls failure names settings.js"
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing settings.js reached a publish"; else ok "missing settings.js never reached a publish"; fi
+mv "$TMP/settings.js.saved" "$REPO/web/$ARENA_LIVE/settings.js"
+
+echo "== the Arena cache-token contract fails closed =="
+cp "$REPO/web/$ARENA_LIVE/index.html" "$TMP/arena-index.saved"
+for fixture in missing duplicate two-digit; do
+    case "$fixture" in
+        missing) printf 'arena live<script src="./settings.js"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html" ;;
+        duplicate) printf '<script src="./settings.js?v=1"></script><script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html" ;;
+        two-digit) printf 'arena live<script src="./settings.js?v=10"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html" ;;
+    esac
+    : > "$SHIM_LOG"
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/settings-$fixture.log" 2>&1; then
+        bad "the $fixture Arena settings cache token was accepted"
+    else
+        ok "the $fixture Arena settings cache token was refused"
+    fi
+    contains "$(cat "$TMP/settings-$fixture.log")" "Arena settings cache key must occur exactly once" "the $fixture cache-token failure explains the contract"
+    if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "$fixture settings cache token reached a publish"; else ok "$fixture settings cache token never reached a publish"; fi
+done
+cp "$TMP/arena-index.saved" "$REPO/web/$ARENA_LIVE/index.html"
 
 echo "== a statically imported module the deploy does not ship is refused =="
 printf 'import { openLab } from "./lab.js?v=1"; import nowhere from "./nowhere.js?v=1";\n' > "$REPO/web/labs/julibrot/main.js"

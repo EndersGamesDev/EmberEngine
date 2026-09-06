@@ -126,6 +126,8 @@ impl PadState {
 /// Which physical keys/buttons are currently held, plus pointer state.
 /// Snapshot-style: the game polls it every frame instead of chasing events.
 pub struct InputState {
+    /// Opt-in platform menu gate, separate from game simulation pause.
+    paused: bool,
     pressed: HashSet<KeyCode>,
     mouse: HashSet<MouseButton>,
     /// Cursor in normalized device coordinates (-1..1, +y up), if the
@@ -146,6 +148,7 @@ pub struct InputState {
 impl Default for InputState {
     fn default() -> Self {
         Self {
+            paused: false,
             pressed: HashSet::new(),
             mouse: HashSet::new(),
             cursor_ndc: None,
@@ -239,8 +242,10 @@ impl InputState {
     }
 
     pub(crate) fn add_mouse_delta(&mut self, dx: f32, dy: f32) {
-        self.mouse_delta.0 += dx;
-        self.mouse_delta.1 += dy;
+        if !self.paused {
+            self.mouse_delta.0 += dx;
+            self.mouse_delta.1 += dy;
+        }
     }
 
     /// Called by the engine after each game update.
@@ -249,7 +254,9 @@ impl InputState {
     }
 
     pub(crate) fn press(&mut self, key: KeyCode) {
-        self.pressed.insert(key);
+        if !self.paused {
+            self.pressed.insert(key);
+        }
     }
 
     pub(crate) fn release(&mut self, key: KeyCode) {
@@ -257,7 +264,9 @@ impl InputState {
     }
 
     pub(crate) fn mouse_press(&mut self, button: MouseButton) {
-        self.mouse.insert(button);
+        if !self.paused {
+            self.mouse.insert(button);
+        }
     }
 
     pub(crate) fn mouse_release(&mut self, button: MouseButton) {
@@ -275,7 +284,7 @@ impl InputState {
     }
 
     pub(crate) const fn set_pad(&mut self, pad: Option<PadState>) {
-        self.pad = pad;
+        self.pad = if self.paused { None } else { pad };
     }
 
     pub(crate) const fn set_pad_status(&mut self, status: &'static str) {
@@ -289,7 +298,21 @@ impl InputState {
     pub(crate) fn clear(&mut self) {
         self.pressed.clear();
         self.mouse.clear();
+        self.mouse_delta = (0.0, 0.0);
         self.pad = None;
+    }
+
+    pub(crate) const fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Opening, closing and remaining inside a menu all discard held/transient
+    /// device state. Key-up/button-up remain accepted while presses are gated.
+    pub(crate) fn set_paused(&mut self, paused: bool) {
+        if paused || self.paused != paused {
+            self.clear();
+        }
+        self.paused = paused;
     }
 }
 
@@ -364,5 +387,48 @@ mod tests {
         input.clear();
         assert!(!input.down(KeyCode::KeyW));
         assert_eq!(input.pad(), None);
+    }
+
+    #[test]
+    fn menu_pause_clears_held_motion_and_masks_new_presses_and_pad_until_resume() {
+        let pad = Some(PadState {
+            rt: 1.0,
+            ..PadState::default()
+        });
+        let mut input =
+            InputState::from_parts(&[KeyCode::KeyW], &[MouseButton::Left], (15.0, -9.0), pad);
+        input.set_paused(true);
+        assert!(input.paused());
+        input.press(KeyCode::KeyS);
+        input.mouse_press(MouseButton::Right);
+        input.add_mouse_delta(40.0, 25.0);
+        input.set_pad(pad);
+        assert!(!input.down(KeyCode::KeyW));
+        assert!(!input.down(KeyCode::KeyS));
+        assert!(!input.mouse_down(MouseButton::Left));
+        assert!(!input.mouse_down(MouseButton::Right));
+        assert_eq!(input.mouse_delta(), (0.0, 0.0));
+        assert_eq!(input.pad(), None);
+        input.release(KeyCode::KeyW);
+        input.mouse_release(MouseButton::Left);
+        input.set_paused(false);
+        assert!(!input.paused());
+        assert!(!input.down(KeyCode::KeyW));
+        assert_eq!(input.mouse_delta(), (0.0, 0.0));
+        input.press(KeyCode::KeyW);
+        input.mouse_press(MouseButton::Left);
+        input.add_mouse_delta(2.0, 3.0);
+        input.set_pad(pad);
+        assert!(input.down(KeyCode::KeyW));
+        assert!(input.mouse_down(MouseButton::Left));
+        assert_eq!(input.mouse_delta(), (2.0, 3.0));
+        assert_eq!(input.pad(), pad);
+    }
+
+    #[test]
+    fn focus_clear_also_drops_pending_mouse_motion() {
+        let mut input = InputState::from_parts(&[], &[], (300.0, -200.0), None);
+        input.clear();
+        assert_eq!(input.mouse_delta(), (0.0, 0.0));
     }
 }

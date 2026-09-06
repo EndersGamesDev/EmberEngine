@@ -34,24 +34,111 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 /// only way to beat it (flank it), so it is the tuning knob that matters most.
 pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 
-/// Height of the head zone, measured DOWN from the top of the hit volume.
+/// Maximum continuous shield hold, in seconds.
+pub const SHIELD_MAX_HOLD: f32 = 3.0;
+/// Trigger recovery after releasing or exhausting the shield, in seconds.
+pub const SHIELD_FIRE_LOCK: f32 = 0.35;
+/// Reuse delay after releasing or exhausting the shield, in seconds.
+pub const SHIELD_REUSE_COOLDOWN: f32 = 5.0;
+
+/// Deterministic shield state shared by authority and movement prediction.
 ///
-/// 0.30 is not a tuning knob: it is the height of the head part the client
-/// actually draws (`ember-engine/src/rig.rs:686-694` anchors it bottom-centre
-/// at NECK + 0.01 with a target height of 0.30). Because `BODY_H_*` above is
-/// now the drawn head's TOP, subtracting the drawn head's HEIGHT puts the zone
-/// exactly on the drawn head: [1.56, 1.86] standing, [1.25, 1.55] crouched.
-/// Change the model's head and this must follow, or headshots stop landing
-/// where players aim.
+/// A press during cooldown is consumed: `held` remembers the last intent even
+/// when raising fails, so continued holding never automatically reactivates it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ShieldState {
+    pub active: bool,
+    /// Seconds of protection left in the current hold; zero while lowered.
+    pub remaining: f32,
+    /// Seconds before another rising edge may raise the shield.
+    pub cooldown: f32,
+    /// Seconds before the owner's trigger can fire after lowering.
+    pub fire_lock: f32,
+    /// Previous raw held intent, not the active visual state.
+    pub held: bool,
+}
+
+impl ShieldState {
+    /// Fresh-life state. Weapon grants and reloads must not call this.
+    pub const READY: Self = Self {
+        active: false,
+        remaining: 0.0,
+        cooldown: 0.0,
+        fire_lock: 0.0,
+        held: false,
+    };
+}
+
+/// Advance once before movement, ADS and firing in each predicted/simulated step.
 ///
-/// It must also stay under `BODY_H_STAND - EYE_STAND` = 0.41. Rounds leave the
-/// muzzle at `EYE_STAND` 1.45 and fly level at pitch 0, so a band reaching down
-/// to 1.45 would make every level shot between two standing players a headshot
-/// and, with headshots lethal, the pistol would one-shot the whole game with
-/// nobody aiming at a head. At 0.30 the band starts at 1.56, so level fire
-/// lands in the chest and a standing kill needs deliberate upward aim.
-/// `level_fire_is_not_a_free_headshot` pins that margin.
-pub const HEAD_H: f32 = 0.30;
+/// Existing cooldowns advance first; a transition starts its complete recovery
+/// timers. The activation step counts toward the three-second maximum, so the
+/// shield is exhausted by step 180 at 60 Hz. Invalid/negative time is a no-op;
+/// zero time processes a newly arrived press/release without aging the state.
+/// Catch-up steps are capped at 250 ms. A tiny tolerance removes float countdown
+/// residue at exact 60 Hz boundaries, without buying an additional protected tick.
+#[must_use]
+pub fn advance_shield(mut state: ShieldState, held: bool, dt: f32) -> ShieldState {
+    if !dt.is_finite() || dt < 0.0 {
+        return state;
+    }
+    let dt = dt.min(0.25);
+    let countdown = |value: f32, limit: f32| {
+        let value = if value.is_finite() {
+            value.clamp(0.0, limit)
+        } else {
+            0.0
+        };
+        if value <= dt + 0.0001 {
+            0.0
+        } else {
+            value - dt
+        }
+    };
+    state.cooldown = countdown(state.cooldown, SHIELD_REUSE_COOLDOWN);
+    state.fire_lock = countdown(state.fire_lock, SHIELD_FIRE_LOCK);
+    let pressed = held && !state.held;
+    state.held = held;
+    if !state.active && pressed && state.cooldown == 0.0 {
+        state.active = true;
+        state.remaining = SHIELD_MAX_HOLD;
+    }
+    if state.active {
+        state.remaining = countdown(state.remaining, SHIELD_MAX_HOLD);
+        if !held || state.remaining == 0.0 {
+            state.active = false;
+            state.remaining = 0.0;
+            state.cooldown = SHIELD_REUSE_COOLDOWN;
+            state.fire_lock = SHIELD_FIRE_LOCK;
+        }
+    } else {
+        state.remaining = 0.0;
+    }
+    state
+}
+
+/// Anatomical skull/helmet proxy height, excluding the imported neck collar.
+///
+/// The production SWAT neck part includes collar, mask and helmet. Its measured
+/// settled bounds at 0.95 scale are Y [1.3518, 1.6993] standing and
+/// [1.0676, 1.4171] crouching. A 24 cm crop below the rounded helmet top excludes
+/// the collar: [1.46, 1.70] standing and [1.18, 1.42] crouching. The historical
+/// movement/ceiling clearance in `body_h` stays unchanged and does not define
+/// the bullet head volume. Animation remains cosmetic rather than per-bone rewind.
+pub const HEAD_H: f32 = 0.24;
+pub const HEAD_TOP_STAND: f32 = 1.70;
+pub const HEAD_TOP_CROUCH: f32 = 1.42;
+/// Headshot footprint radius, independent of stance and projectile radius.
+///
+/// The production SWAT `rig_neck` bounds are about 0.24 m wide by 0.36 m deep
+/// after its node transform and the client's 0.95 body scale (helmet included).
+/// This 0.32 m diameter proxy replaces the body's 1.2 m headshot cylinder.
+/// Crouching lowers the head but never makes the skull narrower.
+pub const HEAD_R: f32 = 0.16;
+/// Forward offset of the production head centre above a standing body's origin.
+pub const HEAD_FORWARD_STAND: f32 = 0.03;
+/// Forward offset of the production head centre above a fully crouched body.
+pub const HEAD_FORWARD_CROUCH: f32 = 0.20;
 
 /// Melee reach from the attacker's centre, before the target's own radius is
 /// added.
@@ -83,42 +170,14 @@ pub fn hit_radius(crouch: bool) -> f32 {
 /// level, so this is a bullet's starting height.
 pub const EYE_STAND: f32 = 1.45;
 pub const EYE_CROUCH: f32 = 0.85;
-/// Body height above the feet, per stance.
+/// Historical movement/ceiling clearance above the feet, per stance.
 ///
-/// The vertical extent matches the silhouette the client draws, so that what
-/// you see is what you hit. These live here, not in the renderer, because
-/// client and server must agree where a body IS.
-///
-/// They were 1.70 / 1.25 and did NOT match it. The rig draws a standing head
-/// at [1.56, 1.86]: ROOT sits at `pelvis_h` 0.98, SPINE is +0.05 above it,
-/// NECK is +`spine_len` 0.52 above that (`ember-engine/src/rig.rs:128-130`,
-/// defaults at `:100-105`), and the head part is anchored bottom-centre 0.01
-/// above NECK with a target height of 0.30 (`rig.rs:686-694`). So 1.70 cut the
-/// drawn head in half and left its top 16 cm unhittable - not even for body
-/// damage. Crouched was worse: `walk_pose` sinks the root by
-/// `crouch * (thigh_len 0.44 + shin_len 0.43) * 0.36` = 0.313 (`rig.rs:434`),
-/// putting the drawn crouched head near [1.25, 1.55] against a volume that
-/// stopped at 1.25 - a crouched player's visible head sat entirely OUTSIDE
-/// their own hitbox.
-///
-/// That was survivable while every hit was worth the same. It is not
-/// survivable with a head zone, because the player aims at a head they can
-/// see. These are now the drawn heights, so `HEAD_H` below lands on the drawn
-/// head in both stances.
-///
-/// Consequence, taken deliberately: crouch is weaker than it was. The old note
-/// here observed that a standing muzzle at 1.45 merely GRAZED a crouched band
-/// topping out at 1.47. That band now reaches 1.77, so level fire connects
-/// solidly - and since 1.45 falls inside the crouched head band [1.25, 1.55],
-/// level fire at a crouched target is a headshot. Crouch still shrinks your
-/// radius; it no longer also hides the part of you that was never in the
-/// hitbox to begin with.
+/// These dimensions were fitted to the previous veteran rig. They remain stable
+/// so existing map clearance, jumping, support and melee/splash checks do not
+/// change with an artwork update. Bullet collision uses the lower body ending
+/// at `head_lo`, plus the separately measured production SWAT head cylinder.
 pub const BODY_H_STAND: f32 = 1.86;
 pub const BODY_H_CROUCH: f32 = 1.55;
-// Worth knowing before tuning either of the above: they are tied to the rig
-// now, so moving one without moving the model reintroduces exactly the
-// aim-at-what-you-cannot-hit bug they were changed to fix. If the character
-// model changes height these follow it, and HEAD_H follows its head part.
 
 /// Height a shot leaves from, measured from the shooter's feet.
 #[must_use]
@@ -126,24 +185,110 @@ pub const fn eye_h(crouch: bool) -> f32 {
     if crouch { EYE_CROUCH } else { EYE_STAND }
 }
 
-/// Vertical extent of the hit volume, measured from the target's feet.
-///
-/// Together with `hit_radius` this makes the hitbox a finite cylinder; it
-/// used to be one of infinite height, which is why pitch never mattered.
+/// Movement/ceiling extent above the feet, not the bullet head volume.
 #[must_use]
 pub const fn body_h(crouch: bool) -> f32 {
     if crouch { BODY_H_CROUCH } else { BODY_H_STAND }
 }
 
-/// Bottom of the head zone, measured from the target's feet. A round arriving
-/// at or above this, and still inside the body volume, kills outright.
+/// Top of the production head proxy above the feet, separate from clearance.
+#[must_use]
+pub const fn head_top(crouch: bool) -> f32 {
+    if crouch {
+        HEAD_TOP_CROUCH
+    } else {
+        HEAD_TOP_STAND
+    }
+}
+
+/// Bottom of the head zone, measured from the target's feet. A round must
+/// also cross the narrow horizontal head footprint to be a headshot.
 ///
 /// Lives beside `body_h` and `eye_h` and for the same reason: it decides who
 /// dies, so client and server must agree on it, and the renderer must not be
 /// the one to define it.
 #[must_use]
 pub const fn head_lo(crouch: bool) -> f32 {
-    body_h(crouch) - HEAD_H
+    head_top(crouch) - HEAD_H
+}
+
+/// Stance proxy for the head's horizontal centre, preserving the supplied feet Y.
+///
+/// Measured from the production SWAT neck mesh, bind joints and settled walk pose
+/// at 0.95 body scale: standing +0.0305 m, crouching +0.199 m forward. The crouch
+/// spine leans 0.38 radians and the neck counters 80% of that rotation. This is
+/// deliberately a deterministic stance proxy, not per-frame cosmetic bone motion.
+#[must_use]
+pub fn head_origin(target: [f32; 3], aim: [f32; 2], crouch: bool) -> [f32; 3] {
+    let length = aim[0].hypot(aim[1]);
+    let direction = if length.is_finite() && length > 1e-4 {
+        [aim[0] / length, aim[1] / length]
+    } else {
+        [1.0, 0.0]
+    };
+    let forward = if crouch {
+        HEAD_FORWARD_CROUCH
+    } else {
+        HEAD_FORWARD_STAND
+    };
+    [
+        target[0] + direction[0] * forward,
+        target[1],
+        target[2] + direction[1] * forward,
+    ]
+}
+
+/// First segment contact with the head-sized cylinder, if any.
+///
+/// `target` is the rewound [`head_origin`] and feet height. No projectile-radius
+/// padding applies: a graze outside the head at head height is a miss; below
+/// the neck, the separate body volume still receives ordinary damage.
+/// Exact horizontal and vertical intervals also handle a steep/fast round
+/// crossing the entire head in one tick without sampling or tunnelling.
+#[must_use]
+pub fn headshot_contact(
+    from: [f32; 3],
+    to: [f32; 3],
+    target: [f32; 3],
+    crouch: bool,
+) -> Option<f32> {
+    if !from.iter().chain(&to).chain(&target).all(|v| v.is_finite()) {
+        return None;
+    }
+    let (dx, dz) = (to[0] - from[0], to[2] - from[2]);
+    let (fx, fz) = (from[0] - target[0], from[2] - target[2]);
+    let a = dx * dx + dz * dz;
+    let c = fx * fx + fz * fz - HEAD_R * HEAD_R;
+    let (mut enter, mut leave) = if a <= 1e-8 {
+        if c >= 0.0 {
+            return None;
+        }
+        (0.0f32, 1.0f32)
+    } else {
+        let half_b = fx * dx + fz * dz;
+        let half_b_sq = half_b * half_b;
+        let disc = half_b_sq - a * c;
+        if disc <= 0.0 {
+            return None;
+        }
+        let root = disc.sqrt();
+        (
+            ((-half_b - root) / a).max(0.0),
+            ((-half_b + root) / a).min(1.0),
+        )
+    };
+    let (lo, hi) = (target[1] + head_lo(crouch), target[1] + head_top(crouch));
+    let dy = to[1] - from[1];
+    if dy.abs() <= 1e-8 {
+        if from[1] < lo || from[1] > hi {
+            return None;
+        }
+    } else {
+        let (a, b) = ((lo - from[1]) / dy, (hi - from[1]) / dy);
+        enter = enter.max(a.min(b));
+        leave = leave.min(a.max(b));
+    }
+    (enter <= leave).then_some(enter)
 }
 
 /// Hard clamp on aim pitch, radians (~83°). The client clamps its own look
@@ -530,7 +675,8 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             cooldown: 1.2,
             mag: 1,
             reserve: 2,
-            damage: 3,
+            // A direct explosive impact remains lethal as the health bar grows.
+            damage: MAX_HP,
             // The booster leaves the tube at 120 m/s and the sustainer
             // adds 180 m/s over the first half second, to 300. Inside a
             // 48 m arena the cap is only ever reached by a round that
@@ -776,7 +922,7 @@ pub const BLAST_STANDOFF: f32 = 0.02;
 /// price for having caught them. Telling the two apart would need a flag
 /// on `Bullet`.
 pub const MAX_BULLETS_PER_PLAYER: usize = 10;
-pub const MAX_HP: u8 = 3;
+pub const MAX_HP: u8 = 5;
 pub const RESPAWN_SECS: f32 = 2.5;
 pub const MAX_PLAYERS: usize = 8;
 /// Lag compensation: hit tests may rewind targets at most this many ticks
@@ -1828,6 +1974,10 @@ pub struct PlayerIn {
     /// wire that a dropped packet can desync, and nothing in this struct has
     /// ever needed one.
     pub shield: bool,
+    /// A received release edge that must survive latest-intent coalescing.
+    /// Applied before `shield` on the next fixed tick, then consumed by the
+    /// server. Internal only: the wire still sends ordinary held intent.
+    pub shield_released: bool,
     /// A melee PRESS (E), consumed on the tick it lands, exactly like `jump`
     /// and for the same reason: held semantics would re-swing on every tick
     /// the server keeps applying the last input it received, and at one kill
@@ -1869,6 +2019,8 @@ pub struct PlayerSt {
     /// Off-hand shield raised. Broadcast, because a shield nobody can see is
     /// a mechanic that kills you for no visible reason.
     pub shield: bool,
+    /// Timers and press latch; `shield` mirrors this state's `active` flag.
+    pub shield_state: ShieldState,
     /// A weapon id, `1..=WEAPON_COUNT`; `SIDEARM` on spawn and on death.
     pub weapon: u8,
     pub ammo: u8,
@@ -2135,13 +2287,14 @@ pub fn launch(
     });
 }
 
-/// One tick's snapshot per player (id, pos, feet y, alive, crouch) for
+/// One tick's snapshot per player (id, pos, feet y, alive, crouch, aim) for
 /// lag-compensated rewinds — stance AND height rewind with position, so a
 /// shot at a target who was then standing on a crate uses the standing
 /// hitbox at the crate's height, even if they have since crouched or
 /// dropped off it. Without the height the vertical band below would test a
 /// current position against a rewound one and miss for the wrong reason.
-type HistoryFrame = Vec<(u8, [f32; 2], f32, bool, bool)>;
+type HistoryFrame = Vec<(u8, [f32; 2], f32, bool, bool, [f32; 2])>;
+type RewoundBody = ([f32; 2], f32, bool, bool, [f32; 2]);
 
 /// One loot block's state: which obstacle it is, and whether it is armed.
 #[derive(Clone, Debug)]
@@ -2254,6 +2407,8 @@ const fn respawn(p: &mut PlayerSt, position: [f32; 2]) {
     p.reserve = RESERVE_INFINITE;
     p.fired = 0;
     p.reload_t = 0.0;
+    p.shield = false;
+    p.shield_state = ShieldState::READY;
     reset_handling(p);
 }
 
@@ -2385,6 +2540,7 @@ impl Sim {
             alive: true,
             crouch: false,
             shield: false,
+            shield_state: ShieldState::READY,
             weapon: SIDEARM,
             ammo: weapon_stats(SIDEARM).mag,
             reserve: RESERVE_INFINITE,
@@ -2408,7 +2564,7 @@ impl Sim {
         // a joiner must not inherit the leaver's ghost (lag-comp hit tests
         // would land on positions the new player never occupied).
         for frame in &mut self.history {
-            frame.retain(|(pid, _, _, _, _)| *pid != id);
+            frame.retain(|(pid, _, _, _, _, _)| *pid != id);
         }
     }
 
@@ -2461,10 +2617,10 @@ impl Sim {
         }
     }
 
-    /// Target state for a hit test — (pos, feet y, alive, crouch) rewound
+    /// Target state for a hit test — (pos, feet y, alive, crouch, aim) rewound
     /// `delay` ticks for lag compensation (None when history is short or
     /// delay 0).
-    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], f32, bool, bool)> {
+    fn rewound(&self, id: u8, delay: u16) -> Option<RewoundBody> {
         if delay == 0 {
             return None;
         }
@@ -2472,8 +2628,8 @@ impl Sim {
         let frame = self.history.get(idx)?;
         frame
             .iter()
-            .find(|(pid, _, _, _, _)| *pid == id)
-            .map(|&(_, pos, y, alive, crouch)| (pos, y, alive, crouch))
+            .find(|(pid, _, _, _, _, _)| *pid == id)
+            .map(|&(_, pos, y, alive, crouch, aim)| (pos, y, alive, crouch, aim))
     }
 
     /// A rocket going off at `blast`.
@@ -2522,9 +2678,9 @@ impl Sim {
             if q.id != b.owner && self.same_team(b.owner, q.id) {
                 continue;
             }
-            let (qpos, qy, qalive, qcrouch) = self
+            let (qpos, qy, qalive, qcrouch, _) = self
                 .rewound(q.id, b.delay)
-                .unwrap_or((q.pos, q.y, q.alive, q.crouch));
+                .unwrap_or((q.pos, q.y, q.alive, q.crouch, q.aim));
             if !qalive || !q.alive {
                 continue;
             }
@@ -2590,6 +2746,8 @@ impl Sim {
                 // their first live tick after respawning, and remote clients
                 // draw it.
                 p.shield = false;
+                p.shield_state.active = false;
+                p.shield_state.remaining = 0.0;
                 reset_handling(p);
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
@@ -2598,6 +2756,18 @@ impl Sim {
                 continue;
             }
 
+            let p = &mut self.players[i];
+            let shield_dt = if input.shield_released && input.shield {
+                let lowered_now = p.shield_state.active;
+                p.shield_state = advance_shield(p.shield_state, false, 0.0);
+                // A release that lowers protection starts its complete recovery
+                // this tick. The queued re-press must not age those new timers.
+                if lowered_now { 0.0 } else { dt }
+            } else {
+                dt
+            };
+            p.shield_state = advance_shield(p.shield_state, input.shield, shield_dt);
+            p.shield = p.shield_state.active;
             let (old_pos, feet_height, vertical_speed) =
                 (self.players[i].pos, self.players[i].y, self.players[i].vy);
             // Shared movement code (also used by client prediction).
@@ -2610,7 +2780,7 @@ impl Sim {
                 input.jump,
                 input.sprint,
                 input.crouch,
-                input.shield,
+                self.players[i].shield,
                 &self.obstacles,
             );
             let pos = move_circle_in(
@@ -2645,7 +2815,6 @@ impl Sim {
             p.y = v.y;
             p.vy = v.vy;
             p.crouch = input.crouch;
-            p.shield = input.shield;
 
             // Aim.
             let mut aim = input.aim;
@@ -2718,14 +2887,17 @@ impl Sim {
             } else if (input.reload && p.ammo < stats.mag && p.reserve > 0) || p.ammo == 0 {
                 p.reload_t = stats.reload;
                 reset_handling(p);
-            } else if input.fire && !input.shield && p.cooldown == 0.0 && p.ammo > 0 {
+            } else if input.fire
+                && !p.shield
+                && p.shield_state.fire_lock == 0.0
+                && p.cooldown == 0.0
+                && p.ammo > 0
+            {
                 // Raising the shield blocks your own trigger — the price of
                 // cover, and the reason the whole match does not degenerate
                 // into everyone holding Q. Only the trigger is blocked: the
-                // cooldown above still runs down behind the shield, so
-                // releasing Q fires on the next tick exactly as if the
-                // trigger had simply not been pulled, which is how every
-                // other held intent here behaves.
+                // weapon cooldown still runs behind it, but lowering starts
+                // a separate trigger lock that weapon swaps cannot clear.
                 let owner = p.id;
                 let active = self.bullets.iter().filter(|b| b.owner == owner).count()
                     + new_bullets.iter().filter(|b| b.owner == owner).count();
@@ -2863,7 +3035,7 @@ impl Sim {
         self.history.push_back(
             self.players
                 .iter()
-                .map(|p| (p.id, p.pos, p.y, p.alive, p.crouch))
+                .map(|p| (p.id, p.pos, p.y, p.alive, p.crouch, p.aim))
                 .collect(),
         );
         if self.history.len() > HISTORY_LEN {
@@ -2919,10 +3091,11 @@ impl Sim {
                     continue;
                 }
                 let tid = self.players[j].id;
-                let (tpos, ty, talive, tcrouch) = self.rewound(tid, delay).unwrap_or_else(|| {
-                    let t = &self.players[j];
-                    (t.pos, t.y, t.alive, t.crouch)
-                });
+                let (tpos, ty, talive, tcrouch, _) =
+                    self.rewound(tid, delay).unwrap_or_else(|| {
+                        let t = &self.players[j];
+                        (t.pos, t.y, t.alive, t.crouch, t.aim)
+                    });
                 if !talive || self.same_team(aid, tid) {
                     continue;
                 }
@@ -3044,9 +3217,9 @@ impl Sim {
                 }
                 // Where (in what stance, and at what height) the shooter
                 // SAW this target.
-                let (tpos, ty, talive, tcrouch) = self
+                let (tpos, ty, talive, tcrouch, taim) = self
                     .rewound(p.id, b.delay)
-                    .unwrap_or((p.pos, p.y, p.alive, p.crouch));
+                    .unwrap_or((p.pos, p.y, p.alive, p.crouch, p.aim));
                 if !talive || !p.alive {
                     continue;
                 }
@@ -3089,37 +3262,36 @@ impl Sim {
                     }
                     (t_in, t_out)
                 };
-                // Vertical band, with the bullet's own radius on both ends
-                // so it matches the horizontal sum-of-radii test. This is
-                // what turns the hit volume from a cylinder of infinite
-                // height into a real body, and so what makes pitch matter.
-                let (lo, hi) = (ty - radius, ty + body_h(tcrouch) + radius);
-                // The head is the top HEAD_H of the volume. No BULLET_R pad on
-                // its underside: that boundary is internal, between head and
-                // chest, not a silhouette edge, and padding it outward would
-                // quietly make the head bigger than the one being drawn.
-                let head_lo = ty + head_lo(tcrouch);
+                // The body stops at the neck; the head is a separate narrow
+                // cylinder. Padding the body's top would recreate an invisible
+                // shoulder shell that consumes a round before it reaches the
+                // real head, sometimes one tick later. The neck boundary belongs
+                // to the head for a horizontal round exactly on that plane.
+                let (lo, hi) = (ty - radius, ty + head_lo(tcrouch));
                 let (ya, yb) = (y0 + (y1 - y0) * t_in, y0 + (y1 - y0) * t_out);
                 let (ymin, ymax) = (ya.min(yb), ya.max(yb));
-                // Body iff the height interval meets [lo, hi]; head iff it
-                // meets [head_lo, hi], and given the first the second is
-                // one comparison. A round that passed through the head IS
-                // a headshot, wherever else on the body it also was.
-                if ymax < lo || ymin > hi {
-                    continue;
-                }
-                let head = ymax >= head_lo;
-                // Where the round met the body: where it entered the
-                // circle, unless it was still above or below the volume
-                // there, in which case where its height came into the
-                // band. That is the exact contact with the volume, and it
-                // is where the tracer ends and the cover gate is judged.
-                let contact = if ya > hi {
-                    t_in + (t_out - t_in) * ((hi - ya) / (yb - ya))
-                } else if ya < lo {
-                    t_in + (t_out - t_in) * ((lo - ya) / (yb - ya))
+                let head = headshot_contact(
+                    [p0[0], y0, p0[1]],
+                    [p1[0], y1, p1[1]],
+                    head_origin([tpos[0], ty, tpos[1]], taim, tcrouch),
+                    tcrouch,
+                );
+                let body = if ymax < lo || ymin >= hi {
+                    None
                 } else {
-                    t_in
+                    Some(if ya > hi {
+                        t_in + (t_out - t_in) * ((hi - ya) / (yb - ya))
+                    } else if ya < lo {
+                        t_in + (t_out - t_in) * ((lo - ya) / (yb - ya))
+                    } else {
+                        t_in
+                    })
+                };
+                let (contact, head) = match (head, body) {
+                    (Some(head), Some(body)) if head <= body => (head, true),
+                    (_, Some(body)) => (body, false),
+                    (Some(head), None) => (head, true),
+                    (None, None) => continue,
                 };
                 // Cover between the muzzle and the body stops the round
                 // before the body does: the world's first crossing lies
@@ -3312,6 +3484,9 @@ impl Sim {
             v.hp = v.hp.saturating_sub(dmg);
             if v.hp == 0 {
                 v.alive = false;
+                v.shield = false;
+                v.shield_state.active = false;
+                v.shield_state.remaining = 0.0;
                 reset_handling(v);
                 v.respawn_in = RESPAWN_SECS;
                 v.death_count += 1;
@@ -3575,7 +3750,7 @@ mod tests {
     }
 
     #[test]
-    fn three_hits_kill_score_and_respawn() {
+    fn five_point_health_kills_score_and_respawn() {
         let mut sim = Sim::new(2);
         sim.obstacles.clear(); // open field for a clean shot
         sim.add_player(0);
@@ -3766,7 +3941,9 @@ mod tests {
     }
 
     #[test]
-    fn the_revolver_kills_in_two_hits() {
+    fn the_revolver_kills_in_three_body_hits() {
+        // Aim below the measured chin so real recoil dispersion cannot turn
+        // this body-damage count into a legitimate lucky headshot.
         let mut sim = Sim::new(9);
         sim.obstacles.clear();
         sim.pads.clear();
@@ -3783,6 +3960,7 @@ mod tests {
             PlayerIn {
                 mv: [0.0, 0.0],
                 aim: [1.0, 0.0],
+                pitch: -0.10,
                 fire: true,
                 ..Default::default()
             },
@@ -3806,9 +3984,9 @@ mod tests {
             }
         }
         assert_eq!(sim.events, vec![(0, 1)], "the revolver killed the target");
-        assert!(
-            hits <= 1,
-            "at most one non-lethal hit before the kill (2 dmg per hit)"
+        assert_eq!(
+            hits, 2,
+            "two non-lethal hits before the third 2-damage body hit"
         );
         // The killing round is reported from the damage loop: shooter,
         // victim, the two points of body damage, not a head.
@@ -4257,6 +4435,7 @@ mod tests {
             0,
             PlayerIn {
                 aim: [1.0, 0.0],
+                pitch: -0.10, // Below either chin: this isolates the horizontal stance radius.
                 fire: true,
                 delay_ticks: 12,
                 ..Default::default()
@@ -4795,6 +4974,219 @@ mod tests {
 
     // ---- the off-hand shield ----
 
+    #[test]
+    fn shield_exhausts_on_the_180th_step_and_never_reactivates_while_held() {
+        let mut state = ShieldState::READY;
+        for tick in 1..=179 {
+            state = advance_shield(state, true, FIXED_DT);
+            assert!(
+                state.active && state.remaining > 0.0,
+                "tick {tick}: {state:?}"
+            );
+        }
+        assert!((state.remaining - FIXED_DT).abs() < 0.0001);
+        state = advance_shield(state, true, FIXED_DT);
+        assert!(!state.active);
+        assert_eq!(state.remaining, 0.0);
+        assert_eq!(state.cooldown, SHIELD_REUSE_COOLDOWN);
+        assert_eq!(state.fire_lock, SHIELD_FIRE_LOCK);
+        state = advance_shield(state, true, FIXED_DT);
+        assert!(!state.active && state.cooldown < SHIELD_REUSE_COOLDOWN);
+        for _ in 0..900 {
+            state = advance_shield(state, true, FIXED_DT);
+            assert!(!state.active, "holding through expiry cannot raise again");
+        }
+        assert_eq!(state.cooldown, 0.0);
+        state = advance_shield(state, false, FIXED_DT);
+        state = advance_shield(state, true, FIXED_DT);
+        assert!(state.active, "a new press after cooldown raises again");
+    }
+
+    #[test]
+    fn shield_release_starts_exact_recovery_and_consumes_early_presses() {
+        let raised = advance_shield(ShieldState::READY, true, FIXED_DT);
+        let lowered = advance_shield(raised, false, FIXED_DT);
+        assert!(!lowered.active && !lowered.held);
+        assert_eq!(
+            (lowered.fire_lock, lowered.cooldown),
+            (SHIELD_FIRE_LOCK, SHIELD_REUSE_COOLDOWN)
+        );
+        let mut state = lowered;
+        for tick in 1..=300 {
+            // An immediate, premature repress is remembered throughout cooldown.
+            state = advance_shield(state, true, FIXED_DT);
+            assert!(
+                !state.active,
+                "premature press was not consumed on tick {tick}"
+            );
+            assert_eq!(state.fire_lock == 0.0, tick >= 21, "tick {tick}: {state:?}");
+            assert_eq!(state.cooldown == 0.0, tick == 300, "tick {tick}: {state:?}");
+        }
+        state = advance_shield(state, false, 0.0);
+        state = advance_shield(state, true, 0.0);
+        assert!(state.active);
+        assert_eq!(
+            state.remaining, SHIELD_MAX_HOLD,
+            "zero-time reconciliation does not age timers"
+        );
+    }
+
+    #[test]
+    fn shield_time_is_finite_bounded_and_zero_time_only_changes_intent() {
+        let state = advance_shield(ShieldState::READY, true, 0.0);
+        assert_eq!(state.remaining, SHIELD_MAX_HOLD);
+        for dt in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+            assert_eq!(advance_shield(state, false, dt), state);
+        }
+        assert_eq!(
+            advance_shield(state, true, 10.0),
+            advance_shield(state, true, 0.25)
+        );
+        let lower = advance_shield(state, false, 0.0);
+        assert_eq!(
+            (lower.fire_lock, lower.cooldown),
+            (SHIELD_FIRE_LOCK, SHIELD_REUSE_COOLDOWN)
+        );
+        assert_eq!(advance_shield(lower, false, 0.0), lower);
+    }
+
+    #[test]
+    fn coalesced_shield_release_precedes_latest_held_intent_without_aging_twice() {
+        let mut sim = open_sim(32, 1);
+        sim.players[0].shield_state = ShieldState {
+            held: true,
+            ..ShieldState::READY
+        };
+        let held = PlayerIn {
+            shield: true,
+            ..Default::default()
+        };
+        sim.step(&|_| held);
+        assert!(!sim.players[0].shield, "continued holding cannot rearm");
+        sim.step(&|_| PlayerIn {
+            shield_released: true,
+            ..held
+        });
+        let raised = sim.players[0].shield_state;
+        assert!(raised.active && raised.held && sim.players[0].shield);
+        assert!((raised.remaining - (SHIELD_MAX_HOLD - FIXED_DT)).abs() < 1e-5);
+        // Releasing an active shield is not a free refill, even if the latest
+        // packet already requests another raise. Only the fixed tick ages it.
+        sim.step(&|_| PlayerIn {
+            shield_released: true,
+            ..held
+        });
+        let lowered = sim.players[0].shield_state;
+        assert!(!lowered.active && lowered.held && !sim.players[0].shield);
+        assert_eq!(lowered.cooldown, SHIELD_REUSE_COOLDOWN);
+        assert_eq!(lowered.fire_lock, SHIELD_FIRE_LOCK);
+        for _ in 0..300 {
+            sim.step(&|_| held);
+        }
+        assert!(
+            !sim.players[0].shield,
+            "premature re-press remains consumed"
+        );
+        // A final released intent already contains the edge: merging it must
+        // preserve exactly the same timing as an ordinary direct sim release.
+        sim.players[0].shield_state = raised;
+        sim.players[0].shield = true;
+        sim.step(&|_| PlayerIn {
+            shield_released: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            sim.players[0].shield_state,
+            advance_shield(raised, false, FIXED_DT)
+        );
+    }
+
+    #[test]
+    fn only_actual_shield_protection_suppresses_sprint_ads_and_trigger() {
+        let mut sim = open_sim(32, 1);
+        sim.players[0].pos = [0.0, 0.0];
+        let input = PlayerIn {
+            mv: [1.0, 0.0],
+            aim: [1.0, 0.0],
+            shield: true,
+            sprint: true,
+            ads: true,
+            fire: true,
+            ..Default::default()
+        };
+        let mag = sim.players[0].ammo;
+        for tick in 1..=201 {
+            sim.players[0].pos = [0.0, 0.0];
+            sim.step(&|_| input);
+            let p = &sim.players[0];
+            assert_eq!(p.shield, p.shield_state.active);
+            let speed = if tick < 180 {
+                MOVE_SPEED
+            } else {
+                MOVE_SPEED * SPRINT_MULT
+            };
+            assert!((p.pos[0] - speed * FIXED_DT).abs() < 1e-6, "tick {tick}");
+            assert_eq!(p.ads_fraction > 0.0, tick >= 180, "ADS on tick {tick}");
+            assert_eq!(
+                p.ammo,
+                if tick < 201 { mag } else { mag - 1 },
+                "trigger on tick {tick}"
+            );
+        }
+    }
+
+    #[test]
+    fn shield_recovery_survives_reload_grant_dry_swap_and_round_pause() {
+        let mut sim = open_sim(32, 1);
+        sim.players[0].shield_state = advance_shield(
+            advance_shield(ShieldState::READY, true, FIXED_DT),
+            false,
+            FIXED_DT,
+        );
+        let lowered = sim.players[0].shield_state;
+        grant(&mut sim.players[0], 3);
+        assert_eq!(
+            sim.players[0].shield_state, lowered,
+            "weapon grant cannot erase shield recovery"
+        );
+        sim.players[0].ammo -= 1;
+        sim.step(&|_| PlayerIn {
+            reload: true,
+            shield: true,
+            ..Default::default()
+        });
+        assert!(sim.players[0].reload_t > 0.0 && !sim.players[0].shield);
+        assert!(sim.players[0].shield_state.cooldown > 4.9);
+        sim.players[0].reload_t = FIXED_DT * 0.5;
+        sim.step(&|_| PlayerIn {
+            shield: true,
+            ..Default::default()
+        });
+        assert_eq!(sim.players[0].reload_t, 0.0);
+        assert!(sim.players[0].shield_state.cooldown > 4.9);
+        sim.players[0].ammo = 0;
+        sim.players[0].reserve = 0;
+        sim.step(&|_| PlayerIn {
+            shield: true,
+            ..Default::default()
+        });
+        assert_eq!(sim.players[0].weapon, SIDEARM);
+        assert!(sim.players[0].shield_state.cooldown > 4.9);
+        sim.round_pause = 1.0;
+        sim.step(&|_| PlayerIn {
+            shield: true,
+            ..Default::default()
+        });
+        assert!(sim.players[0].shield_state.cooldown > 4.9 && !sim.players[0].shield);
+        sim.restart_round();
+        assert_eq!(
+            sim.players[0].shield_state,
+            ShieldState::READY,
+            "round restart grants a new life"
+        );
+        assert_eq!(sim.players[0].hp, 5);
+    }
+
     /// A shooter at the origin firing +x at a defender `dist` away, for
     /// exactly one round on the first tick. The defender aims along
     /// `def_aim` and holds the shield iff `shield`. Both are pinned in place
@@ -4995,9 +5387,8 @@ mod tests {
             sim.players[0].ammo, mag,
             "a blocked trigger must not spend ammunition either"
         );
-        // Lowering it restores fire on the very next tick — the cooldown ran
-        // down behind the shield, exactly as it does when the trigger is
-        // simply not pulled.
+        // Lowering starts a separate 350 ms trigger lock, even when the
+        // weapon's ordinary cooldown has already expired behind the shield.
         inputs.insert(
             0,
             PlayerIn {
@@ -5008,10 +5399,20 @@ mod tests {
             },
         );
         step_with(&mut sim, &inputs);
+        assert!(
+            sim.bullets.is_empty(),
+            "the blocked trigger emitted no round"
+        );
+        assert_eq!(sim.players[0].shield_state.fire_lock, SHIELD_FIRE_LOCK);
+        for _ in 0..20 {
+            step_with(&mut sim, &inputs);
+            assert_eq!(sim.players[0].ammo, mag);
+        }
+        step_with(&mut sim, &inputs);
         assert_eq!(
             sim.bullets.len(),
             1,
-            "releasing the shield must fire on the same tick"
+            "the held trigger fires exactly when recovery ends"
         );
         assert_eq!(sim.players[0].ammo, mag - 1);
     }
@@ -5132,70 +5533,396 @@ mod tests {
 
     // ---- v12: melee and headshots -------------------------------------
 
+    // Collision-only probes specify both segment endpoints directly. Real weapon
+    // spread/launch behaviour remains covered by the weapon and ADS suites.
+    fn collision_probe(from: [f32; 3], to: [f32; 3], delay: u16) -> Bullet {
+        Bullet {
+            pos: [from[0], from[2]],
+            vel: [(to[0] - from[0]) / FIXED_DT, (to[2] - from[2]) / FIXED_DT],
+            y: from[1],
+            vy: (to[1] - from[1]) / FIXED_DT,
+            ttl: 1.0,
+            from,
+            owner: 0,
+            dmg: 1,
+            delay,
+            weapon: SIDEARM,
+            pierce: 0,
+            hit_mask: 0,
+        }
+    }
+
     #[test]
-    fn level_fire_at_a_crouched_target_is_a_headshot() {
-        // DELIBERATE, and pinned because it is the surprising one.
-        //
-        // Level fire is forbidden from being a free headshot in three of the
-        // four stance pairings, by assertion. This is the fourth, and it goes
-        // the other way:
-        //
-        //   standing -> standing   1.45 vs [1.56, 1.86]   body
-        //   standing -> CROUCHED   1.45 vs [1.25, 1.55]   HEAD
-        //   crouched -> standing   0.85 vs [1.56, 1.86]   body
-        //   crouched -> crouched   0.85 vs [1.25, 1.55]   body
-        //
-        // A crouched player's head rises into a standing player's eye line -
-        // which is what crouching does in life and in most shooters. And
-        // because a pitch-0 round has vy = 0, it holds 1.45 forever: this is
-        // true at EVERY range, and the shooter aiming at what looks like a
-        // chest does not have to know. Crouch is therefore a hard commitment,
-        // not free value: it still shrinks your radius, and it now also puts
-        // your head where the bullets already are.
-        //
-        // The point of the test is not the direction, it is that the next
-        // person to tune BODY_H_CROUCH finds out they changed this. It moved
-        // once already (1.25 -> 1.55) and this behaviour came with it.
-        assert!(
-            head_lo(true) < EYE_STAND && EYE_STAND < BODY_H_CROUCH,
-            "a standing muzzle {EYE_STAND} must sit inside the crouched head band [{}, {BODY_H_CROUCH}]",
-            head_lo(true)
+    fn headshot_footprint_is_narrow_in_both_stances_and_all_directions() {
+        for crouch in [false, true] {
+            let height = head_lo(crouch) + HEAD_H * 0.5;
+            for (along_x, offset) in [(true, 0.0), (false, 0.0), (true, 0.159), (false, 0.159)] {
+                let (from, to) = if along_x {
+                    ([-2.0, height, offset], [2.0, height, offset])
+                } else {
+                    ([offset, height, -2.0], [offset, height, 2.0])
+                };
+                assert!(headshot_contact(from, to, [0.0; 3], crouch).is_some());
+            }
+            for offset in [0.161, HEAD_R + BULLET_R * 0.5, hit_radius(crouch) * 0.9] {
+                assert!(
+                    headshot_contact(
+                        [-2.0, height, offset],
+                        [2.0, height, offset],
+                        [0.0; 3],
+                        crouch
+                    )
+                    .is_none(),
+                    "a lateral graze is not a headshot: stance {crouch}, offset {offset}"
+                );
+            }
+            assert!(
+                headshot_contact(
+                    [0.0, height + 4.0, 0.0],
+                    [0.0, height - 1.0, 0.0],
+                    [0.0; 3],
+                    crouch
+                )
+                .is_some()
+            );
+            assert!(
+                headshot_contact(
+                    [-2.0, head_lo(crouch) - 0.001, 0.0],
+                    [2.0, head_lo(crouch) - 0.001, 0.0],
+                    [0.0; 3],
+                    crouch
+                )
+                .is_none()
+            );
+            assert!(
+                headshot_contact(
+                    [-2.0, head_top(crouch) + 0.001, 0.0],
+                    [2.0, head_top(crouch) + 0.001, 0.0],
+                    [0.0; 3],
+                    crouch
+                )
+                .is_none()
+            );
+        }
+        assert!(headshot_contact([f32::NAN, 1.7, 0.0], [2.0, 1.7, 0.0], [0.0; 3], false).is_none());
+    }
+
+    #[test]
+    fn head_origin_tracks_settled_stance_and_rewinds_the_targets_facing() {
+        assert_eq!(
+            head_origin([1.0, 2.0, 3.0], [0.0, 2.0], true),
+            [1.0, 2.0, 3.2]
         );
+        assert_eq!(
+            head_origin([0.0; 3], [-1.0, 0.0], false),
+            [-HEAD_FORWARD_STAND, 0.0, 0.0]
+        );
+        let run = |delay| {
+            let mut sim = open_sim(21, 2);
+            sim.players[0].pos = [-10.0, 0.0];
+            sim.players[1].pos = [3.0, 0.0];
+            for _ in 0..8 {
+                sim.step(&|id| PlayerIn {
+                    aim: [0.0, 1.0],
+                    crouch: id == 1,
+                    ..Default::default()
+                });
+            }
+            let height = head_lo(true) + HEAD_H * 0.5;
+            sim.bullets.push(collision_probe(
+                [0.0, height, HEAD_FORWARD_CROUCH],
+                [6.0, height, HEAD_FORWARD_CROUCH],
+                delay,
+            ));
+            // A turn moves the crouched head by 40 cm without moving the body.
+            // Only historical aim can put the old head where the shooter saw it.
+            sim.step(&|id| PlayerIn {
+                aim: [0.0, -1.0],
+                crouch: id == 1,
+                ..Default::default()
+            });
+            sim.hits
+        };
         assert!(
-            one_shot_kills(0.0, 5.0, 0.0, true),
-            "level fire at a crouched target is a headshot, deliberately"
+            run(0).is_empty(),
+            "the present head has turned out of the ray"
+        );
+        assert_eq!(run(4), vec![(0, 1, MAX_HP, true)]);
+    }
+
+    #[test]
+    fn head_height_glances_miss_but_lower_shoulder_glances_still_damage() {
+        for crouch in [false, true] {
+            for offset in [0.0, 0.159, 0.161, 0.3] {
+                let mut sim = open_sim(21, 2);
+                sim.players[0].pos = [-10.0, 0.0];
+                sim.players[1].pos = [3.0, 0.0];
+                let height = head_lo(crouch) + HEAD_H * 0.5;
+                sim.bullets.push(collision_probe(
+                    [0.0, height, offset],
+                    [6.0, height, offset],
+                    0,
+                ));
+                sim.step(&|id| PlayerIn {
+                    crouch: id == 1 && crouch,
+                    ..Default::default()
+                });
+                let head = offset < HEAD_R;
+                let expected = if head {
+                    vec![(0, 1, MAX_HP, true)]
+                } else {
+                    vec![]
+                };
+                assert_eq!(sim.hits, expected, "stance {crouch}, offset {offset}");
+                assert_eq!(sim.players[1].hp, if head { 0 } else { MAX_HP });
+            }
+            let mut sim = open_sim(21, 2);
+            sim.players[0].pos = [-10.0, 0.0];
+            sim.players[1].pos = [3.0, 0.0];
+            let shoulder = head_lo(crouch) - 0.05;
+            sim.bullets.push(collision_probe(
+                [0.0, shoulder, 0.3],
+                [6.0, shoulder, 0.3],
+                0,
+            ));
+            sim.step(&|id| PlayerIn {
+                crouch: id == 1 && crouch,
+                ..Default::default()
+            });
+            assert_eq!(sim.hits, vec![(0, 1, 1, false)]);
+        }
+    }
+
+    #[test]
+    fn head_and_height_intervals_must_overlap_before_cover() {
+        let mut sim = open_sim(21, 2);
+        sim.players[0].pos = [-10.0, 0.0];
+        sim.players[1].pos = [3.0, 0.0];
+        let height = head_lo(false) + HEAD_H * 0.5;
+        // A raised slab blocks the real head. There is no invisible upper-body
+        // shell in front of it to absorb a hit. Raised base avoids spawning the
+        // test actor inside floor-based cover and invoking its support rule.
+        sim.obstacles.push(Obstacle::boxed(
+            Cover::Wall,
+            [2.65, -1.0],
+            [2.7, 1.0],
+            1.5,
+            2.6,
+        ));
+        sim.bullets
+            .push(collision_probe([0.0, height, 0.0], [6.0, height, 0.0], 0));
+        sim.step(&|_| PlayerIn::default());
+        assert_eq!(sim.players[1].y, 0.0);
+        assert!(
+            sim.hits.is_empty(),
+            "the ray never entered the head or lower body"
+        );
+        sim.bullets
+            .push(collision_probe([0.0, 1.0, 0.0], [6.0, 1.0, 0.0], 0));
+        sim.step(&|_| PlayerIn::default());
+        assert_eq!(
+            sim.hits,
+            vec![(0, 1, 1, false)],
+            "lower body below the slab remains exposed"
+        );
+        // Cover before the entire body continues to block both classifications.
+        sim.obstacles[0] = Obstacle::boxed(Cover::Wall, [1.0, -1.0], [1.1, 1.0], 0.0, 2.6);
+        sim.bullets
+            .push(collision_probe([0.0, height, 0.0], [6.0, height, 0.0], 0));
+        sim.step(&|_| PlayerIn::default());
+        assert!(
+            sim.hits.is_empty(),
+            "the ray never entered the head or lower body"
+        );
+        // Passing head height near the wide body's edge is not sufficient if
+        // the same segment is already below the neck inside the narrow footprint.
+        assert!(
+            headshot_contact(
+                [0.0, height + 3.0, 0.0],
+                [3.0, head_lo(false) - 0.4, 0.0],
+                [3.0, 0.0, 0.0],
+                false
+            )
+            .is_none()
         );
     }
 
     #[test]
-    fn the_head_band_matches_the_drawn_model() {
-        // The guard for "what you see is what you hit". These numbers are the
-        // rig's, not this crate's, and the only way they stay true is if
-        // someone is told when they stop being true.
-        //
-        // Standing, from ember-engine/src/rig.rs: ROOT pelvis_h 0.98, SPINE
-        // +0.05, NECK +spine_len 0.52 => neck at 1.55; the head part is
-        // anchored 0.01 above NECK and is 0.30 tall => drawn head [1.56, 1.86].
-        let drawn_neck = 0.98 + 0.05 + 0.52;
-        let drawn_head_lo = drawn_neck + 0.01;
-        let drawn_head_hi = drawn_head_lo + 0.30;
+    fn head_contact_never_looks_beyond_the_current_segment_or_lifetime() {
+        let travel = BULLET_SPEED * FIXED_DT;
+        for crouch in [false, true] {
+            for gap in [4.4, 4.6, 4.8, 5.0, 5.2] {
+                let mut sim = open_sim(21, 2);
+                sim.players[0].pos = [-10.0, 0.0];
+                sim.players[1].pos = [gap, 0.0];
+                let height = head_lo(crouch) + HEAD_H * 0.5;
+                let origin = head_origin([gap, 0.0, 0.0], [1.0, 0.0], crouch);
+                sim.bullets.push(collision_probe(
+                    [0.0, height, 0.0],
+                    [travel, height, 0.0],
+                    0,
+                ));
+                let input = |id| PlayerIn {
+                    crouch: id == 1 && crouch,
+                    ..Default::default()
+                };
+                sim.step(&input);
+                let first_tick = origin[0] - HEAD_R < travel;
+                assert_eq!(
+                    !sim.hits.is_empty(),
+                    first_tick,
+                    "gap {gap}, crouch {crouch}"
+                );
+                if !first_tick {
+                    assert_eq!(
+                        sim.bullets.len(),
+                        1,
+                        "the broad upper body cannot consume the round early"
+                    );
+                    sim.step(&input);
+                }
+                assert_eq!(sim.hits, vec![(0, 1, MAX_HP, true)]);
+                assert!((sim.shots[0].to[0] - (origin[0] - HEAD_R)).abs() < 0.001);
+            }
+        }
+        // The head would be reached next tick, but the round expires first.
+        let mut sim = open_sim(21, 2);
+        sim.players[0].pos = [-10.0, 0.0];
+        sim.players[1].pos = [5.0, 0.0];
+        let height = head_lo(false) + HEAD_H * 0.5;
+        let mut round = collision_probe([0.0, height, 0.0], [travel, height, 0.0], 0);
+        round.ttl = FIXED_DT * 1.5;
+        sim.bullets.push(round);
+        for _ in 0..2 {
+            sim.step(&|_| PlayerIn::default());
+        }
         assert!(
-            (BODY_H_STAND - drawn_head_hi).abs() < 1e-4,
-            "standing hit volume must top out at the drawn head: {BODY_H_STAND} vs {drawn_head_hi}"
+            sim.hits.is_empty(),
+            "the ray never entered the head or lower body"
         );
-        assert!(
-            (head_lo(false) - drawn_head_lo).abs() < 1e-4,
-            "standing head band must start at the drawn head: {} vs {drawn_head_lo}",
-            head_lo(false)
-        );
+        assert_eq!(sim.players[1].hp, MAX_HP);
+        assert_eq!(sim.shots[0].hit, SHOT_EXPIRED);
+    }
 
-        // Crouched: walk_pose sinks the root by crouch * (0.44 + 0.43) * 0.36.
-        let sink = (0.44f32 + 0.43) * 0.36;
+    #[test]
+    fn narrow_head_classification_rewinds_position_height_and_stance_together() {
+        for crouch in [false, true] {
+            for (delay, offset, expected) in [(0, 0.0, None), (4, 0.0, Some(true)), (4, 0.3, None)]
+            {
+                let mut sim = open_sim(21, 2);
+                sim.players[0].pos = [-10.0, 0.0];
+                for _ in 0..8 {
+                    hold(&mut sim, &[(1, [3.0, 0.0], 1.5)]);
+                    sim.step(&|id| PlayerIn {
+                        crouch: id == 1 && crouch,
+                        ..Default::default()
+                    });
+                }
+                let old_y = sim.players[1].y;
+                let height = old_y + head_lo(crouch) + HEAD_H * 0.5;
+                sim.players[1].pos = [3.0, 3.0];
+                sim.players[1].y = 0.0;
+                sim.players[1].vy = 0.0;
+                sim.bullets.push(collision_probe(
+                    [0.0, height, offset],
+                    [6.0, height, offset],
+                    delay,
+                ));
+                sim.step(&|id| PlayerIn {
+                    crouch: id == 1 && !crouch,
+                    ..Default::default()
+                });
+                if let Some(head) = expected {
+                    assert_eq!(
+                        sim.hits,
+                        vec![(0, 1, if head { MAX_HP } else { 1 }, head)],
+                        "stance {crouch}, offset {offset}"
+                    );
+                } else {
+                    assert!(
+                        sim.hits.is_empty(),
+                        "the ray never entered the head or lower body"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn five_body_hits_kill_and_new_life_resets_shield_without_a_death_frame_plate() {
+        let mut sim = open_sim(21, 2);
+        sim.players[0].pos = [-10.0, 0.0];
+        sim.players[1].pos = [3.0, 0.0];
+        assert_eq!(sim.players[1].hp, 5);
+        for hit in 1..=5 {
+            sim.bullets
+                .push(collision_probe([0.0, 1.0, 0.0], [6.0, 1.0, 0.0], 0));
+            // The defender is facing away; its active plate must not protect the back.
+            sim.step(&|id| PlayerIn {
+                aim: [1.0, 0.0],
+                shield: id == 1,
+                ..Default::default()
+            });
+            assert_eq!(sim.players[1].hp, 5 - hit);
+            assert_eq!(sim.players[1].alive, hit < 5);
+        }
+        let p = &sim.players[1];
+        assert!(!p.shield && !p.shield_state.active && p.shield_state.remaining == 0.0);
+        assert_eq!(sim.events, vec![(0, 1)]);
+        for _ in 0..240 {
+            sim.step(&|_| PlayerIn {
+                shield: true,
+                ..Default::default()
+            });
+            if sim.players[1].alive {
+                break;
+            }
+        }
+        assert!(sim.players[1].alive);
+        assert_eq!(sim.players[1].hp, 5);
+        assert_eq!(sim.players[1].shield_state, ShieldState::READY);
+    }
+
+    #[test]
+    fn level_fire_passes_over_a_crouched_head_but_aimed_fire_hits_it() {
+        let mut sim = open_sim(21, 2);
+        sim.players[0].pos = [-10.0, 0.0];
+        sim.players[1].pos = [3.0, 0.0];
+        sim.bullets.push(collision_probe(
+            [0.0, EYE_STAND, 0.0],
+            [6.0, EYE_STAND, 0.0],
+            0,
+        ));
+        sim.step(&|id| PlayerIn {
+            crouch: id == 1,
+            ..Default::default()
+        });
         assert!(
-            (BODY_H_STAND - BODY_H_CROUCH - sink).abs() < 0.02,
-            "the crouched volume must sink with the model: {} vs {sink}",
-            BODY_H_STAND - BODY_H_CROUCH
+            sim.hits.is_empty(),
+            "the measured crouched helmet is below a level standing ray"
         );
+        let center = head_lo(true) + HEAD_H * 0.5;
+        let pitch = ((center - EYE_STAND) / (5.0 + HEAD_FORWARD_CROUCH - 0.2)).atan();
+        assert!(
+            one_shot_kills(0.0, 5.0, pitch, true),
+            "deliberately aimed fire hits the crouched skull"
+        );
+    }
+
+    #[test]
+    fn the_head_band_matches_the_production_skull_without_changing_clearance() {
+        // Measured through every rig_neck vertex, bind skeleton, settled pose
+        // and BODY_SCALE=.95, not the former veteran model's dimensions.
+        for (crouch, mesh_lo, mesh_top) in [(false, 1.3518, 1.6993), (true, 1.0676, 1.4171)] {
+            assert!((head_top(crouch) - mesh_top).abs() < 0.004);
+            assert!(
+                head_lo(crouch) > mesh_lo + 0.1,
+                "collar is not a lethal head zone"
+            );
+            assert!((head_top(crouch) - head_lo(crouch) - 0.24).abs() < 1e-5);
+            assert!(head_top(crouch) < body_h(crouch));
+        }
+        assert_eq!((body_h(false), body_h(true)), (1.86, 1.55));
     }
 
     #[test]
@@ -5207,7 +5934,7 @@ mod tests {
         let lo = head_lo(true);
         assert!(
             lo < BODY_H_CROUCH && lo > 0.0,
-            "the crouched head band [{lo}, {BODY_H_CROUCH}] must lie inside the crouched volume"
+            "the crouched head base {lo} must lie below the movement clearance {BODY_H_CROUCH}"
         );
         // And it must still be above a crouched player's OWN muzzle, or a
         // crouched player shooting level would headshot another crouched one
@@ -5453,17 +6180,18 @@ mod tests {
 
     #[test]
     fn a_headshot_kills_outright() {
-        // Standing head band is [1.56, 1.86]. At the swept body's near
-        // edge (4.18 m), pitch .06 puts a settled shot near 1.70 m, with
-        // margin for its real nonzero cone instead of aiming at the edge.
+        // Aim through the measured skull centre, allowing the weapon's real
+        // settled cone rather than deliberately aiming at its boundary.
+        let pitch =
+            ((head_lo(false) + HEAD_H * 0.5 - EYE_STAND) / (5.0 + HEAD_FORWARD_STAND - 0.2)).atan();
         assert!(
-            one_shot_kills(0.0, 5.0, 0.06, false),
+            one_shot_kills(0.0, 5.0, pitch, false),
             "a round arriving in the head band must kill from full health"
         );
     }
 
     #[test]
-    fn a_body_shot_still_takes_three() {
+    fn a_body_shot_does_not_kill_five_point_health() {
         // The same geometry aimed down into the chest must NOT one-shot, or
         // the head zone has swallowed the whole body.
         assert!(
@@ -5477,20 +6205,24 @@ mod tests {
     // two numbers in its failure message when someone retunes one of them.
     #[allow(clippy::assertions_on_constants)]
     fn level_fire_is_not_a_free_headshot() {
-        // This is the balance guard for HEAD_H, and it is the whole reason
-        // that constant is 0.22 rather than something rounder. A round leaves
-        // at EYE_STAND 1.45 and flies flat at pitch 0, so if the head band
-        // ever reaches down to 1.45 then two standing players simply shooting
-        // at each other trade instant kills without anyone aiming at a head.
+        // A truly flat ray remains below the measured standing chin. Real
+        // weapon dispersion can rise into a nearby head; this is the geometry
+        // guard, not a promise that every random near-level ray misses the skull.
         assert!(
-            HEAD_H < BODY_H_STAND - EYE_STAND,
+            HEAD_H < HEAD_TOP_STAND - EYE_STAND,
             "HEAD_H {HEAD_H} must stay under {} or level fire becomes a headshot",
-            BODY_H_STAND - EYE_STAND
+            HEAD_TOP_STAND - EYE_STAND
         );
-        assert!(
-            !one_shot_kills(0.0, 5.0, 0.0, false),
-            "a flat shot between two standing players must be a body hit"
-        );
+        let mut sim = open_sim(21, 2);
+        sim.players[0].pos = [-10.0, 0.0];
+        sim.players[1].pos = [3.0, 0.0];
+        sim.bullets.push(collision_probe(
+            [0.0, EYE_STAND, 0.0],
+            [6.0, EYE_STAND, 0.0],
+            0,
+        ));
+        sim.step(&|_| PlayerIn::default());
+        assert_eq!(sim.hits, vec![(0, 1, 1, false)]);
     }
 
     #[test]
@@ -5570,8 +6302,8 @@ mod tests {
             let s = sim.shots.first().expect("the round ended in the body");
             assert_eq!((s.hit, s.victim), (SHOT_BODY, 1), "gap {gap}");
             assert!(
-                s.to[0] > 0.2 && s.to[0] < gap,
-                "gap {gap}: the contact {:?} is between the muzzle and the centre",
+                s.to[0] > 0.2 && (s.to[0] - gap - HEAD_FORWARD_STAND).abs() <= HEAD_R + 1e-4,
+                "gap {gap}: the contact {:?} lies on the actual head, including a far-side top crossing",
                 s.to
             );
         }
@@ -6693,6 +7425,11 @@ mod tests {
             u64::from(p.alive),
             u64::from(p.crouch),
             u64::from(p.shield),
+            u64::from(p.shield_state.active),
+            u64::from(p.shield_state.remaining.to_bits()),
+            u64::from(p.shield_state.cooldown.to_bits()),
+            u64::from(p.shield_state.fire_lock.to_bits()),
+            u64::from(p.shield_state.held),
             u64::from(p.weapon),
             u64::from(p.ammo),
             u64::from(p.reserve),
@@ -7477,7 +8214,7 @@ mod tests {
         // All on the first tick, at 15 m a tick, and the two events chain:
         // the second body's segment starts where the first's ended.
         let (sim, hp) = sniper_line(Vec::new(), &[3.0, 6.0, 9.0], 1);
-        assert_eq!(hp, vec![1, 1, MAX_HP]);
+        assert_eq!(hp, vec![MAX_HP - 2, MAX_HP - 2, MAX_HP]);
         assert!(
             sim.bullets.is_empty(),
             "the round stopped in the second body"
@@ -7526,7 +8263,10 @@ mod tests {
             }
         }
         assert!(both_on_one_tick, "the two bodies were not hit on one tick");
-        assert_eq!((player(&sim, 1).hp, player(&sim, 2).hp), (1, 1));
+        assert_eq!(
+            (player(&sim, 1).hp, player(&sim, 2).hp),
+            (MAX_HP - 2, MAX_HP - 2)
+        );
     }
 
     #[test]
@@ -7537,7 +8277,7 @@ mod tests {
         // tick it entered, and the mask still stands for a round whose
         // next segment starts inside a body (a reflected one, say).
         let (sim, hp) = sniper_line(Vec::new(), &[5.0], 30);
-        assert_eq!(hp, vec![1]);
+        assert_eq!(hp, vec![MAX_HP - 2]);
         assert_eq!(player(&sim, 1).death_count, 0);
     }
 
@@ -7547,7 +8287,7 @@ mod tests {
         // first and is stopped by the container, so the second is untouched.
         let container = Obstacle::boxed(Cover::Container, [5.0, -1.0], [6.0, 1.0], 0.0, 2.6);
         let (_, hp) = sniper_line(vec![container], &[3.0, 8.0], 30);
-        assert_eq!(hp, vec![1, MAX_HP]);
+        assert_eq!(hp, vec![MAX_HP - 2, MAX_HP]);
     }
 
     #[test]
@@ -7637,7 +8377,11 @@ mod tests {
                 assert_eq!(sim.events, vec![(0, 1)]);
             }
         }
-        assert_eq!(hits, vec![(0, 1, 3, false)], "one direct hit, the full bar");
+        assert_eq!(
+            hits,
+            vec![(0, 1, MAX_HP, false)],
+            "one direct hit, the full bar"
+        );
         assert_eq!(blasts.len(), 1, "one blast");
         assert_eq!(blasts[0].1, 0, "owned by the shooter");
         assert!(!player(&sim, 1).alive);
@@ -7857,7 +8601,7 @@ mod tests {
         );
         // Control: with the wall gone the same round reaches the body.
         let (_, hp) = sniper_line(Vec::new(), &[13.0], 1);
-        assert_eq!(hp, vec![1]);
+        assert_eq!(hp, vec![MAX_HP - 2]);
     }
 
     #[test]
@@ -8293,14 +9037,14 @@ mod tests {
         }
         // Steeply down from 6 m up at a body 1.5 m out, aimed at its
         // centre: the round enters the circle 5.4 m up, far above the
-        // 2.08 top of the volume, and the contact is where it crossed
-        // that top. Through the head, so it kills; the sidearm and the
+        // 1.86 top of the unpadded head, and contact is where it crossed
+        // that top inside HEAD_R. It kills; the sidearm and the
         // sniper both, the second at 15 m a tick.
         let from_y = 6.0;
         let gap = 1.5;
         let pitch = -((from_y + EYE_STAND - 1.0) / gap).atan();
         assert!(pitch.abs() < MAX_PITCH);
-        let hi = BODY_H_STAND + BULLET_R;
+        let hi = HEAD_TOP_STAND;
         for weapon in [SIDEARM, 6] {
             let mut sim = open_sim(11, 2);
             arm(&mut sim.players[0], weapon);
@@ -8325,7 +9069,15 @@ mod tests {
                 s.to
             );
             let dist = ((s.to[0] - gap).powi(2) + s.to[2].powi(2)).sqrt();
-            assert!(dist < rr, "weapon {weapon}: inside the circle's footprint");
+            let head_dist = ((s.to[0] - gap - HEAD_FORWARD_STAND).powi(2) + s.to[2].powi(2)).sqrt();
+            assert!(
+                head_dist <= HEAD_R + 1e-4,
+                "weapon {weapon}: on the actual head footprint"
+            );
+            assert!(
+                dist < rr,
+                "weapon {weapon}: also inside the enclosing body footprint"
+            );
         }
     }
 
@@ -8366,21 +9118,31 @@ mod tests {
 
     #[test]
     fn a_rewound_headshot_uses_the_head_where_it_was() {
-        // The target stood on a crate top (feet 1.5 up) while the shooter
-        // took aim, then dropped to the floor. A shooter twelve ticks
-        // behind fires at the head where it was, 3.2 m up: the rewound
-        // body's exact head band is up there and it is a kill, and the
-        // tracer ends up in the air where the shooter saw the head. The
-        // same round in the present passes clean over a body whose top is
-        // at 2.08. The v18 sampled band and the v20 interval must agree on
-        // the rewind reading height and stance with position; this pins
-        // the height at the new speed.
-        let pitch = ((3.2 - EYE_STAND) / 5.8).atan();
+        // Both players stood on crate tops (feet 1.5 up), then the target
+        // dropped. Shooting from the same elevation exposes the head rather
+        // than first hitting the lower body with an upward ray. The real round
+        // reaches the historical skull at about 3.08 m, and passes well above
+        // the present crouch/standing head when rewind is disabled.
+        let pitch =
+            ((head_lo(false) + HEAD_H * 0.5 - EYE_STAND) / (6.0 + HEAD_FORWARD_STAND - 0.2)).atan();
         let run = |delay: u16| -> (HitList, Vec<ShotEvent>) {
             let mut sim = open_sim(12, 2);
-            let idle = HashMap::new();
+            sim.obstacles.push(Obstacle::boxed(
+                Cover::Crate,
+                [-1.0, -1.0],
+                [1.0, 1.0],
+                0.0,
+                1.5,
+            ));
+            let idle = HashMap::from([(
+                0,
+                PlayerIn {
+                    ads: true,
+                    ..Default::default()
+                },
+            )]);
             for _ in 0..15 {
-                hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [6.0, 0.0], 1.5)]);
+                hold(&mut sim, &[(0, [0.0, 0.0], 1.5), (1, [6.0, 0.0], 1.5)]);
                 step_with(&mut sim, &idle);
             }
             // The drop, and the shot: the round reaches the body on its
@@ -8388,11 +9150,12 @@ mod tests {
             let mut inputs = HashMap::new();
             let (mut hits, mut shots) = (Vec::new(), Vec::new());
             for t in 0..3u32 {
-                hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [6.0, 0.0], 0.0)]);
+                hold(&mut sim, &[(0, [0.0, 0.0], 1.5), (1, [6.0, 0.0], 0.0)]);
                 inputs.insert(
                     0,
                     PlayerIn {
                         delay_ticks: delay,
+                        ads: true,
                         ..shot(t, [1.0, 0.0], pitch)
                     },
                 );
@@ -8497,7 +9260,7 @@ mod tests {
         let mut landed = None;
         for t in 0..30u32 {
             hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [5.0, 0.0], 0.0)]);
-            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            inputs.insert(0, shot(t, [1.0, 0.0], -0.10));
             step_with(&mut sim, &inputs);
             if landed.is_some() {
                 assert!(sim.shots.is_empty() && sim.blasts.is_empty(), "tick {t}");
@@ -8518,7 +9281,7 @@ mod tests {
                 sim.blasts[0],
                 s.to
             );
-            assert_eq!(sim.hits, vec![(0, 1, 3, false)]);
+            assert_eq!(sim.hits, vec![(0, 1, MAX_HP, false)]);
             let rr = hit_radius(false) + weapon_stats(7).radius;
             assert!((s.to[0] - (5.0 - rr)).abs() < 1e-3, "{:?}", s.to);
             assert!(sim.bullets.is_empty(), "the rocket is gone");
@@ -8550,6 +9313,7 @@ mod tests {
             reload: hash & 32 != 0,
             jump: tick % 50 == u64::from(id) * 7,
             shield: id == 2 && tick % 97 < 10,
+            shield_released: false,
             melee: tick % 123 == u64::from(id),
             ads: hash & 8 != 0,
             delay_ticks: ((hash >> 8) % 19) as u16,
@@ -8648,12 +9412,12 @@ mod tests {
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
     /// `fold_tick` of the driver after ticks 99, 199, ... 599, computed
-    /// from the protocol-20 four-metre walking tree on the Windows workstation,
+    /// from the protocol-21 five-health/timed-shield tree on the Windows workstation,
     /// after independently replaying two simulations and checking every
-    /// player's ADS fraction, recoverable bloom and effective cone as well
-    /// as movement, bullets and events. The protocol-19 handling pin changed
-    /// deliberately because the requested walking speed is now 4 m/s;
-    /// the jump speed and handling rules remain unchanged. This is
+    /// player's ADS fraction, recoverable bloom, effective cone and complete
+    /// shield timers/latch as well as movement, bullets and events. The pin changes
+    /// deliberately for the new head/body union and five-point health, with direct
+    /// rockets still lethal. Walking/jump speed and weapon handling stay unchanged. This is
     /// a regression fingerprint, not identity with old gameplay.
     /// The script and the launch go through `cos`, `sin` and
     /// `tan`, which are the platform's, so a toolchain on another libm
@@ -8661,12 +9425,12 @@ mod tests {
     /// run here, and if that changes the pin is regenerated the same way,
     /// from the tree that is being pinned.
     const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
-        0x55b7_e8cb_e70f_813b,
-        0xdbe5_d977_bf15_e020,
-        0xab42_b94a_f87c_740a,
-        0xde2d_5013_d138_b096,
-        0x13d4_88f8_da66_bdbd,
-        0x9be6_5b95_a1b8_b22d,
+        0x545f_4d94_5781_9e33,
+        0x48c0_ceef_10c6_e051,
+        0xeac1_1c8e_351d_7011,
+        0x3f28_8e85_b9d4_14d3,
+        0x812b_a60d_ad6d_ae9f,
+        0x2568_56e9_4f9a_e006,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a

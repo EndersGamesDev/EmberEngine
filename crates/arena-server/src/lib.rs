@@ -179,6 +179,13 @@ fn bounded_tick_age(current: u64, earlier: u64) -> u16 {
         .expect("the tick age is clamped to u16::MAX")
 }
 
+/// One-shot edges survive all received frames in a tick, but never the next tick.
+const fn consume_input_edges(input: &mut PlayerIn) {
+    input.jump = false;
+    input.melee = false;
+    input.shield_released = false;
+}
+
 // RTT values are finite and nonnegative, and the established float formula always fits u64.
 #[allow(
     clippy::cast_possible_truncation,
@@ -498,8 +505,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
             // last input is re-applied, and since every connect is a kill
             // that is a proximity field rather than a weapon.
             for (i, ..) in lobby.inputs.values_mut() {
-                i.jump = false;
-                i.melee = false;
+                consume_input_edges(i);
             }
 
             // The sim's events of this tick, in the order they happened:
@@ -587,6 +593,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             alive: p.alive,
                             crouch: p.crouch,
                             shield: p.shield,
+                            shield_state: p.shield_state,
                             weapon: p.weapon,
                             ammo: p.ammo,
                             reserve: p.reserve,
@@ -1128,6 +1135,13 @@ fn handle_event(
                     // makes it fire exactly once.
                     let jump = jump || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.jump);
                     let melee = melee || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.melee);
+                    // Shield activation needs a rising edge. A release followed
+                    // by a re-press can arrive in this same drain; preserve the
+                    // release before retaining the latest held state.
+                    let shield_released = lobby
+                        .inputs
+                        .get(&pid)
+                        .is_some_and(|(i, ..)| i.shield_released || (i.shield && !shield));
                     lobby.inputs.insert(
                         pid,
                         (
@@ -1141,6 +1155,7 @@ fn handle_event(
                                 reload,
                                 jump,
                                 shield,
+                                shield_released,
                                 melee,
                                 ads,
                                 delay_ticks: 0,
@@ -1193,5 +1208,156 @@ fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<St
     if lobby.members.is_empty() {
         tracing::info!(lobby = %name, "game closed (last player left)");
         lobbies.remove(&name);
+    }
+}
+
+#[cfg(test)]
+mod shield_input_tests {
+    use super::*;
+    use arena_core::shooter::{
+        SHIELD_FIRE_LOCK, SHIELD_MAX_HOLD, SHIELD_REUSE_COOLDOWN, ShieldState, advance_shield,
+    };
+
+    struct HubFixture {
+        conns: HashMap<u64, Conn>,
+        lobbies: HashMap<String, Lobby>,
+        counter: u64,
+        config: ServerConfig,
+        _outbound: Receiver<Message>,
+    }
+
+    impl HubFixture {
+        fn new(state: ShieldState) -> Self {
+            let (tx, outbound) = mpsc::sync_channel(16);
+            let mut fixture = Self {
+                conns: HashMap::new(),
+                lobbies: HashMap::new(),
+                counter: 0,
+                config: ServerConfig::default(),
+                _outbound: outbound,
+            };
+            fixture.event(Ev::Connected {
+                id: 1,
+                tx,
+                peer: "shield-fixture".into(),
+            });
+            fixture.message(C2S::Hello {
+                proto: PROTO_VERSION,
+                handle: "shield-fixture".into(),
+            });
+            fixture.message(C2S::CreateLobby {
+                name: "shield-fixture".into(),
+                password: None,
+                map: MAP_FREIGHT_YARD.into(),
+                mode: "ffa".into(),
+            });
+            let lobby = fixture.lobbies.get_mut("shield-fixture").unwrap();
+            assert_eq!(lobby.pids[&1], 0);
+            lobby.sim.players[0].shield_state = state;
+            lobby.sim.players[0].shield = state.active;
+            lobby.inputs.insert(
+                0,
+                (
+                    PlayerIn {
+                        shield: state.held,
+                        ..Default::default()
+                    },
+                    0,
+                    0,
+                    0,
+                ),
+            );
+            fixture
+        }
+
+        fn event(&mut self, event: Ev) {
+            handle_event(
+                event,
+                &mut self.conns,
+                &mut self.lobbies,
+                &mut self.counter,
+                &self.config,
+            );
+        }
+
+        fn message(&mut self, msg: C2S) {
+            self.event(Ev::Msg { id: 1, msg });
+        }
+
+        fn input(&mut self, shield: bool) {
+            // Real decoded wire input: there is deliberately no client-facing
+            // release-marker field that a peer could forge.
+            let msg = serde_json::from_str(&format!(
+                r#"{{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false,"shield":{shield}}}"#
+            )).unwrap();
+            self.message(msg);
+        }
+
+        fn step(&mut self) -> ShieldState {
+            let lobby = self.lobbies.get_mut("shield-fixture").unwrap();
+            let input = lobby.inputs[&0].0;
+            lobby.sim.step(&|_| input);
+            for (input, ..) in lobby.inputs.values_mut() {
+                consume_input_edges(input);
+            }
+            let state = lobby.sim.players[0].shield_state;
+            assert_eq!(lobby.sim.players[0].shield, state.active);
+            state
+        }
+
+        fn pending(&self) -> PlayerIn {
+            self.lobbies["shield-fixture"].inputs[&0].0
+        }
+    }
+
+    #[test]
+    fn shield_release_and_repress_in_one_hub_drain_rearms_once_after_cooldown() {
+        let mut hub = HubFixture::new(ShieldState {
+            held: true,
+            ..ShieldState::READY
+        });
+        hub.input(true);
+        assert!(!hub.pending().shield_released);
+        assert!(!hub.step().active, "continuous holding alone never rearms");
+        hub.input(false);
+        hub.input(true);
+        hub.input(true);
+        assert!(hub.pending().shield && hub.pending().shield_released);
+        let raised = hub.step();
+        assert!(raised.active && raised.held);
+        assert!((raised.remaining - (SHIELD_MAX_HOLD - FIXED_DT)).abs() < 1e-5);
+        assert!(
+            !hub.pending().shield_released,
+            "the release edge is consumed once"
+        );
+        assert!(
+            hub.step().active,
+            "a stale release must not lower the next tick"
+        );
+    }
+
+    #[test]
+    fn coalesced_repress_cannot_refill_an_active_shield_or_shorten_release_recovery() {
+        let raised = advance_shield(ShieldState::READY, true, FIXED_DT);
+        for latest in [false, true] {
+            let mut hub = HubFixture::new(raised);
+            hub.input(false);
+            if latest {
+                hub.input(true);
+            }
+            assert!(hub.pending().shield_released);
+            let lowered = hub.step();
+            assert!(!lowered.active);
+            assert_eq!(lowered.held, latest);
+            assert_eq!(lowered.cooldown, SHIELD_REUSE_COOLDOWN);
+            assert_eq!(lowered.fire_lock, SHIELD_FIRE_LOCK);
+            assert!(!hub.pending().shield_released);
+            if latest {
+                for _ in 0..300 {
+                    assert!(!hub.step().active);
+                }
+                assert_eq!(hub.step().cooldown, 0.0);
+            }
+        }
     }
 }

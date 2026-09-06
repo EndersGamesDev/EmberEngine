@@ -16,7 +16,7 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v27/      live arena build — local contact shading (page + its own frozen pkg)
+#   games/arena/v28/      live arena build — combat and personal controls (page + frozen pkg)
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
@@ -111,7 +111,7 @@ trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; r
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v27"
+ARENA_LIVE="games/arena/v28"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
@@ -142,6 +142,7 @@ if [ -f web/engine.html ]; then
     cp web/engine.html "$PAGES_DIR"/
 fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
+cp "web/$ARENA_LIVE/settings.js" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
@@ -314,6 +315,18 @@ bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recomp
 # The checked-in lab loader stays pinned at v=1 for its page contract. Only
 # assembled copies receive the final deployment stamp after address recompute.
 DEPLOY_STAMP="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["v"])' "$PAGES_DIR/server.json")"
+# Arena's menu and WASM share a revisioned settings contract. Ship and stamp
+# the menu beside its own versioned page, never mutate archived releases.
+"$PY" - "$PAGES_DIR/$ARENA_LIVE/index.html" "$DEPLOY_STAMP" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+token = re.compile(r"\./settings\.js\?v=1(?=[\"'])")
+if len(token.findall(text)) != 1:
+    raise SystemExit("FAILED: Arena settings cache key must occur exactly once")
+with open(p, "w", encoding="utf-8", newline="") as fh:
+    fh.write(token.sub(lambda _: './settings.js?v=' + sys.argv[2], text))
+PY
 for loader in index.html main.js lab.js drive.html worker.js; do
     assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
     if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then

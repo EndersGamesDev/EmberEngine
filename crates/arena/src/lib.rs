@@ -20,6 +20,7 @@ mod online;
 mod props;
 mod rounds;
 mod script;
+mod settings;
 mod sound;
 mod viewarms;
 mod weather;

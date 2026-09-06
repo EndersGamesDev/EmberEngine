@@ -104,6 +104,39 @@ struct App<G: EmberGame> {
     overlay: Option<crate::overlay::Overlay>,
 }
 
+impl<G: EmberGame> App<G> {
+    fn refresh_input_pause(&mut self) {
+        let paused = page_input_paused();
+        if paused && !self.input.paused() {
+            self.haptics.stop();
+        }
+        self.input.set_paused(paused);
+    }
+}
+
+/// A hosting page can suspend device intent without freezing a networked game.
+/// Absent is false, so other games and native behavior are unchanged. The page
+/// owns its DOM menu and pointer-lock exit; no game-specific UI enters platform.
+#[cfg(target_arch = "wasm32")]
+fn page_input_paused() -> bool {
+    thread_local! {
+        static KEY: wasm_bindgen::JsValue = "__emberInputPaused".into();
+    }
+    web_sys::window().is_some_and(|window| {
+        KEY.with(|key| {
+            js_sys::Reflect::get(&window, key)
+                .ok()
+                .and_then(|value| value.as_bool())
+                == Some(true)
+        })
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn page_input_paused() -> bool {
+    false
+}
+
 impl<G: EmberGame> ApplicationHandler for App<G> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // On desktop `resumed` fires once at startup; guard so a second call
@@ -164,6 +197,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         _device_id: winit::event::DeviceId,
         event: winit::event::DeviceEvent,
     ) {
+        self.refresh_input_pause();
         if let winit::event::DeviceEvent::MouseMotion { delta } = event {
             self.input.add_mouse_delta(delta.0 as f32, delta.1 as f32);
         }
@@ -172,6 +206,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
     // Keeping the winit event dispatch linear makes input ordering and early returns explicit.
     #[allow(clippy::too_many_lines)]
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        self.refresh_input_pause();
         // Overlay first: F3 toggles it; a visible overlay may consume input.
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref()) {
@@ -260,6 +295,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 // Clicking (re)captures the mouse for FPS look. Cheap to
                 // re-request; also restores capture after Esc on the web.
                 if self.config.capture_mouse
+                    && !self.input.paused()
                     && state == ElementState::Pressed
                     && let Some(window) = self.window.as_ref()
                 {
@@ -375,7 +411,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 let feedback = self.game.feedback();
                 self.input.end_frame();
                 self.haptics.tick(now);
-                if self.focused {
+                if self.focused && !self.input.paused() {
                     for r in feedback.rumbles {
                         self.haptics.request(r, now);
                     }

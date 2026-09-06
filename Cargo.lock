@@ -179,6 +179,7 @@ dependencies = [
  "arena-core",
  "ember-engine",
  "glam",
+ "js-sys",
  "rodio",
  "rustls",
  "serde",

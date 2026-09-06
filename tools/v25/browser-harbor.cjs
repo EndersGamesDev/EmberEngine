@@ -12,7 +12,7 @@ const { chromium } = require(process.env.EMBER_QA_PLAYWRIGHT || 'playwright');
 const webRoot = path.resolve(process.env.EMBER_QA_WEB_ROOT || 'web');
 const output = path.resolve(process.env.EMBER_QA_OUTPUT || 'target/harbor-captures');
 const started = Date.now();
-const map = 'harbor', arenaHalf = 48, proto = 20;
+const map = 'harbor', arenaHalf = 48, proto = 21;
 // Authored capture fixtures, not geometry or spawn-allocation verification.
 // Gameplay tests observe the server's real roster in network-harbor.cjs.
 const spawns = [[-37, 42], [-37, -42], [-13, 42], [-13, -42], [11, 42], [11, -42], [35, 42], [35, -42]];
@@ -62,12 +62,12 @@ const html = '<!doctype html><meta charset="utf-8"><title>Harbor rendering fixtu
   + '<div id="ember-root"><span id="loading">Loading real harbor assets</span></div><div id="status"></div><div id="scoreboard"></div>';
 function state() {
   const players = spawns.map(([x, z], id) => ({ id, x, z, y: 0, vy: 0,
-    ax: x > 0 ? -1 : 1, az: 0, pitch: 0, hp: 3, score: 0, alive: true,
+    ax: x > 0 ? -1 : 1, az: 0, pitch: 0, hp: 5, score: 0, alive: true,
     crouch: false, shield: false, weapon: id % 7 + 1, ammo: [6, 30, 30, 30, 6, 5, 1][id % 7], reserve: 60,
     reloading: false, ads_fraction: 0, spread: 0.026, recoil_bloom: 0, deaths: 0,
     ack, ack_age_ticks: 0, team: id % 2 }));
   Object.assign(players[0], { x: current.eye[0], y: current.eye[1] - 1.45, z: current.eye[2],
-    alive: observerAlive, hp: observerAlive ? 3 : 0, weapon: 1 });
+    alive: observerAlive, hp: observerAlive ? 5 : 0, weapon: 1 });
   // A spawn camera replaces that spawn's occupant. Move the displaced
   // fixture player to spawn0, rather than filming through a remote body.
   for (const p of players.slice(1)) {
@@ -324,7 +324,7 @@ async function main() {
       action: 'create', lobby: 'harbor-fixture', handle: 'harbor-camera', map: 'harbor', mode: 'ffa' }));
   }, origin);
   await page.waitForFunction(() => window.__qaDraws > 100 && /Sidearm/.test(document.querySelector('#status').textContent), null, { timeout: 90000 });
-  assert.equal(result.protocol, proto, 'Build the current protocol20 WASM, not the previous release');
+  assert.equal(result.protocol, proto, 'Build the current protocol21 WASM, not the previous release');
   clearInterval(stream);
   await page.evaluate(() => window.__qaClock.freeze());
   for (const view of views) {

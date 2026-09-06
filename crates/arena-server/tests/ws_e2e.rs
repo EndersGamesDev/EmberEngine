@@ -12,6 +12,84 @@ use tungstenite::{Message, WebSocket};
 type Ws = WebSocket<MaybeTlsStream<TcpStream>>;
 
 #[test]
+fn timed_shield_and_five_point_health_are_authoritative_wire_state() {
+    let port = start_server();
+    let mut ws = connect(port, "shield-state");
+    send(
+        &mut ws,
+        &C2S::CreateLobby {
+            name: "shield-state".into(),
+            password: None,
+            map: MAP_FREIGHT_YARD.into(),
+            mode: "ffa".into(),
+        },
+    );
+    let id = recv_until(&mut ws, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+    recv_until(&mut ws, 5, |m| match m {
+        S2C::State { players, .. } => {
+            let p = players.iter().find(|p| p.id == id).unwrap();
+            assert_eq!(p.hp, 5);
+            assert_eq!(p.shield_state, arena_core::shooter::ShieldState::READY);
+            assert!(!p.shield);
+            Some(())
+        }
+        _ => None,
+    });
+    let raised: C2S = serde_json::from_str(
+        r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":true,"shield":true,"seq":1}"#,
+    )
+    .unwrap();
+    send(&mut ws, &raised);
+    recv_until(&mut ws, 5, |m| match m {
+        S2C::State { players, .. } => {
+            let p = players.iter().find(|p| p.id == id).unwrap();
+            if p.ack != 1 {
+                return None;
+            }
+            assert!(p.shield && p.shield_state.active && p.shield_state.held);
+            assert!(p.shield_state.remaining > 2.5 && p.shield_state.remaining < 3.0);
+            assert_eq!(p.ammo, arena_core::shooter::weapon_stats(1).mag);
+            Some(())
+        }
+        _ => None,
+    });
+    let lowered: C2S = serde_json::from_str(
+        r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":true,"shield":false,"seq":2}"#,
+    )
+    .unwrap();
+    send(&mut ws, &lowered);
+    recv_until(&mut ws, 5, |m| match m {
+        S2C::State { players, .. } => {
+            let p = players.iter().find(|p| p.id == id).unwrap();
+            if p.ack != 2 {
+                return None;
+            }
+            assert!(!p.shield && !p.shield_state.active && !p.shield_state.held);
+            assert!(p.shield_state.fire_lock > 0.3);
+            assert!(p.shield_state.cooldown > 4.9);
+            assert_eq!(p.ammo, arena_core::shooter::weapon_stats(1).mag);
+            Some(())
+        }
+        _ => None,
+    });
+    recv_until(&mut ws, 5, |m| match m {
+        S2C::State { players, .. } => {
+            let p = players.iter().find(|p| p.id == id).unwrap();
+            if p.shield_state.fire_lock > 0.0 {
+                return None;
+            }
+            assert_eq!(p.ammo, arena_core::shooter::weapon_stats(1).mag - 1);
+            assert!(p.shield_state.cooldown > 4.5 && !p.shield);
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+#[test]
 fn harbor_advertises_real_bounds_and_eight_distinct_team_starts() {
     let port = start_server();
     let mut clients = Vec::new();
