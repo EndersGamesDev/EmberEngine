@@ -545,33 +545,33 @@ fn hallow_cast(frame: &mut Frame, cast: &Cast, slot: u8) {
         0 => {
             petals(
                 frame,
-                center + Vec3::Y * (cast.age * 0.7),
-                0.56 + cast.pulse * 0.2,
+                cast.origin + Vec3::Y * (2.35 + cast.age * 0.7),
+                0.85 + cast.pulse * 0.2,
                 cast.age,
                 6,
                 IVORY,
             );
             rod(
                 frame,
-                center - Vec3::X * 0.33,
-                center + Vec3::X * 0.33,
+                cast.origin + Vec3::Y * 2.35 - Vec3::X * 0.44,
+                cast.origin + Vec3::Y * 2.35 + Vec3::X * 0.44,
                 0.07,
                 MINT,
             );
             rod(
                 frame,
-                center - Vec3::Z * 0.33,
-                center + Vec3::Z * 0.33,
+                cast.origin + Vec3::Y * 2.35 - Vec3::Z * 0.44,
+                cast.origin + Vec3::Y * 2.35 + Vec3::Z * 0.44,
                 0.07,
                 MINT,
             );
-            sparks(frame, center, MINT, cast.age, 4);
+            sparks(frame, cast.origin + Vec3::Y * 2.35, MINT, cast.age, 4);
         }
         1 => {
             let side = Vec3::new(-cast.yaw.sin(), 0.0, cast.yaw.cos());
             for index in 0..3u8 {
                 let tip =
-                    cast.forward(0.4 + f32::from(index) * 0.62 + cast.age * 0.7) + Vec3::Y * 0.18;
+                    cast.forward(1.25 + f32::from(index) * 0.62 + cast.age * 0.7) + Vec3::Y * 0.18;
                 let back = Vec3::new(cast.yaw.cos(), 0.0, cast.yaw.sin()) * 0.42;
                 rod(frame, tip - back + side * 0.38, tip, 0.065, MINT);
                 rod(frame, tip - back - side * 0.38, tip, 0.065, IVORY);
