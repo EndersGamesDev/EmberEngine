@@ -7,7 +7,7 @@ param([Parameter(Mandatory=$true)][string]$Repository,
       [Parameter(Mandatory=$true)][string]$Commit,
       [string]$HostName='dusky-osprey',
       [string]$TunnelBinary='C:/Users/end/tools/cloudflared.exe',
-      [string]$Bash='C:/Program Files/Git/bin/bash.exe',
+      [Parameter(Mandatory=$true)][string]$Node,
       [switch]$Publish)
 $ErrorActionPreference='Stop'
 [Diagnostics.Process]::GetCurrentProcess().PriorityClass='Idle'
@@ -45,7 +45,7 @@ $ready=@{url=$url;version=$Version;commit=$Commit;pid=$child.Id;verified=[DateTi
 if ($Publish) {
     Push-Location -LiteralPath $Repository
     try {
-        & node (Join-Path $Repository 'tools/league/publish-host.cjs') $url $Version $Commit $HostName
+        & $Node (Join-Path $Repository 'tools/league/publish-host.cjs') $url $Version $Commit $HostName
         if ($LASTEXITCODE -ne 0) { throw 'League is reachable but its address book publication failed' }
     } finally { Pop-Location }
 }

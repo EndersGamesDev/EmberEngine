@@ -9,6 +9,7 @@ $timer=[Diagnostics.Stopwatch]::StartNew()
 $Repository=(Resolve-Path -LiteralPath $Repository).Path
 $binary=Join-Path $Repository 'target/release/league-server.exe'
 $probe=Join-Path $Repository 'target/release/examples/wsprobe.exe'
+$node=(Get-Command node -ErrorAction Stop).Source
 if((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -ne $ExpectedSha256){throw 'Tested League binary changed'}
 foreach($name in 'ember-league-server-v1','ember-league-tunnel-v1'){
     if(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue){throw ('Task already exists: '+$name+'; inspect it before changing a running service')}
@@ -28,7 +29,7 @@ for($i=0;$i -lt 30;$i++){
 }
 & $probe 'ws://127.0.0.1:7783' 'install-proof' --expect-commit $Commit
 if($LASTEXITCODE -ne 0){throw 'Installed League server failed loopback match proof; no tunnel opened'}
-$tunnelArgs='-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $Repository 'deploy/league-tunnel-windows.ps1')+'" -Repository "'+$Repository+'" -Probe "'+$probe+'" -Version '+$Version+' -Commit '+$Commit+' -Publish'
+$tunnelArgs='-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $Repository 'deploy/league-tunnel-windows.ps1')+'" -Repository "'+$Repository+'" -Probe "'+$probe+'" -Node "'+$node+'" -Version '+$Version+' -Commit '+$Commit+' -Publish'
 $action=New-ScheduledTaskAction -Execute $ps -Argument $tunnelArgs -WorkingDirectory $Repository
 # At logon the server gets time to start before the tunnel probes it.
 $tunnelTrigger=New-ScheduledTaskTrigger -AtLogOn -User $user

@@ -51,6 +51,14 @@ async function practice(mode,champ){
   const cards=await p.locator('#cards .card').count();check(cards===5,`practice ${mode}v${mode}: five champion cards`);
   await click(p,`#cards [data-c="${champ}"]`);
   await p.waitForFunction(champ=>window.qaState().roster[0].champ===champ,champ);
+  if(champ===0&&mode===1){
+    await click(p,'#runebox [data-r="0"]');
+    await p.waitForFunction(()=>document.getElementById('btn-start').disabled);
+    check(true,'incomplete rune page prevents starting');
+    await click(p,'#runebox [data-r="5"]');
+    await p.waitForFunction(()=>window.qaState().roster[0].runes.includes(5));
+    check(await p.evaluate(()=>JSON.parse(localStorage.getItem('ember-league-pages')).A.includes(5)),'rune changes save to selected page');
+  }
   if(champ===0&&mode===1)await screenshot(p,'draft');
   await click(p,'#btn-start');
   const s=await waitState(p,()=>window.qaState().phase==='live'&&window.qaState().me);
@@ -67,6 +75,10 @@ async function practice(mode,champ){
   await pause(250);
   const after=await state(p);
   check(after.me.cd[ability]>0||after.me.mn<mana,`champion ${champ}: learned ability activates through keyboard`);
+  check(after.me.stats.attackSpeed>0&&after.me.stats.attackSpeed<2,`champion ${champ}: attack speed uses correct units`);
+  await key(p,'KeyD');
+  await p.waitForFunction(()=>window.qaState().me.scd[0]>0);
+  check(true,`champion ${champ}: D spell activates`);
   await key(p,'KeyB');await p.waitForFunction(()=>getComputedStyle(document.getElementById('shop')).display!=='none');
   check(true,`champion ${champ}: shop opens`);
   const items=await p.evaluate(()=>JSON.parse(window.qaWasm.data_json()).items);
@@ -74,6 +86,15 @@ async function practice(mode,champ){
   if(potion){await click(p,`#shop [data-buy="${potion.id}"]`);await pause(150);check((await state(p)).me.g<after.me.g,`champion ${champ}: buying spends gold`);}
   await key(p,'KeyB');await p.waitForFunction(()=>getComputedStyle(document.getElementById('shop')).display==='none');
   check(true,`champion ${champ}: shop closes`);
+  if(potion?.charges){
+    const charges=(await state(p)).me.charges[0];
+    await key(p,'Digit1');
+    await p.waitForFunction(n=>window.qaState().me.charges[0]<n,charges);
+    check(true,`champion ${champ}: item key consumes a potion charge`);
+  }
+  const start=await state(p);await motion(p,.73,.47,true);await pause(300);
+  const moved=await state(p);
+  check(Math.hypot(moved.me.x-start.me.x,moved.me.z-start.me.z)>.1,`champion ${champ}: ground click moves the champion`);
   if(mode===3){await motion(p,.55,.5,true);await pause(1000);await screenshot(p,'squad');}
   else if(champ===1)await screenshot(p,'emberknight');
   await p.close();
