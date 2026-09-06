@@ -790,6 +790,87 @@ mod tests {
         ));
     }
 
+    /// The 960x540 owner row copied by the programmatic driver on 2026-09-06.
+    fn zoom_jump_owner_pose() -> Pose {
+        let object = ObjectAngles {
+            rho_12: 0.0,
+            rho_13: -0.163_226_878_883_618_53,
+            rho_14: 0.0,
+            rho_23: 0.0,
+            rho_24: -0.163_226_878_883_618_53,
+            rho_34: 0.0,
+        };
+        let view = ViewControls {
+            camera: [
+                0.387_171_329_215_743,
+                0.945_997_639_356_507,
+                -1.185_339_915_598_97,
+                -0.756_473_212_467_682,
+                -0.236_634_784_429_762,
+                -1.770_158_147_141_63,
+                2.011_666_416_834_24,
+                0.504_134_975_524_275,
+                -0.665_501_487_561_046,
+                0.374_175_368_514_795,
+            ],
+            camera_translation: [-0.04, 0.258, 0.0, 0.0, 0.0],
+            camera_yaw: 0.0,
+            camera_pitch: 0.0,
+            height_scale: 3.565,
+            distance_five: 8.0,
+            distance_four: 8.0,
+        };
+        let plane = construct_plane(object).expect("the owner row constructs its plane");
+        let mut posed = object_pose(object, plane, view, [0.0; 2]);
+        posed.zoom_log2 = 1.259_194_831_013_92;
+        posed.plane_origin = [-0.629, 0.0, -0.083, 0.016];
+        set_extent(&mut posed, [960, 540]);
+        posed
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the owner-row probe reports the measured 9x9 error field"
+    )]
+    fn zoom_jump_owner_row_refuses_at_the_error_ceiling() {
+        let from = zoom_jump_owner_pose();
+        for zoom_delta in [0.1, 0.5] {
+            let mut to = from;
+            to.zoom_log2 += zoom_delta;
+            let flat = warp_matrix(&from, &to).expect("a centred zoom has a finite flat map");
+            let residual = chart_residual(&from, &to);
+            let raw = anchor_plan(
+                &frame(&from),
+                &from,
+                &to,
+                flat.forward,
+                residual,
+            )
+            .expect("the owner row has a finite anchor plan");
+            let samples = sampled_errors(&from, &to, unpack_rows(raw.rows))
+                .expect("the owner row has a measurable relief corpus");
+            assert_eq!(samples.len(), 9 * 9 * HEIGHT_SAMPLES.len());
+            let screen_maxima: Vec<f64> = samples
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .chunks_exact(HEIGHT_SAMPLES.len())
+                .map(|heights| heights.iter().copied().fold(0.0, f64::max))
+                .collect();
+            let plan = reproject(&frame(&from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::ClearOnly);
+            assert!(raw.source_valid);
+            assert!(residual <= MAX_CHART_RESIDUAL_PX);
+            assert!(raw.approx_max_error_px.is_some_and(|px| px > WARP_MAX_ERROR_PX));
+            eprintln!(
+                "owner zoom +{zoom_delta:.1}: chart_residual={residual:.9} max={:.9} p95={:.9} field={screen_maxima:.6?}",
+                raw.approx_max_error_px.expect("the maximum was measured"),
+                raw.approx_p95_error_px.expect("the percentile was measured"),
+            );
+        }
+    }
+
     fn frame(pose: &Pose) -> SceneFrame {
         SceneFrame {
             scene_id: 3,
