@@ -1,0 +1,11 @@
+# Killshot v31 — Breach-12
+
+User request: introduce a shotgun in v31. Work stays on `codex/killshot-v31`, incorporating main's host repair `70ffba2a` and the v30 release handoff. Preserve the unrelated dirty original checkout, all frozen releases, and peer game changes. No all-game updater or new Cloudflare tunnel is part of this task.
+
+Proposed contract: Breach-12 is weapon 8, a magazine-fed shotgun with six shells loaded, 24 in reserve, an 0.85-second firing cycle and a 2.8-second reload. One shell launches eight server-authoritative deterministic pellets. Intrinsic pellet spread stays nonzero while ADS/crouch improve aim, and isolated pellets must not inherit the other weapons' instant-headshot kill. Balance and effective range are verified against the existing five-HP model. Weapon 8 participates in loot, retained per-life inventory, resupply and Custom starting loadouts; slot 9 remains reserved. Protocol 24 rejects incompatible v30 clients cleanly.
+
+Root owns runtime integration, serial Idle-priority builds, multiplayer/browser verification and release coordination. Core worker owns core/server; web worker owns new v31 page/settings/catalog/tests and scoped publisher; presentation worker owns feel/reload/sound plus a separate shotgun GLB and sidecar. Original weapon and glove assets remain unchanged. A new gun can reuse the existing AK glove frame only if its geometry actually fits those sockets and is visually checked in first and third person.
+
+Required gates: existing and new native/core/server tests, strict all-target Clippy, pure v31 web/publisher tests, clean server/WASM builds, actual private browser custom-shotgun/HUD/reload checks, pellet authority/cover/shield/range regressions, first/third-person asset captures and public byte/version checks if deployed. Report wall times and explicitly distinguish rendering fixtures from gameplay tests. Never synthesize workstation input or take its foreground. Publication/restart must be coordinated against fresh live state; v30's prior Windows-only approval does not authorize a Knecht fleet update.
+
+Barza message 98 was read: main/ci-passed now contain the host-only refinement; Knecht's timer remains paused, its current Arena/Fire servers remain live, and the Kings tunnel is absent. Do not resume its timer as a side effect of the shotgun work.
