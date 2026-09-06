@@ -236,7 +236,7 @@ pub struct WarpPlan {
     pub source_texture_index: Option<u32>,
     /// Destination pose used to project retained records, present only for a relief redraw.
     pub destination_pose: Option<Pose>,
-    /// Whether sampling the retained texture is honest.
+    /// Whether using the named retained image or record source is honest.
     pub source_valid: bool,
     /// Whether the destination pose is the physical edge-on all-sky state.
     pub edge_on: bool,
@@ -616,7 +616,7 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
-    /// Share of the destination coverage mirror that the warp or redraw leaves clear.
+    /// Image-warp clear share or relief-redraw stale-resolution and coverage risk.
     pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,
@@ -645,7 +645,7 @@ impl PresentFacts {
         self.warp_hold_count = self.warp_hold_count.saturating_add(1);
     }
 
-    /// Records relief coverage only after the redraw's resident records and backdrop were checked.
+    /// Records planned relief exposure only after the redraw's resident records were checked.
     pub(crate) const fn record_relief_coverage(&mut self, exposed_fraction: Option<f64>) {
         self.warp_exposed_fraction = exposed_fraction;
     }

@@ -162,7 +162,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let view = vec3<f32>(yawed.x, camera_pitch_cosine * yawed.y - camera_pitch_sine * yawed.z, camera_pitch_sine * yawed.y + camera_pitch_cosine * yawed.z - distance_four);
     if (-view.z <= 1.0e-4) { output.valid = 0.0; output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); return output; }
     let clip_depth = (camera_far / (camera_near - camera_far)) * view.z + camera_far * camera_near / (camera_near - camera_far);
-    let aspect = f32(scene.grid.x) / f32(scene.grid.y);
+    let aspect = hot.view_scale.w;
     let perspective_scale = aspect * distance_four * 0.5;
     output.position = vec4<f32>(perspective_scale * view.x / aspect, perspective_scale * view.y, clip_depth, -view.z);
     return output;
@@ -451,6 +451,7 @@ mod tests {
             "let denominator_five = distance_five - ambient.fifth;",
             "if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }",
             "let denominator_four = distance_four - projected_four.w;",
+            "let aspect = hot.view_scale.w;",
             "if (denominator_four <= 1.0e-4) { return output; }",
             "let camera_yaw_cosine = hot.observer_rotation.x;",
             "let camera_pitch_cosine = hot.observer_rotation.z;",

@@ -37,7 +37,7 @@ use uniforms::{
 };
 use warp::{color, create_warp_pipeline, warp_load_color};
 #[cfg(test)]
-use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fraction};
+use warp::{destination_extent, planned_exposed_fraction};
 
 mod census;
 mod ledger;

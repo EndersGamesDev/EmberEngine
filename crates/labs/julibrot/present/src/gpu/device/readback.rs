@@ -147,7 +147,6 @@ pub(super) struct ReadbackTarget {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct OffscreenCapturePlan {
     pub(super) relief_redraw: bool,
-    pub(super) has_backdrop: bool,
     pub(super) texture_index: usize,
     /// The opaque HOT slot the presentation pass was drawn from; the capture asks it for its own
     /// dynamic offset rather than being handed a number, so the two draws cannot be given
@@ -336,7 +335,7 @@ impl Presenter {
                 &target.view,
                 hot_offset,
                 warp_load_color(plan.selected),
-                plan.has_backdrop,
+                false,
                 "Julibrot relief redraw capture pass",
             );
         } else {

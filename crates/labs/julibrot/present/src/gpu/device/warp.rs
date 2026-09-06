@@ -5,8 +5,6 @@ use crate::{
     WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
     exterior_zero, identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
 };
-use ember_julibrot_math::scene_uncovered_fraction;
-
 use super::ledger::{LatticeRefusal, presentation_ledger_entry};
 use super::readback::OffscreenCapturePlan;
 use super::{
@@ -24,6 +22,10 @@ impl Presenter {
     #[allow(
         clippy::too_many_lines,
         reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
+    )]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "the destination lattice aspect is narrowed once into the binary32 GPU ABI"
     )]
     pub fn write_hot(
         &mut self,
@@ -70,7 +72,9 @@ impl Presenter {
         );
         let plan = if plan.kind == WarpKind::ReliefRedraw
             && self.ledger.retained().is_none_or(|source| {
-                !self.retained_records_support_relief_redraw(source, selected.1)
+                plan.destination_pose.is_none_or(|destination| {
+                    !self.retained_records_support_relief_redraw(source, &destination, selected.1)
+                })
             }) {
             clear_warp_plan(plan.edge_on, true)
         } else {
@@ -101,12 +105,15 @@ impl Presenter {
         let translation = camera_translation(hot.view.camera_translation).unwrap_or([[0.0; 4]; 2]);
         let observer = camera_rotation(hot.view.camera_yaw, hot.view.camera_pitch)
             .unwrap_or([1.0, 0.0, 1.0, 0.0]);
-        let scale = view_scale(
+        let mut scale = view_scale(
             hot.view.height_scale,
             hot.view.distance_five,
             hot.view.distance_four,
         )
         .unwrap_or([0.0, 8.0, 8.0, 0.0]);
+        if warp_destination_extent[1] > 0 {
+            scale[3] = warp_destination_extent[0] as f32 / warp_destination_extent[1] as f32;
+        }
         let screen_rows = screen_rows.unwrap_or_else(identity_warp_rows);
         let epoch = hot.epoch.to_le_bytes();
         let epoch_low = u32::from_le_bytes([epoch[0], epoch[1], epoch[2], epoch[3]]);
@@ -273,20 +280,25 @@ impl Presenter {
             .as_ref()
             .and_then(PresentMain::selected_palette)
             .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
-        let relief_redraw_backdrop = if planned_relief_redraw {
+        let relief_redraw_prepared = if planned_relief_redraw {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
             })?;
+            let destination = presented_plan.destination_pose.as_ref().ok_or(
+                PresentError::Device {
+                    operation: "select relief redraw destination",
+                },
+            )?;
             self.prepare_relief_redraw(
                 source,
+                destination,
                 [state.canvas_width, state.canvas_height],
                 selected.1,
             )?
         } else {
-            None
+            false
         };
-        let relief_redraw = relief_redraw_backdrop.is_some();
-        let capture_has_backdrop = relief_redraw_backdrop.unwrap_or(false);
+        let relief_redraw = relief_redraw_prepared;
         let mut held_stale = source_slot.held_stale;
         if planned_relief_redraw && !relief_redraw {
             let (fallback, refusal) = enforce_lattice(
@@ -315,22 +327,16 @@ impl Presenter {
                 label: Some("Julibrot warp and fence"),
             });
         if relief_redraw {
-            let has_backdrop = relief_redraw_backdrop.unwrap_or(false);
             encode_relief_redraw(
                 &mut encoder,
                 &self.gpu,
                 state.surface_view,
                 hot_slot.dynamic_offset(),
                 selected.1,
-                has_backdrop,
             );
             self.facts.record_relief_redraw();
-            let exposed_fraction = self.hot[hot_slot.index() as usize]
-                .as_ref()
-                .and_then(|pose| {
-                    relief_redraw_clear_fraction(pose, self.main.as_ref(), has_backdrop)
-                });
-            self.facts.record_relief_coverage(exposed_fraction);
+            self.facts
+                .record_relief_coverage(presented_plan.predicted_exposed_fraction);
         } else {
             self.write_warp_destination_extent(warp_destination_extent);
             encode_image_warp(
@@ -354,7 +360,6 @@ impl Presenter {
         let armed_capture = if self.frame_readback_armed {
             let plan = OffscreenCapturePlan {
                 relief_redraw,
-                has_backdrop: capture_has_backdrop,
                 texture_index,
                 hot_slot,
                 selected: selected.1,
@@ -483,34 +488,9 @@ pub(super) fn planned_exposed_fraction(
     source: Option<&crate::SceneFrame>,
 ) -> Option<f64> {
     if plan.kind == WarpKind::ReliefRedraw {
-        return None;
+        return plan.predicted_exposed_fraction;
     }
     to_pose.and_then(|to_pose| warp_exposed_fraction(plan, to_pose, source))
-}
-
-pub(super) fn relief_redraw_clear_fraction(
-    pose: &Pose,
-    main: Option<&PresentMain>,
-    use_backdrop: bool,
-) -> Option<f64> {
-    let apron_scale = use_backdrop
-        .then(|| {
-            main.and_then(|main| main.backdrop.as_ref())
-                .and_then(|backdrop| match backdrop.map {
-                    PoseMap::Mapped(map) => Some(map.apron_scale),
-                    PoseMap::EdgeOn => None,
-                })
-        })
-        .flatten()
-        .unwrap_or(1.0);
-    scene_uncovered_fraction(
-        &pose.object,
-        &pose.view,
-        pose.grid_width,
-        pose.grid_height,
-        apron_scale,
-    )
-    .ok()
 }
 
 pub(super) fn create_warp_pipeline(

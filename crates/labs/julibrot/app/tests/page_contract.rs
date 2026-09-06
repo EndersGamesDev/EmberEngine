@@ -793,6 +793,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));
     assert!(FACTS.contains("warp_exposed_fraction: present.warp_exposed_fraction"));
+    assert!(FACTS.contains("warp_wall_ms: present.last_warp.map(|sample| sample.wall_ms)"));
 }
 
 #[test]

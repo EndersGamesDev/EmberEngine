@@ -496,7 +496,12 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let retained_grid = ledger
         .retained_grid()
         .expect("retained frame owns its record grid");
-    let uniform = relief_scene_uniform(retained_grid, &sampled, crate::CLASSIC_PALETTE)
+    let uniform = relief_scene_uniform(
+        retained_grid,
+        &sampled,
+        &sampled.pose,
+        crate::CLASSIC_PALETTE,
+    )
         .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
@@ -751,7 +756,15 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
         .clone();
     retained_grid.width /= 2;
     retained_grid.height /= 2;
-    assert!(relief_scene_uniform(&retained_grid, &sampled, crate::CLASSIC_PALETTE).is_err());
+    assert!(
+        relief_scene_uniform(
+            &retained_grid,
+            &sampled,
+            &sampled.pose,
+            crate::CLASSIC_PALETTE
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -767,82 +780,39 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
             .directory_index,
         main.grid.span.directory_index
     );
-    assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
+    assert!(
+        relief_scene_uniform(
+            &main.grid,
+            &sampled,
+            &sampled.pose,
+            crate::CLASSIC_PALETTE
+        )
+        .is_ok()
+    );
 }
 
 #[test]
-fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
-    let angle = -1.316_653_720_171_549_4;
-    let object = ObjectAngles {
-        rho_13: angle,
-        rho_24: angle,
-        ..ObjectAngles::IDENTITY
-    };
-    let camera_angle = -0.254_142_606_623_347_1;
-    let mut camera = [0.0; 10];
-    camera[1] = camera_angle;
-    camera[4] = camera_angle;
-    let view = ViewControls {
-        camera,
-        camera_yaw: 0.960_422_302_787_256,
-        camera_pitch: core::f64::consts::PI,
-        height_scale: 4.0,
-        distance_five: 2.0,
-        distance_four: 2.0,
-        ..ViewControls::NEUTRAL
-    };
-    let mut pose = binding_pose();
-    pose.object = object;
-    pose.plane = construct_plane(object).expect("coverage fixture plane constructs");
-    pose.view = view;
-    pose.grid_width = 960;
-    pose.grid_height = 540;
-    let mut main = binding_main();
-    let mut invalid_grid = main.grid.clone();
-    invalid_grid.width = 0;
-    let backdrop_map = ember_julibrot_math::Homography {
-        apron_scale: 2.0,
-        ..ember_julibrot_math::Homography::IDENTITY
-    };
-    main.backdrop = Some(crate::PresentBackdrop {
-        grid: invalid_grid,
-        iteration_cap: 64,
-        plane: pose.plane,
-        map: PoseMap::Mapped(backdrop_map),
-    });
-    assert!(
-        validate_backdrop(
-            main.backdrop.as_ref().expect("candidate backdrop exists"),
-            ember_lab_heap::DialectLimits {
-                descriptor_capacity: u32::MAX,
-                span_capacity: u32::MAX,
-                handle_capacity: u32::MAX,
-            },
-        )
-        .is_err(),
-        "the submit path refuses this candidate before publishing its coverage"
-    );
+fn relief_redraw_publishes_the_planned_fraction_without_filling_from_a_backdrop() {
+    let pose = binding_pose();
     let relief = crate::WarpPlan {
         kind: WarpKind::ReliefRedraw,
         source_valid: true,
         exposed: true,
+        predicted_exposed_fraction: Some(0.071_952_160_494),
         ..clear_warp_plan(false, true)
     };
     assert_eq!(
         planned_exposed_fraction(&relief, Some(&pose), None),
-        None,
-        "HOT publication cannot assume the candidate backdrop will validate"
+        relief.predicted_exposed_fraction
     );
-    let main_only = relief_redraw_clear_fraction(&pose, Some(&main), false)
-        .expect("the main-only coverage mirror is finite");
-    let candidate_backdrop = relief_redraw_clear_fraction(&pose, Some(&main), true)
-        .expect("the unvalidated candidate coverage mirror is finite");
-    assert!(main_only > candidate_backdrop);
     let mut facts = PresentFacts::default();
-    facts.record_warp_plan(&relief, None);
-    assert_eq!(facts.warp_exposed_fraction, None);
-    facts.record_relief_coverage(Some(main_only));
-    assert_eq!(facts.warp_exposed_fraction, Some(main_only));
+    facts.record_warp_plan(&relief, relief.predicted_exposed_fraction);
+    assert_eq!(
+        facts.warp_exposed_fraction,
+        relief.predicted_exposed_fraction
+    );
+    assert_eq!(facts.warp_max_error_px, None);
+    assert_eq!(facts.warp_p95_error_px, None);
 }
 
 #[test]
@@ -1113,6 +1083,68 @@ fn frame_on(scene_id: u64, source_extent: [u32; 2], pose_extent: [u32; 2]) -> cr
     let mut frame = frame_at_extent(scene_id, source_extent);
     frame.pose = pose_on(pose_extent);
     frame
+}
+
+#[test]
+fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() {
+    let mut grid = binding_main().grid;
+    grid.width = 8;
+    grid.height = 5;
+    grid.level = RefinementLevel::Preview;
+    let source = frame_on(90, [8, 5], [64, 36]);
+    let mut destination = pose_on([64, 36]);
+    destination.zoom_log2 = 1.0;
+    destination.centre_from_reference_px = [4.0, -2.0];
+    destination.view.height_scale = 2.0;
+    let uniform = relief_scene_uniform(&grid, &source, &destination, crate::CLASSIC_PALETTE)
+        .expect("the reduced retained grid composes into the destination chart");
+
+    assert_eq!(uniform.grid[..2], [8, 5]);
+    let rows = [
+        f64::from(uniform.screen_to_plane_row_0[0]),
+        f64::from(uniform.screen_to_plane_row_0[1]),
+        f64::from(uniform.screen_to_plane_row_0[2]),
+        f64::from(uniform.screen_to_plane_row_1[0]),
+        f64::from(uniform.screen_to_plane_row_1[1]),
+        f64::from(uniform.screen_to_plane_row_1[2]),
+        f64::from(uniform.screen_to_plane_row_2[0]),
+        f64::from(uniform.screen_to_plane_row_2[1]),
+        f64::from(uniform.screen_to_plane_row_2[2]),
+    ];
+    let uniform_chart = crate::apply_homography(rows, [1.0, -1.0])
+        .expect("the known source vertex reaches the destination chart");
+    assert!((uniform_chart[0] - 1.5).abs() < 1.0e-6);
+    assert!((uniform_chart[1] + 1.55).abs() < 1.0e-6);
+    let chart_scale = 4.0 * f64::from(uniform.screen_to_plane_row_2[3])
+        / f64::from(uniform.grid[0]);
+    let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
+    assert!((display[0] - 0.75).abs() < 1.0e-6);
+    assert!((display[1] + 0.775).abs() < 1.0e-6);
+
+    let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
+        .expect("the source delivery lattice composes into the destination pose");
+    let record = [12.0, 1.0, 0.0, 0.0];
+    let actual = crate::project_scene_record_vertex(
+        &redraw,
+        [1.0, -1.0],
+        record,
+        source.iteration_cap,
+        crate::CLASSIC_PALETTE,
+    )
+    .expect("the record height is valid")
+    .expect("the redraw vertex projects");
+    let expected = crate::project_scene_record_vertex(
+        &destination,
+        [12.0, -12.4],
+        record,
+        source.iteration_cap,
+        crate::CLASSIC_PALETTE,
+    )
+    .expect("the record height is valid")
+    .expect("the destination vertex projects");
+    assert!((actual.0[0] - expected.0[0]).abs() < 1.0e-9);
+    assert!((actual.0[1] - expected.0[1]).abs() < 1.0e-9);
+    assert!((actual.1 - expected.1).abs() < 1.0e-9);
 }
 
 /// Reprojects `frame` onto `to_pose` the way the presenter does, with no validation demand.

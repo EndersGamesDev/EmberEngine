@@ -33,7 +33,7 @@ pub struct HotUniform {
     pub camera_translation_1: [f32; 4],
     /// Cosine and sine of the observer yaw, then of its pitch.
     pub observer_rotation: [f32; 4],
-    /// Height amplitude, both perspective distances, and one reserved zero.
+    /// Height amplitude, both perspective distances, and the destination aspect ratio.
     pub view_scale: [f32; 4],
     /// First padded row of the inverse-sampling homography.
     pub homography_row_0: [f32; 4],
@@ -303,6 +303,8 @@ mod tests {
         use crate::{camera_rotation, camera_rotation_pairs, camera_translation, view_scale};
         let ambient = camera_rotation_pairs([0.0; 10]).expect("neutral ambient camera");
         let translation = camera_translation([0.0; 5]).expect("neutral camera translation");
+        let mut neutral_scale = view_scale(0.0, 8.0, 8.0).expect("neutral distances");
+        neutral_scale[3] = 16.0 / 9.0;
         let uniform = HotUniform {
             camera_rotation_pairs_0: ambient[0],
             camera_rotation_pairs_1: ambient[1],
@@ -312,7 +314,7 @@ mod tests {
             camera_translation_0: translation[0],
             camera_translation_1: translation[1],
             observer_rotation: camera_rotation(0.0, 0.0).expect("neutral observer"),
-            view_scale: view_scale(0.0, 8.0, 8.0).expect("neutral distances"),
+            view_scale: neutral_scale,
             homography_row_0: [1.0, 0.0, 0.0, 0.0],
             homography_row_1: [0.0, 1.0, 0.0, 0.0],
             homography_row_2: [0.0, 0.0, 1.0, 0.0],
@@ -343,15 +345,18 @@ mod tests {
         assert_eq!(lane(96), [0.0; 4]);
         // Byte 112 is the observer yaw followed by pitch.
         assert_eq!(lane(112), [1.0, 0.0, 1.0, 0.0]);
-        // Byte 128 is [h, d5, d4, reserved]: the vertex reads .x as the height amplitude, .y as the
-        // five-to-four pole, and .z as both the four-to-three pole and the observer distance.
-        assert_eq!(lane(128), [0.0, 8.0, 8.0, 0.0]);
+        // Byte 128 is [h, d5, d4, aspect]: the vertex reads .x as the height amplitude, .y as the
+        // five-to-four pole, .z as both the four-to-three pole and observer distance, and .w as the
+        // destination aspect even when a relief redraw's source grid has another aspect.
+        assert_eq!(lane(128), [0.0, 8.0, 8.0, 16.0 / 9.0]);
         assert_eq!(&bytes[284..288], &0_u32.to_le_bytes());
+        let mut moved_scale = view_scale(1.5, 2.0, 40.0).expect("moved distances");
+        moved_scale[3] = 16.0 / 9.0;
         let moved = HotUniform {
-            view_scale: view_scale(1.5, 2.0, 40.0).expect("moved distances"),
+            view_scale: moved_scale,
             ..uniform
         };
-        assert_eq!(lane_of(&moved, 128), [1.5, 2.0, 40.0, 0.0]);
+        assert_eq!(lane_of(&moved, 128), [1.5, 2.0, 40.0, 16.0 / 9.0]);
     }
 
     fn lane_of(uniform: &HotUniform, offset: usize) -> [f32; 4] {
