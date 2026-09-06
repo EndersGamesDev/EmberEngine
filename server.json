@@ -1,6 +1,6 @@
 {
   "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788700511",
+  "v": "1788711660",
   "proto": 21,
   "fire_ws": "wss://automation-awesome-entrance-precise.trycloudflare.com",
   "fire_proto": 1,
@@ -27,11 +27,11 @@
     {
       "name": "dusky-osprey",
       "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-      "proto": 21,
-      "version": "r1469",
-      "commit": "f28a145f",
+      "proto": 22,
+      "version": "r1490",
+      "commit": "129bcac4",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-06T13:14:57Z",
+      "updated": "2026-09-06T16:21:00Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
