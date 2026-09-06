@@ -38,7 +38,9 @@ use ember_julibrot_math::{
     BigCentre, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px,
     construct_plane, pixel_scale, plane_to_screen, screen_to_plane,
 };
-use ember_julibrot_present::{CLASSIC_PALETTE, exterior_zero, grid_screen, shade_escape_record};
+use ember_julibrot_present::{
+    CLASSIC_PALETTE, SceneUniform, exterior_zero, grid_screen, shade_escape_record,
+};
 
 const EXTENT: [u32; 2] = [960, 540];
 const CAP: u32 = 512;
@@ -503,6 +505,8 @@ struct Frame {
     colour: Vec<[u8; 3]>,
     covered: Vec<bool>,
     cause: Vec<Cause>,
+    /// Pixels painted with a record belonging to no corner of the primitive that covered them.
+    foreign: u64,
 }
 
 fn render(pose: &Pose, records: &[[f32; 4]], rule: Rule) -> (Vec<[u8; 3]>, Vec<bool>) {
@@ -531,6 +535,7 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
     let mut depth = vec![f64::INFINITY; pixels];
     let mut covered = vec![false; pixels];
     let mut cause = vec![Cause::Sky; pixels];
+    let mut foreign = 0_u64;
     let half_w = 0.5 * f64::from(width);
     let half_h = 0.5 * f64::from(height);
     let light_direction = {
@@ -637,6 +642,18 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                         let sample_row =
                             (grid[1] + 0.5).floor().clamp(0.0, f64::from(height) - 1.0) as u32;
                         let record = records[(sample_row * width + sample_column) as usize];
+                        // The fragment stage resolves a pixel to a sample by rounding the
+                        // interpolated grid coordinate. The interpolant is a convex combination of
+                        // the primitive's three grid coordinates, so the sample it lands on must be
+                        // a corner of the primitive's own cell; anything else would paint a pixel
+                        // with a record belonging to a different part of the object.
+                        if sample_column < column
+                            || sample_column > column + 1
+                            || sample_row < row
+                            || sample_row > row + 1
+                        {
+                            foreign += 1;
+                        }
                         let linear = shade(record, light);
                         depth[index] = fragment_depth;
                         covered[index] = true;
@@ -651,6 +668,7 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
         colour,
         covered,
         cause,
+        foreign,
     }
 }
 
@@ -1663,5 +1681,72 @@ fn the_right_hand_curtain_is_lifted_escaped_records_and_the_census_walk_finds_it
     assert!(
         inside_lifted > 2.0 * outside_lifted,
         "the curtain band must be made of lifted escaped records: {inside_lifted} against {outside_lifted}"
+    );
+}
+
+/// No pixel of this frame is painted with a record that is not its own surface point's.
+///
+/// This is the test the verdict on the row rests on. A settled frame may not assert geometry the
+/// object does not have, and the way this pass could break that rule without any gate refusing
+/// anything is to paint a pixel with the wrong record: the fragment stage resolves a pixel to a
+/// sample by rounding the interpolated grid coordinate, and a primitive stretched across the frame
+/// by the fifth perspective interpolates that coordinate over a long screen distance. The bound is
+/// that the interpolant is a convex combination of the primitive's own three grid coordinates, so
+/// the sample it rounds to is a corner of the primitive's own cell whatever the projection did to
+/// the primitive's shape. The counter below is incremented wherever that fails, at every height
+/// the census covers and under both height mappings, and is zero.
+#[test]
+fn no_pixel_of_this_row_is_painted_with_a_record_from_outside_its_own_cell() {
+    let records = steep_records(&zoom_pose(3.565));
+    for height_scale in [3.565_f64, 1.0, 0.0] {
+        for mapping in [Mapping::InteriorAtFloor, Mapping::InteriorAtPeak] {
+            for rule in [Rule::Fixed, Rule::Base] {
+                let frame = render_frame(&zoom_pose(height_scale), &records, rule, mapping);
+                assert_eq!(
+                    frame.foreign, 0,
+                    "height {height_scale} painted {} pixels from outside their own cell",
+                    frame.foreign
+                );
+            }
+        }
+    }
+}
+
+/// The zoomed row uploads the accepted steep row's scene payload byte for byte.
+///
+/// The claim the whole lane rests on is that the two rows share a mesh, so that every difference
+/// between their frames is a difference in the records. That is an argument from two contracts —
+/// the screen map is zoom-free, and the centre enters only where a pixel becomes a point — and
+/// this is the mechanical check of it: `SceneUniform::new` is present's own packer, and the bytes
+/// it produces for the two poses are identical. The one lane that could carry a zoom is the apron
+/// in `screen_to_plane_row_2.w`, which is one for both.
+#[test]
+fn the_zoomed_row_uploads_the_steep_row_s_scene_payload_unchanged() {
+    let scene_for = |pose: &Pose| {
+        SceneUniform::new(
+            [pose.grid_width, pose.grid_height],
+            3,
+            CAP,
+            0,
+            pose.grid_width * pose.grid_height,
+            pose.plane,
+            pose.map,
+            CLASSIC_PALETTE,
+        )
+        .expect("the row's map packs into the scene payload")
+    };
+    let steep = scene_for(&pose_with(steep_view(3.565)));
+    let zoomed = scene_for(&zoom_pose(3.565));
+    assert_eq!(steep.span[2], 0, "the row's map is not edge-on");
+    assert_eq!(zoomed.screen_to_plane_row_2[3], 1.0, "apron one");
+    assert_eq!(
+        bytemuck::bytes_of(&steep),
+        bytemuck::bytes_of(&zoomed),
+        "the zoom and the centre reached the scene payload"
+    );
+    assert_ne!(
+        pose_with(steep_view(3.565)).centre_from_reference_px,
+        zoom_pose(3.565).centre_from_reference_px,
+        "the two poses really do differ where the records are sampled"
     );
 }
