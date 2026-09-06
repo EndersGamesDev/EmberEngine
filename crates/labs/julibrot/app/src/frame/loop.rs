@@ -609,6 +609,18 @@ mod browser {
         cancelled: bool,
     }
 
+    /// One requested copy of the presented frame, and what happened to the request.
+    ///
+    /// The copy is on request only and never per frame: it costs a full surface-sized transfer,
+    /// 2,073,600 bytes at 960 by 540, and a frame loop that paid that every turn would be measuring
+    /// its own readback rather than the picture.
+    #[derive(Debug, Default)]
+    struct FrameCapture {
+        armed: bool,
+        ready: Option<ember_julibrot_present::FrameReadback>,
+        refusal: Option<String>,
+    }
+
     /// Browser-only owner of the heap, kernels, worker endpoint, presenter, and frame schedule.
     pub struct BrowserFrameLoop {
         device: std::sync::Arc<wgpu::Device>,
@@ -663,6 +675,7 @@ mod browser {
         map_condition_number: f64,
         edge_on: bool,
         facts_pose: (PoseMap, [u32; 2]),
+        frame_capture: FrameCapture,
     }
 
     impl BrowserFrameLoop {
@@ -830,6 +843,7 @@ mod browser {
                 map_condition_number: initial_horizon.condition_number,
                 edge_on: initial_horizon.edge_on,
                 facts_pose: (map, grid_extent),
+                frame_capture: FrameCapture::default(),
             };
             Ok(frame_loop)
         }
@@ -840,6 +854,62 @@ mod browser {
         /// returns the same cause, so the page reports one honest reason instead of restating a
         /// broken invariant sixty times a second. A transient fence refusal never escapes.
         ///
+        /// Arms one copy of the next presented frame.
+        ///
+        /// Arming is not a copy: the surface image exists only between its acquisition and its
+        /// presentation, so the request waits for the turn that presents a frame and is taken
+        /// there. A second arming while one is already outstanding is the same one request.
+        pub const fn arm_frame_capture(&mut self) {
+            self.frame_capture.armed = true;
+        }
+
+        /// Reports whether an armed or in-flight frame copy still needs turns of the loop.
+        #[must_use]
+        pub fn frame_capture_turning(&self) -> bool {
+            self.frame_capture.armed || self.presenter.frame_readback_pending()
+        }
+
+        /// Reports whether a copy is armed or in flight and has not yet been taken.
+        #[must_use]
+        pub fn frame_capture_pending(&self) -> bool {
+            self.frame_capture_turning() && self.frame_capture.ready.is_none()
+        }
+
+        /// Returns the extent of the copy that is waiting to be taken.
+        #[must_use]
+        pub fn frame_capture_extent(&self) -> Option<[u32; 2]> {
+            self.frame_capture
+                .ready
+                .as_ref()
+                .map(|frame| [frame.width, frame.height])
+        }
+
+        /// Returns the typed reason the last copy did not happen, if one did not.
+        #[must_use]
+        pub fn frame_capture_refusal(&self) -> Option<&str> {
+            self.frame_capture.refusal.as_deref()
+        }
+
+        /// Takes the completed copy, leaving nothing behind for a second caller.
+        pub fn take_frame_capture(&mut self) -> Option<ember_julibrot_present::FrameReadback> {
+            self.frame_capture.ready.take()
+        }
+
+        /// Collects a completed copy without waiting on one that is still in flight.
+        fn drain_frame_capture(&mut self) {
+            if !self.presenter.frame_readback_pending() {
+                return;
+            }
+            match self.presenter.take_frame_readback() {
+                Ok(None) => (),
+                Ok(Some(frame)) => {
+                    self.frame_capture.refusal = None;
+                    self.frame_capture.ready = Some(frame);
+                }
+                Err(error) => self.frame_capture.refusal = Some(error.to_string()),
+            }
+        }
+
         /// # Errors
         ///
         /// Returns the first typed cross-slice refusal without looping or presenting an unfinished
@@ -886,6 +956,7 @@ mod browser {
                 .refresh_id
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
+            self.drain_frame_capture();
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let observed = self.handle_events(runtime, viewer, events)?;
             self.synchronize_precision_mode(viewer)?;
@@ -1220,7 +1291,22 @@ mod browser {
                         self.frame_policy
                             .record(measurement.wall_ms)
                             .map_err(|error| AppError::Present(error.to_string()))?;
-                        if runtime.complete_warp(measurement.id) {
+                        // The copy is taken here or nowhere: this is the one moment the frame the
+                        // page is about to show exists as a texture the renderer can read.
+                        let armed =
+                            self.frame_capture.armed && !self.presenter.frame_readback_pending();
+                        let presenter = &mut self.presenter;
+                        let capture = &mut self.frame_capture;
+                        if runtime.complete_warp_capturing(measurement.id, |texture| {
+                            if !armed {
+                                return;
+                            }
+                            capture.armed = false;
+                            match presenter.request_frame_readback(texture) {
+                                Ok(()) => capture.refusal = None,
+                                Err(error) => capture.refusal = Some(error.to_string()),
+                            }
+                        }) {
                             observed.presented = true;
                             if let Some((warp_id, stamp)) = self.pending_warp_view
                                 && warp_id == measurement.id

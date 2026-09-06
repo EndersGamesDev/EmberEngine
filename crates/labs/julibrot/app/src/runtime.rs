@@ -29,6 +29,10 @@ pub struct DeviceFacts {
     pub width: u32,
     /// Configured surface height.
     pub height: u32,
+    /// Whether the surface image can be copied, which is what a frame readback needs.
+    pub frame_copy_supported: bool,
+    /// Why a frame copy is unavailable, or that it is available.
+    pub frame_copy_status: &'static str,
 }
 
 /// App-owned browser device and sole surface.
@@ -57,7 +61,21 @@ impl BrowserRuntime {
                 detail: format!("status id must be {STATUS_ID}, got {status_id}"),
             });
         }
-        let canvas = canvas_by_id(canvas_id)?;
+        Self::start_on_canvas(canvas_by_id(canvas_id)?).await
+    }
+
+    /// Starts the same runtime on a canvas element, with no status element in the document.
+    ///
+    /// A driver page carries a canvas and nothing else, and a lab that can only start beside a
+    /// status paragraph cannot be opened by a script without one being invented for it. The typed
+    /// startup failure still reaches the console and the caller's rejection either way; the status
+    /// element, where one exists, is only where the message is also written.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed device, capability, surface, or validation-scope failure.
+    pub async fn start_on_canvas(canvas: web_sys::HtmlCanvasElement) -> Result<Self, AppError> {
+        install_julibrot_panic_hook();
         validate_webgl2_floor()?;
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
@@ -148,8 +166,23 @@ impl BrowserRuntime {
                     operation: "surface selection",
                     detail: "surface exposes no alpha mode".to_string(),
                 })?;
+        // A frame the page can copy is a frame a script can measure without editing the page to
+        // read it. The copy usage is asked for only when the surface offers it, because a surface
+        // configured with a usage it does not expose is a refused configuration and the picture
+        // matters more than the readback; what the surface answered is published either way.
+        let frame_copy_supported = capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
+        let frame_copy_status = if frame_copy_supported {
+            "available"
+        } else {
+            "unavailable: the surface is not a copy source"
+        };
+        let usage = if frame_copy_supported {
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: surface_format,
             width,
             height,
@@ -172,6 +205,8 @@ impl BrowserRuntime {
                 rgba32f_renderable: true,
                 width,
                 height,
+                frame_copy_supported,
+                frame_copy_status,
             },
         };
         runtime.clear_first_frame(0)?;
@@ -247,11 +282,22 @@ impl BrowserRuntime {
         self.surfaces.release_unsubmitted(generation)
     }
 
-    /// Presents a matching completed warp after its measured fence region has ended.
+    /// Presents a matching completed warp after its measured fence region has ended, offering its
+    /// frame texture to one caller first.
+    ///
+    /// The offer is the whole of the readback path: the surface image exists only between its
+    /// acquisition and its presentation, so a copy of what the page shows has to be taken inside
+    /// that window and nowhere else. The closure runs once, immediately before the present, and
+    /// only for a warp that is actually being presented.
     #[must_use]
-    pub(crate) fn complete_warp(&mut self, warp_id: u64) -> bool {
+    pub(crate) fn complete_warp_capturing(
+        &mut self,
+        warp_id: u64,
+        capture: impl FnOnce(&wgpu::Texture),
+    ) -> bool {
         match self.surfaces.complete(warp_id) {
             SurfaceAction::Present(frame) => {
+                capture(&frame.texture);
                 frame.present();
                 true
             }

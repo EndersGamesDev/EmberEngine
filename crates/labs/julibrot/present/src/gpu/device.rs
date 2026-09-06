@@ -23,6 +23,7 @@ use ledger::{
     apply_hold_policy, clear_warp_plan, enforce_lattice, pose_is_finite, select_warp_source,
     warp_exposed_fraction,
 };
+use readback::PendingFrameReadback;
 use redraw::encode_relief_redraw;
 #[cfg(test)]
 use redraw::relief_scene_uniform;
@@ -41,6 +42,7 @@ use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fra
 mod census;
 mod ledger;
 mod poll;
+pub mod readback;
 mod redraw;
 mod scene;
 mod uniforms;
@@ -327,6 +329,8 @@ pub struct Presenter {
     ledger: SceneLedger,
     scene_fence: Option<PendingFence>,
     warp_fence: Option<PendingFence>,
+    /// The one requested frame copy in flight, if a caller has asked for one.
+    frame_readback: Option<PendingFrameReadback>,
     next_scene_id: u64,
     next_warp_id: u64,
     scene_samples: SampleTracker,
@@ -366,6 +370,7 @@ impl Presenter {
             ledger: SceneLedger::default(),
             scene_fence: None,
             warp_fence: None,
+            frame_readback: None,
             next_scene_id: 1,
             next_warp_id: 1,
             scene_samples: SampleTracker::default(),
