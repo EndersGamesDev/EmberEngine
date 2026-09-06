@@ -228,7 +228,7 @@ fn hook(frame: &mut Frame, center: Vec3, yaw: f32, phase: f32) {
 ///
 /// No interpolation moves a projectile ahead of the snapshot. Unknown owners
 /// retain a compact team-colored dart; minion shots are never misidentified.
-pub(crate) fn draw_projectile(frame: &mut Frame, projectile: &ProjSnap, time: f32) {
+pub fn draw_projectile(frame: &mut Frame, projectile: &ProjSnap, time: f32) {
     if ![projectile.x, projectile.z, projectile.dx, projectile.dz]
         .iter()
         .all(|v| v.is_finite())
@@ -907,7 +907,7 @@ fn teleport(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
 /// `age` is normalized across the effect's lifetime. Malformed attributed
 /// coordinates are consumed without drawing, preventing invalid transforms
 /// from reaching either this renderer or the legacy fallback.
-pub(crate) fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
+pub fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
     if fx.champ > 4 {
         return false;
     }
@@ -976,7 +976,7 @@ pub(crate) fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
 /// `rotation` and its scale by `stretch`. Collider, selection and health-bar
 /// positions stay authoritative. No skeleton or gameplay timing is changed.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct AttackPose {
+pub struct AttackPose {
     pub offset: Vec3,
     pub rotation: Quat,
     pub stretch: Vec3,
@@ -999,7 +999,7 @@ fn attack_start(fx: &FxLite) -> bool {
 }
 
 /// Recoil, swing or lunge for the latest nearby start belonging to this actor.
-pub(crate) fn attack_pose(unit: &UnitLite, effects: &[FxLite]) -> AttackPose {
+pub fn attack_pose(unit: &UnitLite, effects: &[FxLite]) -> AttackPose {
     if unit.dead || unit.def > 4 || ![unit.x, unit.z, unit.fa].iter().all(|v| v.is_finite()) {
         return AttackPose::default();
     }
