@@ -20,11 +20,20 @@ pub enum Action {
     Melee,
     Shield,
     Scoreboard,
+    Slot1,
+    Slot2,
+    Slot3,
+    Slot4,
+    Slot5,
+    Slot6,
+    Slot7,
+    Slot8,
+    Slot9,
 }
 
 impl Action {
     #[cfg(any(target_arch = "wasm32", test))]
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 22] = [
         Self::Forward,
         Self::Backward,
         Self::Left,
@@ -38,6 +47,15 @@ impl Action {
         Self::Melee,
         Self::Shield,
         Self::Scoreboard,
+        Self::Slot1,
+        Self::Slot2,
+        Self::Slot3,
+        Self::Slot4,
+        Self::Slot5,
+        Self::Slot6,
+        Self::Slot7,
+        Self::Slot8,
+        Self::Slot9,
     ];
 
     #[cfg(any(target_arch = "wasm32", test))]
@@ -56,6 +74,15 @@ impl Action {
             Self::Melee => "melee",
             Self::Shield => "shield",
             Self::Scoreboard => "scoreboard",
+            Self::Slot1 => "slot1",
+            Self::Slot2 => "slot2",
+            Self::Slot3 => "slot3",
+            Self::Slot4 => "slot4",
+            Self::Slot5 => "slot5",
+            Self::Slot6 => "slot6",
+            Self::Slot7 => "slot7",
+            Self::Slot8 => "slot8",
+            Self::Slot9 => "slot9",
         }
     }
 
@@ -145,7 +172,7 @@ const fn key(code: KeyCode) -> Bindings {
     [Some(Binding::Key(code)), None]
 }
 
-const fn default_bindings() -> [Bindings; 13] {
+const fn default_bindings() -> [Bindings; 22] {
     [
         key(KeyCode::KeyW),
         key(KeyCode::KeyS),
@@ -163,6 +190,15 @@ const fn default_bindings() -> [Bindings; 13] {
         key(KeyCode::KeyE),
         key(KeyCode::KeyQ),
         key(KeyCode::Tab),
+        key(KeyCode::Digit1),
+        key(KeyCode::Digit2),
+        key(KeyCode::Digit3),
+        key(KeyCode::Digit4),
+        key(KeyCode::Digit5),
+        key(KeyCode::Digit6),
+        key(KeyCode::Digit7),
+        key(KeyCode::Digit8),
+        key(KeyCode::Digit9),
     ]
 }
 
@@ -170,7 +206,7 @@ const fn default_bindings() -> [Bindings; 13] {
 pub struct Settings {
     pub sensitivity: f32,
     pub paused: bool,
-    bindings: [Bindings; 13],
+    bindings: [Bindings; 22],
     #[cfg(target_arch = "wasm32")]
     revision: Option<f64>,
     #[cfg(target_arch = "wasm32")]
@@ -192,6 +228,25 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// A slot request, not a weapon ID. Simultaneous controls choose the lowest
+    /// slot deterministically; the caller owns edge detection and inventory.
+    pub fn selected_slot(&self, input: &InputState) -> u8 {
+        [
+            (Action::Slot1, 1),
+            (Action::Slot2, 2),
+            (Action::Slot3, 3),
+            (Action::Slot4, 4),
+            (Action::Slot5, 5),
+            (Action::Slot6, 6),
+            (Action::Slot7, 7),
+            (Action::Slot8, 8),
+            (Action::Slot9, 9),
+        ]
+        .into_iter()
+        .find_map(|(action, slot)| action.down(self, input).then_some(slot))
+        .unwrap_or(0)
+    }
+
     pub fn axis(&self, negative: Action, positive: Action, input: &InputState) -> f32 {
         match (negative.down(self, input), positive.down(self, input)) {
             (true, false) => -1.0,
@@ -307,7 +362,7 @@ fn parse_bindings(value: &serde_json::Value) -> Option<Bindings> {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn has_duplicates(table: &[Bindings; 13]) -> bool {
+fn has_duplicates(table: &[Bindings; 22]) -> bool {
     for (index, binding) in table.iter().flatten().flatten().enumerate() {
         if table
             .iter()
@@ -368,6 +423,15 @@ mod tests {
             KeyCode::KeyE,
             KeyCode::KeyQ,
             KeyCode::Tab,
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
         ];
         let input = InputState::from_parts(
             &keys,
@@ -487,5 +551,60 @@ mod tests {
         for revision in [-1.0, 0.5, f64::NAN, f64::INFINITY, 9_007_199_254_740_992.0] {
             assert!(!valid_revision(revision));
         }
+    }
+
+    #[test]
+    fn weapon_slots_have_distinct_defaults_respect_remaps_and_pause() {
+        let settings = Settings::default();
+        for (key, slot) in [
+            (KeyCode::Digit1, 1),
+            (KeyCode::Digit2, 2),
+            (KeyCode::Digit3, 3),
+            (KeyCode::Digit4, 4),
+            (KeyCode::Digit5, 5),
+            (KeyCode::Digit6, 6),
+            (KeyCode::Digit7, 7),
+            (KeyCode::Digit8, 8),
+            (KeyCode::Digit9, 9),
+        ] {
+            let input = InputState::from_parts(&[key], &[], (0.0, 0.0), None);
+            assert_eq!(settings.selected_slot(&input), slot);
+            assert_eq!(
+                Settings::from_json(r#"{"paused":true}"#).selected_slot(&input),
+                0
+            );
+        }
+        let remapped = Settings::from_json(r#"{"bindings":{"slot3":["KeyZ"]}}"#);
+        assert_eq!(
+            remapped.selected_slot(&InputState::from_parts(
+                &[KeyCode::KeyZ],
+                &[],
+                (0.0, 0.0),
+                None
+            )),
+            3
+        );
+        assert_eq!(
+            remapped.selected_slot(&InputState::from_parts(
+                &[KeyCode::Digit3],
+                &[],
+                (0.0, 0.0),
+                None
+            )),
+            0
+        );
+        assert_eq!(
+            settings.selected_slot(&InputState::from_parts(
+                &[KeyCode::Digit9, KeyCode::Digit2],
+                &[],
+                (0.0, 0.0),
+                None
+            )),
+            2
+        );
+        assert_eq!(
+            Settings::from_json(r#"{"bindings":{"slot2":["Digit1"]}}"#).bindings,
+            default_bindings()
+        );
     }
 }

@@ -153,6 +153,7 @@ struct Lobby {
     /// `LobbyInfo` carry its name. The sim holds the same value and reads
     /// it; this copy is what the wire is written from.
     mode: GameMode,
+    loadout: String,
     /// Minted per lobby and sent in `GameJoined`: what a peer falls back to
     /// for a map name it does not know, and since v14 the seed of every
     /// spread and loot roll the sim makes (`Sim.seed`).
@@ -184,6 +185,7 @@ const fn consume_input_edges(input: &mut PlayerIn) {
     input.jump = false;
     input.melee = false;
     input.shield_released = false;
+    input.select_slot = 0;
 }
 
 // RTT values are finite and nonnegative, and the established float formula always fits u64.
@@ -599,6 +601,8 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             ammo: p.ammo,
                             reserve: p.reserve,
                             reloading: p.reload_t > 0.0,
+                            reload_remaining: p.reload_t.max(0.0),
+                            inventory: p.inventory_snapshot(),
                             ads_fraction: p.ads_fraction,
                             spread: p.spread,
                             recoil_bloom: p.recoil_bloom(),
@@ -629,6 +633,12 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                         })
                         .collect(),
                     pads: lobby.sim.pads.iter().map(|p| p.respawn_t <= 0.0).collect(),
+                    supplies: lobby
+                        .sim
+                        .supplies
+                        .iter()
+                        .map(|s| s.respawn_t <= 0.0)
+                        .collect(),
                     loot: lobby.sim.loot.iter().map(|l| l.respawn_t <= 0.0).collect(),
                     team_score: lobby.sim.team_score,
                     hill: lobby.sim.hill_holder,
@@ -801,7 +811,7 @@ fn handle_event(
                         id,
                         &S2C::Welcome {
                             proto: PROTO_VERSION,
-                            motd: "ember arena — cubes with guns".into(),
+                            motd: "Killshot v30 — powered by Ember".into(),
                             host: cfg.host_name.clone(),
                             version: version.to_owned(),
                             commit: commit.to_owned(),
@@ -843,6 +853,8 @@ fn handle_event(
                             cap: u8::try_from(MAX_PLAYERS).expect("MAX_PLAYERS fits in u8"),
                             map: l.map.clone(),
                             mode: l.mode.name().to_string(),
+                            loadout: l.loadout.clone(),
+                            starting_weapon: l.sim.starting_weapon,
                         })
                         .collect();
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
@@ -853,6 +865,8 @@ fn handle_event(
                         password,
                         map,
                         mode,
+                        loadout,
+                        starting_weapon,
                     },
                     true,
                 ) => {
@@ -946,6 +960,25 @@ fn handle_event(
                         );
                         return;
                     };
+                    let loadout = if loadout.is_empty() {
+                        "classic".to_string()
+                    } else {
+                        loadout
+                    };
+                    let starting_weapon = match (loadout.as_str(), starting_weapon) {
+                        ("classic", 0 | 1) => arena_core::shooter::SIDEARM,
+                        ("custom", weapon @ 1..=arena_core::shooter::WEAPON_COUNT) => weapon,
+                        _ => {
+                            let _ = send_to(
+                                conns,
+                                id,
+                                &S2C::Error {
+                                    message: "invalid starting loadout".into(),
+                                },
+                            );
+                            return;
+                        }
+                    };
                     *lobby_counter += 1;
                     let mut hasher = DefaultHasher::new();
                     name.hash(&mut hasher);
@@ -975,11 +1008,13 @@ fn handle_event(
                         sim: Sim::from_level(&level, seed, mode),
                         map,
                         mode,
+                        loadout,
                         seed,
                         members: vec![id],
                         pids: HashMap::new(),
                         inputs: HashMap::new(),
                     };
+                    lobby.sim.starting_weapon = starting_weapon;
                     let pid = alloc_pid(&lobby);
                     lobby.pids.insert(id, pid);
                     lobby.sim.add_player(pid);
@@ -991,6 +1026,8 @@ fn handle_event(
                         players: roster(&lobby, conns),
                         map: lobby.map.clone(),
                         mode: lobby.mode.name().to_string(),
+                        loadout: lobby.loadout.clone(),
+                        starting_weapon: lobby.sim.starting_weapon,
                     };
                     tracing::info!(conn = id, lobby = %name, map = %lobby.map, mode = lobby.mode.name(), "game created");
                     lobbies.insert(name.clone(), lobby);
@@ -1078,6 +1115,8 @@ fn handle_event(
                         players: roster(lobby, conns),
                         map: lobby.map.clone(),
                         mode: lobby.mode.name().to_string(),
+                        loadout: lobby.loadout.clone(),
+                        starting_weapon: lobby.sim.starting_weapon,
                     };
                     let others: Vec<u64> =
                         lobby.members.iter().copied().filter(|&m| m != id).collect();
@@ -1103,6 +1142,7 @@ fn handle_event(
                         sprint,
                         crouch,
                         reload,
+                        select_slot,
                         jump,
                         shield,
                         melee,
@@ -1136,6 +1176,12 @@ fn handle_event(
                     // makes it fire exactly once.
                     let jump = jump || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.jump);
                     let melee = melee || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.melee);
+                    // Keep the latest nonzero valid selection until one tick consumes it.
+                    let select_slot = if (1..=9).contains(&select_slot) {
+                        select_slot
+                    } else {
+                        lobby.inputs.get(&pid).map_or(0, |(i, ..)| i.select_slot)
+                    };
                     // Shield activation needs a rising edge. A release followed
                     // by a re-press can arrive in this same drain; preserve the
                     // release before retaining the latest held state.
@@ -1154,6 +1200,7 @@ fn handle_event(
                                 sprint,
                                 crouch,
                                 reload,
+                                select_slot,
                                 jump,
                                 shield,
                                 shield_released,
@@ -1251,6 +1298,8 @@ mod shield_input_tests {
                 password: None,
                 map: MAP_FREIGHT_YARD.into(),
                 mode: "ffa".into(),
+                loadout: "classic".into(),
+                starting_weapon: 1,
             });
             let lobby = fixture.lobbies.get_mut("shield-fixture").unwrap();
             assert_eq!(lobby.pids[&1], 0);
@@ -1335,6 +1384,103 @@ mod shield_input_tests {
             hub.step().active,
             "a stale release must not lower the next tick"
         );
+    }
+
+    #[test]
+    fn killshot_slot_selection_survives_coalescing_and_is_consumed_once() {
+        let mut hub = HubFixture::new(ShieldState::READY);
+        for slot in [3, 0, 9, 255, 0] {
+            hub.message(serde_json::from_str(&format!(
+                r#"{{"t":"input","mx":0,"my":0,"ax":1,"az":0,"fire":false,"select_slot":{slot}}}"#
+            )).unwrap());
+        }
+        assert_eq!(
+            hub.pending().select_slot,
+            9,
+            "latest valid press survives later idle/invalid frames"
+        );
+        hub.step();
+        assert_eq!(hub.pending().select_slot, 0);
+        assert_eq!(
+            hub.lobbies["shield-fixture"].sim.players[0].weapon, 1,
+            "empty slot cannot grant a weapon"
+        );
+    }
+
+    #[test]
+    fn killshot_custom_start_is_validated_and_shared_by_joiners() {
+        for weapon in 1..=arena_core::shooter::WEAPON_COUNT {
+            let mut hub = HubFixture::new(ShieldState::READY);
+            hub.message(C2S::LeaveLobby);
+            hub.message(C2S::CreateLobby {
+                name: "custom".into(),
+                password: None,
+                map: MAP_HARBOR.into(),
+                mode: "tdm".into(),
+                loadout: "custom".into(),
+                starting_weapon: weapon,
+            });
+            let lobby = &hub.lobbies["custom"];
+            assert_eq!(lobby.loadout, "custom");
+            assert_eq!(lobby.sim.starting_weapon, weapon);
+            assert_eq!(lobby.sim.players[0].weapon, weapon);
+            let (tx, _rx) = mpsc::sync_channel(16);
+            hub.event(Ev::Connected {
+                id: 2,
+                tx,
+                peer: "joiner".into(),
+            });
+            hub.event(Ev::Msg {
+                id: 2,
+                msg: C2S::Hello {
+                    proto: PROTO_VERSION,
+                    handle: "joiner".into(),
+                },
+            });
+            hub.event(Ev::Msg {
+                id: 2,
+                msg: C2S::JoinLobby {
+                    name: "custom".into(),
+                    password: None,
+                },
+            });
+            assert_eq!(hub.lobbies["custom"].sim.players[1].weapon, weapon);
+        }
+    }
+
+    #[test]
+    fn killshot_refuses_invalid_loadouts_and_previous_protocol() {
+        for (loadout, weapon) in [
+            ("custom", 0),
+            ("custom", 8),
+            ("custom", 255),
+            ("classic", 3),
+            ("typo", 1),
+        ] {
+            let mut hub = HubFixture::new(ShieldState::READY);
+            hub.message(C2S::LeaveLobby);
+            hub.message(C2S::CreateLobby {
+                name: "invalid".into(),
+                password: None,
+                map: MAP_HARBOR.into(),
+                mode: "ffa".into(),
+                loadout: loadout.into(),
+                starting_weapon: weapon,
+            });
+            assert!(!hub.lobbies.contains_key("invalid"));
+        }
+        let mut hub = HubFixture::new(ShieldState::READY);
+        hub.message(C2S::LeaveLobby);
+        hub.conns.get_mut(&1).unwrap().proto = PROTO_VERSION - 1;
+        hub.message(C2S::CreateLobby {
+            name: "old".into(),
+            password: None,
+            map: MAP_HARBOR.into(),
+            mode: "ffa".into(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
+        });
+        assert!(!hub.lobbies.contains_key("old"));
     }
 
     #[test]

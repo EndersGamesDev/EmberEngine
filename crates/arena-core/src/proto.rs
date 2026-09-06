@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::parkour::ParkourState;
-use crate::shooter::{HILL_FREE, ShieldState};
+use crate::shooter::{HILL_FREE, ShieldState, WeaponSlot};
 
 /// Protocol v9 adds the reflecting off-hand shield.
 ///
@@ -242,7 +242,9 @@ use crate::shooter::{HILL_FREE, ShieldState};
 /// v22 (Arena v29): momentum-bearing slides/wall kicks and vertical Harbor
 /// buildings. The entire parkour state must rebase with position; older peers
 /// would discard momentum and collide against a different harbor layout.
-pub const PROTO_VERSION: u16 = 22;
+/// v23 (Killshot v30): retained inventory, timed reload snapshots, authored
+/// supplies and lobby-selected starting loadouts change authoritative play.
+pub const PROTO_VERSION: u16 = 23;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -268,6 +270,10 @@ pub struct LobbyInfo {
     /// browser can show it beside the map. Listing only, like `map`.
     #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub loadout: String,
+    #[serde(default)]
+    pub starting_weapon: u8,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -334,6 +340,12 @@ pub struct PState {
     pub reserve: u8,
     #[serde(default)]
     pub reloading: bool,
+    /// Seconds until the authoritative reload completes; zero when idle.
+    #[serde(default)]
+    pub reload_remaining: f32,
+    /// Fixed weapon-id slots: index 0 is the pistol, 7/8 are empty.
+    #[serde(default)]
+    pub inventory: [WeaponSlot; 9],
     /// Authoritative timed sight raise, 0 = hip and 1 = fully sighted.
     #[serde(default)]
     pub ads_fraction: f32,
@@ -421,6 +433,11 @@ pub enum C2S {
         /// free for all, which is the game a v15 client is playing.
         #[serde(default)]
         mode: String,
+        /// Independent of scoring mode: classic pistol or custom shared start.
+        #[serde(default)]
+        loadout: String,
+        #[serde(default)]
+        starting_weapon: u8,
     },
     JoinLobby {
         name: String,
@@ -454,6 +471,9 @@ pub enum C2S {
         crouch: bool,
         #[serde(default)]
         reload: bool,
+        /// One-shot fixed inventory slot, 1..9; zero means no selection.
+        #[serde(default)]
+        select_slot: u8,
         /// A Space PRESS, not the held key: true means "the player pressed
         /// jump since my last input", and the sim consumes it on one tick.
         /// Held-key semantics re-launched the player on every grounded tick,
@@ -552,6 +572,10 @@ pub enum S2C {
         /// `PROTO_VERSION`.
         #[serde(default)]
         mode: String,
+        #[serde(default)]
+        loadout: String,
+        #[serde(default)]
+        starting_weapon: u8,
     },
     PlayerJoined {
         meta: PlayerMeta,
@@ -567,6 +591,9 @@ pub enum S2C {
         /// positions every client derives locally.
         #[serde(default)]
         pads: Vec<bool>,
+        /// Availability aligned with `Level.supplies`; positions are authored.
+        #[serde(default)]
+        supplies: Vec<bool>,
         /// Loot-block availability (true = armed), index-aligned with the
         /// level's `Cover::Loot` obstacles in obstacle order, like `pads`.
         /// Defaulted: a peer that predates blocks draws none, and it built
@@ -723,6 +750,7 @@ mod tests {
             sprint: true,
             crouch: false,
             reload: false,
+            select_slot: 3,
             jump: true,
             shield: true,
             melee: true,
@@ -747,6 +775,8 @@ mod tests {
             password: None,
             map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
             mode: GameMode::Tdm.name().to_string(),
+            loadout: "custom".into(),
+            starting_weapon: 3,
         })
         .unwrap();
         assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
@@ -798,6 +828,7 @@ mod tests {
                 weapon: 7,
             }],
             pads: vec![true],
+            supplies: vec![false, true],
             loot: vec![true, false],
             team_score: [12, 9],
             hill: HILL_CONTESTED,
@@ -824,6 +855,8 @@ mod tests {
             cap: 8,
             map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
             mode: GameMode::Hill.name().to_string(),
+            loadout: "classic".into(),
+            starting_weapon: 1,
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
@@ -841,6 +874,8 @@ mod tests {
             }],
             map: crate::shooter::MAP_TRENCH_CITY.to_string(),
             mode: GameMode::Tdm.name().to_string(),
+            loadout: "custom".into(),
+            starting_weapon: 6,
         })
         .unwrap();
         assert!(s.contains("\"map\":\"trench-city\""), "{s}");
@@ -959,6 +994,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One state roundtrip exercises additive wire fields together.
     fn the_shield_survives_the_codec_in_both_directions() {
         // The player state carries it, so remote shields can be drawn.
         let p = PState {
@@ -994,7 +1030,17 @@ mod tests {
             weapon: 2,
             ammo: 7,
             reserve: 30,
-            reloading: false,
+            reloading: true,
+            reload_remaining: 0.75,
+            inventory: {
+                let mut slots = [WeaponSlot::EMPTY; 9];
+                slots[1] = WeaponSlot {
+                    weapon: 2,
+                    ammo: 7,
+                    reserve: 30,
+                };
+                slots
+            },
             ads_fraction: 0.625,
             spread: 0.012,
             recoil_bloom: 0.025,
@@ -1008,6 +1054,9 @@ mod tests {
         assert!(s.contains("\"team\":1"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
+        assert!(back.reloading);
+        assert_eq!(back.reload_remaining, 0.75);
+        assert_eq!(back.inventory, p.inventory);
         assert_eq!(back.shield_state, p.shield_state);
         assert_eq!(
             back.parkour, p.parkour,
@@ -1049,8 +1098,8 @@ mod tests {
         assert_eq!(p.spread, 0.0, "old frames have no reported cone");
         assert_eq!(p.recoil_bloom, 0.0, "old frames have no reported recoil");
         assert_eq!(
-            PROTO_VERSION, 22,
-            "parkour state and vertical Harbor require the matching peer"
+            PROTO_VERSION, 23,
+            "retained inventory, supply rules and starting loadouts require matching peers"
         );
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();

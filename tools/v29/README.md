@@ -1,6 +1,10 @@
 # Arena v29 verification and scoped publication
 
+V29 is published from runtime129bcac4/r1490 at Pages28d1b074. See the latest checkpoint in docs/plans/arena-v29-parkour.md for public byte proof, the approved Windows server-only fallback and the still-paused Knecht timer. The utility/handoff branch can be newer than the released runtime; the publisher must still run from the exact clean main revision named by its build attestation.
+
 These scripts do not build code or drive the operating system's input. Run Node at Idle priority. Browser QA launches one disposable headless browser and one owned loopback server; do not run it alongside another browser/GPU test. Network QA never starts or stops a server and touches only its own random-password private rooms. Public release proof sends read-only Hello packets, not gameplay input.
+
+`server-only-windows.ps1` is the explicitly scoped Windows maintenance launcher. It requires the approved, already installed executable's SHA256, refuses any existing port7780listener, never stops a process or creates a tunnel, and must be owned by the distinct persistent Task Scheduler action. Use the machine's configured PowerShell7 runtime and verify that runtime's effective policy; a PowerShell5.1 syntax parse does not prove its separate policy permits execution. Do not add execution-policy overrides. The installed fallback passed a wrong-hash rejection, actual hidden/Idle launch, local/public protocol22 identity and independent lifetime checks. The installer/operator still owns approval, precise old-PID validation, binary backup/copy, task registration and host-book/publication verification. It is not a generic fleet auto-updater.
 
 ## Gates
 

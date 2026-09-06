@@ -16,12 +16,15 @@ mod feel;
 mod grip_tests;
 mod grips;
 mod harbor;
+mod hud;
 mod online;
 mod props;
+mod reload;
 mod rounds;
 mod script;
 mod settings;
 mod sound;
+mod supplies;
 mod viewarms;
 mod weather;
 
@@ -291,7 +294,7 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     game.set_harbor(harbor_base);
     ember_engine::run(
         EngineConfig {
-            title: format!("ember arena — {}", cfg.lobby),
+            title: format!("Killshot v30 — {}", cfg.lobby),
             // A scripted client (`EMBER_SCRIPT`) never grabs the cursor: the
             // operator keeps their pointer while a capture runs, and since
             // the grab is refused here, once, it cannot come back when the

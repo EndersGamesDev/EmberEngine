@@ -132,6 +132,8 @@ fn main() {
                 password,
                 map,
                 mode,
+                loadout: "classic".into(),
+                starting_weapon: 1,
             },
         ),
         "join" => send(
@@ -224,6 +226,7 @@ fn main() {
                     sprint: hunt.is_none() && (t as u64).is_multiple_of(3),
                     crouch: has("crouch"),
                     reload: false,
+                    select_slot: 0,
                     // A press, not a level - see the module docs. `jump`
                     // presses every 24 frames; `bonk` only under a block.
                     jump: (jump && frame.is_multiple_of(24)) || bonk_press,

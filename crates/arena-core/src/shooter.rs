@@ -328,9 +328,47 @@ pub const SIDEARM: u8 = 1;
 /// client that reads an id it does not know still draws something, but the
 /// loot roll only ever hands out members of `LOOT_POOL`.
 pub const WEAPON_COUNT: u8 = 7;
-/// A reserve that reload never draws down. Only the sidearm carries it; a
-/// looted gun carries one finite reserve and no pickup refills it, which is
-/// what makes ammo the clock on every gun but the sidearm.
+pub const INVENTORY_SLOTS: usize = 9;
+pub const SUPPLY_RESPAWN_SECS: f32 = 30.0;
+pub const SUPPLY_RADIUS: f32 = 1.15;
+
+/// Fixed inventory slot; zero weapon is empty. Ammunition belongs to the gun,
+/// never to an equip action, so switching cannot manufacture rounds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WeaponSlot {
+    pub weapon: u8,
+    pub ammo: u8,
+    pub reserve: u8,
+}
+
+impl WeaponSlot {
+    pub const EMPTY: Self = Self {
+        weapon: 0,
+        ammo: 0,
+        reserve: 0,
+    };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SupplyKind {
+    Ammo,
+    Health,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SupplySpawn {
+    pub pos: [f32; 2],
+    pub kind: SupplyKind,
+}
+
+#[derive(Clone, Debug)]
+pub struct Supply {
+    pub spawn: SupplySpawn,
+    pub respawn_t: f32,
+}
+/// A reserve that reload never draws down. Only the sidearm carries it;
+/// finite weapons need an ammo supply to restore their reserve.
 pub const RESERVE_INFINITE: u8 = 255;
 /// What a block or a pad may hand out. Server-side only: clients never
 /// derive from it, so adding the M4 (id 4) when its mesh exists is not a
@@ -1389,6 +1427,8 @@ pub struct Level {
     #[serde(default)]
     pub pads: Vec<[f32; 2]>,
     #[serde(default)]
+    pub supplies: Vec<SupplySpawn>,
+    #[serde(default)]
     pub decor: Vec<Decor>,
     /// Where king of the hill is played on this level; `None` for a level
     /// that has no such place, on which the mode cannot be created.
@@ -1497,6 +1537,7 @@ impl Level {
             obstacles: generate_arena(seed),
             spawns: (0..MAX_PLAYERS as u32).map(spawn_point).collect(),
             pads: generate_pads(seed),
+            supplies: Vec::new(),
             decor: Vec::new(),
             hill: Some(SEEDED_HILL),
         }
@@ -1539,6 +1580,24 @@ impl Level {
             obstacles,
             spawns,
             pads: Vec::new(),
+            supplies: vec![
+                SupplySpawn {
+                    pos: [-5.0, 6.5],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [5.0, -6.5],
+                    kind: SupplyKind::Health,
+                },
+                SupplySpawn {
+                    pos: [-6.5, -5.0],
+                    kind: SupplyKind::Ammo,
+                },
+                SupplySpawn {
+                    pos: [6.5, 5.0],
+                    kind: SupplyKind::Ammo,
+                },
+            ],
             decor: trench_city_decor(),
             hill: Some(TRENCH_HILL),
         }
@@ -1703,10 +1762,14 @@ pub struct Pad {
 }
 
 /// Put weapon `id` in a player's hands with a full magazine and its table
-/// reserve. The old weapon's remaining rounds are discarded: there is no
-/// inventory. The fifth of a second of cooldown is the "new gun" beat in
+/// reserve. Existing guns retain their rounds in their fixed inventory slot.
+/// The fifth of a second of cooldown is the "new gun" beat in
 /// which the client plays the pop-out.
 const fn grant(p: &mut PlayerSt, id: u8) {
+    if id == 0 || id > WEAPON_COUNT {
+        return;
+    }
+    save_active_weapon(p);
     let stats = weapon_stats(id);
     p.weapon = id;
     p.ammo = stats.mag;
@@ -1715,6 +1778,49 @@ const fn grant(p: &mut PlayerSt, id: u8) {
     p.reload_t = 0.0;
     p.cooldown = 0.2;
     reset_handling(p);
+    save_active_weapon(p);
+}
+
+const fn save_active_weapon(p: &mut PlayerSt) {
+    if p.weapon > 0 && p.weapon <= WEAPON_COUNT {
+        p.inventory[p.weapon as usize - 1] = WeaponSlot {
+            weapon: p.weapon,
+            ammo: p.ammo,
+            reserve: p.reserve,
+        };
+    }
+}
+
+/// Equip an owned gun without restoring rounds or bypassing trigger recovery.
+fn select_weapon(p: &mut PlayerSt, slot: u8) -> bool {
+    if slot == 0 || slot > WEAPON_COUNT || slot == p.weapon {
+        return false;
+    }
+    let owned = p.inventory[usize::from(slot - 1)];
+    if owned.weapon != slot {
+        return false;
+    }
+    save_active_weapon(p);
+    p.weapon = owned.weapon;
+    p.ammo = owned.ammo;
+    p.reserve = owned.reserve;
+    p.fired = 0;
+    p.reload_t = 0.0;
+    p.cooldown = p.cooldown.max(0.2);
+    reset_handling(p);
+    true
+}
+
+/// Duplicate loot is not ammunition. It leaves the pickup available and never
+/// switches the player, reloads their gun, or resets recovery timers.
+fn collect_weapon(p: &mut PlayerSt, id: u8) -> bool {
+    if id == 0 || id > WEAPON_COUNT || p.inventory[usize::from(id - 1)].weapon != 0 {
+        return false;
+    }
+    let previous_cooldown = p.cooldown;
+    grant(p, id);
+    p.cooldown = p.cooldown.max(previous_cooldown);
+    true
 }
 
 const fn reset_handling(p: &mut PlayerSt) {
@@ -1966,6 +2072,8 @@ pub struct PlayerIn {
     pub crouch: bool,
     /// Held reload intent (R).
     pub reload: bool,
+    /// One-shot fixed weapon-id slot, consumed by the server after each step.
+    pub select_slot: u8,
     /// A jump PRESS, consumed on the tick it is applied (arena-server clears
     /// it after each step). Launches from ground or an eligible crouched wall contact.
     pub jump: bool,
@@ -2023,15 +2131,18 @@ pub struct PlayerSt {
     pub shield: bool,
     /// Timers and press latch; `shield` mirrors this state's `active` flag.
     pub shield_state: ShieldState,
-    /// A weapon id, `1..=WEAPON_COUNT`; `SIDEARM` on spawn and on death.
+    /// Active weapon id, `1..=WEAPON_COUNT`; selected loadout on each new life.
     pub weapon: u8,
+    pub inventory: [WeaponSlot; INVENTORY_SLOTS],
+    /// Lobby-selected weapon restored on every life, alongside backup pistol.
+    pub starting_weapon: u8,
     pub ammo: u8,
     /// Rounds outside the magazine; `RESERVE_INFINITE` for the sidearm.
-    /// When both this and `ammo` reach zero the gun is gone and the sidearm
-    /// is back, which is what makes a looted gun a loan.
+    /// A dry gun remains owned and selected until switched; an ammo supply
+    /// restores its finite reserve without refilling the magazine.
     pub reserve: u8,
     /// Rounds fired since the magazine was last filled, for bookkeeping.
-    /// Server-only; resets on reload, grant, respawn and the dry swap.
+    /// Server-only; resets on reload, grant, respawn and switching.
     /// Accuracy uses recovering `bloom`, never this lifetime shot count.
     fired: u8,
     /// Authoritative sight raise, 0 = hip and 1 = fully sighted.
@@ -2052,6 +2163,18 @@ pub struct PlayerSt {
 }
 
 impl PlayerSt {
+    #[must_use]
+    pub fn inventory_snapshot(&self) -> [WeaponSlot; INVENTORY_SLOTS] {
+        let mut slots = self.inventory;
+        if (1..=WEAPON_COUNT).contains(&self.weapon) {
+            slots[usize::from(self.weapon - 1)] = WeaponSlot {
+                weapon: self.weapon,
+                ammo: self.ammo,
+                reserve: self.reserve,
+            };
+        }
+        slots
+    }
     /// Recoverable recoil radians before ADS/stance multipliers, for state
     /// reporting. Reading it does not advance recovery or change shot rules.
     #[must_use]
@@ -2334,6 +2457,9 @@ pub struct Sim {
     pub hill: Option<Hill>,
     pub obstacles: Vec<Obstacle>,
     pub pads: Vec<Pad>,
+    pub supplies: Vec<Supply>,
+    /// Validated by the lobby creation gate before any players join.
+    pub starting_weapon: u8,
     /// One per `Cover::Loot` obstacle, in obstacle order, so `State.loot`
     /// is index-aligned with the blocks every client derives from the level.
     pub loot: Vec<LootBlock>,
@@ -2391,7 +2517,7 @@ fn spawns_of<'a>(
     }
 }
 
-/// A player back to life at a fresh spawn with the sidearm: the one
+/// A player back to life at a fresh spawn with the lobby's starting loadout: the one
 /// respawn path, shared by the death timer and the round restart so the
 /// two cannot drift. The spawn slot advances every time so consecutive
 /// spawns walk the list.
@@ -2404,10 +2530,17 @@ const fn respawn(p: &mut PlayerSt, position: [f32; 2]) {
     p.hp = MAX_HP;
     p.alive = true;
     p.cooldown = 0.3;
-    // Death costs your loot: the sidearm is back.
-    p.weapon = SIDEARM;
-    p.ammo = weapon_stats(SIDEARM).mag;
-    p.reserve = RESERVE_INFINITE;
+    // Death costs collected loot, but preserves the lobby's selected start.
+    p.inventory = [WeaponSlot::EMPTY; INVENTORY_SLOTS];
+    p.inventory[0] = WeaponSlot {
+        weapon: SIDEARM,
+        ammo: weapon_stats(SIDEARM).mag,
+        reserve: RESERVE_INFINITE,
+    };
+    p.weapon = p.starting_weapon;
+    p.ammo = weapon_stats(p.weapon).mag;
+    p.reserve = weapon_stats(p.weapon).reserve;
+    save_active_weapon(p);
     p.fired = 0;
     p.reload_t = 0.0;
     p.shield = false;
@@ -2458,6 +2591,7 @@ impl Sim {
         Self {
             arena_half: valid_arena_half(level.arena_half),
             mode,
+            starting_weapon: SIDEARM,
             team_score: [0; 2],
             hill_holder: HILL_FREE,
             hill_t: 0.0,
@@ -2471,6 +2605,15 @@ impl Sim {
                 .iter()
                 .map(|&pos| Pad {
                     pos,
+                    respawn_t: 0.0,
+                })
+                .collect(),
+            supplies: level
+                .supplies
+                .iter()
+                .copied()
+                .map(|spawn| Supply {
+                    spawn,
                     respawn_t: 0.0,
                 })
                 .collect(),
@@ -2546,6 +2689,8 @@ impl Sim {
             shield: false,
             shield_state: ShieldState::READY,
             weapon: SIDEARM,
+            inventory: [WeaponSlot::EMPTY; INVENTORY_SLOTS],
+            starting_weapon: self.starting_weapon.clamp(SIDEARM, WEAPON_COUNT),
             ammo: weapon_stats(SIDEARM).mag,
             reserve: RESERVE_INFINITE,
             fired: 0,
@@ -2559,6 +2704,12 @@ impl Sim {
             melee_cd: 0.0,
             deaths: slot,
         });
+        if let Some(p) = self.players.last_mut() {
+            save_active_weapon(p);
+            if p.starting_weapon != SIDEARM {
+                grant(p, p.starting_weapon);
+            }
+        }
     }
 
     pub fn remove_player(&mut self, id: u8) {
@@ -2589,7 +2740,7 @@ impl Sim {
     }
 
     /// The next round: scores, frags, deaths and the team totals to zero,
-    /// everyone alive at a fresh spawn with the sidearm through the one
+    /// everyone alive at a fresh spawn with the selected loadout through the one
     /// respawn path, every round cleared, every block and pad armed, the
     /// hill free. Stepped in the sim, so the server and any replay agree.
     fn restart_round(&mut self) {
@@ -2603,6 +2754,9 @@ impl Sim {
         }
         for pad in &mut self.pads {
             pad.respawn_t = 0.0;
+        }
+        for supply in &mut self.supplies {
+            supply.respawn_t = 0.0;
         }
         // Reserve the new placements in player order, not against old-round
         // bodies. This keeps all eight pockets distinct on team restarts.
@@ -2828,11 +2982,13 @@ impl Sim {
             };
 
             // Weapon handling: reload, then fire.
+            let switched = self.round_pause == 0.0 && select_weapon(p, input.select_slot);
             let stats = weapon_stats(p.weapon);
             let handling = weapon_handling(p.weapon);
             let moving = (pos[0] - old_pos[0]).abs() + (pos[1] - old_pos[1]).abs() > 1e-5;
             p.bloom = (p.bloom - handling.bloom_recovery * dt).max(0.0);
-            p.ads_fraction = if p.reload_t > 0.0
+            p.ads_fraction = if switched
+                || p.reload_t > 0.0
                 || p.shield
                 || input.melee
                 || p.melee_cd > 0.0
@@ -2867,17 +3023,7 @@ impl Sim {
                     p.fired = 0;
                     reset_handling(p);
                 }
-            } else if p.ammo == 0 && p.reserve == 0 {
-                // Dry: the loot gun is gone and the sidearm is back, this
-                // tick. A quarter second before it fires.
-                p.weapon = SIDEARM;
-                p.ammo = weapon_stats(SIDEARM).mag;
-                p.reserve = RESERVE_INFINITE;
-                p.fired = 0;
-                p.reload_t = 0.0;
-                p.cooldown = 0.25;
-                reset_handling(p);
-            } else if (input.reload && p.ammo < stats.mag && p.reserve > 0) || p.ammo == 0 {
+            } else if p.reserve > 0 && ((input.reload && p.ammo < stats.mag) || p.ammo == 0) {
                 p.reload_t = stats.reload;
                 reset_handling(p);
             } else if input.fire
@@ -2928,6 +3074,7 @@ impl Sim {
                 moving,
                 v.grounded,
             );
+            save_active_weapon(p);
         }
         self.bullets.extend(new_bullets);
 
@@ -2992,9 +3139,10 @@ impl Sim {
                 let (dx, dz) = (p.pos[0] - pad.pos[0], p.pos[1] - pad.pos[1]);
                 if p.y < PAD_PICK_H && dx * dx + dz * dz < PAD_RADIUS * PAD_RADIUS {
                     let w = loot_roll(roll_seed, roll_tick, p.id, p.weapon);
-                    grant(p, w);
-                    pad.respawn_t = PAD_RESPAWN_SECS;
-                    break;
+                    if collect_weapon(p, w) {
+                        pad.respawn_t = PAD_RESPAWN_SECS;
+                        break;
+                    }
                 }
             }
         }
@@ -3017,11 +3165,60 @@ impl Sim {
             }
             let p = &mut self.players[i];
             let w = loot_roll(roll_seed, roll_tick, p.id, p.weapon);
-            grant(p, w);
+            if !collect_weapon(p, w) {
+                continue;
+            }
             slot.respawn_t = LOOT_RESPAWN_SECS;
             // Seven blocks on the biggest map: the index fits a byte.
             self.loot_events
                 .push((p.id, u8::try_from(slot_index).unwrap_or(u8::MAX), w));
+        }
+
+        // Supplies are server-owned and only pay a living, eligible player.
+        // Resolve after movement, before bullets; no through-roof or wall pickup.
+        for supply in &mut self.supplies {
+            if paused {
+                continue;
+            }
+            if supply.respawn_t > 0.0 {
+                supply.respawn_t = (supply.respawn_t - dt).max(0.0);
+                continue;
+            }
+            for p in &mut self.players {
+                let [dx, dz] = [
+                    p.pos[0] - supply.spawn.pos[0],
+                    p.pos[1] - supply.spawn.pos[1],
+                ];
+                if !p.alive
+                    || p.y >= PAD_PICK_H
+                    || dx * dx + dz * dz >= SUPPLY_RADIUS * SUPPLY_RADIUS
+                    || segment_hits_cover(
+                        [p.pos[0], p.y + 0.35, p.pos[1]],
+                        [supply.spawn.pos[0], 0.35, supply.spawn.pos[1]],
+                        &self.obstacles,
+                    )
+                {
+                    continue;
+                }
+                let taken = match supply.spawn.kind {
+                    SupplyKind::Health if p.hp < MAX_HP => {
+                        p.hp = p.hp.saturating_add(2).min(MAX_HP);
+                        true
+                    }
+                    SupplyKind::Ammo
+                        if p.weapon != SIDEARM && p.reserve < weapon_stats(p.weapon).reserve =>
+                    {
+                        p.reserve = weapon_stats(p.weapon).reserve;
+                        save_active_weapon(p);
+                        true
+                    }
+                    _ => false,
+                };
+                if taken {
+                    supply.respawn_t = SUPPLY_RESPAWN_SECS;
+                    break;
+                }
+            }
         }
 
         // Record this tick's positions + stance for lag-compensated rewinds.
@@ -3555,6 +3752,10 @@ impl Sim {
 }
 
 #[cfg(test)]
+#[path = "killshot_tests.rs"]
+mod killshot_tests;
+
+#[cfg(test)]
 mod tests {
     // Test-only casts use small fixed ranges and intentionally exercise production formulas.
     #![allow(
@@ -4069,13 +4270,13 @@ mod tests {
         assert_eq!((sim.players[0].ammo, sim.players[0].reserve), (6, 6));
         empty_the_mag(&mut sim);
         assert_eq!((sim.players[0].ammo, sim.players[0].reserve), (6, 0));
-        // Six more rounds and the reserve cannot refill the magazine: the
-        // dry arm hands the sidearm back instead of starting a reload.
+        // Six more rounds exhaust the gun, retained for an ammo supply.
         empty_the_mag(&mut sim);
         let p = &sim.players[0];
-        assert_eq!(p.weapon, SIDEARM, "a dry loot gun is gone");
-        assert_eq!(p.reserve, RESERVE_INFINITE);
-        assert_eq!(p.ammo, weapon_stats(SIDEARM).mag);
+        assert_eq!(p.weapon, 5, "a dry loot gun stays selected");
+        assert_eq!((p.ammo, p.reserve, p.reload_t), (0, 0, 0.0));
+        assert_eq!(p.inventory[4].weapon, 5);
+        assert!(select_weapon(&mut sim.players[0], SIDEARM));
         // And the sidearm's reserve is never consumed by its reloads.
         for _ in 0..3 {
             let mut reload = inputs.clone();
@@ -4604,6 +4805,7 @@ mod tests {
             obstacles: Vec::new(),
             spawns: Vec::new(),
             pads: Vec::new(),
+            supplies: Vec::new(),
             decor: Vec::new(),
             hill: None,
         };
@@ -4614,6 +4816,7 @@ mod tests {
             obstacles: Vec::new(),
             spawns: vec![[1.0, 2.0], [3.0, 4.0]],
             pads: Vec::new(),
+            supplies: Vec::new(),
             decor: Vec::new(),
             hill: None,
         };
@@ -5174,7 +5377,7 @@ mod tests {
     }
 
     #[test]
-    fn shield_recovery_survives_reload_grant_dry_swap_and_round_pause() {
+    fn shield_recovery_survives_reload_grant_manual_swap_and_round_pause() {
         let mut sim = open_sim(32, 1);
         sim.players[0].shield_state = advance_shield(
             advance_shield(ShieldState::READY, true, FIXED_DT),
@@ -5205,6 +5408,7 @@ mod tests {
         sim.players[0].ammo = 0;
         sim.players[0].reserve = 0;
         sim.step(&|_| PlayerIn {
+            select_slot: SIDEARM,
             shield: true,
             ..Default::default()
         });
@@ -7369,6 +7573,7 @@ mod tests {
                 obstacles,
                 spawns: Vec::new(),
                 pads: Vec::new(),
+                supplies: Vec::new(),
                 decor: Vec::new(),
                 hill: None,
             },
@@ -7539,10 +7744,9 @@ mod tests {
     }
 
     #[test]
-    fn a_looted_gun_runs_dry_and_the_sidearm_comes_back() {
-        // Exactly eighteen revolver rounds (6 + 12) leave; the nineteenth
-        // trigger pull fires a sidearm round a quarter second later, with
-        // the bottomless reserve back in hand.
+    fn a_looted_gun_runs_dry_and_waits_for_manual_sidearm_selection() {
+        // Exactly eighteen revolver rounds (6 + 12) leave. An empty gun stays
+        // selected and owned so it can be refilled by the next ammo supply.
         let mut sim = open_sim(7, 1);
         grant(&mut sim.players[0], 5);
         let mut inputs = HashMap::new();
@@ -7554,9 +7758,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        let (mut revolver_rounds, mut last_revolver_tick, mut first_sidearm_tick) = (0, 0, None);
+        let mut revolver_rounds = 0;
         let (mut prev_weapon, mut prev_ammo) = (sim.players[0].weapon, sim.players[0].ammo);
-        for tick in 0..3000u32 {
+        for _ in 0..3000u32 {
             hold(&mut sim, &[(0, [0.0, 0.0], 0.0)]);
             step_with(&mut sim, &inputs);
             let p = &sim.players[0];
@@ -7565,26 +7769,21 @@ mod tests {
             if p.weapon == prev_weapon && p.ammo + 1 == prev_ammo {
                 if p.weapon == 5 {
                     revolver_rounds += 1;
-                    last_revolver_tick = tick;
-                } else if first_sidearm_tick.is_none() {
-                    first_sidearm_tick = Some(tick);
+                } else {
+                    panic!("a different weapon fired without a selection");
                 }
             }
             prev_weapon = p.weapon;
             prev_ammo = p.ammo;
-            if first_sidearm_tick.is_some() {
-                break;
-            }
         }
         assert_eq!(revolver_rounds, 18, "6 in the magazine and 12 in reserve");
-        let first = first_sidearm_tick.expect("the sidearm never fired");
-        // The swap happens on the tick after the last round, with a 0.25 s
-        // cooldown: fifteen ticks, plus one for the float remainder.
-        let gap = first - last_revolver_tick;
-        assert!(
-            (16..=17).contains(&gap),
-            "the sidearm's first round came {gap} ticks after the last revolver round"
-        );
+        let p = &sim.players[0];
+        assert_eq!((p.weapon, p.ammo, p.reserve, p.reload_t), (5, 0, 0, 0.0));
+        assert_eq!(p.inventory[4].weapon, 5);
+        assert!(select_weapon(&mut sim.players[0], SIDEARM));
+        for _ in 0..14 {
+            step_with(&mut sim, &inputs);
+        }
         let p = &sim.players[0];
         assert_eq!(p.weapon, SIDEARM);
         assert_eq!(p.reserve, RESERVE_INFINITE);
@@ -7821,8 +8020,7 @@ mod tests {
                 offset_angle(&a[0], [1.0, 0.0], 0.0, stats.speed) <= f64::from(stats.spread) + 1e-4
             );
         }
-        // And the count is the rounds fired, until the magazine is empty
-        // and the dry swap hands the sidearm back at zero.
+        // A dry retained gun preserves bookkeeping until a manual swap.
         fire_rounds(&mut sim, 4);
         assert_eq!(sim.players[0].fired, 4);
         fire_rounds(&mut sim, 6);
@@ -7830,7 +8028,12 @@ mod tests {
             step_with(&mut sim, &idle);
         }
         let p = &sim.players[0];
-        assert_eq!((p.weapon, p.fired), (SIDEARM, 0), "the dry swap resets it");
+        assert_eq!((p.weapon, p.fired), (3, 10), "a dry gun stays selected");
+        assert!(select_weapon(&mut sim.players[0], SIDEARM));
+        assert_eq!(
+            sim.players[0].fired, 0,
+            "manual switching resets bookkeeping"
+        );
     }
 
     #[test]
@@ -8103,6 +8306,7 @@ mod tests {
         sim.players[0].ads_fraction = 1.0;
         sim.players[0].bloom = 0.02;
         sim.step(&|_| PlayerIn {
+            select_slot: SIDEARM,
             ads: true,
             ..Default::default()
         });
@@ -9384,6 +9588,7 @@ mod tests {
             sprint: hash & 16 != 0,
             crouch: hash & 4 != 0,
             reload: hash & 32 != 0,
+            select_slot: 0,
             jump: tick % 50 == u64::from(id) * 7,
             shield: id == 2 && tick % 97 < 10,
             shield_released: false,
@@ -9490,7 +9695,7 @@ mod tests {
     /// FNV-1a's offset basis: where every fold starts.
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-    /// Protocol-22 parkour checkpoints after ticks 99, 199, ... 599. Numeric
+    /// Protocol-23 handling checkpoints after ticks 99, 199, ... 599. Numeric
     /// fields are rounded at 1/1000 resolution, discrete events remain exact.
     /// The previous Windows raw-f32 pin failed Linux CI at baseline b97b87bf:
     /// `sin`/`cos`/`tan` last bits are not a cross-platform API guarantee.
@@ -9500,9 +9705,9 @@ mod tests {
         18_363_606_916_869_280_677,
         9_906_945_162_742_530_227,
         16_002_300_601_109_398_104,
-        9_409_843_707_836_138_643,
-        16_050_964_335_518_442_108,
-        18_326_704_171_356_937_484,
+        5_346_487_829_322_662_377,
+        15_337_437_860_169_404_018,
+        16_618_687_247_535_141_578,
     ];
     /// The script's kills over the 600 ticks, and every player's score
     /// at the end, from the same run. v18's script landed one kill, a
@@ -9511,6 +9716,93 @@ mod tests {
     /// owner before anything stops it.
     const FINGERPRINT_KILLS: usize = 0;
     const FINGERPRINT_SCORES: [u32; 4] = [0, 0, 0, 0];
+
+    /// Counterfactual gate: restore only the three deliberately replaced v29
+    /// resource rules (no supply boxes, duplicate loot refills, automatic dry
+    /// pistol) and recover the exact previous protocol-22 fingerprint. Movement,
+    /// geometry, shields and bullet stepping remain the current production code.
+    #[test]
+    fn resource_rule_changes_explain_the_protocol_23_fingerprint() {
+        let level = Level::freight_yard();
+        let mut current = Sim::from_level(&level, 7, GameMode::Ffa);
+        let mut legacy = Sim::from_level(&level, 7, GameMode::Ffa);
+        legacy.supplies.clear();
+        for id in 0..4 {
+            current.add_player(id);
+            legacy.add_player(id);
+        }
+        let mut h = FNV_OFFSET;
+        let mut checkpoints = Vec::new();
+        let mut first_divergence = None;
+        for tick in 0..600 {
+            v18_grants(&mut current, tick);
+            v18_grants(&mut legacy, tick);
+            let dry: Vec<_> = legacy
+                .players
+                .iter()
+                .map(|p| p.alive && p.reload_t == 0.0 && p.ammo == 0 && p.reserve == 0)
+                .collect();
+            // Legacy guns carried no ownership record, so repeated loot paid.
+            for p in &mut legacy.players {
+                p.inventory = [WeaponSlot::EMPTY; INVENTORY_SLOTS];
+            }
+            current.step(&|id| v18_script(tick, id));
+            legacy.step(&|id| v18_script(tick, id));
+            for &(pid, _, _) in &legacy.loot_events {
+                if let Some(p) = legacy.players.iter_mut().find(|p| p.id == pid) {
+                    p.cooldown = 0.2; // Legacy pickup reset, irrespective of the prior gun's shot.
+                }
+            }
+            for (index, was_dry) in dry.into_iter().enumerate() {
+                if was_dry {
+                    assert!(
+                        !legacy
+                            .loot_events
+                            .iter()
+                            .any(|&(pid, _, _)| pid == legacy.players[index].id),
+                        "counterfactual must not hide same-tick loot ordering"
+                    );
+                    grant(&mut legacy.players[index], SIDEARM);
+                    legacy.players[index].cooldown = 0.25;
+                }
+            }
+            for (a, b) in current.players.iter().zip(&legacy.players) {
+                assert_eq!(a.pos, b.pos, "position drift at tick {tick}");
+                assert_eq!(
+                    (a.y, a.vy, a.parkour),
+                    (b.y, b.vy, b.parkour),
+                    "movement drift at tick {tick}"
+                );
+                assert_eq!(
+                    a.shield_state, b.shield_state,
+                    "shield drift at tick {tick}"
+                );
+                if player_bits(a) != player_bits(b) && first_divergence.is_none() {
+                    first_divergence = Some(tick);
+                }
+            }
+            fold_tick(&mut h, &legacy);
+            if tick % 100 == 99 {
+                checkpoints.push(h);
+            }
+        }
+        assert!(
+            first_divergence.is_some_and(|tick| tick >= 300),
+            "expected resource divergence after unchanged first three checkpoints: {first_divergence:?}"
+        );
+        assert_eq!(
+            checkpoints,
+            vec![
+                18_363_606_916_869_280_677,
+                9_906_945_162_742_530_227,
+                16_002_300_601_109_398_104,
+                9_409_843_707_836_138_643,
+                16_050_964_335_518_442_108,
+                18_326_704_171_356_937_484,
+            ],
+            "restoring only legacy resources must exactly recover v29"
+        );
+    }
 
     #[test]
     fn free_for_all_handling_fingerprint_and_mode_equivalence() {
@@ -9614,11 +9906,20 @@ mod tests {
             b.step(&|id| v18_script(tick, id));
             assert_eq!(a.players.len(), b.players.len());
             for (pa, pb) in a.players.iter().zip(&b.players) {
+                assert_eq!(pa.inventory, pb.inventory, "inventory replay tick {tick}");
+                assert_eq!(pa.starting_weapon, pb.starting_weapon);
                 assert_eq!(
                     player_bits(pa),
                     player_bits(pb),
                     "tick {tick} player {}",
                     pa.id
+                );
+            }
+            for (sa, sb) in a.supplies.iter().zip(&b.supplies) {
+                assert_eq!(
+                    sa.respawn_t.to_bits(),
+                    sb.respawn_t.to_bits(),
+                    "supply replay tick {tick}"
                 );
             }
             assert_eq!(a.bullets.len(), b.bullets.len(), "tick {tick}");
