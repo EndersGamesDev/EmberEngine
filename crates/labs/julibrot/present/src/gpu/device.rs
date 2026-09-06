@@ -321,7 +321,7 @@ struct GpuState {
     heap_limits: DialectLimits,
 }
 
-/// Two-texture Julibrot scene owner and sole warp-pass runtime.
+/// Two-texture Julibrot value-scene owner and shared reprojection-plus-shade runtime.
 pub struct Presenter {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,

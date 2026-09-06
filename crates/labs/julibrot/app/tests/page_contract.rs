@@ -1129,25 +1129,25 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
     assert!(READBACK.contains("pub const fn frame_readback_route(surface_usages: wgpu::TextureUsages) -> FrameReadbackRoute {"));
     assert!(READBACK.contains("Self::Surface => \"copied from the surface\","));
     assert!(READBACK.contains(
-        "Self::OffscreenRerender => \"copied from an offscreen re-render of the presented pass\","
+        "Self::OffscreenRerender => \"copied from an offscreen re-render of the shade pass\","
     ));
     assert!(FRAME.contains("fn stage_frame_capture(&mut self) {"));
     assert!(LIB.contains("\"frame_capture_route\": facts.route,"));
     assert!(LIB.contains("\"frame_capture_copy_route\": facts.copy_route,"));
-    // The fallback draws the same call into a copy source inside the presentation submission, so
-    // the two encodes cannot be separated: the second is appended to the first's encoder before it
-    // is submitted, and nothing runs between them. A target of another extent would be a second
-    // draw of a different picture, and that is the refusal the guard names.
+    // The fallback draws the same shade call over the completed presentation values into a copy
+    // source inside the submission. The two shade encodes cannot be separated: the second is
+    // appended to the first's encoder before submission, and nothing runs between them.
     let present_encode = WARP_SUBMIT
-        .find("encode_image_warp(")
-        .expect("the presentation pass encodes the warp");
+        .find("encode_shade(&mut encoder, &self.gpu, state.surface_view);")
+        .expect("the presentation encodes the shade pass");
     let capture_encode = WARP_SUBMIT
-        .find("self.encode_offscreen_capture(&mut encoder, extent, plan)")
+        .find("self.encode_offscreen_capture(&mut encoder, extent)")
         .expect("the capture is encoded in the presentation submission");
     let submit = WARP_SUBMIT
         .find("self.queue.submit([encoder.finish()]);")
         .expect("one submission");
     assert!(present_encode < capture_encode && capture_encode < submit);
+    assert!(READBACK.contains("encode_shade(encoder, &self.gpu, &target.view);"));
     assert!(
         READBACK.contains(
             "operation: \"copy a frame whose target extent is not the presented extent\","

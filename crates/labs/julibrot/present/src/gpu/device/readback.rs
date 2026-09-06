@@ -14,12 +14,11 @@
 //! ANGLE over Mesa Intel, so a lab that only had this route would answer a typed refusal to every
 //! request on the device class it is for.
 //!
-//! The fallback route draws the presentation pass a second time into an offscreen colour target
-//! that is a copy source, and copies from that. It is pixel-identical by construction rather than
-//! by hope: the second encode is the same call, with the same pipeline, the same bind groups, the
-//! same uniforms and the same clear, appended to the same command encoder as the first, before that
-//! encoder is submitted. The pass is deterministic over its inputs, and nothing writes to those
-//! inputs between the two encodes because there is no gap between them to write in. The one thing
+//! The fallback route draws the shade pass a second time into an offscreen colour target that is a
+//! copy source, and copies from that. It is pixel-identical by construction rather than by hope:
+//! the second encode is the same call over the already reprojected value target, with the same
+//! pipeline, bind groups and palette, appended to the same command encoder as the first before that
+//! encoder is submitted. Nothing writes those inputs between the two encodes. The one thing
 //! that could separate them is an extent disagreement between the surface the pass was drawn at and
 //! the target the copy is taken from, and that is refused with a reason rather than resized.
 //!
@@ -48,7 +47,7 @@ impl FrameReadbackRoute {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Surface => "copied from the surface",
-            Self::OffscreenRerender => "copied from an offscreen re-render of the presented pass",
+            Self::OffscreenRerender => "copied from an offscreen re-render of the shade pass",
         }
     }
 }
@@ -183,7 +182,7 @@ impl Presenter {
         Ok(())
     }
 
-    /// Arms one copy taken by drawing the presentation pass a second time into a copy source.
+    /// Arms one copy taken by drawing the shade pass a second time into a copy source.
     ///
     /// This is the fallback route, for a surface that is not itself a copy source. Arming is not a
     /// copy: the second draw is appended to the presentation pass's own command encoder on the next
@@ -271,7 +270,7 @@ impl Presenter {
         }
     }
 
-    /// Draws the presentation pass once more into a copy source and encodes the copy.
+    /// Draws the shade pass once more into a copy source and encodes the copy.
     ///
     /// Called from the warp submission, after the pass has been encoded into the surface view and
     /// before that encoder is submitted, so the second draw reads exactly the state the first one

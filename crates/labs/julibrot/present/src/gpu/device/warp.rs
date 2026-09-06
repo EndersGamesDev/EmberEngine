@@ -230,7 +230,7 @@ impl Presenter {
             .relief_frame(self.ledger.retained(), self.ledger.held())
             .is_some()
     }
-    /// Submits the sole warp pass to the borrowed surface view and returns before completion.
+    /// Submits value reprojection and the sole shade pass, then returns before completion.
     ///
     /// # Errors
     ///
@@ -353,7 +353,7 @@ impl Presenter {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Julibrot warp and fence"),
+                label: Some("Julibrot value reprojection, shade, and fence"),
             });
         if relief_redraw {
             encode_relief_redraw(

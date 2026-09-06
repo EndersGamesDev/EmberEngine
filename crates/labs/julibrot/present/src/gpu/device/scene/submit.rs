@@ -8,7 +8,7 @@ use super::super::{
 };
 
 impl Presenter {
-    /// Submits the one image scene pass, optional Final census, and completion fence.
+    /// Submits the one value scene pass, optional Final census, and completion fence.
     ///
     /// # Errors
     ///
