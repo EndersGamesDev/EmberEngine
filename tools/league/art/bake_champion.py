@@ -141,7 +141,9 @@ def decimate(verts: np.ndarray, faces: np.ndarray, target_faces: int):
 
 def orient(verts: np.ndarray, forward: str, up: str, height: float):
     """Rotate source axes into engine axes (+X forward, +Y up), stand the
-    mesh on y=0 centred in x/z, scale to `height`. Returns (verts, matrix)."""
+    mesh on y=0 centred in x/z, scale to `height`. Returns the transformed
+    vertices and the (rot, scale, shift) that did it, so the hi-res mesh the
+    colours come from gets the IDENTICAL transform: v' = (v @ rot.T) * scale + shift."""
     f = axis_vec(forward)
     u = axis_vec(up)
     if abs(float(np.dot(f, u))) > 1e-6:
@@ -160,11 +162,9 @@ def orient(verts: np.ndarray, forward: str, up: str, height: float):
     out *= scale
     lo = out.min(axis=0)
     hi = out.max(axis=0)
-    centre = (lo + hi) / 2.0
-    out[:, 0] -= centre[0]
-    out[:, 2] -= centre[2]
-    out[:, 1] -= lo[1]
-    return out, rot, scale
+    shift = np.array([-(lo[0] + hi[0]) / 2.0, -lo[1], -(lo[2] + hi[2]) / 2.0])
+    out += shift
+    return out, rot, scale, shift
 
 
 def unwrap(verts: np.ndarray, faces: np.ndarray):
@@ -296,6 +296,10 @@ def main() -> int:
     ap.add_argument("--atlas", type=int, default=ATLAS)
     ap.add_argument("--min-component", type=float, default=0.01,
                     help="drop connected components smaller than this fraction of the faces (TripoSR specks)")
+    ap.add_argument("--gain", type=float, default=1.0,
+                    help="multiply the baked colours (TripoSR bakes its own shading in and comes out dark; 1.2-1.4 lifts it)")
+    ap.add_argument("--gamma", type=float, default=1.0,
+                    help="power curve on the baked colours after gain (<1 lifts the midtones)")
     args = ap.parse_args()
     atlas_size = int(args.atlas)
 
@@ -304,6 +308,9 @@ def main() -> int:
     verts, faces, colours = load_coloured(args.input)
     print(f"source: {len(verts)} vertices, {len(faces)} faces, colours {'present' if colours.std() > 1e-3 else 'FLAT'}")
     t = tick("load", t)
+    if abs(args.gain - 1.0) > 1e-6 or abs(args.gamma - 1.0) > 1e-6:
+        colours = np.clip(np.clip(colours * args.gain, 0.0, 1.0) ** args.gamma, 0.0, 1.0)
+        print(f"colour: gain x{args.gain:.2f}, gamma {args.gamma:.2f}; mean brightness now {colours.mean():.2f}")
     verts, faces, colours, dropped = drop_debris(verts, faces, colours, args.min_component)
     if dropped:
         print(f"debris: dropped {dropped} floating component(s) under {args.min_component:.1%} of the faces; {len(faces)} faces remain")
@@ -311,20 +318,11 @@ def main() -> int:
     hi_verts_src = verts.copy()
     dverts, dfaces = decimate(verts, faces, args.faces)
     t = tick("decimate", t)
-    dverts, rot, scale = orient(dverts, args.forward, args.up, args.height)
-    hi_verts = (hi_verts_src @ rot.T) * scale
-    # the same translation the decimated mesh received
-    lo = (hi_verts_src @ rot.T * scale)
-    # recompute translation from the decimated result so both agree exactly
-    shift = np.array([0.0, 0.0, 0.0])
-    d_lo = dverts.min(axis=0)
-    d_hi = dverts.max(axis=0)
-    h_lo = lo.min(axis=0)
-    h_hi = lo.max(axis=0)
-    shift[0] = -(h_lo[0] + h_hi[0]) / 2.0
-    shift[2] = -(h_lo[2] + h_hi[2]) / 2.0
-    shift[1] = -h_lo[1]
-    hi_verts = lo + shift
+    # one transform, computed on the decimated mesh, applied to both: the
+    # colour lookup must see the hi-res surface exactly where the shipped
+    # surface is (a per-mesh recentre put them 5 mm apart in the first bake)
+    dverts, rot, scale, shift = orient(dverts, args.forward, args.up, args.height)
+    hi_verts = (hi_verts_src @ rot.T) * scale + shift
     t = tick("orient", t)
     uverts, ufaces, uvs, _ = unwrap(dverts, dfaces)
     t = tick("unwrap", t)
