@@ -3139,6 +3139,39 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
     assert!(ladder.refinement_pending());
 }
 
+/// Pins when an idle ladder facing a stale view starts another one.
+///
+/// A hold stamps no view, so the requested view reads stale for the whole time the previous picture
+/// stands in for it, including the turn its replacement completes on. The restart rule has to tell
+/// that turn from the case it exists for: a completed scene one present from the canvas is not a
+/// missing scene, while a view that moved on after its scene was shown is.
+#[test]
+fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
+    assert!(
+        !super::stale_view_needs_a_new_scene(false, true, Some(7), Some(5)),
+        "the completed scene has not been presented yet, so the picture for this view exists"
+    );
+    assert!(
+        !super::stale_view_needs_a_new_scene(false, true, Some(7), None),
+        "nothing has reached the canvas yet, and the completed scene is on its way"
+    );
+    assert!(
+        super::stale_view_needs_a_new_scene(false, true, Some(7), Some(7)),
+        "the completed scene is what is on screen and the view has still moved on"
+    );
+    assert!(
+        super::stale_view_needs_a_new_scene(false, true, None, None),
+        "an opening frame with no scene at all starts the first ladder"
+    );
+    assert!(!super::stale_view_needs_a_new_scene(true, true, None, None));
+    assert!(!super::stale_view_needs_a_new_scene(
+        false,
+        false,
+        Some(7),
+        Some(7)
+    ));
+}
+
 /// Pins the stale reading a hold must not clear.
 ///
 /// The loop stamps the view it expects the next presented image to reproduce when it submits the

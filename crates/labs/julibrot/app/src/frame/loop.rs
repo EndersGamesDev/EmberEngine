@@ -413,6 +413,31 @@ const fn adopt_reference_lease_for_correction(
     lease.centre_revision = centre_revision;
 }
 
+/// Whether an idle ladder facing a stale presented view has work to start.
+///
+/// A completed scene reaches the canvas one warp after it completes, and while the loop is holding
+/// the previous picture no warp stamps the requested view at all, so the moment the last level
+/// completes the view on screen is honestly not the view being asked for and yet nothing is
+/// missing: the picture for that view exists and the next warp draws it. Restarting there spends a
+/// whole ladder repainting a scene that was one present away. The restart is therefore reserved
+/// for the case the rule is about, a view that moved on after the scene it asked for has already
+/// been shown.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn stale_view_needs_a_new_scene(
+    refinement_pending: bool,
+    view_stale: bool,
+    completed_scene_id: Option<u64>,
+    presented_scene_id: Option<u64>,
+) -> bool {
+    !refinement_pending
+        && view_stale
+        && match (completed_scene_id, presented_scene_id) {
+            (Some(completed), Some(presented)) => completed == presented,
+            (None, None) => true,
+            _ => false,
+        }
+}
+
 /// Whether a submitted warp puts the requested view on the canvas.
 ///
 /// A held warp draws the last completed picture unmoved, so what reaches the canvas is the view
@@ -1123,7 +1148,12 @@ mod browser {
             self.main = hot.state.main;
             self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             self.observe_scene_selection(viewer);
-            if !self.loop_state.refinement_pending() && self.presented_view_is_stale(viewer) {
+            if super::stale_view_needs_a_new_scene(
+                self.loop_state.refinement_pending(),
+                self.presented_view_is_stale(viewer),
+                self.presenter.facts().completed_scene_id,
+                self.presented_scene_id,
+            ) {
                 self.loop_state.scene_changed(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
