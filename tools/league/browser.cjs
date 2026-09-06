@@ -9,6 +9,7 @@ const root=process.cwd(),web=path.join(root,'web'),out=path.join(root,'target/le
 const origin='http://127.0.0.1:8093',ws='ws://127.0.0.1:7793';
 const started=Date.now(),report={checks:[],errors:[],screenshots:[]};
 let browser,server,game;
+const fixturePeers=new Set();
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const check=(ok,name)=>{assert(ok,name);report.checks.push(name);console.log('PASS '+name);};
 async function page({holdWasm=false}={}){
@@ -142,6 +143,89 @@ async function online(){
   check((await state(b)).connected,'guest remains connected after host leaves');
   await b.close();
 }
+// Fixture peers use the real private server protocol; Quick match still runs
+// through the shipped page, lobby discovery, WASM client and draft screen.
+async function fixturePeer(handle,proto){
+  const socket=new WebSocket(ws),messages=[],waiters=[];
+  socket.addEventListener('message',event=>{
+    const message=JSON.parse(event.data);
+    const at=waiters.findIndex(waiter=>waiter.type===message.t||message.t==='rejected');
+    if(at<0){messages.push(message);return;}
+    const waiter=waiters.splice(at,1)[0];clearTimeout(waiter.timer);
+    if(message.t==='rejected')waiter.reject(new Error(`Fixture ${handle}: ${message.reason}`));
+    else waiter.resolve(message);
+  });
+  const receive=type=>new Promise((resolve,reject)=>{
+    const at=messages.findIndex(message=>message.t===type||message.t==='rejected');
+    if(at>=0){const message=messages.splice(at,1)[0];if(message.t==='rejected')reject(new Error(message.reason));else resolve(message);return;}
+    const waiter={type,resolve,reject,timer:null};
+    waiter.timer=setTimeout(()=>{const at=waiters.indexOf(waiter);if(at>=0)waiters.splice(at,1);reject(new Error(`Fixture ${handle}: timed out waiting for ${type}`));},6000);
+    waiters.push(waiter);
+  });
+  const peer={
+    async request(message,type){const reply=receive(type);socket.send(JSON.stringify(message));return reply;},
+    async close(){
+      fixturePeers.delete(peer);
+      if(socket.readyState===WebSocket.CLOSED)return;
+      await new Promise(resolve=>{socket.addEventListener('close',resolve,{once:true});socket.close();});
+    }
+  };
+  fixturePeers.add(peer);
+  await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});});
+  await peer.request({t:'hello',proto,handle},'welcome');
+  return peer;
+}
+function recordJoined(p){
+  const joined=[];
+  p.on('websocket',socket=>socket.on('framereceived',event=>{
+    try{const message=JSON.parse(String(event.payload));if(message.t==='joined')joined.push(message);}catch{}
+  }));
+  return joined;
+}
+async function quickMatch(mode){
+  const peers=[],pages=[];
+  try{
+    const creator=await page();pages.push(creator);
+    const proto=await creator.evaluate(()=>window.qaWasm.proto_version());
+    const seed=async(name,roomMode,password=null)=>{
+      const peer=await fixturePeer(name,proto);peers.push(peer);
+      await peer.request({t:'create_lobby',name,mode:roomMode,password},'joined');
+      return peer;
+    };
+    const full=`quick${mode}-full`,locked=`quick${mode}-locked`,wrong=`quick${mode}-wrong`;
+    const inspector=await seed(full,mode);
+    for(let i=1;i<mode*2;i++){
+      const peer=await fixturePeer(`quick${mode}-fill${i}`,proto);peers.push(peer);
+      await peer.request({t:'join_lobby',name:full,password:null},'joined');
+    }
+    await seed(locked,mode,'fixture-only');
+    await seed(wrong,mode===1?3:1);
+    const before=(await inspector.request({t:'list_lobbies'},'lobbies')).lobbies;
+    check(before.find(l=>l.name===full)?.players===mode*2,`quick ${mode}v${mode}: full room fixture occupies every seat`);
+    check(before.find(l=>l.name===locked)?.has_password===true,`quick ${mode}v${mode}: locked room fixture is advertised`);
+    check(before.find(l=>l.name===wrong)?.mode!==mode,`quick ${mode}v${mode}: opposite mode fixture is advertised`);
+    assert(before.every(l=>l.racing||l.has_password||l.players>=l.cap||l.mode!==mode),'Expected no eligible lobby before Quick match');
+    const createdJoins=recordJoined(creator);
+    await creator.evaluate(mode=>{document.getElementById('newmode').value=String(mode);},mode);
+    await click(creator,'#btn-quick');
+    await waitState(creator,()=>window.qaState().connected&&window.qaState().roster.length>0);
+    const created=createdJoins.at(-1),createdState=await state(creator);
+    check(created&&created.mode===mode&&!before.some(l=>l.name===created.lobby),`quick ${mode}v${mode}: creates selected mode when only full, locked or wrong-mode rooms exist`);
+    check(createdState.slot===0&&createdState.mode===mode&&createdState.roster.length===mode*2,`quick ${mode}v${mode}: new room opens its host draft with the correct team size`);
+    const guest=await page();pages.push(guest);const guestJoins=recordJoined(guest);
+    await guest.evaluate(mode=>{document.getElementById('newmode').value=String(mode);},mode);
+    await click(guest,'#btn-quick');
+    await waitState(guest,()=>window.qaState().connected&&window.qaState().roster.length>0);
+    const guestState=await state(guest);
+    check(guestJoins.at(-1)?.lobby===created.lobby&&guestState.slot===1&&guestState.mode===mode,`quick ${mode}v${mode}: joins the existing eligible room instead of creating another`);
+    const after=(await inspector.request({t:'list_lobbies'},'lobbies')).lobbies;
+    check(after.length===before.length+1&&after.find(l=>l.name===created.lobby)?.players===2,`quick ${mode}v${mode}: both browser players share one new lobby`);
+    check([full,locked,wrong].every(name=>after.find(l=>l.name===name)?.players===before.find(l=>l.name===name).players),`quick ${mode}v${mode}: excluded rooms retain their original players`);
+  }finally{
+    await Promise.all(pages.map(p=>p.close()));
+    await Promise.all(peers.map(peer=>peer.close()));
+  }
+}
 async function main(){
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);fs.mkdirSync(out,{recursive:true});
   server=http.createServer((req,res)=>{
@@ -162,10 +246,11 @@ async function main(){
   browser=await chromium.launch({channel:'msedge',headless:true,args:['--disable-webgpu','--disable-features=WebGPU','--enable-webgl','--ignore-gpu-blocklist']});
   for(let champ=0;champ<5;champ++)await practice(1,champ);
   await practice(3,0);await online();
+  await quickMatch(1);await quickMatch(3);
   check(report.errors.length===0,'no uncaught browser errors');report.passed=true;
 }
 main().catch(e=>{report.failure=e.stack;console.error(e);process.exitCode=1;}).finally(async()=>{
   if(report.failure&&browser){for(const [i,p] of browser.contexts().flatMap(c=>c.pages()).entries()){try{await screenshot(p,'failure-'+i);console.log(await p.evaluate(()=>({body:document.body.innerText,state:window.qaState?.()})));}catch{}}}
-  if(browser)await browser.close();if(game)game.kill();if(server)await new Promise(r=>server.close(r));
+  if(browser)await browser.close();await Promise.all([...fixturePeers].map(peer=>peer.close()));if(game)game.kill();if(server)await new Promise(r=>server.close(r));
   report.elapsedSeconds=(Date.now()-started)/1000;fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 });
