@@ -16,6 +16,7 @@ pub mod game;
 pub mod online_game;
 pub mod world;
 
+pub(crate) mod combat;
 mod net;
 mod scene;
 
