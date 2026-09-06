@@ -88,23 +88,25 @@
       background: #000;
     }
     #loading { font-size: 0.9rem; opacity: 0.8; }
-    /* Fullscreen (v14). The STAGE goes fullscreen, not the bare canvas, so
-       the crosshair and the Tab scoreboard - page elements positioned over
-       the canvas - come along. The canvas then fills the whole screen at
+    /* Fullscreen keeps the entire page, including the lobby and settings.
+       During a match only the stage is shown, with the HUD and scoreboard.
+       The canvas then fills the whole screen at
        the screen's own aspect: the engine syncs its backing store to the
        canvas CSS size every frame and the camera takes the aspect from the
        surface, so a 21:9 monitor simply sees more to the sides. */
-    #stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; }
-    #stage:fullscreen #ember-root canvas {
+    :root.arena-playing:fullscreen body { gap: 0; padding: 0; justify-content: center; }
+    :root.arena-playing:fullscreen header, :root.arena-playing:fullscreen #status, :root.arena-playing:fullscreen #fs-row { display: none; }
+    :root.arena-playing:fullscreen #stage { background: #000; display: flex; align-items: center; justify-content: center; width: 100vw; height: 100vh; }
+    :root.arena-playing:fullscreen #ember-root canvas {
       width: 100vw !important; height: 100vh !important; aspect-ratio: auto;
       border-radius: 0; box-shadow: none;
     }
     /* The browser's own F11 (no Fullscreen API involved): keep the page's
        chrome out of the way and let the canvas take the viewport. */
     @media (display-mode: fullscreen) {
-      body { gap: 0; padding: 0; justify-content: center; }
-      header, #status, #fs-row { display: none; }
-      #ember-root canvas { width: 100vw !important; height: 100vh !important; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
+      .arena-playing body { gap: 0; padding: 0; justify-content: center; }
+      .arena-playing header, .arena-playing #status, .arena-playing #fs-row { display: none; }
+      .arena-playing #ember-root canvas { width: 100vw !important; height: 100vh !important; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
     }
     #fs-row { font-size: 0.8rem; opacity: 0.75; }
     #btn-fullscreen { padding: 3px 9px; font-size: 0.8rem; margin-left: 6px; vertical-align: middle; }
@@ -128,7 +130,7 @@
   <div id="menu" class="card">
     <h2>Arena Shooter</h2>
     <div class="hint"><b>Your controls. Your next match.</b> Free for all, 4v4 team deathmatch or king of the hill across three hand-authored maps. Up to 8 players · <b>5 HP</b> · respawn in 2.5 seconds.</div>
-    <div class="hint"><b>New in v28:</b> saved mouse sensitivity and keyboard/mouse bindings. Open <b>Settings</b> before playing or press <b>Esc</b> in a match. The multiplayer match keeps running while the menu is open.</div>
+    <div class="hint"><b>New in v28:</b> saved mouse sensitivity, keyboard/mouse bindings and a prominent <b>Fullscreen mode</b> control. Open <b>Settings</b> before playing or press <b>Esc</b> in a match. The multiplayer match keeps running while the menu is open.</div>
     <details class="quick-guide">
       <summary>Controls &amp; combat guide</summary>
       <p><b>Defaults:</b> WASD move · mouse look · left click fire · right click aim · Space jump · Shift sprint · C crouch · R reload · E melee · Q shield · Tab scoreboard. Change any game action in Settings. Fullscreen has its own button; F11 is the browser shortcut.</p>
@@ -188,7 +190,7 @@
     </div>
   </div>
 
-  <script src="./settings.js?v=1788700511"></script>
+  <script src="./settings.js?v=ddbb0d62bbea"></script>
   <script>
     // Rumble (v18). The engine's web build cannot reach the Gamepad haptics
     // API itself: `GamepadHapticActuator::play_effect` is behind
@@ -351,14 +353,7 @@
 
     const showGame = () => { $('menu').hidden = true; $('game').hidden = false; window.emberArenaSettingsUI.setPlaying(true); };
 
-    // ---- fullscreen (v14): the stage, not the canvas (see the CSS note).
-    // Fullscreen stays a separate user-gesture button; KeyF is available
-    // for a game binding. Escape/unlock is handled by the settings controller.
-    const toggleFullscreen = () => {
-      if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
-      $('stage').requestFullscreen?.().catch((e) => console.warn('fullscreen refused', e));
-    };
-    $('btn-fullscreen').addEventListener('click', toggleFullscreen);
+    // Fullscreen buttons and their state are owned by settings.js.
     // Back to a live menu, not a dead screen: the poll is re-armed and a
     // re-rank kicked, so a host that comes back is picked up without a reload.
     const showMenu = (msg) => {
