@@ -230,7 +230,8 @@ fn same_terminal_and_index(left: KernelSample, right: KernelSample) -> bool {
 }
 
 fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
-    let left = shade_presentation_value(presentation_value(record(left), LIGHT), CLASSIC_PALETTE).rgba;
+    let left =
+        shade_presentation_value(presentation_value(record(left), LIGHT), CLASSIC_PALETTE).rgba;
     let right =
         shade_presentation_value(presentation_value(record(right), LIGHT), CLASSIC_PALETTE).rgba;
     left.into_iter()

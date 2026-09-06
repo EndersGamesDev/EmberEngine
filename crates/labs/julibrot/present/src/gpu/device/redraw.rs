@@ -1,6 +1,9 @@
 use crate::{Pose, PresentDataError, PresentError, SceneUniform};
 
-use super::{GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts, warp_load_color};
+use super::{
+    GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts,
+    warp_load_color,
+};
 
 impl Presenter {
     pub(super) fn prepare_relief_redraw(

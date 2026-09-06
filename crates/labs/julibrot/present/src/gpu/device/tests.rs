@@ -737,6 +737,7 @@ fn a_palette_change_reuses_values_and_recolours_on_the_next_present() {
     assert!(!scene.contains("PaletteUniform"));
     assert!(!scene.contains("palette."));
     assert!(crate::shade_shader().contains("palette."));
+    assert!(!include_str!("scene/submit.rs").contains("selected_palette"));
 }
 
 /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.

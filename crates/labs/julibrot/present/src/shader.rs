@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn both_present_shaders_translate_for_webgl2() {
+    fn every_present_shader_translates_for_webgl2() {
         let scene = scene_shader(limits());
         for (source, entries) in [
             (

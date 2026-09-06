@@ -218,10 +218,6 @@ pub fn presentation_value(record: [f32; 4], light: f32) -> [f32; 4] {
 pub fn shade_presentation_value(value: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
     let [smooth_iter, escaped, status, light] = value;
     match status {
-        7.0 => PaletteOutcome {
-            rgba: DEBUG_TINT,
-            contract_violation: true,
-        },
         1.0 => PaletteOutcome {
             rgba: GLITCH_DIAGNOSTIC,
             contract_violation: false,
@@ -279,9 +275,18 @@ mod tests {
         assert_eq!(presentation_value([-1.0, 0.0, 0.0, 0.0], 0.7), [-1.0, 0.0, 0.0, 0.7]);
         assert_eq!(presentation_value([12.0, 1.0, 0.0, 1.0], 0.7), [12.0, 1.0, 1.0, 1.0]);
         assert_eq!(presentation_value([0.0, 1.0, 0.0, 2.0], 0.7), [0.0, 1.0, 2.0, 1.0]);
-        assert_eq!(shade_presentation_value(CLEAR_VALUE, EMBER_PALETTE).rgba, EMBER_PALETTE.clear_rgba);
-        assert_eq!(shade_presentation_value(EXPOSED_VALUE, ICE_PALETTE).rgba, ICE_PALETTE.clear_rgba);
-        assert_eq!(shade_presentation_value(SKY_VALUE, CLASSIC_PALETTE).rgba, exterior_zero(CLASSIC_PALETTE));
+        assert_eq!(
+            shade_presentation_value(CLEAR_VALUE, EMBER_PALETTE).rgba,
+            EMBER_PALETTE.clear_rgba
+        );
+        assert_eq!(
+            shade_presentation_value(EXPOSED_VALUE, ICE_PALETTE).rgba,
+            ICE_PALETTE.clear_rgba
+        );
+        assert_eq!(
+            shade_presentation_value(SKY_VALUE, CLASSIC_PALETTE).rgba,
+            exterior_zero(CLASSIC_PALETTE)
+        );
         assert_eq!(
             shade_presentation_value([0.0, 1.0, 2.0, 1.0], EMBER_PALETTE).rgba,
             exterior_zero(EMBER_PALETTE)
