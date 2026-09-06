@@ -576,8 +576,7 @@ fn compare_redraw(name: &str, from: &Pose, to: &Pose) -> (u32, u32, u32) {
 
 fn exposure_count(plan: &WarpPlan) -> Option<(u32, u32)> {
     let Some(WarpRefusalReason::ReliefExposure {
-        predicted_fraction,
-        ..
+        predicted_fraction, ..
     }) = plan.refusal_reason
     else {
         return None;
@@ -633,8 +632,14 @@ fn check_fixture(
                 plan.approx_max_error_px.is_none(),
                 "relief redraw retained a maximum",
             )?;
-            fixture_assertion(plan.approx_p95_error_px.is_none(), "relief redraw retained a p95")?;
-            fixture_assertion(plan.refusal_reason.is_none(), "relief redraw retained a refusal")?;
+            fixture_assertion(
+                plan.approx_p95_error_px.is_none(),
+                "relief redraw retained a p95",
+            )?;
+            fixture_assertion(
+                plan.refusal_reason.is_none(),
+                "relief redraw retained a refusal",
+            )?;
             fixture_assertion(
                 plan.destination_pose == Some(*to),
                 "relief redraw lost its destination pose",
@@ -657,10 +662,11 @@ fn check_fixture(
                 )?;
             }
         } else if plan.kind == WarpKind::ClearOnly {
-            if let Some(reason @ WarpRefusalReason::ReliefExposure {
-                predicted_fraction,
-                ..
-            }) = plan.refusal_reason
+            if let Some(
+                reason @ WarpRefusalReason::ReliefExposure {
+                    predicted_fraction, ..
+                },
+            ) = plan.refusal_reason
             {
                 let exposure = measured_exposure.map_or_else(
                     || "unavailable".to_owned(),
@@ -709,14 +715,15 @@ fn check_fixture(
                 return Err("displayable plan did not publish its measured maximum");
             };
             let compared = compare_accepted(name, from, to, plan.rows, maximum, height);
-            eprintln!(
-                "oracle fixture | {name} | agree | samples={compared} | bound={maximum:.6}"
-            );
+            eprintln!("oracle fixture | {name} | agree | samples={compared} | bound={maximum:.6}");
             fixture_assertion(expected == Expected::Agree, "unexpectedly displayed")?;
             fixture_assertion(plan.source_valid, "display plan lost its source")?;
             fixture_assertion(plan.source_scene_id == Some(7), "wrong source scene")?;
             fixture_assertion(plan.source_texture_index == Some(1), "wrong source texture")?;
-            fixture_assertion(maximum <= WARP_MAX_ERROR_PX, "display error exceeded its ceiling")?;
+            fixture_assertion(
+                maximum <= WARP_MAX_ERROR_PX,
+                "display error exceeded its ceiling",
+            )?;
         } else {
             eprintln!("oracle fixture | {name} | unexpected HoldStale");
             return Err("planner returned HoldStale from Warp::reproject");
@@ -741,9 +748,7 @@ fn fixture_mismatch(
     );
     format!(
         "{name}: expected={expected:?}; actual_kind={:?}; refusal_reason={:?}; measured_exposure={exposure}; checks={}",
-        plan.kind,
-        plan.refusal_reason,
-        check
+        plan.kind, plan.refusal_reason, check
     )
 }
 
