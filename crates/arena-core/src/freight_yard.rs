@@ -209,6 +209,24 @@ impl Level {
             obstacles,
             spawns,
             pads: Vec::new(),
+            supplies: vec![
+                crate::shooter::SupplySpawn {
+                    pos: [-5.5, 14.5],
+                    kind: crate::shooter::SupplyKind::Health,
+                },
+                crate::shooter::SupplySpawn {
+                    pos: [5.5, -14.5],
+                    kind: crate::shooter::SupplyKind::Health,
+                },
+                crate::shooter::SupplySpawn {
+                    pos: [-16.5, -10.5],
+                    kind: crate::shooter::SupplyKind::Ammo,
+                },
+                crate::shooter::SupplySpawn {
+                    pos: [16.5, 10.5],
+                    kind: crate::shooter::SupplyKind::Ammo,
+                },
+            ],
             decor: freight_yard_decor(),
             hill: Some(YARD_HILL),
         }
@@ -609,7 +627,7 @@ mod tests {
     /// is meant to change, and that is a protocol question every time: the
     /// v18 blocks replaced the v13 pads here, and that is what took
     /// `PROTO_VERSION` from 14 to 15.
-    const TRENCH_CITY_V18: &str = include_str!("../tests/fixtures/trench-city-v18.json");
+    const TRENCH_CITY_V30: &str = include_str!("../tests/fixtures/trench-city-v30.json");
 
     fn yard() -> Level {
         Level::freight_yard()
@@ -1470,15 +1488,19 @@ mod tests {
     // 15
     #[test]
     fn trench_city_matches_its_fixture() {
-        let frozen: Level = serde_json::from_str(TRENCH_CITY_V18).unwrap();
+        let frozen: Level = serde_json::from_str(TRENCH_CITY_V30).unwrap();
         let live = Level::trench_city();
         assert_eq!(live.obstacles.len(), frozen.obstacles.len());
         for (i, (a, b)) in live.obstacles.iter().zip(&frozen.obstacles).enumerate() {
             assert_eq!(a, b, "trench city obstacle {i} moved");
         }
         assert_eq!(live.spawns, frozen.spawns);
-        assert!(frozen.pads.is_empty(), "the v18 fixture carries no pads");
+        assert!(
+            frozen.pads.is_empty(),
+            "the v30 fixture carries no weapon pads"
+        );
         assert_eq!(live.pads, frozen.pads);
+        assert_eq!(live.supplies, frozen.supplies);
         assert_eq!(live.decor, frozen.decor);
         assert_eq!(live, frozen);
         assert_eq!(
@@ -1488,13 +1510,13 @@ mod tests {
                 .filter(|o| o.kind == Cover::Loot)
                 .count(),
             4,
-            "the v18 fixture carries the four blocks"
+            "the v30 fixture preserves all four original loot blocks"
         );
         // The fixture is what serde writes today, so a serialisation change
         // is caught as loudly as a map change.
         assert_eq!(
             serde_json::to_string_pretty(&live).unwrap() + "\n",
-            TRENCH_CITY_V18.replace("\r\n", "\n")
+            TRENCH_CITY_V30.replace("\r\n", "\n")
         );
     }
 
@@ -1508,7 +1530,7 @@ mod tests {
     fn write_trench_city_fixture() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/trench-city-v18.json"
+            "/tests/fixtures/trench-city-v30.json"
         );
         let json = serde_json::to_string_pretty(&Level::trench_city()).unwrap() + "\n";
         std::fs::write(path, json).unwrap();
