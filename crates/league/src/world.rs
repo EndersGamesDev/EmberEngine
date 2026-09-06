@@ -36,6 +36,8 @@ pub struct UnitLite {
 #[derive(Clone, Copy, Debug)]
 pub struct FxLite {
     pub k: u8,
+    pub champ: u8,
+    pub ability: u8,
     pub x: f32,
     pub z: f32,
     pub x2: f32,
@@ -43,6 +45,23 @@ pub struct FxLite {
     pub v: f32,
     pub life: f32,
     pub left: f32,
+}
+
+impl From<proto::Fx> for FxLite {
+    fn from(f: proto::Fx) -> Self {
+        Self {
+            k: f.k,
+            champ: f.champ,
+            ability: f.ability,
+            x: f.x,
+            z: f.z,
+            x2: f.x2,
+            z2: f.z2,
+            v: f.v,
+            life: 0.0,
+            left: 0.0,
+        }
+    }
 }
 
 /// One line of the kill feed, already text — the world knows handles.
@@ -111,6 +130,7 @@ impl World {
 
     pub fn push_fx(&mut self, mut f: FxLite) {
         f.life = match f.k {
+            13 => 0.45,
             1 | 8 | 10 => 0.35,
             2 | 3 | 5 => 0.55,
             _ => 0.3,
@@ -359,6 +379,23 @@ pub fn feed_line(w: &World, ev: &proto::LogEv) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_effect_identity_survives_client_conversion_and_clocks() {
+        let event: proto::Fx = serde_json::from_str(
+            r#"{"k":13,"champ":4,"ability":3,"x":1.0,"z":2.0,"x2":9.0,"z2":8.0,"v":0.0}"#,
+        ).unwrap();
+        let mut w = World::new(1);
+        w.push_fx(event.into());
+        w.tick_clocks(0.1);
+        let effect = w.fx[0];
+        assert_eq!((effect.k, effect.champ, effect.ability), (13, 4, 3));
+        assert_eq!(
+            [effect.x, effect.z, effect.x2, effect.z2].map(f32::to_bits),
+            [1.0_f32, 2.0, 9.0, 8.0].map(f32::to_bits),
+        );
+        assert!(effect.left > 0.0 && effect.left < effect.life);
+    }
 
     #[test]
     fn escape_handles_the_nasty_names() {

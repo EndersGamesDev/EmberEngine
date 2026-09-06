@@ -281,6 +281,9 @@ pub enum ProjKind {
 pub struct Proj {
     pub id: u32,
     pub owner: u32,
+    /// Presentation identity is captured at launch, before a clone can expire.
+    pub champ: u8,
+    pub ability: u8,
     pub team: u8,
     pub kind: ProjKind,
     pub x: f32,
@@ -314,6 +317,8 @@ pub enum ZoneKind {
 pub struct Zone {
     pub id: u32,
     pub owner: u32,
+    pub champ: u8,
+    pub ability: u8,
     pub team: u8,
     pub zk: ZoneKind,
     pub x: f32,
@@ -668,6 +673,7 @@ impl Match {
                         ProjKind::Hook => 3,
                     },
                     t: p.team,
+                    champ: p.champ,
                     x: p.x,
                     z: p.z,
                     dx: p.dx,
@@ -1006,6 +1012,8 @@ impl Match {
                 self.units[ui].dead = true;
                 let (x, z) = (self.units[ui].x, self.units[ui].z);
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
                     x,
                     z,
@@ -1349,6 +1357,7 @@ impl Match {
     )]
     fn do_attack(&mut self, ui: usize, ti: usize) {
         let kind = self.units[ui].kind;
+        let champ = self.presentation_champ(self.units[ui].id);
         let reach_is_melee = self.range_of(ui) < 2.5;
         let (aid, team) = (self.units[ui].id, self.units[ui].team);
         let mut stats = if kind == Kind::Champ {
@@ -1426,12 +1435,14 @@ impl Match {
             let (sx, sz) = (self.units[ui].x, self.units[ui].z);
             let (tx, tz) = (self.units[ti].x, self.units[ti].z);
             self.fx.push(Fx {
+                champ,
+                ability: 4,
                 k: 0,
                 x: sx,
                 z: sz,
                 x2: tx,
                 z2: tz,
-                v: f32::from(crit),
+                v: 4.0 + f32::from(crit),
             });
         } else {
             let (sx, sz) = (self.units[ui].x, self.units[ui].z);
@@ -1440,6 +1451,8 @@ impl Match {
             self.projs.push(Proj {
                 id: self.next_id,
                 owner: aid,
+                champ,
+                ability: 4,
                 team,
                 kind: ProjKind::Auto,
                 x: sx,
@@ -1460,7 +1473,27 @@ impl Match {
                 nhit: 0,
             });
             self.next_id += 1;
+            // Ranged champions need an attack-start event as well as their
+            // later impact. This adds no projectile, damage or cooldown work.
+            if champ != proto::UNKNOWN_PRESENTATION {
+                self.fx.push(Fx {
+                    champ,
+                    ability: 4,
+                    k: 0,
+                    x: sx,
+                    z: sz,
+                    x2: tx,
+                    z2: tz,
+                    v: 4.0 + f32::from(crit),
+                });
+            }
         }
+    }
+
+    pub(crate) fn presentation_champ(&self, owner: u32) -> u8 {
+        self.index_of(owner)
+            .filter(|&i| matches!(self.units[i].kind, Kind::Champ | Kind::Clone))
+            .map_or(proto::UNKNOWN_PRESENTATION, |i| self.units[i].def)
     }
 
     fn atk_cd_of(&self, ui: usize) -> f32 {
@@ -1529,6 +1562,8 @@ impl Match {
         }
         let Some(ti) = hit_i else { return };
 
+        let (champ, ability) = (self.projs[pi].champ, self.projs[pi].ability);
+
         let (dmg, crit, burn, pk, pierce, slow, slow_ttl, hook_rank, owner) = {
             let p = &self.projs[pi];
             (
@@ -1560,6 +1595,8 @@ impl Match {
                 add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 40.0, owner);
             }
             self.fx.push(Fx {
+                champ,
+                ability,
                 k: 10,
                 x: ox,
                 z: oz,
@@ -1578,6 +1615,8 @@ impl Match {
                 add_buff(&mut self.units[ti], BuffKind::Slow, slow_ttl, slow, owner);
             }
             self.fx.push(Fx {
+                champ,
+                ability,
                 k: 0,
                 x: self.units[ti].x,
                 z: self.units[ti].z,
@@ -1633,6 +1672,7 @@ impl Match {
                 z.owner, z.team, z.zk, z.r, z.dmg, z.root, z.slow, z.detonate,
             )
         };
+        let (champ, ability) = (self.zones[zi].champ, self.zones[zi].ability);
         match zk {
             ZoneKind::Trap => {
                 for i in 0..self.units.len() {
@@ -1641,6 +1681,8 @@ impl Match {
                         add_buff(&mut self.units[i], BuffKind::Root, root, 0.0, owner);
                         self.zones[zi].ttl = 0.0;
                         self.fx.push(Fx {
+                            champ,
+                            ability,
                             k: 2,
                             x,
                             z,
@@ -1685,6 +1727,8 @@ impl Match {
                         }
                     }
                     self.fx.push(Fx {
+                        champ,
+                        ability,
                         k: 2,
                         x,
                         z,
@@ -1874,6 +1918,8 @@ impl Match {
                     u.hp = mx * pct / 100.0;
                     u.dmg_log = [(u8::MAX, 0); 8];
                     self.fx.push(Fx {
+                        champ: data::HALLOW,
+                        ability: 3,
                         k: 9,
                         x,
                         z,
@@ -1899,6 +1945,8 @@ impl Match {
                 self.units[ti].order = Order::Hold;
                 self.units[ti].target = 0;
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
                     x,
                     z,
@@ -1994,6 +2042,8 @@ impl Match {
             Kind::Melee | Kind::Caster => {
                 self.units[ti].dead = true;
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
                     x,
                     z,
@@ -2057,6 +2107,8 @@ impl Match {
                 self.boon[usize::from(winners)] = if kind == Kind::CourtN { 1 } else { 2 };
                 self.boon_left[usize::from(winners)] = data::BOON_SECS;
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 2,
                     x,
                     z,
@@ -2086,6 +2138,8 @@ impl Match {
                 self.units[ti].dead = true;
                 self.units[ti].hp = 0.0;
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 2,
                     x,
                     z,
@@ -2121,6 +2175,8 @@ impl Match {
         self.earned[team] += g;
         let (x, z) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 7,
             x,
             z,
@@ -2162,6 +2218,8 @@ impl Match {
             u.mana = (u.mana + (mm1 - mm0)).min(mm1);
             let (x, z) = (u.x, u.z);
             self.fx.push(Fx {
+                champ: crate::proto::UNKNOWN_PRESENTATION,
+                ability: crate::proto::UNKNOWN_PRESENTATION,
                 k: 6,
                 x,
                 z,
@@ -2302,6 +2360,169 @@ mod tests {
         m.set_pick(1, data::KNIGHT, 2, 3, [1, 3, 4]);
         m.start();
         m
+    }
+
+    fn visual_duel(def: u8) -> Match {
+        let mut m = duel();
+        let caster = m.champ_by_slot(0).unwrap();
+        let target = m.champ_by_slot(1).unwrap();
+        let u = &mut m.units[caster];
+        u.def = def;
+        u.level = data::MAX_LEVEL;
+        u.ranks = [3; 4];
+        u.mana = 10_000.0;
+        u.x = 0.0;
+        u.z = 0.0;
+        m.units[target].x = 4.0;
+        m.units[target].z = 0.0;
+        m.units[target].hp = 100_000.0;
+        m.fx.clear();
+        m
+    }
+
+    #[test]
+    fn all_twenty_accepted_abilities_publish_their_cast_identity() {
+        for champ in 0..5 {
+            for ability in 0..4 {
+                let mut m = visual_duel(champ);
+                let caster = m.champ_by_slot(0).unwrap();
+                m.cast(caster, ability, 4.0, 0.0);
+                assert!(m.units[caster].cds[usize::from(ability)] > 0.0);
+                let casts: Vec<_> = m.fx.iter().filter(|f| f.k == 13).collect();
+                assert_eq!(casts.len(), 1, "champ {champ} ability {ability}");
+                let event = casts[0];
+                assert_eq!((event.champ, event.ability), (champ, ability));
+                assert!(event.x.abs() < f32::EPSILON && event.z.abs() < f32::EPSILON);
+                assert!((event.x2 - 4.0).abs() < f32::EPSILON && event.z2.abs() < f32::EPSILON);
+                for fx in m.fx.iter().filter(|f| !matches!(f.k, 5..=7)) {
+                    assert_eq!((fx.champ, fx.ability), (champ, ability));
+                }
+                for p in &m.projs {
+                    assert_eq!((p.champ, p.ability), (champ, ability));
+                }
+                for z in &m.zones {
+                    assert_eq!((z.champ, z.ability), (champ, ability));
+                }
+                let proto::S2C::State { fx, projs, .. } = m.snapshot() else { unreachable!() };
+                assert!(fx.iter().any(|f| f.k == 13 && f.champ == champ && f.ability == ability));
+                assert!(projs.iter().all(|p| p.champ == champ));
+            }
+        }
+    }
+
+    #[test]
+    fn all_five_auto_attacks_and_impacts_keep_the_shooters_identity() {
+        for champ in 0..5 {
+            let mut m = visual_duel(champ);
+            let caster = m.champ_by_slot(0).unwrap();
+            let target = m.champ_by_slot(1).unwrap();
+            m.do_attack(caster, target);
+            let start = m.fx.iter().find(|f| f.k == 0).expect("attack-start event");
+            assert_eq!((start.champ, start.ability), (champ, 4));
+            assert_eq!(start.v as u8 & 4, 4);
+            assert!(start.x.abs() < f32::EPSILON && (start.x2 - 4.0).abs() < f32::EPSILON);
+            if !m.projs.is_empty() {
+                assert_eq!((m.projs[0].champ, m.projs[0].ability), (champ, 4));
+                m.fx.clear();
+                for _ in 0..60 {
+                    m.step_proj(0);
+                }
+                let impact = m.fx.iter().find(|f| f.k == 0).expect("projectile impact");
+                assert_eq!((impact.champ, impact.ability), (champ, 4));
+                assert_eq!(impact.v as u8 & 4, 0);
+                assert!((impact.x - 4.0).abs() < f32::EPSILON);
+            }
+        }
+    }
+
+    #[test]
+    fn an_auto_aimed_at_the_origin_is_distinct_from_a_point_impact() {
+        let mut m = visual_duel(data::SWARM);
+        let caster = m.champ_by_slot(0).unwrap();
+        let target = m.champ_by_slot(1).unwrap();
+        m.units[caster].x = -4.0;
+        m.units[target].x = 0.0;
+        m.do_attack(caster, target);
+        let start = m.fx.iter().find(|f| f.k == 0).unwrap();
+        assert!(start.x2.abs() < f32::EPSILON && start.z2.abs() < f32::EPSILON);
+        assert_eq!(start.v as u8 & 4, 4);
+        m.fx.clear();
+        for _ in 0..60 {
+            m.step_proj(0);
+        }
+        let impact = m.fx.iter().find(|f| f.k == 0).unwrap();
+        assert!(impact.x.abs() < f32::EPSILON && impact.z.abs() < f32::EPSILON);
+        assert_eq!(impact.v as u8 & 4, 0);
+    }
+
+    #[test]
+    fn expired_clone_projectiles_keep_identity_in_snapshots_and_hits() {
+        let mut m = visual_duel(data::SWARM);
+        let caster = m.champ_by_slot(0).unwrap();
+        m.cast(caster, 3, 4.0, 0.0);
+        let clone = m.units.iter().position(|u| u.kind == Kind::Clone).unwrap();
+        let clone_id = m.units[clone].id;
+        let target = m.champ_by_slot(1).unwrap();
+        m.do_attack(clone, target);
+        m.projs.retain(|p| p.owner == clone_id);
+        assert!(m.projs.iter().any(|p| p.ability == 3));
+        assert!(m.projs.iter().any(|p| p.ability == 4));
+        m.units.retain(|u| u.kind != Kind::Clone);
+        m.fx.clear();
+        let proto::S2C::State { projs, .. } = m.snapshot() else { unreachable!() };
+        assert!(projs.iter().all(|p| p.champ == data::SWARM));
+        for _ in 0..120 {
+            for pi in 0..m.projs.len() {
+                m.step_proj(pi);
+            }
+        }
+        assert!(m.fx.iter().any(|f| f.k == 0 && f.champ == data::SWARM && f.ability == 3));
+        assert!(m.fx.iter().any(|f| f.k == 0 && f.champ == data::SWARM && f.ability == 4));
+    }
+
+    #[test]
+    fn rejected_casts_are_silent_and_knight_blinks_keep_r_identity() {
+        let mut m = visual_duel(data::SWARM);
+        let caster = m.champ_by_slot(0).unwrap();
+        let target = m.champ_by_slot(1).unwrap();
+        m.units[target].x = 60.0;
+        m.cast(caster, 0, 4.0, 0.0); // No drone target: refund.
+        assert!(m.fx.is_empty());
+        m.units[caster].mana = 0.0;
+        m.cast(caster, 1, 4.0, 0.0);
+        assert!(m.fx.is_empty());
+
+        let mut m = visual_duel(data::KNIGHT);
+        let caster = m.champ_by_slot(0).unwrap();
+        m.cast(caster, 3, 4.0, 0.0);
+        let mana = m.units[caster].mana;
+        let cooldown = m.units[caster].cds[3];
+        m.fx.clear();
+        m.cast(caster, 3, 6.0, 1.0);
+        assert_eq!(m.units[caster].tp, 2);
+        assert!((m.units[caster].mana - mana).abs() < f32::EPSILON);
+        assert!((m.units[caster].cds[3] - cooldown).abs() < f32::EPSILON);
+        assert!(m.fx.iter().any(|f| f.k == 13 && f.champ == data::KNIGHT && f.ability == 3));
+    }
+
+    #[test]
+    fn delayed_traps_and_revives_keep_the_original_ability_identity() {
+        let mut m = visual_duel(data::TESSERA);
+        let caster = m.champ_by_slot(0).unwrap();
+        m.cast(caster, 1, 4.0, 0.0);
+        m.fx.clear();
+        m.step_zone(0);
+        assert!(m.fx.iter().any(|f| f.k == 2 && f.champ == data::TESSERA && f.ability == 1));
+
+        let mut m = visual_duel(data::HALLOW);
+        let caster = m.champ_by_slot(0).unwrap();
+        let attacker = m.champ_by_slot(1).unwrap();
+        m.cast(caster, 3, 0.0, 0.0);
+        m.fx.clear();
+        m.units[caster].hp = 1.0;
+        m.deal_damage(caster, 10.0, 0, m.units[attacker].id, false);
+        assert!(m.fx.iter().any(|f| f.k == 9 && f.champ == data::HALLOW && f.ability == 3));
+        assert!(!m.units[caster].dead);
     }
 
     #[test]

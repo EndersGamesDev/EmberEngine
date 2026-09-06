@@ -29,6 +29,10 @@ impl Match {
 
     /// Cast one ability at the world point under the cursor. `ui` is the
     /// unit index into `self.units`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Payment, the twenty-kit dispatch and accepted-cast presentation stay at the same atomic command boundary."
+    )]
     pub(crate) fn cast(&mut self, ui: usize, ab: u8, ax: f32, az: f32) {
         let u = &self.units[ui];
         debug_assert!(matches!(u.kind, Kind::Champ));
@@ -42,11 +46,23 @@ impl Match {
             u.tp -= 1;
             let (x, z) = (u.x, u.z);
             self.fx.push(Fx {
+                champ: data::KNIGHT,
+                ability: 3,
                 k: 8,
                 x: x0,
                 z: z0,
                 x2: x,
                 z2: z,
+                v: 0.0,
+            });
+            self.fx.push(Fx {
+                champ: data::KNIGHT,
+                ability: 3,
+                k: 13,
+                x: x0,
+                z: z0,
+                x2: ax,
+                z2: az,
                 v: 0.0,
             });
             return;
@@ -64,6 +80,8 @@ impl Match {
             return;
         }
         let def = u.def;
+        let (sx, sz) = (u.x, u.z);
+        let (fx_start, proj_start, zone_start) = (self.fx.len(), self.projs.len(), self.zones.len());
         let stats = self.champ_stats_of(&self.units[ui]);
         let haste_scale = 100.0 / (100.0 + stats.haste + self.boon_haste(ui));
         {
@@ -93,6 +111,33 @@ impl Match {
             (data::TESSERA, 2) => self.tessera_e(ui, rank, ax, az),
             (data::TESSERA, 3) => self.tessera_r(ui, rank, &stats, ax, az),
             _ => {}
+        }
+        // Refunds reset this cooldown. Only accepted casts animate, including
+        // self-buffs that do not otherwise create a transient effect.
+        if self.units[ui].cds[a] > 0.0 {
+            for fx in &mut self.fx[fx_start..] {
+                if !matches!(fx.k, 5..=7) && fx.ability == crate::proto::UNKNOWN_PRESENTATION {
+                    fx.champ = def;
+                    fx.ability = ab;
+                }
+            }
+            for p in &mut self.projs[proj_start..] {
+                p.ability = ab;
+            }
+            for zone in &mut self.zones[zone_start..] {
+                zone.champ = def;
+                zone.ability = ab;
+            }
+            self.fx.push(Fx {
+                champ: def,
+                ability: ab,
+                k: 13,
+                x: sx,
+                z: sz,
+                x2: ax,
+                z2: az,
+                v: 0.0,
+            });
         }
     }
 
@@ -189,6 +234,8 @@ impl Match {
         let id = self.units[ui].id;
         add_buff(&mut self.units[ui], BuffKind::Ms, 1.0, 20.0, id);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
             x: px,
             z: pz,
@@ -321,6 +368,8 @@ impl Match {
         let z = Zone {
             id: self.next_id,
             owner: id,
+            champ: self.presentation_champ(id),
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             team,
             zk: ZoneKind::Tornado,
             x: zx,
@@ -337,6 +386,8 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 3,
             x: zx,
             z: zz,
@@ -358,6 +409,8 @@ impl Match {
         );
         let (x, z) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 12,
             x,
             z,
@@ -400,6 +453,8 @@ impl Match {
         add_buff(u, BuffKind::DmgAmp, dur, 100.0, id);
         let (x, z) = (u.x, u.z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
             x,
             z,
@@ -421,6 +476,8 @@ impl Match {
         u.hp = (u.hp + amount).min(mx);
         let (x, z) = (u.x, u.z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
             x,
             z,
@@ -438,6 +495,8 @@ impl Match {
         add_buff(&mut self.units[ti], BuffKind::Ms, 3.0, 35.0, id);
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
             x,
             z,
@@ -461,6 +520,8 @@ impl Match {
         );
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 12,
             x,
             z,
@@ -484,6 +545,8 @@ impl Match {
         );
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
             x,
             z,
@@ -515,6 +578,8 @@ impl Match {
         let z = Zone {
             id: self.next_id,
             owner: id,
+            champ: self.presentation_champ(id),
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             team,
             zk: ZoneKind::Shroud,
             x,
@@ -552,6 +617,8 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
             x: sx,
             z: sz,
@@ -560,6 +627,8 @@ impl Match {
             v: 0.0,
         });
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
             x: nx,
             z: nz,
@@ -584,6 +653,8 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
             x,
             z,
@@ -637,6 +708,8 @@ impl Match {
         let z = Zone {
             id: self.next_id,
             owner: id,
+            champ: self.presentation_champ(id),
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             team,
             zk: ZoneKind::Trap,
             x: zx,
@@ -653,6 +726,8 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 4,
             x: zx,
             z: zz,
@@ -675,6 +750,8 @@ impl Match {
         add_buff(&mut self.units[ui], BuffKind::Ms, 1.5, 25.0, id);
         let (nx, nz) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
             x: sx,
             z: sz,
@@ -695,6 +772,8 @@ impl Match {
         let z = Zone {
             id: self.next_id,
             owner: id,
+            champ: self.presentation_champ(id),
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             team,
             zk: ZoneKind::Stasis,
             x: zx,
@@ -711,6 +790,8 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 3,
             x: zx,
             z: zz,
@@ -737,6 +818,7 @@ impl Match {
         if spell >= 4 || self.units[ui].dead || self.units[ui].scds[slot_index] > 0.0 {
             return;
         }
+        let (fx_start, champ) = (self.fx.len(), self.units[ui].def);
         self.units[ui].scds[slot_index] = data::SPELLS[usize::from(spell)].cd;
         match spell {
             data::SPELL_FLASH => {
@@ -749,6 +831,8 @@ impl Match {
                 }
                 let (nx, nz) = (self.units[ui].x, self.units[ui].z);
                 self.fx.push(Fx {
+                    champ: crate::proto::UNKNOWN_PRESENTATION,
+                    ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 8,
                     x,
                     z,
@@ -771,6 +855,8 @@ impl Match {
                         u.hp = (u.hp + amount).min(mx);
                         let (hx, hz) = (u.x, u.z);
                         self.fx.push(Fx {
+                            champ: crate::proto::UNKNOWN_PRESENTATION,
+                            ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 9,
                             x: hx,
                             z: hz,
@@ -807,6 +893,8 @@ impl Match {
                     if dealt > 0.0 {
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
+                            champ: crate::proto::UNKNOWN_PRESENTATION,
+                            ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 2,
                             x: tx,
                             z: tz,
@@ -825,6 +913,8 @@ impl Match {
                         add_buff(&mut self.units[ti], BuffKind::Exhaust, 3.0, 0.0, id);
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
+                            champ: crate::proto::UNKNOWN_PRESENTATION,
+                            ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 11,
                             x: tx,
                             z: tz,
@@ -838,6 +928,11 @@ impl Match {
                 }
             }
             _ => {}
+        }
+        for fx in &mut self.fx[fx_start..] {
+            if !matches!(fx.k, 5..=7) && fx.champ == crate::proto::UNKNOWN_PRESENTATION {
+                fx.champ = champ;
+            }
         }
     }
 
@@ -950,6 +1045,8 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            champ: crate::proto::UNKNOWN_PRESENTATION,
+            ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 1,
             x: sx,
             z: sz,
@@ -987,7 +1084,7 @@ impl Match {
         clippy::too_many_arguments,
         reason = "Projectile initialization explicitly supplies identity, planar position/direction and combat parameters without changing their coordinate representation."
     )]
-    pub(crate) const fn blank_proj(
+    pub(crate) fn blank_proj(
         &mut self,
         owner: u32,
         team: u8,
@@ -1003,6 +1100,8 @@ impl Match {
         let p = Proj {
             id: self.next_id,
             owner,
+            champ: self.presentation_champ(owner),
+            ability: if kind == ProjKind::Auto { 4 } else { 0 },
             team,
             kind,
             x,
