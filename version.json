@@ -1,6 +1,6 @@
 {
-  "version": "r1469",
-  "commit": "f28a145f",
-  "built": "2026-09-06T13:15:07Z",
-  "subject": "fix(arena): keep Resume visible and verify v28 browser release"
+  "version": "r1490",
+  "commit": "129bcac4",
+  "built": "2026-09-06T16:21:51Z",
+  "subject": "fix(deploy): publish Arena protocol and client atomically through bound mirrors"
 }
