@@ -159,14 +159,16 @@ const fn keys(weapon: u8) -> [Key; 7] {
             key(0.90, [-0.070,-0.040, 0.000], [ 0.10, 0.02, 0.06], [0.12, 0.03,-0.010], [0.00, 0.00, 0.05]),
             Key::rest(1.0),
         ],
-        // Breach-12: weighty box-mag swap, firm seat, then receiver release.
+        // Breach-12: expose the box magazine toward screen-left, forward of
+        // the eye. A short clear withdrawal avoids dropping the support hand
+        // out of view or forcing the remote reach projection up to the face.
         8 => [
             Key::rest(0.0),
-            key(0.15, [-0.060,-0.025,-0.010], [-0.32, 0.04, 0.13], [-0.10,-0.04,-0.025], [0.00, 0.03,-0.10]),
-            key(0.32, [-0.075,-0.040,-0.020], [-0.53, 0.08, 0.20], [-0.19,-0.12,-0.010], [0.02, 0.04,-0.14]),
-            key(0.53, [-0.095,-0.060,-0.025], [-0.56, 0.08, 0.18], [-0.21,-0.36,-0.010], [0.02, 0.04,-0.14]),
-            key(0.72, [-0.055,-0.020,-0.015], [-0.40, 0.03, 0.23], [-0.19,-0.12,-0.010], [0.02, 0.04,-0.14]),
-            key(0.90, [-0.080,-0.025, 0.000], [-0.12,-0.06, 0.06], [-0.24, 0.10, 0.085], [0.08,-0.32, 0.22]),
+            key(0.15, [ 0.070, 0.035,-0.040], [ 0.35, 0.08,-0.02], [-0.10,-0.04,-0.025], [0.00, 0.03,-0.10]),
+            key(0.32, [ 0.120, 0.055,-0.060], [ 0.60, 0.16,-0.03], [-0.19,-0.12,-0.025], [0.02, 0.04,-0.14]),
+            key(0.53, [ 0.150, 0.080,-0.080], [ 0.68, 0.18,-0.035],[-0.21,-0.26,-0.025], [0.02, 0.04,-0.14]),
+            key(0.72, [ 0.120, 0.055,-0.060], [ 0.60, 0.16,-0.03], [-0.19,-0.12,-0.025], [0.02, 0.04,-0.14]),
+            key(0.90, [ 0.050, 0.025,-0.030], [ 0.20, 0.05,-0.01], [-0.24, 0.10, 0.085], [0.08,-0.32, 0.22]),
             Key::rest(1.0),
         ],
         // Pistol: compact chest-high magazine reach, seat and overhand rack.
@@ -225,7 +227,7 @@ pub fn pose(weapon: u8, progress: f32) -> ReloadPose {
         result.rocket_load = ramp(progress, 0.35, 0.78);
     } else if weapon == 8 {
         let withdrawn = ramp(progress, 0.32, 0.53) * (1.0 - ramp(progress, 0.53, 0.72));
-        result.magazine_offset = Vec3::new(-0.02, -0.24, 0.0) * withdrawn;
+        result.magazine_offset = Vec3::new(-0.02, -0.14, 0.0) * withdrawn;
     }
     result
 }
@@ -353,10 +355,34 @@ mod tests {
             );
         }
         assert_eq!(pose(8, 0.0).magazine_offset, Vec3::ZERO);
-        assert_eq!(pose(8, 0.53).magazine_offset, Vec3::new(-0.02, -0.24, 0.0));
+        assert_eq!(pose(8, 0.53).magazine_offset, Vec3::new(-0.02, -0.14, 0.0));
         assert_eq!(pose(8, 1.0).magazine_offset, Vec3::ZERO);
         for weapon in 1..=7 {
             assert_eq!(pose(weapon, 0.53).magazine_offset, Vec3::ZERO);
+        }
+    }
+
+    #[test]
+    fn shotgun_exchange_keeps_palms_and_magazine_inside_the_hip_view() {
+        let hip = Vec3::new(0.60, -0.24, 0.212);
+        let half_fov = (crate::feel::HIP_FOV * 0.5).to_radians().tan();
+        for tick in 32..=72_u8 {
+            let reload = pose(8, f32::from(tick) / 100.0);
+            let project = |point: Vec3| {
+                let camera = hip + reload.offset + reload.rotation * point;
+                assert!(camera.x > 0.15);
+                assert!((camera.y / (camera.x * half_fov)).abs() < 0.92);
+                assert!((camera.z / (camera.x * half_fov * 16.0 / 9.0)).abs() < 0.92);
+            };
+            project(Vec3::new(-0.073_887, -0.011_812, 0.028_618));
+            project(Vec3::new(0.358_626, -0.004_903, -0.016_754) + reload.left_offset);
+            for x in [0.107, 0.224] {
+                for y in [-0.255, 0.028] {
+                    for z in [-0.046, 0.046] {
+                        project(Vec3::new(x, y, z) + reload.magazine_offset);
+                    }
+                }
+            }
         }
     }
 }

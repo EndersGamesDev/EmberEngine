@@ -22,6 +22,8 @@
 
 The pose cants the gun, grabs the box magazine, withdraws/reinserts it, works the receiver and returns exactly to the original grip. Existing weapons receive a zero magazine offset. The gunshot and reload cues are synthesized locally; one shot cue must be emitted **per shell, not per pellet**. Appended sound enum values preserve all legacy deterministic sound seeds.
 
+Final reload presentation uses a 14 cm downward withdrawal with a 2 cm rearward component. The inward cant and forward presentation offset keep both palms and the magazine inside the hip-view frustum during exchange; changing those offsets must retain the pure geometry gate and first-/third-person capture review.
+
 ## Geometry and provenance
 
 No shotgun source archive was present in the local artist-source directory. This is original authored geometry: long hollow large-bore barrel and support tube, receiver and ejection port, charging handle, beveled fore-end, trigger guard, stock/recoil pad, rail and iron sights, and a separate ribbed box magazine. Tiny original RGB8 material swatches add visual separation and subtle surface grain; they are not a claim of photoreal scanned or artist-painted PBR materials.
