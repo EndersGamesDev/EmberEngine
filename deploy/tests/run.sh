@@ -9,11 +9,16 @@
 #   pages         pages assembly and prebuilt bundles against PATH shims — seconds
 #   publish-host  the address book's only writer, against temp files — seconds
 #   ssh-deploys   both workstation deploys against PATH shims — seconds
+#   ship-host     ship-host.sh against PATH shims for ssh, scp and curl: the
+#                 published-version read, the builder's command line, the copy
+#                 list and check's exit codes — seconds
 #   watchdog      what the off-host watchdog decides, against PATH shims and a
 #                 real git origin — seconds
 #   host-pids     host.sh's process control, against real `sleep` processes —
 #                 instant
 #   host-kings    host.sh's three-game wiring against fake build products
+#   host-prebuilt host.sh and bootstrap-host.sh in EMBER_PREBUILT mode, with
+#                 git and cargo present as shims that must never be called
 #   host-timer    generated unit lifecycle and isolated tick lock inheritance
 #   republish-host workstation fetch/merge and unchanged no-push behaviour
 #   host-loopback host.sh up/status/update/down for real on loopback; builds
@@ -23,7 +28,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax pages publish-host ssh-deploys watchdog host-pids host-kings host-timer republish-host host-loopback}"
+SUITES="${*:-syntax pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
 
 T0="$(date +%s)"
 failed=""
