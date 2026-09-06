@@ -132,22 +132,22 @@
   <b>1-6</b> drink potions, <b>B</b> the shop. Level-up points go in with the little <b>+</b> on each ability, or <b>Shift + Q/W/E/R</b>. <b>S</b> stops moving.</p>
   <div class="panel">
     <label>handle <input id="handle" maxlength="20"></label>
-    <button id="btn-practice" class="go">Practice 1v1</button>
-    <button id="btn-practice3">Practice 3v3</button>
-    <button id="btn-quick" class="go">Quick match</button>
+    <button disabled id="btn-practice" class="go">Practice 1v1</button>
+    <button disabled id="btn-practice3">Practice 3v3</button>
+    <button disabled id="btn-quick" class="go">Quick match</button>
   </div>
   <div class="panel">
     <div>
       <input id="newlobby" maxlength="24" placeholder="lobby name">
       <select id="newmode"><option value="3">3 v 3</option><option value="1">1 v 1</option></select>
       <input id="newpass" type="password" maxlength="40" placeholder="password (optional)">
-      <button id="btn-create" class="go">create lobby</button>
+      <button disabled id="btn-create" class="go">create lobby</button>
       <button id="btn-refresh">refresh</button>
     </div>
     <ul id="lobbies"></ul>
     <div id="lobby-note" class="note"></div>
   </div>
-  <div id="engine-note" class="note"></div>
+  <div id="engine-note" class="note" role="status">Loading game...</div>
 </div>
 
 <div id="draft" class="col">
@@ -221,6 +221,11 @@ const fail = msg => showStatus('Unable to start the game: ' + (msg || 'see brows
 window.addEventListener('error', (e) => fail(e.message));
 window.addEventListener('unhandledrejection', (e) => fail(e.reason));
 
+// The promise resolves only when WASM and every control binding are ready.
+// Consumers can obtain the initialized API without racing a second import.
+let resolveLeagueReady;
+window.leagueReady = new Promise(resolve => { resolveLeagueReady = resolve; });
+document.body.dataset.leagueBoot = 'loading';
 let wasm = null, PROTO = 0, DATA = null;
 let chosen = null, candidates = [], wrongProto = [];
 let launched = false, mode = 3, shopOpen = false, lastPhase = '', local = false, latest = null, lastAim = null, lastShop = '', pendingPick = null;
@@ -236,7 +241,7 @@ try {
   console.error(e);
   const n = $('engine-note');
   n.className = 'note bad';
-  n.textContent = 'the engine bundle (pkg/league.js) is not published for this page yet, so no match can start here; the lobby list still works.';
+  n.textContent = 'The game could not load. Reload the page to try again.';
   $('btn-practice').disabled = true; $('btn-practice3').disabled = true; $('btn-create').disabled = true; $('btn-quick').disabled = true;
 }
 
@@ -282,6 +287,7 @@ async function discover() {
     const r = await chooseHost(ROOT.href, { game: 'league', proto: PROTO || null });
     if (launched) return;
     chosen = r.chosen; candidates = r.candidates; wrongProto = r.wrongProto || [];
+    for (const id of ['btn-create', 'btn-quick']) $(id).disabled = !wasm || !(chosen || candidates[0]);
     renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
   } catch (e) { console.error(e); }
 }
@@ -634,7 +640,15 @@ document.querySelectorAll('#islots .slot').forEach((el) => {
 });
 
 document.querySelectorAll('[data-spell]').forEach(el => el.onclick = () => aimedCommand('spell', Number(el.dataset.spell)));
-if (DATA) buildDraftChrome();
+if (DATA) {
+  buildDraftChrome();
+  for (const id of ['btn-practice', 'btn-practice3']) $(id).disabled = false;
+  $('engine-note').textContent = '';
+  document.body.dataset.leagueBoot = 'ready';
+} else {
+  document.body.dataset.leagueBoot = 'failed';
+}
+resolveLeagueReady(wasm);
 
 // ---- boot -------------------------------------------------------------------
 

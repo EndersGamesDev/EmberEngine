@@ -12,7 +12,7 @@ The three founding champions and their kits are the user's; two more (Bog Maw, T
 
 ## The lane
 
-One lane along X. Blue core at x=-62, red at x=+62; lane corridor z∈[-7,7]; whole field x∈[-70,70], z∈[-40,40]. Fountain = within 7 of your core: 6% HP + 5% mana per second.
+One lane along X. Blue core at x=-62, red at x=+62; lane corridor z∈[-7,7]; whole field x∈[-68,68], z∈[-40,40]. The fountain is an axis-aligned box around your core, with half-extents 7 along X and 6 along Z (`abs(x - core_x) <= 7` and `abs(z) <= 6`); it restores 6% maximum HP + 5% maximum mana per second.
 
 - **Cores** (win condition): 3200 HP, +0.4 HP/s regen while no enemy unit within 18. Enemy core dies, you win.
 - **Courts** (the objective on each side of the lane): North Court at (0, +16), South Court at (0, -16). 1400 HP, respawn 150 s. Killing blow team gets 150 gold each and a 100 s boon: North = +12% damage, South = +15% ability haste and +15% gold. Only champions damage courts.
@@ -29,12 +29,12 @@ Auto-attack: right-click an enemy unit to attack it (chase within leash, then ho
 Roster (base HP/mana/MS/AD/AP, attack range/cooldown):
 
 - **SW4RM, AI Swarm** — 560/320/330/54/55, 5.6/0.95. Q homing micro-drones (3 bites at target), W piercing laser beam (skillshot, slow), E split into you + a hologram (5 s, 50/60/70% AD attacks, invulnerable), R split into 4 and every copy casts Q and W on one target (8 s).
-- **EmberKnight** — 660/260/340/66/30, 1.9/0.85. Q flame tornado (ground zone, ticks, slow), W immune to damage 2 s + shield after, E sword in flames 4 s (attacks burn), R demon form 10–16 s: all damage doubled and 3 charges of teleport-to-cursor.
-- **The Hallow One** — 600/420/330/50/65, 4.6/1.0. Q heal ally, W ally speed +35% 3 s, E ally shield, R mark ally: a lethal hit inside 5 s revives them at 30–60% HP instead. In 1v1 the ally is yourself.
+- **EmberKnight** — 660/260/340/66/30, 1.9/0.85. Q flame tornado (ground zone, ticks, slow), W immune to damage 2 s + shield after, E sword in flames 4 s (attacks burn), R demon form 12/14/16 s by rank: all damage doubled and 3 charges of teleport-to-cursor.
+- **The Hallow One** — 600/420/330/50/65, 4.6/1.0. Q heal ally, W ally speed +35% 3 s, E ally shield, R mark ally: a lethal hit inside 5 s revives them at 30/40/50% maximum HP by rank instead. In 1v1 the ally is yourself.
 - **Bog Maw** (ours) — 740/210/320/64/15, 1.8/0.95. Q bog hook (pull + root), W fen shroud (draining decay aura), E silt lunge (dash + AoE slow), R bogquake (big AoE root + burst).
 - **Tessera the Clockmaker** (ours) — 550/340/325/52/70, 5.2/1.05. Q gear shot (piercing bolt), W chrono trap (planted root + burst, max 3), E chrono step (short blink + burst of speed), R grand mechanism (zone root, ticking, detonates).
 
-Summoner spells, one for D and one for F at pick time: **Flash** (7 m blink, 210 s), **Heal** (80 + 10% missing, hits nearby allies, 150 s), **Smite** (350 to minions/courts, 80+15/lv to champions, 60 s), **Exhaust** (−40% damage, −30% speed, 3 s, 150 s).
+Summoner spells, one for D and one for F at pick time: **Flash** (7 m blink, 210 s), **Heal** (80 + 10% missing, hits nearby allies, 150 s), **Smite** (`350 + 30·level` base true damage to nearby enemy minions or neutral courts only, 60 s; champions and cores are ineligible), **Exhaust** (−40% damage, −30% speed, 3 s, 150 s).
 
 Runes: a page is any 3 of Fury (+7% attack speed), Vigor (+70 HP), Focus (+14 AP), Swift (+5% MS), Riches (+15% gold), Haste (7% ability haste), Cruelty (+5% crit, +6% crit damage), Ruin (+8% spell damage). Pages are saved per browser (localStorage) as A/B/C and chosen in champion select.
 
@@ -42,7 +42,7 @@ Items: 18 in the shop, three tiers, stats only except potions (charges) and Embe
 
 ## Economy
 
-Start 500 gold, passive 1.2/s. Melee minion 25 / caster 30 on last hit; XP shared within 12 (last hit 100%, others 80%). Champion kill: `280 + 40·level` (killer 70%, assists split 30%, 8 s assist window), first blood +100, kill XP 150+20·level. Court 150 to all. Gold scales ×1.15/×South boon.
+Start 500 gold, passive 1.2/s. Melee minion 25 / caster 30 on last hit; minion XP is 20/26 respectively, with 100% to the last hitter and 60% to each other living opposing champion within 12. Champion kill: `280 + 40·victim_level` (killer receives the full bounty without assists; otherwise 70% to the killer and the remaining 30% split between assists, 8 s assist window), first blood +100, kill XP `150 + 20·victim_level`. Court capture grants 150 base gold to each living teammate. Riches adds 15% gold and the active South boon adds 15%; their bonuses add, giving ×1.15 with either and ×1.30 with both. These bonuses apply to passive income and awarded gold; there is no time-based gold multiplier.
 
 ## Match flow (server)
 
@@ -52,10 +52,12 @@ Start 500 gold, passive 1.2/s. Melee minion 25 / caster 30 on last hit; XP share
 
 House style: `#[serde(tag="t", rename_all="snake_case")]`, text frames, `#[serde(default)]` on late additions, 64 KiB cap, `ping/pong` every 5 s, 30 s silent-peer drop, listing ungated at proto 0.
 
-- `C2S`: `Hello`, `ListLobbies`, `CreateLobby{name,password,mode}`, `JoinLobby`, `LeaveLobby`, `Pick{champ,d,f,runes}`, `StartMatch`, `Cmd{a: CmdKind, x, z, target, slot}` (Move/Attack/Cast/Spell/UseItem/Buy — all point-and-event, no held inputs), `Ping`.
-- `S2C`: `Welcome{proto,host,version,commit,players,lobbies}`, `Rejected{reason}`, `Lobbies`, `Joined{lobby,id,mode,roster}`, `PlayerJoined/PlayerLeft`, `Phase{phase,left}`, `Roster`, `State{tick,units,champs,teams,fx,log}`, `Result{winner,stats}`, `Pong`.
+- `C2S`: `Hello`, `ListLobbies`, `CreateLobby{name,password,mode}`, `JoinLobby`, `LeaveLobby`, `Pick{champ,d,f,runes}`, `StartMatch`, `Cmd` (tag `a` with variant-specific fields: Move/Attack/Cast/Spell/Rank/UseItem/Buy — all point-and-event, no held inputs), `Ping`.
+- `S2C`: `Welcome{proto,host,version,commit,players,lobbies}`, `Rejected{reason}`, `Lobbies`, `Joined{lobby,id,mode,roster}`, `PlayerJoined/PlayerLeft`, `Phase{phase,left}`, `Roster`, `State{tick,secs,units,champs,buffs,projs,zones,kills,boon,boon_left,court_respawn,fx,log}`, `Result{winner,kills,gold}`, `Pong`.
 
 State is 20 Hz (`STATE_EVERY_TICKS = 3`). Units is one flat struct with `#[serde(default)]` champion extras; `fx` is a transient effects stream; `log` carries kills/captures by unit id for the kill feed. Persistent `projs` and `zones` snapshots keep moving attacks and ground abilities visible between broadcasts. The client renders authoritative positions and smooths the following camera; unit interpolation and prediction are later work.
+
+`projs` contains `ProjSnap{id,k,t,x,z,dx,dz}`: stable projectile id, kind (0 auto-attack, 1 drone, 2 bolt, 3 hook), team and planar position/direction. `zones` contains `ZoneSnap{k,x,z,r}`: kind (0 tornado, 1 trap, 2 stasis, 3 shroud), planar position and radius. Both lists default to empty when absent from a decoded state.
 
 ## Client
 

@@ -11,13 +11,30 @@ const started=Date.now(),report={checks:[],errors:[],screenshots:[]};
 let browser,server,game;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const check=(ok,name)=>{assert(ok,name);report.checks.push(name);console.log('PASS '+name);};
-async function page(){
+async function page({holdWasm=false}={}){
   const p=await browser.newPage({viewport:{width:1440,height:1000}});
   p.on('pageerror',e=>report.errors.push(e.message));
   await p.addInitScript(()=>{window.focus=()=>{};Element.prototype.setPointerCapture=()=>{};});
-  await p.goto(origin+'/games/league/v1/');
-  await p.waitForFunction(()=>!document.getElementById('btn-practice').disabled);
-  await p.evaluate(async()=>{window.qaWasm=await import('./pkg/league.js');window.qaState=()=>JSON.parse(window.qaWasm.state_json());});
+  let releaseWasm;
+  if(holdWasm){
+    const gate=new Promise(resolve=>{releaseWasm=resolve;});
+    await p.route('**/*.wasm',async route=>{await gate;await route.continue();});
+  }
+  await p.goto(origin+'/games/league/v1/',{waitUntil:holdWasm?'commit':'load'});
+  if(holdWasm){
+    await p.waitForFunction(()=>document.body?.dataset.leagueBoot==='loading');
+    check(await p.evaluate(()=>['btn-practice','btn-practice3','btn-create','btn-quick'].every(id=>document.getElementById(id).disabled)),'launch controls stay disabled while WASM is loading');
+    await p.evaluate(()=>{for(const id of ['btn-practice','btn-practice3','btn-create','btn-quick'])document.getElementById(id).click();});
+    check(await p.locator('#ember-root canvas').count()===0,'clicking launch controls during loading cannot start a partial engine');
+    releaseWasm();
+  }
+  await p.waitForFunction(()=>['ready','failed'].includes(document.body.dataset.leagueBoot));
+  await p.evaluate(async()=>{
+    window.qaWasm=await window.leagueReady;
+    if(!window.qaWasm)throw new Error(document.getElementById('engine-note').textContent);
+    window.qaState=()=>JSON.parse(window.qaWasm.state_json());
+  });
+  if(holdWasm)check((await state(p)).phase==='select','readiness exposes the initialized WASM API after delayed loading');
   return p;
 }
 async function click(p,s){
@@ -45,7 +62,7 @@ async function motion(p,xf=.62,yf=.45,clickGround=false){
 }
 async function screenshot(p,name){const f=path.join(out,name+'.png');await p.screenshot({path:f,fullPage:true});report.screenshots.push(f);}
 async function practice(mode,champ){
-  const p=await page();
+  const p=await page({holdWasm:mode===1&&champ===0});
   await click(p,mode===1?'#btn-practice':'#btn-practice3');
   await waitState(p,()=>window.qaState().connected&&window.qaState().phase==='select');
   const cards=await p.locator('#cards .card').count();check(cards===5,`practice ${mode}v${mode}: five champion cards`);
