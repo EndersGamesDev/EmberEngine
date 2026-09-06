@@ -25,14 +25,16 @@ fn main() -> Result<(), String> {
         }
         Some("online") => {
             let Some(url) = args.get(1) else {
-                return Err("usage: league-app online URL LOBBY [create] [mode1|mode3] [password] [handle]".into());
+                return Err(
+                    "usage: league-app online URL LOBBY [create] [mode1|mode3] [password] [handle]"
+                        .into(),
+                );
             };
             let lobby = args.get(2).cloned().unwrap_or_else(|| "lane".into());
             let create = args.get(3).is_some_and(|a| a == "create");
             let mode = args
                 .get(4)
-                .map(|m| if m == "mode1" || m == "1" { 1 } else { 3 })
-                .unwrap_or(3);
+                .map_or(3, |m| if m == "mode1" || m == "1" { 1 } else { 3 });
             let password = args.get(5).filter(|p| *p != "-").cloned();
             let handle = args
                 .get(6)
@@ -46,7 +48,7 @@ fn main() -> Result<(), String> {
                 create,
                 mode,
             };
-            println!("connecting to {url} lobby {}", cfg.lobby);
+            tracing::info!(url, lobby = cfg.lobby, "connecting");
             league::run_online(&cfg)
         }
         Some(other) => Err(format!("unknown command: {other}")),

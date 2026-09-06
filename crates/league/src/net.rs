@@ -201,7 +201,7 @@ mod imp {
             }
         }
 
-        pub fn drain(&mut self, out: &mut VecDeque<S2C>) {
+        pub fn drain(&self, out: &mut VecDeque<S2C>) {
             let mut b = self.shared.borrow_mut();
             while let Some(m) = b.inbox.pop_front() {
                 out.push_back(m);
@@ -355,7 +355,7 @@ mod imp {
             }
         }
 
-        pub fn drain(&mut self, out: &mut VecDeque<S2C>) {
+        pub fn drain(&self, out: &mut VecDeque<S2C>) {
             while let Ok(m) = self.rx.try_recv() {
                 out.push_back(m);
             }
@@ -379,7 +379,7 @@ pub struct Inbox(pub VecDeque<S2C>);
 
 impl Inbox {
     /// Move everything the socket has received into the queue.
-    pub fn pump(&mut self, net: &mut Net) {
+    pub fn pump(&mut self, net: &Net) {
         net.drain(&mut self.0);
     }
 

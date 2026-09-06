@@ -1,5 +1,6 @@
-//! The local match: the authoritative sim right here in the executable,
-//! one human seat, the rest bots. It is the practice mode the page offers
+//! Practice matches with one human seat and bots.
+//!
+//! The authoritative simulation runs inside the executable. Practice works
 //! without a server, and it is what `league-app` runs with no arguments.
 //!
 //! Input mapping lives here as a shared free function, because the online
@@ -23,10 +24,10 @@ pub mod uiq {
     /// The page calls this between frames; wasm is single-threaded and the
     /// engine loop runs on rAF, so it never races `update`.
     pub fn push(json: String) {
-        if let Ok(mut q) = QUEUE.lock() {
-            if q.len() < 256 {
-                q.push(json);
-            }
+        if let Ok(mut q) = QUEUE.lock()
+            && q.len() < 256
+        {
+            q.push(json);
         }
     }
 
@@ -38,9 +39,15 @@ pub mod uiq {
     }
 }
 
-/// Translate HUD controls once, so practice and online use the same commands.
+/// Translate HUD controls for both practice and online matches.
+///
 /// Clickable spells use the last cursor position on the field, or your own
 /// champion if the pointer has not yet entered the canvas.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "JSON numbers narrow to the simulation f32 format and are checked for finiteness below"
+)]
 pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
     if let Some(item) = v.get("buy").and_then(serde_json::Value::as_u64) {
         return u16::try_from(item).ok().map(|item| Cmd::Buy { item });
@@ -50,14 +57,18 @@ pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
         .and_then(serde_json::Value::as_u64)
         .filter(|s| *s < 6)
     {
-        return Some(Cmd::UseItem { slot: slot as u8 });
+        return Some(Cmd::UseItem {
+            slot: u8::try_from(slot).unwrap_or_default(),
+        });
     }
     if let Some(slot) = v
         .get("rank")
         .and_then(serde_json::Value::as_u64)
         .filter(|s| *s < 4)
     {
-        return Some(Cmd::Rank { slot: slot as u8 });
+        return Some(Cmd::Rank {
+            slot: u8::try_from(slot).unwrap_or_default(),
+        });
     }
     let aim = v
         .get("aim")
@@ -82,7 +93,7 @@ pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
         .filter(|s| *s < 4)
     {
         return aim.map(|(x, z)| Cmd::Cast {
-            slot: slot as u8,
+            slot: u8::try_from(slot).unwrap_or_default(),
             x,
             z,
         });
@@ -93,7 +104,7 @@ pub fn ui_command(v: &serde_json::Value, world: &World) -> Option<Cmd> {
         .filter(|s| *s < 2)
     {
         return aim.map(|(x, z)| Cmd::Spell {
-            slot: slot as u8,
+            slot: u8::try_from(slot).unwrap_or_default(),
             x,
             z,
         });
@@ -127,13 +138,14 @@ pub fn read_input(
     prev.rmb_was_left = lmb;
 
     let my_alive = my_alive && world.phase == Phase::Live && !world.shop_open;
-    if my_alive && (rmb_edge || lmb_edge) {
-        if let Some(ndc) = cursor {
-            if let Some(target) = pick_enemy(&camera, aspect, world, ndc) {
-                out.push(Cmd::Attack { target });
-            } else if let Some((x, z)) = ground_point(&camera, aspect, ndc) {
-                out.push(Cmd::Move { x, z });
-            }
+    if my_alive
+        && (rmb_edge || lmb_edge)
+        && let Some(ndc) = cursor
+    {
+        if let Some(target) = pick_enemy(&camera, aspect, world, ndc) {
+            out.push(Cmd::Attack { target });
+        } else if let Some((x, z)) = ground_point(&camera, aspect, ndc) {
+            out.push(Cmd::Move { x, z });
         }
     }
 
@@ -151,10 +163,12 @@ pub fn read_input(
         let down = input.down(key);
         if my_alive && down && !prev.abil[idx] {
             if rank_modifier {
-                out.push(Cmd::Rank { slot: idx as u8 });
+                out.push(Cmd::Rank {
+                    slot: u8::try_from(idx).unwrap_or_default(),
+                });
             } else if let Some((x, z)) = aim {
                 out.push(Cmd::Cast {
-                    slot: idx as u8,
+                    slot: u8::try_from(idx).unwrap_or_default(),
                     x,
                     z,
                 });
@@ -164,14 +178,16 @@ pub fn read_input(
     }
     for (idx, key) in [KeyCode::KeyD, KeyCode::KeyF].into_iter().enumerate() {
         let down = input.down(key);
-        if my_alive && down && !prev.spell[idx] {
-            if let Some((x, z)) = aim {
-                out.push(Cmd::Spell {
-                    slot: idx as u8,
-                    x,
-                    z,
-                });
-            }
+        if my_alive
+            && down
+            && !prev.spell[idx]
+            && let Some((x, z)) = aim
+        {
+            out.push(Cmd::Spell {
+                slot: u8::try_from(idx).unwrap_or_default(),
+                x,
+                z,
+            });
         }
         prev.spell[idx] = down;
     }
@@ -188,13 +204,19 @@ pub fn read_input(
     {
         let down = input.down(key);
         if my_alive && down && !prev.item[idx] {
-            out.push(Cmd::UseItem { slot: idx as u8 });
+            out.push(Cmd::UseItem {
+                slot: u8::try_from(idx).unwrap_or_default(),
+            });
         }
         prev.item[idx] = down;
     }
     out
 }
 
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "Preserve the tested screen-space picking arithmetic during this lint-only change"
+)]
 fn pick_enemy(
     camera: &ember_engine::Camera,
     aspect: f32,
@@ -210,8 +232,7 @@ fn pick_enemy(
         let (sx, sy) = project(camera, aspect, u.x, 1.0, u.z);
         let rx = match u.k {
             0 => 0.055,
-            1 | 2 => 0.030,
-            4 | 5 | 6 | 7 => 0.075,
+            4..=7 => 0.075,
             _ => 0.03,
         };
         // NDC x spans a wider viewport than y. Normalize both axes by
@@ -255,7 +276,7 @@ impl LocalGame {
         m.join(human_handle);
         let mut world = World::new(mode);
         world.my_slot = 0;
-        world.roster = m.roster.clone();
+        world.roster.clone_from(&m.roster);
         world.phase = Phase::Select;
         world.left = league_core::data::SELECT_SECS;
         world.connected = true;
@@ -269,6 +290,10 @@ impl LocalGame {
     }
 
     /// The page's draft/start/buy commands, applied to the local sim.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Preserve the existing byte-valued pick bridge; the shared simulation validates champion, spell, and rune ids"
+    )]
     fn drain_ui(&mut self) {
         for json in uiq::drain() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
@@ -414,14 +439,16 @@ impl EmberGame for LocalGame {
         self.world.tick_clocks(dt);
         self.world.follow(dt);
         crate::hud::set(&self.world.state_json());
-        scene::scene(
-            &self.world.units,
-            &self.world.zones,
-            &self.world.fx,
-            self.world.secs,
-            camera_for(self.world.cam),
-            &self.world.projs,
-        )
+        scene::scene_with(&scene::SceneInput {
+            units: &self.world.units,
+            zones: &self.world.zones,
+            fx: &self.world.fx,
+            buffs: &self.world.buffs,
+            projs: &self.world.projs,
+            time: self.world.secs,
+            camera: camera_for(self.world.cam),
+            my_slot: Some(self.world.my_slot),
+        })
     }
 }
 
@@ -465,16 +492,28 @@ mod tests {
             read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
             vec![Cmd::Rank { slot: 0 }]
         );
-        assert!(read_input(&input, &mut prev, &world, 16.0 / 9.0, true).is_empty());
+        assert_eq!(
+            read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
+            Vec::<Cmd>::new()
+        );
         let empty = InputState::default();
-        assert!(read_input(&empty, &mut prev, &world, 16.0 / 9.0, false).is_empty());
+        assert_eq!(
+            read_input(&empty, &mut prev, &world, 16.0 / 9.0, false),
+            Vec::<Cmd>::new()
+        );
         assert_eq!(
             read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
             vec![Cmd::Rank { slot: 0 }]
         );
         world.shop_open = true;
-        assert!(read_input(&empty, &mut prev, &world, 16.0 / 9.0, true).is_empty());
-        assert!(read_input(&input, &mut prev, &world, 16.0 / 9.0, true).is_empty());
+        assert_eq!(
+            read_input(&empty, &mut prev, &world, 16.0 / 9.0, true),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            read_input(&input, &mut prev, &world, 16.0 / 9.0, true),
+            Vec::<Cmd>::new()
+        );
     }
 
     #[test]

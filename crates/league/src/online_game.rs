@@ -1,6 +1,7 @@
-//! The online game: pump the socket, keep the last snapshot as the world,
-//! send the player's commands, render. Lobby browsing is not here — the
-//! page opens its own short-lived socket to list lobbies, then calls
+//! The online game renders authoritative snapshots and sends commands.
+//!
+//! It pumps the socket and keeps the last snapshot. The page opens its own
+//! short-lived socket to list lobbies, then calls
 //! `start_online` with the one the player picked.
 
 use ember_engine::{EmberGame, Frame, InputState};
@@ -100,6 +101,10 @@ impl OnlineGame {
         })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the exhaustive server-message lifecycle mapping together for protocol review"
+    )]
     fn apply(&mut self, msg: S2C) {
         match msg {
             S2C::Welcome { .. } => self.welcomed = true,
@@ -206,6 +211,10 @@ impl OnlineGame {
         }
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "Preserve the existing byte-valued pick bridge; the authoritative server validates champion, spell, and rune ids"
+    )]
     fn drain_ui(&mut self) {
         for json in uiq::drain() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) else {
@@ -241,7 +250,7 @@ impl OnlineGame {
         }
     }
 
-    fn send_cmd(&mut self, cmd: Cmd) {
+    fn send_cmd(&self, cmd: Cmd) {
         if self.world.connected && self.world.phase == Phase::Live {
             self.net.send(&C2S::Cmd(cmd));
         }
@@ -257,7 +266,7 @@ impl EmberGame for OnlineGame {
         {
             self.lost = Some(format!("connection lost: {why}"));
         }
-        self.inbox.pump(&mut self.net);
+        self.inbox.pump(&self.net);
         while let Some(m) = self.inbox.pop() {
             self.apply(m);
         }
@@ -298,13 +307,15 @@ impl EmberGame for OnlineGame {
         crate::hud::set(&self.world.state_json());
 
         let camera = crate::scene::camera_for(self.world.cam);
-        crate::scene::scene(
-            &self.world.units,
-            &self.world.zones,
-            &self.world.fx,
-            self.world.secs,
+        crate::scene::scene_with(&crate::scene::SceneInput {
+            units: &self.world.units,
+            zones: &self.world.zones,
+            fx: &self.world.fx,
+            buffs: &self.world.buffs,
+            projs: &self.world.projs,
+            time: self.world.secs,
             camera,
-            &self.world.projs,
-        )
+            my_slot: Some(self.world.my_slot),
+        })
     }
 }

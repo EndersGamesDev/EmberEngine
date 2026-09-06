@@ -152,6 +152,10 @@ impl World {
 
     /// Persistent effects arrive in snapshots, so late joiners see fields
     /// and projectiles already in flight as well as newly cast flashes.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "This tick conversion controls visual spin only and intentionally uses renderer f32 precision"
+    )]
     pub fn set_zones(&mut self, zones: &[ZoneSnap]) {
         let spin = (self.tick as f32 * 0.35) % std::f32::consts::TAU;
         self.zones = zones.iter().map(|z| (z.k, z.x, z.z, z.r, spin)).collect();
@@ -174,6 +178,10 @@ impl World {
     }
 
     /// Move the camera toward your champion.
+    #[allow(
+        clippy::suboptimal_flops,
+        reason = "Preserve the tested camera interpolation during this lint-only change"
+    )]
     pub fn follow(&mut self, dt: f32) {
         let target = self
             .my_unit()
@@ -265,7 +273,13 @@ pub fn json_escape(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if u32::from(c) < 0x20 => {
+                let digits = b"0123456789abcdef";
+                let code = usize::try_from(u32::from(c)).unwrap_or_default();
+                out.push_str("\\u00");
+                out.push(char::from(digits[code / 16]));
+                out.push(char::from(digits[code % 16]));
+            }
             c => out.push(c),
         }
     }
@@ -295,6 +309,7 @@ pub fn data_json() -> String {
 }
 
 /// Turn one log event into a feed line, resolving ids to names.
+#[must_use]
 pub fn feed_line(w: &World, ev: &proto::LogEv) -> Option<String> {
     let name_of = |id: u32| -> String {
         w.units.iter().find(|u| u.id == id).map_or_else(
@@ -410,10 +425,10 @@ mod tests {
         w.champs = champs;
         w.set_units(&units);
         let state: serde_json::Value = serde_json::from_str(&w.state_json()).unwrap();
-        let stats = &state["me"]["stats"];
-        assert!((stats["attackSpeed"].as_f64().unwrap() - 1.126_315_8).abs() < 0.0001);
-        assert!((stats["crit"].as_f64().unwrap() - 0.05).abs() < 0.0001);
-        assert!((stats["haste"].as_f64().unwrap() - 0.07).abs() < 0.0001);
-        assert_eq!(stats["critd"], 181.0);
+        let displayed = &state["me"]["stats"];
+        assert!((displayed["attackSpeed"].as_f64().unwrap() - 1.126_315_8).abs() < 0.0001);
+        assert!((displayed["crit"].as_f64().unwrap() - 0.05).abs() < 0.0001);
+        assert!((displayed["haste"].as_f64().unwrap() - 0.07).abs() < 0.0001);
+        assert_eq!(displayed["critd"], 181.0);
     }
 }
