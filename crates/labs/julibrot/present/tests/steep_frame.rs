@@ -568,15 +568,20 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                     edge_one[0] * edge_two[1] - edge_one[1] * edge_two[0],
                 ];
                 let norm = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
-                let light = if norm > 1.0e-12 {
-                    let normal = [cross[0] / norm, cross[1] / norm, cross[2] / norm];
-                    let dot = normal[0] * light_direction[0]
-                        + normal[1] * light_direction[1]
-                        + normal[2] * light_direction[2];
-                    0.24_f64.mul_add(dot.abs(), 0.58)
+                // The shader's fallback is a NORMAL, not a lighting term: it starts at
+                // `vec3(0,0,1)` and replaces it only when the screen derivatives give a usable
+                // cross product. Standing in a saturated term instead was wrong wherever the
+                // fallback is taken, which at height zero is the whole frame — every vertex there
+                // carries `world = vec3(0)`, so no triangle has a normal at all.
+                let normal = if norm > 1.0e-12 {
+                    [cross[0] / norm, cross[1] / norm, cross[2] / norm]
                 } else {
-                    0.24_f64.mul_add(1.0, 0.58)
+                    [0.0, 0.0, 1.0]
                 };
+                let dot = normal[0] * light_direction[0]
+                    + normal[1] * light_direction[1]
+                    + normal[2] * light_direction[2];
+                let light = 0.24_f64.mul_add(dot.abs(), 0.58);
                 let xs = [tri[0].x, tri[1].x, tri[2].x];
                 let ys = [tri[0].y, tri[1].y, tri[2].y];
                 let min_x = xs.iter().fold(f64::INFINITY, |m, v| m.min(*v));
@@ -888,9 +893,16 @@ fn the_curtain_grows_with_the_height_control_from_a_flat_frame_that_has_none() {
 /// `sample_pose` composes three things the app composes: the screen map from `screen_to_plane`,
 /// the pixel scale from `pixel_scale`, and the centre offset the app carries as
 /// `centre_from_reference_px`. This walks one pixel forward to the four-dimensional point the
-/// kernel is asked about and back through `plane_to_screen`, so a wrong zoom, a wrong centre or a
-/// wrong basis projection would land somewhere else. It also states the two numbers the browser
-/// published for this row, the scale mantissa and exponent, from the same `pixel_scale` input.
+/// kernel is asked about and back through `plane_to_screen`, and states the two numbers the
+/// browser published for this row, the scale mantissa and exponent, from the same `pixel_scale`
+/// input.
+///
+/// What it can and cannot catch is worth being exact about. It inverts through the SAME centre it
+/// added, so a wrong centre cancels and the round trip closes anyway: a one-pixel centre shift
+/// survives this test. What it does catch is a wrong zoom, a wrong basis projection, and an
+/// off-plane centre, none of which cancel. The centre itself is pinned by the flat-frame census in
+/// [`the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_bands_of_the_row`],
+/// which compares the records this centre selects against the served build's own counts.
 #[test]
 fn the_zoomed_row_s_sampling_map_round_trips_a_pixel_through_the_app_s_own_functions() {
     let pose = zoom_pose(3.565);
@@ -1259,10 +1271,10 @@ fn the_interior_colour_this_pass_emits_is_not_neutral_grey() {
         first[2] > first[0],
         "and its blue is strictly higher: {first:?}"
     );
-    assert_ne!(
+    assert_eq!(
         first,
-        [13, 13, 13],
-        "the census's dark class is not this pass's interior colour"
+        [12, 12, 17],
+        "the flat frame's interior fragment, at the shader's own fallback normal"
     );
     println!("flat interior fragment {first:?} from record {interior:?}");
     let lifted = zoom_pose(3.565);
@@ -1299,15 +1311,18 @@ fn the_interior_colour_this_pass_emits_is_not_neutral_grey() {
     );
 }
 
-/// The boundary is a cliff, and this measures it in the units the picture is made of.
+/// The boundary is a cliff on the screen and a small step on the chart, and this measures both.
 ///
-/// The height law puts a never-escaped record at the chart floor and a record that escaped only
-/// at the iteration cap at the peak, so two neighbouring samples across the set boundary are
-/// `height_scale * 2` chart units apart in the fifth coordinate. What that is worth in the picture
-/// is not a constant: the fifth perspective divides by `d5 - ambient.fifth`, so the same two
-/// samples separate by more screen pixels the closer the lifted one comes to the near limit. The
-/// test reports the separation of one measured pair, the spread over every boundary pair in the
-/// row, and how many of those pairs the near limit refuses outright.
+/// The height law spans `[-2, 2]`, so a never-escaped record at the floor and a record surviving
+/// to the iteration cap at the peak would stand `height_scale * 2` chart units apart. That is the
+/// law's range and not this row's step: at this zoom the escaped neighbours of the interior are
+/// the SHALLOWEST escapes, which the law also places near the floor. The test measures the actual
+/// chart heights of the escaped side of every horizontal boundary pair and pins their quartiles.
+///
+/// The screen separation is a different quantity and is large: the fifth perspective divides by
+/// `d5 - ambient.fifth`, so a small chart step near the near limit is magnified into tens or
+/// hundreds of pixels. What the picture shows as a wall is that magnification acting on a step of
+/// a fraction of a unit, not a full-range discontinuity.
 #[test]
 fn the_set_boundary_is_a_cliff_whose_screen_height_this_row_can_be_measured_in() {
     let pose = zoom_pose(3.565);
@@ -1315,6 +1330,7 @@ fn the_set_boundary_is_a_cliff_whose_screen_height_this_row_can_be_measured_in()
     let [width, height] = EXTENT;
     let interior = |record: [f32; 4]| record[3] == 0.0 && record[1] == 0.0 && record[0] == -1.0;
     let mut separations: Vec<f64> = Vec::new();
+    let mut escaped_heights: Vec<f64> = Vec::new();
     let mut pairs = 0_u64;
     let mut refused = 0_u64;
     let mut example: Option<(u32, u32, f64, f64, f64)> = None;
@@ -1326,6 +1342,7 @@ fn the_set_boundary_is_a_cliff_whose_screen_height_this_row_can_be_measured_in()
                 continue;
             }
             pairs += 1;
+            escaped_heights.push(record_height(if interior(left) { right } else { left }));
             let (floor_column, floor_record, lifted_column, lifted_record) = if interior(left) {
                 (column, left, column + 1, right)
             } else {
@@ -1376,14 +1393,43 @@ fn the_set_boundary_is_a_cliff_whose_screen_height_this_row_can_be_measured_in()
     println!(
         "boundary pairs {pairs}, near-limit refusals {refused} ({refused_share:.4}), screen separation median {median:.2} px, largest {largest:.2} px"
     );
+    // The chart step across the same pairs. The height law's range is four units; this row uses a
+    // small part of it at the boundary, because the escaped neighbours of the interior here are
+    // the shallowest escapes and the law places those next to the floor as well.
+    escaped_heights.sort_by(f64::total_cmp);
+    let quantile = |fraction: f64| {
+        escaped_heights[((escaped_heights.len() - 1) as f64 * fraction).round() as usize]
+    };
+    let above_midline = escaped_heights.iter().filter(|value| **value > 0.0).count();
+    println!(
+        "escaped-side chart height over {} pairs: min {:.3}, p25 {:.3}, median {:.3}, p75 {:.3}, max {:.3}; above the mid-line {above_midline}",
+        escaped_heights.len(),
+        escaped_heights[0],
+        quantile(0.25),
+        quantile(0.5),
+        quantile(0.75),
+        escaped_heights[escaped_heights.len() - 1]
+    );
+    assert!(
+        quantile(0.5) < -1.5,
+        "this row's boundary step is small, not the law's full range: median {}",
+        quantile(0.5)
+    );
+    assert!(
+        above_midline * 10 < escaped_heights.len(),
+        "{above_midline} of {} escaped neighbours stand above the mid-line",
+        escaped_heights.len()
+    );
     if let Some((column, row, separation, floor_height, lifted_height)) = example {
         println!(
             "one measured pair at column {column} row {row}: record heights {floor_height:.3} and {lifted_height:.3}, {separation:.2} screen pixels apart"
         );
     }
+    // A step of about a tenth of a unit on the chart, and tens of pixels on the screen: the gap
+    // between the two is the fifth perspective's magnification, not the height law's range.
     assert!(
-        median > 1.0,
-        "the boundary is a cliff, not a step: median {median}"
+        median > 20.0,
+        "the screen separation is the magnified step: median {median}"
     );
 }
 
@@ -1535,14 +1581,16 @@ fn the_record_driven_shares_this_row_would_publish() {
 /// dark class, 75,895 of them in the first 90-row band and 32,837 in the second and none below;
 /// exactly 17,556 in the pass-clear class, in the bottom band only. This oracle's interior cause
 /// reproduces all four numbers to within five pixels, which identifies the dark class as the set
-/// interior of this slice beyond argument.
+/// interior of this slice beyond argument. The class split of the same frame agrees to four pixels
+/// on the exterior class and one on the relief class, which is a second and independent check on
+/// the fragment lighting term, since that term is what decides which side of the census's exterior
+/// predicate a palette colour lands on.
 ///
 /// Under the row's own height the agreement holds over the first four bands and breaks in the last
-/// two. That is this mirror's known approximation and not a disagreement about the frame: where a
-/// grid cell has one vertex past the near limit, the shipped pass clips the primitive and keeps
-/// the part whose interpolated validity is still one, while this rasterizer drops the whole
-/// primitive. The lower two bands are exactly where the near-limit refusals live, and the mirror
-/// clears about 25,000 pixels there that the served frame paints.
+/// two, where this oracle clears 25,393 pixels the served frame paints. Those pixels are outside
+/// what this instrument can speak for: it models the scene pass alone, and the served frame has a
+/// backdrop grid drawn behind it at a wider apron. Any verdict this file supports is a verdict
+/// about the upper four bands.
 #[test]
 fn the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_bands_of_the_row() {
     let records = steep_records(&zoom_pose(3.565));
@@ -1579,10 +1627,20 @@ fn the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_ba
         flat_classes[1], 17_556,
         "the flat frame's pass-clear class is the horizon record count exactly"
     );
+    // The two halves of that total are pinned separately, because their split is what the
+    // fragment lighting term decides. Standing a saturated term in for the shader's fallback
+    // normal put 5,291 pixels on the wrong side of the census's exterior predicate while leaving
+    // the sum untouched; with the shader's own fallback the two agree with the served build to
+    // four pixels and to one.
     assert!(
-        (flat_classes[2] + flat_classes[3]).abs_diff(392_112) <= 8,
-        "flat exterior and other together {}",
-        flat_classes[2] + flat_classes[3]
+        flat_classes[2].abs_diff(384_588) <= 8,
+        "flat exterior {} against the browser's 384,588",
+        flat_classes[2]
+    );
+    assert!(
+        flat_classes[3].abs_diff(7_524) <= 8,
+        "flat other {} against the browser's 7,524",
+        flat_classes[3]
     );
 
     let lifted = render_frame(
@@ -1611,7 +1669,7 @@ fn the_oracle_reproduces_the_browser_s_census_of_the_flat_frame_and_the_upper_ba
     }
     let lower_clear: u64 = (4..6).map(|band| lifted_classes[band][1]).sum();
     println!(
-        "lower two bands, pass clear: oracle {lower_clear}, browser 69,739 — the mirror's dropped primitives"
+        "lower two bands, pass clear: oracle {lower_clear}, browser 69,739 — pixels the oracle does not model"
     );
     assert!(
         lower_clear > 69_739,
