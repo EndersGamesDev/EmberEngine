@@ -98,8 +98,9 @@ fn kind_for_height(h: f32) -> &'static Kind {
 /// `Sim::add_player` hardcodes the initial aim and a facing the game
 /// ignores would be a promise the format cannot keep.
 ///
-/// Pads and decor are not authored here yet, so an exported level carries
-/// none; the sim plays it without pads, exactly as its author left it.
+/// Pads, supplies and decor are not authored here yet, so an exported level
+/// carries none; the sim plays it without pads and without health or ammo
+/// pickups, exactly as its author left it.
 #[must_use]
 pub fn to_level(objects: &[Obj], arena_half: f32) -> Level {
     let mut obstacles = Vec::new();
@@ -125,6 +126,10 @@ pub fn to_level(objects: &[Obj], arena_half: f32) -> Level {
         obstacles,
         spawns,
         pads: Vec::new(),
+        // No palette entry places a supply, and the sim has no fallback for
+        // an empty list the way it has a spawn ring: an exported level is
+        // played with no health or ammo pickups at all.
+        supplies: Vec::new(),
         decor: Vec::new(),
         // The editor places obstacles and spawns only; a hill is a hand-written
         // level property, so an exported level plays king of the hill as
@@ -266,6 +271,14 @@ mod tests {
             "the level under test has a raised roof, or this proves nothing"
         );
         assert_eq!(back.spawns, level.spawns);
+        assert!(
+            !level.supplies.is_empty(),
+            "the level under test has supplies, or the next assertion proves nothing"
+        );
+        assert!(
+            back.supplies.is_empty(),
+            "supplies are not authored in the editor, so the export drops them"
+        );
     }
 
     #[test]
