@@ -1,0 +1,9 @@
+# UltimateLegue server
+
+The authoritative server hosts independent 1v1 and 3v3 lobbies at 60 Hz and sends snapshots at 20 Hz. Run `league-server [BIND_ADDR] [--name HOST]`; the default bind address is `127.0.0.1:7783`. TLS terminates in the hosting tunnel. The host name also accepts `EMBER_HOST_NAME`; compile-time `EMBER_BUILD_VERSION` and `EMBER_BUILD_COMMIT` appear in the welcome response.
+
+A connection greets once with the exact game protocol version before creating or joining a lobby. Listing remains available to version-zero browser clients. A player occupies one lobby at a time, and a failed switch preserves their existing seat. The host is the lowest occupied human roster slot, so the next player can start after a host leaves. Champion picks are unique within a team; opponents may mirror each other. Unfilled seats and live disconnects run as bots. A late join takes an available bot seat and receives current state immediately. Seat identity is not reserved for reconnecting clients.
+
+`cargo run -p league-server --example wsprobe -- ws://127.0.0.1:7783 probe-duel --mode 1` creates a temporary lobby and verifies selection, start, increasing simulation ticks, a skill rank, an item purchase, movement, and ping/pong. Use `--mode 3` for squads and `--expect-commit SHA` to require a deployed binary stamp. The probe supports `wss://` and explicitly selects rustls's ring provider. It leaves its own lobby after success and fails immediately on server rejection.
+
+`cargo test -p league-server --all-targets` covers protocol gating, duplicate greetings, lobby switches, password/full/missing failures, host migration, mirror drafts, invalid loadouts, result reset, silent-client cleanup, and real WebSocket games with two and six human connections. The socket tests confirm movement, skill ranking, purchases, and live disconnect messages. Run builds and tests at Idle priority on the development machine.

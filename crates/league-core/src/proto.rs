@@ -46,14 +46,16 @@ pub fn sanitize_handle(s: &str) -> String {
 }
 
 /// Transient socket errors that are not a dead peer. The Windows value
-/// (ERROR_IO_PENDING) belongs here: fire's server learned that the hard way.
+/// (`ERROR_IO_PENDING`) belongs here: fire's server learned that the hard way.
 const WINDOWS_IO_PENDING: i32 = 997;
 
 #[must_use]
 pub fn is_transient_read(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
-        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
     ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
 }
 
@@ -149,12 +151,8 @@ impl Cmd {
                 x: coord(x),
                 z: coord(z),
             },
-            Self::Rank { slot } => Self::Rank {
-                slot: slot.min(3),
-            },
-            Self::UseItem { slot } => Self::UseItem {
-                slot: slot.min(5),
-            },
+            Self::Rank { slot } => Self::Rank { slot: slot.min(3) },
+            Self::UseItem { slot } => Self::UseItem { slot: slot.min(5) },
             other => other,
         }
     }
@@ -220,6 +218,27 @@ pub struct BuffSnap {
     pub val: f32,
 }
 
+/// An active projectile. Kind: 0 auto-attack, 1 drone, 2 bolt, 3 hook.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ProjSnap {
+    pub id: u32,
+    pub k: u8,
+    pub t: u8,
+    pub x: f32,
+    pub z: f32,
+    pub dx: f32,
+    pub dz: f32,
+}
+
+/// An active zone. Kind: 0 tornado, 1 trap, 2 stasis, 3 shroud.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct ZoneSnap {
+    pub k: u8,
+    pub x: f32,
+    pub z: f32,
+    pub r: f32,
+}
+
 /// Transient effect for the renderer, one snapshot's worth. `k`:
 /// 0 auto-attack (u->v), 1 beam (xy->xy2), 2 explosion (x, v=radius),
 /// 3 zone spawn, 4 trap plant, 5 death, 6 level-up, 7 gold, 8 teleport,
@@ -250,7 +269,10 @@ pub struct LogEv {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
-    Hello { proto: u16, handle: String },
+    Hello {
+        proto: u16,
+        handle: String,
+    },
     ListLobbies,
     CreateLobby {
         name: String,
@@ -318,7 +340,7 @@ pub enum S2C {
     },
     /// Pick broadcast: the whole roster, every time anything changes.
     Roster {
-        roster: Vec<SlotInfo>
+        roster: Vec<SlotInfo>,
     },
     /// Match lifecycle. `left` is seconds of the phase remaining.
     Phase {
@@ -332,6 +354,10 @@ pub enum S2C {
         units: Vec<UnitSnap>,
         champs: Vec<ChampView>,
         buffs: Vec<BuffSnap>,
+        #[serde(default)]
+        projs: Vec<ProjSnap>,
+        #[serde(default)]
+        zones: Vec<ZoneSnap>,
         kills: [u16; 2],
         boon: [u8; 2],
         boon_left: [f32; 2],

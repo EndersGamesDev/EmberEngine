@@ -15,11 +15,12 @@ const fn mix64(mut x: u64) -> u64 {
 /// The one hash: every random-looking decision in the sim comes from it.
 #[must_use]
 pub const fn hash(seed: u64, tick: u64, who: u64, salt: u64) -> u64 {
-    mix64(seed
-        .wrapping_mul(0x517c_c1b7_2722_0a95)
-        ^ tick.wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        ^ who.wrapping_mul(0xd6e8_feb8_6659_fd93)
-        ^ salt.wrapping_mul(0x85eb_ca77_f3ac_7cf9))
+    mix64(
+        seed.wrapping_mul(0x517c_c1b7_2722_0a95)
+            ^ tick.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ who.wrapping_mul(0xd6e8_feb8_6659_fd93)
+            ^ salt.wrapping_mul(0x85eb_ca77_f3ac_7cf9),
+    )
 }
 
 /// A uniform f32 in `0..1`.

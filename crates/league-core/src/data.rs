@@ -50,7 +50,12 @@ pub struct Ability {
 }
 
 const fn ab(name: &'static str, desc: &'static str, mana: [f32; 3], cd: [f32; 3]) -> Ability {
-    Ability { name, desc, mana, cd }
+    Ability {
+        name,
+        desc,
+        mana,
+        cd,
+    }
 }
 
 /// A champion's whole table row. `atk_style` picks the client's auto-attack
@@ -445,13 +450,12 @@ impl Stats {
     }
 
     /// Clamp every field into its legal range after all bonuses are in.
-    pub fn clamp_odds(&mut self) {
-        self.crit = self.crit.clamp(0.0, 0.9);
+    pub const fn clamp_odds(&mut self) {
+        self.crit = self.crit.clamp(0.0, 90.0);
         self.critd = self.critd.max(150.0);
-        self.dr = self.dr.min(0.6);
-        self.ms = self.ms.clamp(-0.9, 3.0);
-        self.aspd = self.aspd.min(3.0);
-        self.haste = self.haste.min(2.5);
+        self.dr = self.dr.clamp(0.0, 60.0);
+        self.aspd = self.aspd.clamp(0.0, 300.0);
+        self.haste = self.haste.clamp(0.0, 250.0);
     }
 }
 
@@ -867,7 +871,7 @@ mod tests {
     #[test]
     fn item_ids_are_unique_and_start_at_one() {
         let mut seen = 0u64;
-        for i in ITEMS.iter() {
+        for i in &ITEMS {
             assert_eq!(u64::from(i.id), seen + 1, "ids must be dense from 1");
             seen = u64::from(i.id);
         }
@@ -875,7 +879,7 @@ mod tests {
 
     #[test]
     fn ability_tables_are_per_rank() {
-        for c in CHAMPS.iter() {
+        for c in &CHAMPS {
             for a in [&c.q, &c.w, &c.e, &c.r] {
                 assert_eq!(a.mana.len(), 3);
                 assert_eq!(a.cd.len(), 3);

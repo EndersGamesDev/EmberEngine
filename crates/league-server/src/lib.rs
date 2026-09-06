@@ -24,15 +24,14 @@ use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
 
 use league_core::ai;
-use league_core::proto::{
-    self, C2S, Cmd, LobbyInfo, Phase, SlotInfo, S2C, STATE_EVERY_TICKS,
-};
+use league_core::proto::{self, C2S, Cmd, LobbyInfo, Phase, S2C, STATE_EVERY_TICKS, SlotInfo};
 use league_core::sim::Match;
 
 const OUTBOUND_QUEUE: usize = 256;
 const MAX_WS_MESSAGE: usize = proto::MAX_FRAME_BYTES;
 const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
 const MAX_MSGS_PER_TICK: u32 = 64;
+const MAX_PENDING_EVENTS: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub struct ServerConfig {
@@ -92,7 +91,6 @@ struct Lobby {
     m: Match,
     /// slot -> conn
     members: HashMap<u8, u64>,
-    last_phase: Phase,
     /// Broadcast the select/result clock at this cadence.
     clock_left: f32,
 }
@@ -107,7 +105,10 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         cfg.host_name.as_str()
     };
     if version.is_empty() && commit.is_empty() {
-        tracing::info!(host, "league-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)");
+        tracing::info!(
+            host,
+            "league-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)"
+        );
     } else {
         tracing::info!(host, version, commit, "league-server build");
     }
@@ -117,7 +118,7 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         "league-server listening"
     );
 
-    let (events_tx, events_rx) = mpsc::channel::<Ev>();
+    let (events_tx, events_rx) = mpsc::sync_channel::<Ev>(MAX_PENDING_EVENTS);
     let hub = thread::spawn(move || {
         if let Err(e) = hub_loop(&events_rx, &cfg) {
             tracing::error!("hub loop died: {e}");
@@ -141,7 +142,7 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     Ok(())
 }
 
-fn conn_thread(id: u64, stream: TcpStream, events_tx: &mpsc::Sender<Ev>) {
+fn conn_thread(id: u64, stream: TcpStream, events_tx: &SyncSender<Ev>) {
     let peer = stream
         .peer_addr()
         .map_or_else(|_| "?".into(), |a| a.to_string());
@@ -180,7 +181,10 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &mpsc::Sender<Ev>) {
         }
     };
     done.store(true, Ordering::Relaxed);
-    drop(ws.get_ref().set_read_timeout(Some(Duration::from_millis(5))));
+    drop(
+        ws.get_ref()
+            .set_read_timeout(Some(Duration::from_millis(5))),
+    );
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx
@@ -283,7 +287,9 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     let mut acc: f32 = 0.0;
 
     loop {
-        loop {
+        // A busy sender must not prevent the fixed simulation clock from
+        // advancing. The bounded channel also limits pending input memory.
+        for _ in 0..MAX_PENDING_EVENTS {
             match events_rx.try_recv() {
                 Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, cfg),
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -339,16 +345,19 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
         if phase == Phase::Over && left <= 0.0 {
             // the result screen held long enough: same roster, new draft
             reset_for_select(lobby);
-            out.push(S2C::Roster { roster: lobby.m.roster.clone() });
+            out.push(S2C::Roster {
+                roster: lobby.m.roster.clone(),
+            });
             out.push(S2C::Phase {
                 phase: lobby.m.phase,
                 left: lobby.m.left,
             });
         } else if phase != before {
-            lobby.last_phase = phase;
             out.push(S2C::Phase { phase, left });
             if phase == Phase::Live {
-                out.push(S2C::Roster { roster: lobby.m.roster.clone() });
+                out.push(S2C::Roster {
+                    roster: lobby.m.roster.clone(),
+                });
             }
             if phase == Phase::Over {
                 out.push(S2C::Result {
@@ -395,10 +404,15 @@ fn reset_for_select(lobby: &mut Lobby) {
         slot.connected = r.connected;
     }
     lobby.m = fresh;
-    lobby.last_phase = Phase::Select;
+    lobby.clock_left = 0.0;
 }
 
-fn handle_event(ev: Ev, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>, cfg: &ServerConfig) {
+fn handle_event(
+    ev: Ev,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+    cfg: &ServerConfig,
+) {
     match ev {
         Ev::Connected { id, tx, peer } => {
             conns.insert(
@@ -427,7 +441,11 @@ fn handle_event(ev: Ev, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<St
             };
             c.last_seen = Instant::now();
             if c.msgs_this_tick >= MAX_MSGS_PER_TICK {
-                tracing::warn!(conn = id, "over the per-tick message allowance, dropping: {:?}", std::mem::discriminant(&msg));
+                tracing::warn!(
+                    conn = id,
+                    "over the per-tick message allowance, dropping: {:?}",
+                    std::mem::discriminant(&msg)
+                );
                 return;
             }
             c.msgs_this_tick += 1;
@@ -436,17 +454,30 @@ fn handle_event(ev: Ev, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<St
     }
 }
 
-fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>, cfg: &ServerConfig) {
+fn handle_msg(
+    id: u64,
+    msg: C2S,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+    cfg: &ServerConfig,
+) {
     match msg {
         C2S::Hello { proto: v, handle } => {
             let Some(c) = conns.get_mut(&id) else { return };
+            if c.handle.is_some() {
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "Hello was already received".into(),
+                    },
+                );
+                return;
+            }
             tracing::info!(conn = id, proto = v, handle = %handle, "hello");
             c.proto = v;
             c.handle = Some(proto::sanitize_handle(&handle));
-            let players = conns
-                .values()
-                .filter(|c| c.slot.is_some())
-                .count() as u32;
+            let players = conns.values().filter(|c| c.slot.is_some()).count() as u32;
             let open = lobbies.len() as u32;
             let (version, commit) = build_stamp();
             send_to(
@@ -469,11 +500,7 @@ fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut H
                     name: name.clone(),
                     host: l.members.keys().min().map_or_else(
                         || "?".to_string(),
-                        |s| {
-                            l.m.roster[usize::from(*s)]
-                                .handle
-                                .clone()
-                        },
+                        |s| l.m.roster[usize::from(*s)].handle.clone(),
                     ),
                     has_password: l.password.is_some(),
                     players: u8::try_from(l.m.roster.iter().filter(|r| !r.bot).count())
@@ -492,30 +519,44 @@ fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut H
         } => create_lobby(id, &name, password.as_deref(), mode, conns, lobbies, cfg),
         C2S::JoinLobby { name, password } => {
             let pw = password.unwrap_or_default();
-            join_lobby(id, &name, Some(&pw), false, conns, lobbies);
+            join_lobby(id, &name, &pw, conns, lobbies);
         }
         C2S::LeaveLobby => leave_lobby(id, conns, lobbies),
-        C2S::Pick {
-            champ,
-            d,
-            f,
-            runes,
-        } => {
+        C2S::Pick { champ, d, f, runes } => {
             let (Some(lobby_name), Some(slot)) = (
                 conns.get(&id).and_then(|c| c.lobby.clone()),
                 conns.get(&id).and_then(|c| c.slot),
             ) else {
-                send_to(conns, id, &S2C::Rejected { reason: "not in a lobby".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "not in a lobby".into(),
+                    },
+                );
                 return;
             };
             let Some(lobby) = lobbies.get_mut(&lobby_name) else {
                 return;
             };
             if lobby.m.phase != Phase::Select {
-                send_to(conns, id, &S2C::Rejected { reason: "the draft is closed".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "the draft is closed".into(),
+                    },
+                );
                 return;
             }
             lobby.m.set_pick(slot, champ, d, f, runes);
+            let pick = &lobby.m.roster[usize::from(slot)];
+            if !pick.picked || (pick.champ, pick.d, pick.f, pick.runes) != (champ, d, f, runes) {
+                send_to(conns, id, &S2C::Rejected {
+                    reason: "choose an available champion for your team, two different spells, and three different runes".into(),
+                });
+                return;
+            }
             // a click on a champion card is cheap to echo; broadcast the
             // whole roster so every screen in the draft agrees
             broadcast(lobby, conns, &roster_msg(lobby));
@@ -527,17 +568,30 @@ fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut H
             ) else {
                 return;
             };
-            if slot != 0 {
-                send_to(conns, id, &S2C::Rejected { reason: "only the host can start the draft".into() });
+            let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+                return;
+            };
+            if lobby.members.keys().copied().min() != Some(slot) {
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "only the host can start the match".into(),
+                    },
+                );
                 return;
             }
-            let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
             if lobby.m.phase != Phase::Select {
-                send_to(conns, id, &S2C::Rejected { reason: "the draft already ran".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "the draft already ran".into(),
+                    },
+                );
                 return;
             }
             lobby.m.start();
-            lobby.last_phase = Phase::Live;
             broadcast(lobby, conns, &roster_msg(lobby));
             broadcast(
                 lobby,
@@ -547,6 +601,8 @@ fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut H
                     left: 0.0,
                 },
             );
+            let state = lobby.m.snapshot();
+            broadcast(lobby, conns, &state);
         }
         C2S::Cmd(cmd) => {
             let (Some(lobby_name), Some(slot)) = (
@@ -555,7 +611,9 @@ fn handle_msg(id: u64, msg: C2S, conns: &mut HashMap<u64, Conn>, lobbies: &mut H
             ) else {
                 return;
             };
-            let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
+            let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+                return;
+            };
             if lobby.m.phase == Phase::Live {
                 lobby.m.command(slot, cmd.sanitized());
             }
@@ -579,26 +637,46 @@ fn create_lobby(
         return;
     }
     if lobbies.len() >= cfg.max_lobbies {
-        send_to(conns, id, &S2C::Rejected { reason: "server is full".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "server is full".into(),
+            },
+        );
         return;
     }
     let name = proto::sanitize(requested_name, proto::MAX_LOBBY_LEN);
     if name.is_empty() {
-        send_to(conns, id, &S2C::Rejected { reason: "lobby needs a name" .into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "lobby needs a name".into(),
+            },
+        );
         return;
     }
     if lobbies.contains_key(&name) {
-        send_to(conns, id, &S2C::Rejected { reason: "that name is taken".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "that name is taken".into(),
+            },
+        );
         return;
     }
     let mode = if mode == 1 { 1 } else { 3 };
     let pw = proto::sanitize(password.unwrap_or(""), proto::MAX_PASSWORD_LEN);
+    // Creation is a lobby switch too. Only leave after every request
+    // validation succeeds, so a rejected create preserves the old seat.
+    leave_lobby(id, conns, lobbies);
     let mut lobby = Lobby {
         password: if pw.is_empty() { None } else { Some(pw) },
         mode,
         m: Match::new(mode, hash_name(&name)),
         members: HashMap::new(),
-        last_phase: Phase::Select,
         clock_left: 0.0,
     };
     // the creator takes slot 0 and hosts the draft
@@ -618,7 +696,13 @@ fn create_lobby(
         );
         send_to(conns, id, &S2C::Phase { phase, left });
     } else {
-        send_to(conns, id, &S2C::Rejected { reason: "could not seat the creator".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "could not seat the creator".into(),
+            },
+        );
     }
 }
 
@@ -635,34 +719,73 @@ fn hash_name(name: &str) -> u64 {
 fn join_lobby(
     id: u64,
     name: &str,
-    password: Option<&str>,
-    creating: bool,
+    password: &str,
     conns: &mut HashMap<u64, Conn>,
     lobbies: &mut HashMap<String, Lobby>,
 ) {
     if !version_ok(id, conns) {
         return;
     }
-    // Leaving first keeps a player from occupying two lobbies at once.
-    leave_lobby(id, conns, lobbies);
-    let Some(lobby) = lobbies.get_mut(name) else {
-        send_to(conns, id, &S2C::Rejected { reason: "no such lobby".into() });
+    let Some(lobby) = lobbies.get(name) else {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "no such lobby".into(),
+            },
+        );
         return;
     };
-    if !creating {
-        if let Some(want) = &lobby.password {
-            if password.unwrap_or("") != want {
-                send_to(conns, id, &S2C::Rejected { reason: "wrong password".into() });
-                return;
-            }
+    if let Some(want) = &lobby.password {
+        if proto::sanitize(password, proto::MAX_PASSWORD_LEN) != *want {
+            send_to(
+                conns,
+                id,
+                &S2C::Rejected {
+                    reason: "wrong password".into(),
+                },
+            );
+            return;
         }
     }
+    let already_here = conns
+        .get(&id)
+        .is_some_and(|c| c.lobby.as_deref() == Some(name));
+    if !already_here && !lobby.m.roster.iter().any(|r| r.bot) {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "lobby is full".into(),
+            },
+        );
+        return;
+    }
+    // Validate first: a typo, a full lobby or a wrong password must not
+    // remove a player from a match they are already playing.
+    if !already_here {
+        leave_lobby(id, conns, lobbies);
+    }
+    let Some(lobby) = lobbies.get_mut(name) else {
+        return;
+    };
     let handle = conns
         .get(&id)
         .and_then(|c| c.handle.clone())
         .unwrap_or_else(|| "summoner".into());
-    let Some(slot) = lobby.m.join(&handle) else {
-        send_to(conns, id, &S2C::Rejected { reason: "lobby is full".into() });
+    let slot = if already_here {
+        conns.get(&id).and_then(|c| c.slot)
+    } else {
+        lobby.m.join(&handle)
+    };
+    let Some(slot) = slot else {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "lobby is full".into(),
+            },
+        );
         return;
     };
     lobby.members.insert(slot, id);
@@ -681,6 +804,21 @@ fn join_lobby(
             roster: roster.clone(),
         },
     );
+    if lobby.m.phase == Phase::Live {
+        // snapshot drains transient effects; preserve them for the normal
+        // broadcast to all existing players on the next state tick.
+        send_to(conns, id, &lobby.m.clone().snapshot());
+    } else if lobby.m.phase == Phase::Over {
+        send_to(
+            conns,
+            id,
+            &S2C::Result {
+                winner: lobby.m.winner,
+                kills: lobby.m.kills,
+                gold: lobby.m.earned,
+            },
+        );
+    }
     send_to(
         conns,
         id,
@@ -692,7 +830,7 @@ fn join_lobby(
     let meta: SlotInfo = roster[usize::from(slot)].clone();
     // everyone else sees the new face
     for member in lobby.members.values() {
-        if *member != id {
+        if *member != id && !already_here {
             send_to(conns, *member, &S2C::PlayerJoined { slot: meta.clone() });
         }
     }
@@ -723,7 +861,12 @@ fn version_ok(id: u64, conns: &HashMap<u64, Conn>) -> bool {
         return true;
     }
     let saw_hello = conns.get(&id).is_some_and(|c| c.handle.is_some());
-    tracing::warn!(conn = id, proto = v, saw_hello, "refusing on protocol version");
+    tracing::warn!(
+        conn = id,
+        proto = v,
+        saw_hello,
+        "refusing on protocol version"
+    );
     send_to(
         conns,
         id,
@@ -751,9 +894,10 @@ fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<St
     if let Some(lobby) = lobbies.get_mut(&lobby_name) {
         lobby.members.remove(&slot);
         lobby.m.leave(slot);
-        // the handle stays for a reconnect inside the timeout; once the
-        // lobby resets to select the seat is open game
+        // Live champions continue under bot control. The remaining lowest
+        // occupied slot becomes host without moving anyone's champion.
         broadcast(lobby, conns, &S2C::PlayerLeft { slot });
+        broadcast(lobby, conns, &roster_msg(lobby));
         if lobby.members.is_empty() {
             lobbies.remove(&lobby_name);
         }
@@ -777,3 +921,6 @@ fn drop_silent(conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lob
         drop_conn(id, conns, lobbies);
     }
 }
+
+#[cfg(test)]
+mod tests;

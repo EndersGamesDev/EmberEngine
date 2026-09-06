@@ -8,10 +8,10 @@
 //! that is not there.
 
 use crate::data;
+use crate::proto::Fx;
 use crate::sim::{
     self, BuffKind, Kind, Match, Proj, ProjKind, Unit, Zone, ZoneKind, add_buff, dist,
 };
-use crate::proto::Fx;
 
 /// What a hit is, for the multiplier pipeline in `Match::deal_damage`.
 const SPELL: u8 = 1;
@@ -36,17 +36,15 @@ impl Match {
         // Demon-form blinks are a free re-cast of R while the form holds.
         if ab == 3 && u.def == data::KNIGHT && u.form > 0.0 && u.tp > 0 {
             let (x0, z0) = (u.x, u.z);
-            let (dx, dz) = sim::dir_to(x0, z0, ax, az);
-            let d = dist(x0, z0, ax, az).min(12.0);
             let u = &mut self.units[ui];
-            u.x = (x0 + dx * d).clamp(-sim::FIELD_X, sim::FIELD_X);
-            u.z = (z0 + dz * d).clamp(-data::FIELD_Z, data::FIELD_Z);
+            u.x = ax.clamp(-sim::FIELD_X, sim::FIELD_X);
+            u.z = az.clamp(-data::FIELD_Z, data::FIELD_Z);
             u.tp -= 1;
             let (x, z) = (u.x, u.z);
             self.fx.push(Fx {
                 k: 8,
-                x,
-                z,
+                x: x0,
+                z: z0,
                 x2: x,
                 z2: z,
                 v: 0.0,
@@ -74,7 +72,7 @@ impl Match {
             u.cds[a] = cd_base * haste_scale;
         }
         match (def, ab) {
-            (data::SWARM, 0) => self.swarm_q(ui, rank, &stats),
+            (data::SWARM, 0) => self.swarm_q(ui, rank, &stats, ax, az),
             (data::SWARM, 1) => self.swarm_w(ui, rank, &stats, ax, az),
             (data::SWARM, 2) => self.swarm_e(ui, rank),
             (data::SWARM, 3) => self.swarm_r(ui, rank, &stats, ax, az),
@@ -100,8 +98,8 @@ impl Match {
 
     // --- SW4RM -----------------------------------------------------------
 
-    fn swarm_q(&mut self, ui: usize, rank: usize, stats: &data::Stats) {
-        let Some(t) = self.current_target_or_enemy_near(ui) else {
+    fn swarm_q(&mut self, ui: usize, rank: usize, stats: &data::Stats, ax: f32, az: f32) {
+        let Some(t) = self.current_target_or_enemy_near(ui, ax, az) else {
             self.refund(ui, 0);
             return;
         };
@@ -129,15 +127,35 @@ impl Match {
         }
     }
 
-    /// The attack-order target if it still lives, else the enemy champion
-    /// nearest the last aim, else nothing.
-    fn current_target_or_enemy_near(&self, ui: usize) -> Option<u32> {
+    /// Prefer the enemy under the cursor, then a living attack target in
+    /// range, then a nearby champion. Drones cannot attack structures.
+    fn current_target_or_enemy_near(&self, ui: usize, ax: f32, az: f32) -> Option<u32> {
+        let u = &self.units[ui];
+        if let Some(enemy) = self
+            .units
+            .iter()
+            .filter(|o| {
+                !o.dead
+                    && o.team != u.team
+                    && matches!(o.kind, Kind::Champ | Kind::Melee | Kind::Caster)
+                    && dist(u.x, u.z, o.x, o.z) <= 14.0
+                    && dist(ax, az, o.x, o.z) <= 3.0
+            })
+            .min_by(|a, b| dist(ax, az, a.x, a.z).total_cmp(&dist(ax, az, b.x, b.z)))
+        {
+            return Some(enemy.id);
+        }
         let t = self.units[ui].target;
-        if t != 0 {
-            if let Some(ti) = self.index_of(t) {
-                if !self.units[ti].dead {
-                    return Some(t);
-                }
+        if t != 0
+            && let Some(ti) = self.index_of(t)
+        {
+            let o = &self.units[ti];
+            if !o.dead
+                && o.team != u.team
+                && matches!(o.kind, Kind::Champ | Kind::Melee | Kind::Caster)
+                && dist(u.x, u.z, o.x, o.z) <= 14.0
+            {
+                return Some(t);
             }
         }
         let (x, z) = (self.units[ui].x, self.units[ui].z);
@@ -163,6 +181,10 @@ impl Match {
         let mut c = self.spawn_clone(pslot, pteam, 5.0, 0.4 + 0.1 * (rank as f32));
         c.x = px - facing.cos() * 2.5;
         c.z = pz - facing.sin() * 2.5;
+        if let Some(target) = self.current_target_or_enemy_near(ui, px, pz) {
+            c.target = target;
+            c.order = sim::Order::Attack;
+        }
         self.units.push(c);
         let id = self.units[ui].id;
         add_buff(&mut self.units[ui], BuffKind::Ms, 1.0, 20.0, id);
@@ -194,7 +216,7 @@ impl Match {
             c.x = px + a.cos() * 2.2;
             c.z = pz + a.sin() * 2.2;
             c.facing = facing;
-            c.order = self.units[ui].order;
+            c.order = sim::Order::Attack;
             c.target = t;
             self.units.push(c);
         }
@@ -218,14 +240,28 @@ impl Match {
         let mut clone_beams = Vec::new();
         let mut clone_drones = Vec::new();
         for cid in clone_ids {
-            let Some(ci) = self.index_of(cid) else { continue };
+            let Some(ci) = self.index_of(cid) else {
+                continue;
+            };
             let (cx, cz) = (self.units[ci].x, self.units[ci].z);
             let (dx, dz) = sim::dir_to(cx, cz, tx, tz);
             clone_beams.push((cid, pteam, cx, cz, dx, dz));
             clone_drones.push((cid, pteam, cx, cz));
         }
         for (cid, team, cx, cz, dx, dz) in clone_beams {
-            self.beam_by(cid, team, cx, cz, dx, dz, 24.0, 1.4, beam_dmg * pct, 30.0, 1.5);
+            self.beam_by(
+                cid,
+                team,
+                cx,
+                cz,
+                dx,
+                dz,
+                24.0,
+                1.4,
+                beam_dmg * pct,
+                30.0,
+                1.5,
+            );
         }
         for (cid, team, cx, cz) in clone_drones {
             for i in 0..3u32 {
@@ -334,7 +370,10 @@ impl Match {
     fn knight_e(&mut self, ui: usize, rank: usize) {
         let id = self.units[ui].id;
         let ap = self.champ_stats_of(&self.units[ui]).ap;
-        let (val, aux) = (25.0 + 5.0 * (rank as f32), 12.0 + 6.0 * (rank as f32) + 0.2 * ap);
+        let (val, aux) = (
+            25.0 + 5.0 * (rank as f32),
+            12.0 + 6.0 * (rank as f32) + 0.2 * ap,
+        );
         let u = &mut self.units[ui];
         if let Some(b) = u.buffs.iter_mut().find(|b| b.k == BuffKind::Fire) {
             b.ttl = 4.0;
@@ -439,7 +478,7 @@ impl Match {
         add_buff(
             &mut self.units[ti],
             BuffKind::Revive,
-            5.0 + (rank as f32),
+            5.0,
             30.0 + 10.0 * ((rank as f32) - 1.0),
             src,
         );
@@ -746,7 +785,11 @@ impl Match {
                     if o.dead || o.team == team {
                         continue;
                     }
-                    if matches!(o.kind, Kind::Champ | Kind::Clone) {
+                    if !matches!(
+                        o.kind,
+                        Kind::Melee | Kind::Caster | Kind::CourtN | Kind::CourtS
+                    ) || dist(x, z, o.x, o.z) > 8.0 + o.kind.hit_r()
+                    {
                         continue;
                     }
                     let d = dist(ax, az, o.x, o.z);
@@ -756,7 +799,7 @@ impl Match {
                     }
                 }
                 if let Some(ti) = target {
-                    let dealt = self.deal_damage(ti, 350.0 + 30.0 * (level as f32), 2, id, false);
+                    let dealt = self.deal_damage(ti, 350.0 + 30.0 * f32::from(level), 2, id, false);
                     if dealt > 0.0 {
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
@@ -768,18 +811,14 @@ impl Match {
                             v: 1.2,
                         });
                     }
-                } else if let Some(tid) = self.enemy_champ_near(ui, ax, az, 3.5) {
-                    if let Some(ti) = self.index_of(tid) {
-                        self.deal_damage(ti, 80.0 + 15.0 * (level as f32), 2, id, false);
-                        add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 30.0, id);
-                    }
+                } else {
+                    self.units[ui].scds[s] = 0.0;
                 }
             }
             data::SPELL_EXHAUST => {
                 if let Some(tid) = self.enemy_champ_near(ui, ax, az, 4.0) {
                     if let Some(ti) = self.index_of(tid) {
                         add_buff(&mut self.units[ti], BuffKind::Exhaust, 3.0, 0.0, id);
-                        add_buff(&mut self.units[ti], BuffKind::Slow, 3.0, 30.0, id);
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
                             k: 11,
@@ -790,6 +829,8 @@ impl Match {
                             v: 0.0,
                         });
                     }
+                } else {
+                    self.units[ui].scds[s] = 0.0;
                 }
             }
             _ => {}
@@ -815,6 +856,9 @@ impl Match {
             if o.kind != Kind::Champ || o.dead || o.team == team {
                 continue;
             }
+            if dist(self.units[ui].x, self.units[ui].z, o.x, o.z) > 18.0 + o.kind.hit_r() {
+                continue;
+            }
             let d2 = (o.x - ax).powi(2) + (o.z - az).powi(2);
             let rr = (r + o.kind.hit_r()).powi(2);
             if d2 <= rr && best.is_none_or(|(_, bd)| d2 < bd) {
@@ -834,6 +878,9 @@ impl Match {
                 continue;
             }
             if i != ui && o.dead {
+                continue;
+            }
+            if dist(self.units[ui].x, self.units[ui].z, o.x, o.z) > 18.0 {
                 continue;
             }
             let d2 = (o.x - ax).powi(2) + (o.z - az).powi(2);
@@ -932,7 +979,7 @@ impl Match {
         self.projs.push(p);
     }
 
-    pub(crate) fn blank_proj(
+    pub(crate) const fn blank_proj(
         &mut self,
         owner: u32,
         team: u8,
@@ -971,4 +1018,3 @@ impl Match {
         p
     }
 }
-

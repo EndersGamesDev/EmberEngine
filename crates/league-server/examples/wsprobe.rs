@@ -1,123 +1,224 @@
-//! Headless league client for deploys: `wsprobe <ws-url> [lobby-name]`
-//! greets, creates or joins a lobby, picks a champion, starts the match,
-//! and prints the first live state tick it sees. The deploy script uses
-//! it as a health check before it exposes a fresh tunnel — if this gets
-//! an `on the wire` line, the server really speaks the protocol end to
-//! end. Exits non-zero on any failure.
+//! `wsprobe <ws-url> [lobby] [--mode 1|3] [--expect-commit sha]` exercises a
+//! fresh lobby, draft, match start, skill rank, shopping and movement over
+//! the real WebSocket protocol. It leaves its lobby and exits unsuccessfully
+//! on rejection, incompatible server identity, or a stalled simulation.
 
+// A command-line health check reports its result directly to its caller.
+#![allow(clippy::print_stderr, clippy::print_stdout)]
+
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use league_core::proto::{self, C2S, Cmd, S2C};
 use tungstenite::Message;
 use tungstenite::stream::MaybeTlsStream;
 
-use league_core::proto::{C2S, Cmd, Phase, S2C};
-
 type Ws = tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>;
 
-fn main() {
-    let mut args = std::env::args().skip(1);
-    let Some(url) = args.next() else {
-        eprintln!("usage: wsprobe <ws-url> [lobby]");
-        std::process::exit(2);
-    };
-    let lobby = args.next().unwrap_or_else(|| "wsprobe".to_string());
-    match run(&url, &lobby) {
-        Ok(()) => println!("wsprobe: {url} speaks league protocol v{}", league_core::proto::PROTO_VERSION),
+fn main() -> ExitCode {
+    let started = Instant::now();
+    match options()
+        .and_then(|(url, lobby, mode, commit)| run(&url, &lobby, mode, commit.as_deref()))
+    {
+        Ok(()) => {
+            println!(
+                "wsprobe: league protocol v{} healthy in {:.2}s",
+                proto::PROTO_VERSION,
+                started.elapsed().as_secs_f32()
+            );
+            ExitCode::SUCCESS
+        }
         Err(e) => {
-            eprintln!("wsprobe FAILED: {e}");
-            std::process::exit(1);
+            eprintln!(
+                "wsprobe FAILED after {:.2}s: {e}",
+                started.elapsed().as_secs_f32()
+            );
+            ExitCode::FAILURE
         }
     }
 }
 
-fn run(url: &str, lobby: &str) -> Result<(), String> {
-    let (mut ws, _) = tungstenite::connect(url).map_err(|e| e.to_string())?;
-    match ws.get_ref() {
-        MaybeTlsStream::Plain(s) => drop(s.set_read_timeout(Some(Duration::from_millis(5)))),
-        MaybeTlsStream::Rustls(s) => drop(s.get_ref().set_read_timeout(Some(Duration::from_millis(5)))),
-        _ => {}
-    };
-    let deadline = Instant::now() + Duration::from_secs(20);
-
-    let mut welcomed = false;
-    let mut joined = false;
-    let mut started = false;
-    let mut live_seen = false;
-    let mut hello_sent = false;
-    let mut next_send = Instant::now();
-
-    while Instant::now() < deadline {
-        drain(&mut ws, &mut welcomed, &mut joined, &mut started, &mut live_seen);
-        if Instant::now() >= next_send {
-            next_send = Instant::now() + Duration::from_millis(150);
-            if !hello_sent {
-                // the ONE hello: the server closes on a second
-                send(&mut ws, &C2S::Hello { proto: league_core::proto::PROTO_VERSION, handle: "probe".into() })?;
-                hello_sent = true;
-            } else if !welcomed {
-            } else if !joined {
-                send(&mut ws, &C2S::CreateLobby { name: lobby.into(), password: None, mode: 1 })?;
-            } else if !started {
-                send(&mut ws, &C2S::Pick { champ: 1, d: 2, f: 0, runes: [0, 1, 2] })?;
-                send(&mut ws, &C2S::StartMatch)?;
-                started = true;
-            } else if !live_seen {
-                // nudge the world to prove commands flow, then wait for state
-                send(&mut ws, &C2S::Cmd(Cmd::Move { x: -40.0, z: 0.0 }))?;
-            } else {
-                return Ok(());
+fn options() -> Result<(String, String, u8, Option<String>), String> {
+    let mut args = std::env::args().skip(1);
+    let url = args
+        .next()
+        .ok_or("usage: wsprobe <ws-url> [lobby] [--mode 1|3] [--expect-commit sha]")?;
+    let mut lobby = None;
+    let mut mode = 1;
+    let mut commit = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--mode" => {
+                mode = match args.next().as_deref() {
+                    Some("1") => 1,
+                    Some("3") => 3,
+                    _ => return Err("--mode must be 1 or 3".into()),
+                };
             }
+            "--expect-commit" => commit = Some(args.next().ok_or("--expect-commit needs a SHA")?),
+            _ if !arg.starts_with('-') && lobby.is_none() => lobby = Some(arg),
+            _ => return Err(format!("unexpected argument: {arg}")),
         }
-        std::thread::sleep(Duration::from_millis(5));
     }
-    Err(format!(
-        "timed out: welcomed={welcomed} joined={joined} started={started} live={live_seen}"
+    Ok((
+        url,
+        lobby.unwrap_or_else(|| format!("wsprobe-{}", std::process::id())),
+        mode,
+        commit,
     ))
 }
 
-fn drain(ws: &mut Ws, welcomed: &mut bool, joined: &mut bool, started: &mut bool, live: &mut bool) {
-    loop {
-        let Ok(frame) = ws.read() else { break };
-        let Message::Text(t) = frame else { continue };
-        let Ok(msg) = serde_json::from_str::<S2C>(&t) else { continue };
-        match msg {
-            S2C::Welcome { players, .. } => {
-                println!("welcome: {players} playing");
-                *welcomed = true;
+fn run(url: &str, lobby: &str, mode: u8, expected_commit: Option<&str>) -> Result<(), String> {
+    drop(rustls::crypto::ring::default_provider().install_default());
+    let (mut ws, _) = tungstenite::connect(url).map_err(|e| e.to_string())?;
+    let socket = match ws.get_ref() {
+        MaybeTlsStream::Plain(s) => s,
+        MaybeTlsStream::Rustls(s) => s.get_ref(),
+        _ => return Err("unsupported WebSocket transport".into()),
+    };
+    socket
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .map_err(|e| e.to_string())?;
+    socket
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: proto::PROTO_VERSION,
+            handle: "probe".into(),
+        },
+    )?;
+    let welcome = receive(&mut ws, deadline, "Welcome", |m| {
+        matches!(m, S2C::Welcome { .. })
+    })?;
+    if let S2C::Welcome {
+        proto: version,
+        commit,
+        ..
+    } = welcome
+    {
+        if version != proto::PROTO_VERSION {
+            return Err(format!(
+                "server uses protocol v{version}, expected v{}",
+                proto::PROTO_VERSION
+            ));
+        }
+        if let Some(expected) = expected_commit {
+            if expected != commit {
+                return Err(format!("server commit {commit:?}, expected {expected:?}"));
             }
-            S2C::Joined { id, roster, .. } => {
-                println!("joined as slot {id}, roster {}", roster.len());
-                *joined = true;
-            }
-            S2C::Rejected { reason } => {
-                eprintln!("rejected: {reason}");
-            }
-            S2C::Phase { phase, left } => {
-                if phase == Phase::Live && !*started {
-                    *started = true;
-                }
-                println!("phase {phase:?} left {left:.1}");
-            }
-            S2C::Roster { roster } => {
-                let picked = roster.iter().filter(|r| r.picked).count();
-                println!("roster: {picked} picked");
-            }
-            S2C::State { tick, units, .. } => {
-                if !*live {
-                    println!("live: tick {tick}, {} units on the field", units.len());
-                    *live = true;
-                }
-            }
-            S2C::Result { winner, .. } => println!("result: team {winner} wins"),
-            S2C::Pong { .. } | S2C::Lobbies { .. } | S2C::PlayerJoined { .. } | S2C::PlayerLeft { .. } => {}
         }
     }
+
+    send(
+        &mut ws,
+        &C2S::CreateLobby {
+            name: lobby.into(),
+            password: None,
+            mode,
+        },
+    )?;
+    receive(
+        &mut ws,
+        deadline,
+        "a new lobby",
+        |m| matches!(m, S2C::Joined { id: 0, mode: m, roster, .. } if *m == mode && roster.len() == usize::from(2 * mode)),
+    )?;
+    send(
+        &mut ws,
+        &C2S::Pick {
+            champ: 1,
+            d: 2,
+            f: 0,
+            runes: [0, 1, 2],
+        },
+    )?;
+    receive(
+        &mut ws,
+        deadline,
+        "confirmed draft",
+        |m| matches!(m, S2C::Roster { roster } if roster.first().is_some_and(|r| r.picked && r.champ == 1 && r.runes == [0, 1, 2])),
+    )?;
+    send(&mut ws, &C2S::StartMatch)?;
+    let first = receive(
+        &mut ws,
+        deadline,
+        "live state",
+        |m| matches!(m, S2C::State { champs, .. } if champs.len() == usize::from(2 * mode)),
+    )?;
+    let S2C::State { units, .. } = first else {
+        unreachable!()
+    };
+    let start_x = units
+        .iter()
+        .find(|u| u.k == 0 && u.slot == 0)
+        .ok_or("live state has no local champion")?
+        .x;
+    for cmd in [
+        Cmd::Rank { slot: 0 },
+        Cmd::Buy { item: 1 },
+        Cmd::Move { x: -40.0, z: 0.0 },
+    ] {
+        send(&mut ws, &C2S::Cmd(cmd))?;
+    }
+    let live = receive(
+        &mut ws,
+        deadline,
+        "rank, purchase and movement",
+        |m| matches!(m, S2C::State { tick, units, champs, .. } if *tick > 0 && units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > start_x + 0.5) && champs.iter().any(|c| c.slot == 0 && c.ranks[0] == 1 && c.items[0] == 1)),
+    )?;
+    if let S2C::State { tick, units, .. } = live {
+        println!(
+            "on the wire: {mode}v{mode}, tick {tick}, {} units; skill, item and movement confirmed",
+            units.len()
+        );
+    }
+    send(&mut ws, &C2S::Ping { nonce: 42 })?;
+    receive(&mut ws, deadline, "Pong", |m| {
+        matches!(m, S2C::Pong { nonce: 42 })
+    })?;
+    send(&mut ws, &C2S::LeaveLobby)?;
+    ws.close(None).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn receive(
+    ws: &mut Ws,
+    deadline: Instant,
+    expected: &str,
+    matches: impl Fn(&S2C) -> bool,
+) -> Result<S2C, String> {
+    while Instant::now() < deadline {
+        match ws.read() {
+            Ok(Message::Text(text)) => {
+                let msg: S2C = serde_json::from_str(&text)
+                    .map_err(|e| format!("undecodable server response: {e}"))?;
+                if let S2C::Rejected { reason } = &msg {
+                    return Err(format!("server rejected the probe: {reason}"));
+                }
+                if matches(&msg) {
+                    return Ok(msg);
+                }
+            }
+            Ok(Message::Close(_)) => {
+                return Err(format!("server closed while waiting for {expected}"));
+            }
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
+            Err(e) => {
+                return Err(format!(
+                    "WebSocket failed while waiting for {expected}: {e}"
+                ));
+            }
+        }
+    }
+    Err(format!("timed out waiting for {expected}"))
 }
 
 fn send(ws: &mut Ws, msg: &C2S) -> Result<(), String> {
-    // send, not write: write only buffers, and the server would sit on an
-    // empty socket until the probe timed out
-    ws.send(Message::text(serde_json::to_string(msg).unwrap()))
-        .map_err(|e| e.to_string())
+    let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
+    ws.send(Message::text(text)).map_err(|e| e.to_string())
 }
-

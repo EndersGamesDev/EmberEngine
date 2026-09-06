@@ -15,7 +15,9 @@
 //! the world (waves, courts, cores).
 
 use crate::data;
-use crate::proto::{self, BuffSnap, ChampView, Cmd, Fx, LogEv, Phase, SlotInfo, UnitSnap};
+use crate::proto::{
+    self, BuffSnap, ChampView, Cmd, Fx, LogEv, Phase, ProjSnap, SlotInfo, UnitSnap, ZoneSnap,
+};
 use crate::rng;
 
 /// Movement numbers are LoL-style (330 = a normal champion); the lane is
@@ -37,7 +39,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn code(self) -> u8 {
+    pub const fn code(self) -> u8 {
         match self {
             Self::Champ => 0,
             Self::Melee => 1,
@@ -51,7 +53,7 @@ impl Kind {
     }
 
     /// How wide the body is for projectile collisions and target picks.
-    pub fn hit_r(self) -> f32 {
+    pub const fn hit_r(self) -> f32 {
         match self {
             Self::Champ | Self::Clone => 0.9,
             Self::Melee | Self::Caster => 0.55,
@@ -61,11 +63,11 @@ impl Kind {
     }
 
     /// Projectiles and beams can meet this body at all.
-    fn hittable_by_shot(self) -> bool {
+    const fn hittable_by_shot(self) -> bool {
         matches!(self, Self::Champ | Self::Melee | Self::Caster)
     }
 
-    pub(crate) fn is_objective(self) -> bool {
+    pub(crate) const fn is_objective(self) -> bool {
         matches!(
             self,
             Self::CourtN | Self::CourtS | Self::CoreBlue | Self::CoreRed
@@ -77,7 +79,7 @@ impl Kind {
 /// kind `theirs_kind`. Courts (team 2) are hostile to everyone who walks up
 /// to them; holograms take no interest from either side.
 #[must_use]
-pub fn hostile(mine: u8, theirs_kind: Kind, theirs_team: u8) -> bool {
+pub const fn hostile(mine: u8, theirs_kind: Kind, theirs_team: u8) -> bool {
     match theirs_kind {
         Kind::Clone => false,
         Kind::CourtN | Kind::CourtS => true,
@@ -104,7 +106,7 @@ pub enum BuffKind {
 }
 
 impl BuffKind {
-    fn code(self) -> u8 {
+    const fn code(self) -> u8 {
         match self {
             Self::Slow => 0,
             Self::Ms => 1,
@@ -216,7 +218,7 @@ pub struct Unit {
 }
 
 impl Unit {
-    pub(crate) fn blank(id: u32, kind: Kind, team: u8) -> Self {
+    pub(crate) const fn blank(id: u32, kind: Kind, team: u8) -> Self {
         Self {
             id,
             kind,
@@ -387,7 +389,7 @@ impl Match {
         for s in 0..2 * ts {
             m.roster.push(SlotInfo {
                 slot: s,
-                team: if s < ts { 0 } else { 1 },
+                team: u8::from(s >= ts),
                 handle: format!("bot-{s}"),
                 bot: true,
                 champ: u8::MAX,
@@ -417,24 +419,28 @@ impl Match {
         if let Some(r) = self.roster.iter_mut().find(|r| r.slot == slot) {
             r.connected = false;
             r.bot = true;
+            if self.phase == Phase::Select {
+                r.champ = u8::MAX;
+                r.picked = false;
+            }
         }
     }
 
     /// A human came back to a seat they still own.
     pub fn reconnect(&mut self, slot: u8, handle: &str) -> bool {
-        if let Some(r) = self.roster.iter_mut().find(|r| r.slot == slot) {
-            if !r.connected {
-                r.connected = true;
-                r.bot = false;
-                r.handle = handle.to_string();
-                return true;
-            }
+        if let Some(r) = self.roster.iter_mut().find(|r| r.slot == slot)
+            && !r.connected
+        {
+            r.connected = true;
+            r.bot = false;
+            r.handle = handle.to_string();
+            return true;
         }
         false
     }
 
     /// Validate and store a pick, during Select only. Champions are unique
-    /// across the roster; D and F must differ; the page must be three
+    /// within each team; D and F must differ; the page must be three
     /// distinct runes.
     pub fn set_pick(&mut self, slot: u8, champ: u8, d: u8, f: u8, runes: [u8; 3]) {
         if self.phase != Phase::Select || champ >= 5 || d >= 4 || f >= 4 || d == f {
@@ -447,10 +453,13 @@ impl Match {
             }
             seen |= 1 << r;
         }
+        let Some(team) = self.roster.iter().find(|r| r.slot == slot).map(|r| r.team) else {
+            return;
+        };
         if self
             .roster
             .iter()
-            .any(|o| o.slot != slot && o.picked && o.champ == champ)
+            .any(|o| o.slot != slot && o.team == team && o.picked && o.champ == champ)
         {
             return;
         }
@@ -470,10 +479,10 @@ impl Match {
         if self.phase != Phase::Select {
             return;
         }
-        let mut taken = 0u32;
+        let mut taken = [0u32; 2];
         for r in &self.roster {
             if r.picked {
-                taken |= 1 << u32::from(r.champ.min(4));
+                taken[usize::from(r.team)] |= 1 << u32::from(r.champ.min(4));
             }
         }
         // A seeded shuffle of the roster order for the fallback picks.
@@ -484,36 +493,39 @@ impl Match {
                 order.swap(j, j + a);
             }
         }
-        let mut fallback = 0usize;
         for r in &mut self.roster {
             if !r.picked {
-                while fallback < 5 && taken & (1 << u32::from(order[fallback])) != 0 {
-                    fallback += 1;
-                }
-                r.champ = if fallback < 5 {
-                    order[fallback]
-                } else {
-                    r.slot % 5
-                };
-                taken |= 1 << u32::from(r.champ);
+                let team_taken = &mut taken[usize::from(r.team)];
+                r.champ = order
+                    .iter()
+                    .copied()
+                    .find(|c| *team_taken & (1 << u32::from(*c)) == 0)
+                    .unwrap_or(0);
+                *team_taken |= 1 << u32::from(r.champ);
                 r.picked = true;
             }
             if r.bot {
                 r.d = (rng::hash(self.seed, u64::from(r.slot), 3, 55) % 4) as u8;
                 r.f = (r.d + 1 + (rng::hash(self.seed, u64::from(r.slot), 4, 56) % 3) as u8) % 4;
-                let mut runes = [0u8; 3];
+                let mut runes = [u8::MAX; 3];
                 let mut n = 0usize;
                 for k in 0..8 {
-                    if n < 3 && rng::unit(self.seed, u64::from(r.slot) * 8 + u64::from(k), 5, 57) > 0.6 {
+                    if n < 3
+                        && rng::unit(self.seed, u64::from(r.slot) * 8 + u64::from(k), 5, 57) > 0.6
+                    {
                         runes[n] = k;
                         n += 1;
                     }
                 }
-                while n < 3 {
-                    runes[n] = n as u8;
-                    n += 1;
+                for k in 0..8 {
+                    if n < 3 && !runes.contains(&k) {
+                        runes[n] = k;
+                        n += 1;
+                    }
                 }
                 r.runes = runes;
+            } else if r.runes.contains(&u8::MAX) {
+                r.runes = [0, 1, 2];
             }
         }
         self.spawn_armies();
@@ -535,6 +547,7 @@ impl Match {
             let mut u = Unit::blank(self.next_id, Kind::Champ, team);
             self.next_id += 1;
             u.slot = slot;
+            u.points = 1;
             u.def = champ.min(4);
             u.d = d;
             u.f = f;
@@ -574,7 +587,11 @@ impl Match {
                 team,
             );
             self.next_id += 1;
-            core.x = if team == 0 { -data::CORE_X } else { data::CORE_X };
+            core.x = if team == 0 {
+                -data::CORE_X
+            } else {
+                data::CORE_X
+            };
             core.hp = data::CORE_HP;
             core.max_hp = data::CORE_HP;
             self.units.push(core);
@@ -638,6 +655,41 @@ impl Match {
             units,
             champs,
             buffs,
+            projs: self
+                .projs
+                .iter()
+                .filter(|p| p.travel > 0.0)
+                .map(|p| ProjSnap {
+                    id: p.id,
+                    k: match p.kind {
+                        ProjKind::Auto => 0,
+                        ProjKind::Drone => 1,
+                        ProjKind::Bolt => 2,
+                        ProjKind::Hook => 3,
+                    },
+                    t: p.team,
+                    x: p.x,
+                    z: p.z,
+                    dx: p.dx,
+                    dz: p.dz,
+                })
+                .collect(),
+            zones: self
+                .zones
+                .iter()
+                .filter(|zone| zone.ttl > 0.0)
+                .map(|zone| ZoneSnap {
+                    k: match zone.zk {
+                        ZoneKind::Tornado => 0,
+                        ZoneKind::Trap => 1,
+                        ZoneKind::Stasis => 2,
+                        ZoneKind::Shroud => 3,
+                    },
+                    x: zone.x,
+                    z: zone.z,
+                    r: zone.r,
+                })
+                .collect(),
             kills: self.kills,
             boon: self.boon,
             boon_left: self.boon_left,
@@ -652,7 +704,11 @@ impl Match {
             id: u.id,
             k: u.kind.code(),
             t: u.team,
-            slot: if u.kind == Kind::Champ { u.slot } else { u8::MAX },
+            slot: if u.kind == Kind::Champ {
+                u.slot
+            } else {
+                u8::MAX
+            },
             x: u.x,
             z: u.z,
             fa: u.facing,
@@ -808,7 +864,13 @@ impl Match {
         let id = self.units[ui].id;
         self.units[ui].charges[s] -= 1;
         if def.heal > 0.0 {
-            add_buff(&mut self.units[ui], BuffKind::Regen, 6.0, def.heal / 6.0, id);
+            add_buff(
+                &mut self.units[ui],
+                BuffKind::Regen,
+                6.0,
+                def.heal / 6.0,
+                id,
+            );
         }
         if def.restore_mana > 0.0 {
             add_buff(
@@ -912,6 +974,7 @@ impl Match {
     fn step_unit(&mut self, ui: usize) {
         let kind = self.units[ui].kind;
         if kind == Kind::Champ {
+            self.step_champ_timers(ui);
             if self.units[ui].dead {
                 self.units[ui].respawn -= crate::DT;
                 if self.units[ui].respawn <= 0.0 {
@@ -919,7 +982,6 @@ impl Match {
                 }
                 return;
             }
-            self.step_champ_timers(ui);
             self.regen_and_buffs(ui);
             if self.units[ui].dead {
                 return; // burn killed us mid-tick
@@ -964,9 +1026,8 @@ impl Match {
         let (mh, mm) = self.champ_maxes(&self.units[ui]);
         self.units[ui].max_hp = mh;
         self.units[ui].max_mana = mm;
-        let haste_scale = 1.0 + (stats.haste + self.boon_haste(ui)) / 100.0;
         for c in 0..4 {
-            self.units[ui].cds[c] = (self.units[ui].cds[c] - crate::DT * haste_scale).max(0.0);
+            self.units[ui].cds[c] = (self.units[ui].cds[c] - crate::DT).max(0.0);
         }
         for c in 0..2 {
             self.units[ui].scds[c] = (self.units[ui].scds[c] - crate::DT).max(0.0);
@@ -976,8 +1037,9 @@ impl Match {
         if self.units[ui].form <= 0.0 {
             self.units[ui].tp = 0;
         }
-        // passive income while alive
-        let gold = data::GOLD_PER_SEC * (1.0 + (stats.gold + self.boon_gold(ui)) / 100.0) * crate::DT;
+        // passive income continues during the respawn timer
+        let gold =
+            data::GOLD_PER_SEC * (1.0 + (stats.gold + self.boon_gold(ui)) / 100.0) * crate::DT;
         let team = usize::from(self.units[ui].team);
         self.units[ui].gold_frac += gold;
         if self.units[ui].gold_frac >= 1.0 {
@@ -997,21 +1059,20 @@ impl Match {
             let (hp_regen, mana_regen) = if self.in_own_fountain(ui) {
                 (mx * 0.06, mm * 0.05)
             } else {
-                (
-                    mx * 0.0025,
-                    mm * (0.004 + 0.004 * stats.mregen / 100.0),
-                )
+                (mx * 0.0025, mm * (0.004 + 0.004 * stats.mregen / 100.0))
             };
             let u = &mut self.units[ui];
             u.hp = (u.hp + hp_regen * crate::DT).min(mx);
             u.mana = (u.mana + mana_regen * crate::DT).min(mm);
         }
-        let n = self.units[ui].buffs.len();
-        for b in 0..n {
-            let (k, val, src) = {
-                let bb = &self.units[ui].buffs[b];
-                (bb.k, bb.val, bb.src)
-            };
+        // Damage may remove a revive mark or clear every buff on death.
+        // Iterate a stable copy so a lethal burn cannot invalidate indices.
+        let buffs = self.units[ui].buffs.clone();
+        for buff in buffs {
+            let (k, val, src) = (buff.k, buff.val, buff.src);
+            if buff.ttl <= 0.0 {
+                continue;
+            }
             match k {
                 BuffKind::Burn if val > 0.0 => {
                     self.deal_damage(ui, val * crate::DT, 2, src, false);
@@ -1028,7 +1089,14 @@ impl Match {
                 }
                 _ => {}
             }
-            if let Some(bb) = self.units[ui].buffs.get_mut(b) {
+            if self.units[ui].dead {
+                return;
+            }
+            if let Some(bb) = self.units[ui]
+                .buffs
+                .iter_mut()
+                .find(|b| b.k == k && b.src == src)
+            {
                 bb.ttl -= crate::DT;
             }
         }
@@ -1047,11 +1115,7 @@ impl Match {
 
     pub(crate) fn boon_haste(&self, ui: usize) -> f32 {
         let t = usize::from(self.units[ui].team);
-        if self.boon[t] == 2 {
-            15.0
-        } else {
-            0.0
-        }
+        if self.boon[t] == 2 { 15.0 } else { 0.0 }
     }
 
     pub(crate) fn boon_gold(&self, ui: usize) -> f32 {
@@ -1142,15 +1206,16 @@ impl Match {
         } else {
             (-data::CORE_X, Kind::CoreBlue)
         };
-        if let Some(ci) = self.units.iter().position(|o| o.kind == core_kind) {
-            if !self.units[ci].dead && dist(x, z, self.units[ci].x, self.units[ci].z) <= 4.2 {
-                let (tx, tz) = (self.units[ci].x, self.units[ci].z);
-                self.face_to(ui, tx, tz);
-                if self.units[ui].atk_cd <= 0.0 {
-                    self.do_attack(ui, ci);
-                }
-                return;
+        if let Some(ci) = self.units.iter().position(|o| o.kind == core_kind)
+            && !self.units[ci].dead
+            && dist(x, z, self.units[ci].x, self.units[ci].z) <= 4.2
+        {
+            let (tx, tz) = (self.units[ci].x, self.units[ci].z);
+            self.face_to(ui, tx, tz);
+            if self.units[ui].atk_cd <= 0.0 {
+                self.do_attack(ui, ci);
             }
+            return;
         }
         let lane_z = self.units[ui].lane_offset();
         let (tx, tz) = if (z - lane_z).abs() > 0.4 {
@@ -1198,7 +1263,9 @@ impl Match {
         }
         match u.kind {
             Kind::Champ | Kind::Clone => {
-                data::champ_stats(u.def, u.level).ms * MS_SCALE * self.ms_mult(u, u.kind == Kind::Champ)
+                data::champ_stats(u.def, u.level).ms
+                    * MS_SCALE
+                    * self.ms_mult(u, u.kind == Kind::Champ)
             }
             Kind::Melee | Kind::Caster => 300.0 * MS_SCALE * self.ms_mult(u, false),
             _ => 0.0,
@@ -1281,11 +1348,13 @@ impl Match {
         if let Some((pct, _)) = fire {
             dmg += stats.ad * pct / 100.0;
         }
-        let aspd_scale = 1.0 / (1.0 + if kind == Kind::Champ {
-            stats.aspd / 100.0
-        } else {
-            0.0
-        });
+        let aspd_scale = 1.0
+            / (1.0
+                + if kind == Kind::Champ {
+                    stats.aspd / 100.0
+                } else {
+                    0.0
+                });
         self.units[ui].atk_cd = self.atk_cd_of(ui) * aspd_scale;
         // item burn rides the hit: emberbrand-style dots
         let item_burn = if kind == Kind::Champ {
@@ -1302,10 +1371,11 @@ impl Match {
         let burn = item_burn.max(fire.map_or(0.0, |(_, aux)| aux));
         if target_is_objective || reach_is_melee {
             self.deal_damage(ti, dmg, 0, aid, crit);
-            if let Some(b) = self.units.get_mut(ti) {
-                if burn > 0.0 && b.kind == Kind::Champ {
-                    add_buff(b, BuffKind::Burn, 2.0, burn, aid);
-                }
+            if let Some(b) = self.units.get_mut(ti)
+                && burn > 0.0
+                && b.kind == Kind::Champ
+            {
+                add_buff(b, BuffKind::Burn, 2.0, burn, aid);
             }
             let (sx, sz) = (self.units[ui].x, self.units[ui].z);
             let (tx, tz) = (self.units[ti].x, self.units[ti].z);
@@ -1339,7 +1409,7 @@ impl Match {
                 slow_ttl: 0.0,
                 pierce: 0,
                 hook_rank: 0,
-                homing: 0,
+                homing: self.units[ti].id,
                 hit: [0; 4],
                 nhit: 0,
             });
@@ -1369,16 +1439,13 @@ impl Match {
         let mut dx = self.projs[pi].dx;
         let mut dz = self.projs[pi].dz;
         let homing = self.projs[pi].homing;
-        if self.projs[pi].kind == ProjKind::Drone {
-            match self.index_of(homing).filter(|&i| !self.units[i].dead) {
-                Some(ti) => {
-                    let (tx, tz) = (self.units[ti].x, self.units[ti].z);
-                    (dx, dz) = dir_to(x, z, tx, tz);
-                }
-                None => {
-                    self.projs[pi].travel = 0.0;
-                    return;
-                }
+        if homing != 0 {
+            if let Some(ti) = self.index_of(homing).filter(|&i| !self.units[i].dead) {
+                let (tx, tz) = (self.units[ti].x, self.units[ti].z);
+                (dx, dz) = dir_to(x, z, tx, tz);
+            } else {
+                self.projs[pi].travel = 0.0;
+                return;
             }
         }
         let speed = self.projs[pi].speed;
@@ -1396,6 +1463,9 @@ impl Match {
         for i in 0..self.units.len() {
             let o = &self.units[i];
             if o.dead || !o.kind.hittable_by_shot() || o.team == team {
+                continue;
+            }
+            if homing != 0 && o.id != homing {
                 continue;
             }
             if self.projs[pi].hit.contains(&o.id) {
@@ -1423,63 +1493,60 @@ impl Match {
             )
         };
         // where the shot's caster stands, for hook pulls
-        let (ox, oz) = self.index_of(owner).map_or((x, z), |i| {
-            (self.units[i].x, self.units[i].z)
-        });
-        match pk {
-            ProjKind::Hook => {
-                self.deal_damage(ti, dmg, 1, owner, false);
-                let root = 0.6 + 0.1 * f32::from(hook_rank);
-                if self.units[ti].kind == Kind::Champ {
-                    let (dx2, dz2) = dir_to(ox, oz, self.units[ti].x, self.units[ti].z);
-                    let u = &mut self.units[ti];
-                    u.x = (ox + dx2 * 2.0).clamp(-FIELD_X, FIELD_X);
-                    u.z = (oz + dz2 * 2.0).clamp(-data::FIELD_Z, data::FIELD_Z);
-                    add_buff(u, BuffKind::Root, root, 0.0, owner);
-                } else {
-                    add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 40.0, owner);
-                }
-                self.fx.push(Fx {
-                    k: 10,
-                    x: ox,
-                    z: oz,
-                    x2: self.units[ti].x,
-                    z2: self.units[ti].z,
-                    v: 0.0,
-                });
-                self.projs[pi].travel = 0.0;
+        let (ox, oz) = self
+            .index_of(owner)
+            .map_or((x, z), |i| (self.units[i].x, self.units[i].z));
+        if pk == ProjKind::Hook {
+            self.deal_damage(ti, dmg, 1, owner, false);
+            let root = 0.6 + 0.1 * f32::from(hook_rank);
+            if self.units[ti].kind == Kind::Champ {
+                let (dx2, dz2) = dir_to(ox, oz, self.units[ti].x, self.units[ti].z);
+                let u = &mut self.units[ti];
+                u.x = (ox + dx2 * 2.0).clamp(-FIELD_X, FIELD_X);
+                u.z = (oz + dz2 * 2.0).clamp(-data::FIELD_Z, data::FIELD_Z);
+                add_buff(u, BuffKind::Root, root, 0.0, owner);
+            } else {
+                add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 40.0, owner);
             }
-            _ => {
-                let as_spell = pk != ProjKind::Auto;
-                self.deal_damage(ti, dmg, if as_spell { 1 } else { 0 }, owner, crit);
-                if burn > 0.0 && self.units[ti].kind == Kind::Champ {
-                    add_buff(&mut self.units[ti], BuffKind::Burn, 2.0, burn, owner);
+            self.fx.push(Fx {
+                k: 10,
+                x: ox,
+                z: oz,
+                x2: self.units[ti].x,
+                z2: self.units[ti].z,
+                v: 0.0,
+            });
+            self.projs[pi].travel = 0.0;
+        } else {
+            let as_spell = pk != ProjKind::Auto;
+            self.deal_damage(ti, dmg, u8::from(as_spell), owner, crit);
+            if burn > 0.0 && self.units[ti].kind == Kind::Champ {
+                add_buff(&mut self.units[ti], BuffKind::Burn, 2.0, burn, owner);
+            }
+            if slow > 0.0 {
+                add_buff(&mut self.units[ti], BuffKind::Slow, slow_ttl, slow, owner);
+            }
+            self.fx.push(Fx {
+                k: 0,
+                x: self.units[ti].x,
+                z: self.units[ti].z,
+                x2: 0.0,
+                z2: 0.0,
+                v: f32::from(crit) + if as_spell { 2.0 } else { 0.0 },
+            });
+            if pk == ProjKind::Bolt && pierce > 0 {
+                let tid = self.units[ti].id;
+                let p = &mut self.projs[pi];
+                if p.nhit < 4 {
+                    p.hit[p.nhit] = tid;
+                    p.nhit += 1;
                 }
-                if slow > 0.0 {
-                    add_buff(&mut self.units[ti], BuffKind::Slow, slow_ttl, slow, owner);
+                p.pierce -= 1;
+                if p.pierce == 0 {
+                    p.travel = 0.0;
                 }
-                self.fx.push(Fx {
-                    k: 0,
-                    x: self.units[ti].x,
-                    z: self.units[ti].z,
-                    x2: 0.0,
-                    z2: 0.0,
-                    v: f32::from(crit) + if as_spell { 2.0 } else { 0.0 },
-                });
-                if pk == ProjKind::Bolt && pierce > 0 {
-                    let tid = self.units[ti].id;
-                    let p = &mut self.projs[pi];
-                    if p.nhit < 4 {
-                        p.hit[p.nhit] = tid;
-                        p.nhit += 1;
-                    }
-                    p.pierce -= 1;
-                    if p.pierce == 0 {
-                        p.travel = 0.0;
-                    }
-                } else {
-                    self.projs[pi].travel = 0.0;
-                }
+            } else {
+                self.projs[pi].travel = 0.0;
             }
         }
     }
@@ -1508,14 +1575,7 @@ impl Match {
         let (owner, team, zk, r, dmg, root, slow, detonate) = {
             let z = &self.zones[zi];
             (
-                z.owner,
-                z.team,
-                z.zk,
-                z.r,
-                z.dmg,
-                z.root,
-                z.slow,
-                z.detonate,
+                z.owner, z.team, z.zk, z.r, z.dmg, z.root, z.slow, z.detonate,
             )
         };
         match zk {
@@ -1542,14 +1602,14 @@ impl Match {
                 while t <= 0.0 {
                     for i in 0..self.units.len() {
                         if self.hitable_enemy(i, team, x, z, r) {
-                            self.deal_damage(i, dmg, 1, owner, true);
-                            if zk == ZoneKind::Shroud {
-                                if let Some(oi) = self.index_of(owner) {
-                                    let mx = self.units[oi].max_hp;
-                                    let half = dmg * 0.5;
-                                    let u = &mut self.units[oi];
-                                    u.hp = (u.hp + half).min(mx);
-                                }
+                            let dealt = self.deal_damage(i, dmg, 1, owner, true);
+                            if zk == ZoneKind::Shroud
+                                && let Some(oi) = self.index_of(owner)
+                            {
+                                let mx = self.units[oi].max_hp;
+                                let half = dealt * 0.5;
+                                let u = &mut self.units[oi];
+                                u.hp = (u.hp + half).min(mx);
                             }
                             let live = &mut self.units[i];
                             if slow > 0.0 {
@@ -1591,7 +1651,10 @@ impl Match {
         if o.kind == Kind::Clone {
             return false;
         }
-        if matches!(o.kind, Kind::CourtN | Kind::CourtS | Kind::CoreBlue | Kind::CoreRed) {
+        if matches!(
+            o.kind,
+            Kind::CourtN | Kind::CourtS | Kind::CoreBlue | Kind::CoreRed
+        ) {
             return false;
         }
         if o.team == team {
@@ -1607,7 +1670,14 @@ impl Match {
     /// Apply `raw` damage from unit `src` to unit `ti`. `source_kind`:
     /// 0 auto-attack, 1 ability (spell multipliers apply), 2 dot/true.
     /// Returns what actually landed after immunities, shields and DR.
-    pub fn deal_damage(&mut self, ti: usize, raw: f32, source_kind: u8, src: u32, _crit: bool) -> f32 {
+    pub fn deal_damage(
+        &mut self,
+        ti: usize,
+        raw: f32,
+        source_kind: u8,
+        src: u32,
+        _crit: bool,
+    ) -> f32 {
         if raw <= 0.0 || !raw.is_finite() {
             return 0.0;
         }
@@ -1629,41 +1699,38 @@ impl Match {
         }
         let mut dmg = raw;
         // source multipliers: spell amp, damage amp, exhaustion, boon north
-        if let Some(si) = self.index_of(src) {
-            if self.units[si].team != vteam {
-                if self.units[si].kind == Kind::Champ
-                    && source_kind == 1
-                {
-                    let st = self.champ_stats_of(&self.units[si]);
-                    dmg *= 1.0 + st.spell / 100.0;
-                }
-                if self.units[si]
-                    .buffs
-                    .iter()
-                    .any(|b| b.k == BuffKind::Exhaust)
-                {
-                    dmg *= 0.6;
-                }
-                if self.boon[usize::from(self.units[si].team)] == 1 {
-                    dmg *= 1.12;
-                }
-                if let Some(a) = self
-                    .units[si]
-                    .buffs
-                    .iter()
-                    .find(|b| b.k == BuffKind::DmgAmp)
-                {
-                    dmg *= 1.0 + a.val / 100.0;
-                }
+        if let Some(si) = self.index_of(src)
+            && self.units[si].team != vteam
+        {
+            if self.units[si].kind == Kind::Champ && source_kind == 1 {
+                let st = self.champ_stats_of(&self.units[si]);
+                dmg *= 1.0 + st.spell / 100.0;
+            }
+            if self.units[si]
+                .buffs
+                .iter()
+                .any(|b| b.k == BuffKind::Exhaust)
+            {
+                dmg *= 0.6;
+            }
+            if self.boon[usize::from(self.units[si].team)] == 1 {
+                dmg *= 1.12;
+            }
+            if let Some(a) = self.units[si]
+                .buffs
+                .iter()
+                .find(|b| b.k == BuffKind::DmgAmp)
+            {
+                dmg *= 1.0 + a.val / 100.0;
             }
         }
-        // target reductions
-        if kind == Kind::Champ {
+        // True damage bypasses reduction, but immunity and shields still
+        // protect against it.
+        if kind == Kind::Champ && source_kind != 2 {
             let dr = self.champ_stats_of(&self.units[ti]).dr;
             dmg *= 1.0 - dr / 100.0;
         }
-        if self
-            .units[ti]
+        if self.units[ti]
             .buffs
             .iter()
             .any(|b| b.k == BuffKind::Immune && b.ttl > 0.0)
@@ -1687,24 +1754,42 @@ impl Match {
         if rest <= 0.0 {
             return 0.0;
         }
+        if source_kind == 1 && kind == Kind::Champ {
+            let slows = self.index_of(src).is_some_and(|si| {
+                self.units[si]
+                    .items
+                    .iter()
+                    .filter_map(|&item| data::item(item))
+                    .any(|item| item.spell_slow)
+            });
+            if slows {
+                add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 20.0, src);
+            }
+        }
         // credit: the champion behind the hit (a clone credits its parent)
         let credit_slot = self
             .index_of(src)
             .filter(|&i| {
-                matches!(self.units[i].kind, Kind::Champ | Kind::Clone) && self.units[i].team != vteam
+                matches!(self.units[i].kind, Kind::Champ | Kind::Clone)
+                    && self.units[i].team != vteam
             })
             .map(|i| self.units[i].slot);
         if let Some(sl) = credit_slot {
             let u = &mut self.units[ti];
-            u.dmg_log[u.dmg_next % 8] = (sl, self.tick);
-            u.dmg_next = u.dmg_next.wrapping_add(1);
+            if let Some(entry) = u.dmg_log.iter_mut().find(|(slot, _)| *slot == sl) {
+                entry.1 = self.tick;
+            } else {
+                u.dmg_log[u.dmg_next % 8] = (sl, self.tick);
+                u.dmg_next = u.dmg_next.wrapping_add(1);
+            }
         }
+        let dealt = rest.min(self.units[ti].hp.max(0.0));
         let u = &mut self.units[ti];
         u.hp -= rest;
         if u.hp <= 0.0 {
             self.on_death(ti, src, credit_slot);
         }
-        rest
+        dealt
     }
 
     /// The victim at `ti` has reached 0 hp. `src` landed the blow.
@@ -1743,11 +1828,13 @@ impl Match {
                 }
                 let vl = self.units[ti].level;
                 self.units[ti].dead = true;
+                self.units[ti].hp = 0.0;
+                self.units[ti].form = 0.0;
+                self.units[ti].tp = 0;
                 self.units[ti].respawn = (5.0 + 1.6 * f32::from(vl)).min(25.0);
                 self.units[ti].buffs.clear();
                 self.units[ti].order = Order::Hold;
                 self.units[ti].target = 0;
-                self.units[ti].dmg_log = [(u8::MAX, 0); 8];
                 self.fx.push(Fx {
                     k: 5,
                     x,
@@ -1771,14 +1858,20 @@ impl Match {
                     .collect();
                 assists.sort_unstable();
                 assists.dedup();
+                self.units[ti].dmg_log = [(u8::MAX, 0); 8];
                 let mut paid = 0u32;
                 if let Some(ks) = killer_slot {
-                    let share = (bounty * 7 / 10).max(120);
+                    let share = if assists.is_empty() {
+                        bounty
+                    } else {
+                        (bounty * 7 / 10).max(120)
+                    };
                     self.pay_gold_to_slot(ks, share);
                     paid += share;
                 }
                 if !assists.is_empty() {
-                    let each = bounty.saturating_sub(paid) / u32::try_from(assists.len()).unwrap_or(1);
+                    let each =
+                        bounty.saturating_sub(paid) / u32::try_from(assists.len()).unwrap_or(1);
                     for a in &assists {
                         self.pay_gold_to_slot(*a, each);
                     }
@@ -1798,10 +1891,10 @@ impl Match {
                 self.kills[usize::from(1 - team)] += 1;
                 // XP: killer full, allies nearby 60%
                 let xp = 150.0 + 20.0 * f32::from(vl);
-                if let Some(ks) = killer_slot {
-                    if let Some(ki) = self.champ_by_slot(ks) {
-                        self.gain_xp(ki, xp);
-                    }
+                if let Some(ks) = killer_slot
+                    && let Some(ki) = self.champ_by_slot(ks)
+                {
+                    self.gain_xp(ki, xp);
                 }
                 let ids: Vec<usize> = self
                     .units
@@ -1821,10 +1914,10 @@ impl Match {
                     self.gain_xp(i, xp * 0.6);
                 }
                 for a in &assists {
-                    if let Some(ai) = self.champ_by_slot(*a) {
-                        if !self.units[ai].dead {
-                            self.gain_xp(ai, xp * 0.6);
-                        }
+                    if let Some(ai) = self.champ_by_slot(*a)
+                        && !self.units[ai].dead
+                    {
+                        self.gain_xp(ai, xp * 0.6);
                     }
                 }
                 let victim_id = self.units[ti].id;
@@ -1853,7 +1946,14 @@ impl Match {
                 if let Some(ks) = killer_slot {
                     self.pay_gold_to_slot(ks, last);
                     if let Some(ki) = self.champ_by_slot(ks) {
-                        self.gain_xp(ki, if self.units[ti].kind == Kind::Caster { 26.0 } else { 20.0 });
+                        self.gain_xp(
+                            ki,
+                            if self.units[ti].kind == Kind::Caster {
+                                26.0
+                            } else {
+                                20.0
+                            },
+                        );
                     }
                 }
                 let near: Vec<usize> = self
@@ -1882,7 +1982,7 @@ impl Match {
                 self.units[ti].dead = true;
             }
             Kind::CourtN | Kind::CourtS => {
-                let c = if kind == Kind::CourtN { 0 } else { 1 };
+                let c = usize::from(kind != Kind::CourtN);
                 self.units[ti].dead = true;
                 self.units[ti].hp = 0.0;
                 self.court_respawn[c] = data::COURT_RESPAWN;
@@ -2058,6 +2158,9 @@ impl Match {
                 data::CORE_X - 4.0
             };
             for (i, caster) in [(0u32, false), (1, false), (2, false), (3, true)] {
+                if alive + i as usize >= data::MINION_CAP {
+                    break;
+                }
                 let kind = if caster { Kind::Caster } else { Kind::Melee };
                 let mut m = Unit::blank(self.next_id, kind, team);
                 self.next_id += 1;
@@ -2144,7 +2247,11 @@ mod tests {
         assert_eq!(m.phase, Phase::Live);
         // two champs, two courts, two cores
         assert_eq!(m.units.iter().filter(|u| u.kind == Kind::Champ).count(), 2);
-        assert!(m.units.iter().any(|u| u.kind == Kind::CoreBlue && u.hp == data::CORE_HP));
+        assert!(
+            m.units
+                .iter()
+                .any(|u| u.kind == Kind::CoreBlue && u.hp == data::CORE_HP)
+        );
         assert!(m.units.iter().any(|u| u.kind == Kind::CourtN));
     }
 
@@ -2164,23 +2271,25 @@ mod tests {
     }
 
     #[test]
-    fn picks_are_unique_until_the_clock_forces_them() {
-        let mut m = Match::new(1, 5);
+    fn picks_are_unique_within_each_team() {
+        let mut m = Match::new(3, 5);
         m.set_pick(0, data::SWARM, 0, 1, [0, 1, 2]);
         m.set_pick(1, data::SWARM, 0, 1, [0, 1, 2]);
-        assert!(m.roster[1].picked == false, "the duplicate must be refused");
+        assert!(!m.roster[1].picked, "the duplicate must be refused");
         m.set_pick(1, data::KNIGHT, 0, 1, [0, 1, 2]);
         assert!(m.roster[1].picked);
+        m.set_pick(3, data::SWARM, 0, 1, [0, 1, 2]);
+        assert!(m.roster[3].picked, "opposing teams may mirror a champion");
     }
 
     #[test]
     fn nobody_picking_still_starts_with_distinct_champs() {
-        let mut m = Match::new(1, 4242);
+        let mut m = Match::new(3, 4242);
         m.start();
         let a = m.roster[0].champ;
         let b = m.roster[1].champ;
         assert_ne!(a, b, "fallback picks must not collide");
-        assert!(m.units.iter().filter(|u| u.kind == Kind::Champ).count() == 2);
+        assert_eq!(m.units.iter().filter(|u| u.kind == Kind::Champ).count(), 6);
     }
 
     #[test]
@@ -2193,14 +2302,12 @@ mod tests {
         m.units[blue].x = data::CORE_X - 2.0;
         m.units[blue].z = 0.0;
         for _ in 0..60 * 60 {
-            m.command(0, Cmd::Attack {
-                target: m
-                    .units
-                    .iter()
-                    .find(|u| u.kind == Kind::CoreRed)
-                    .unwrap()
-                    .id,
-            });
+            m.command(
+                0,
+                Cmd::Attack {
+                    target: m.units.iter().find(|u| u.kind == Kind::CoreRed).unwrap().id,
+                },
+            );
             m.step();
             if m.phase == Phase::Over {
                 break;

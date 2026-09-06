@@ -21,7 +21,10 @@ fn main() -> io::Result<()> {
         match arg.as_str() {
             "--name" => {
                 let Some(n) = args.next() else {
-                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "--name needs a host name"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--name needs a host name",
+                    ));
                 };
                 name = Some(n);
             }
@@ -51,11 +54,19 @@ fn main() -> io::Result<()> {
         }
     }
 
-    let host_name = name.or_else(|| std::env::var("EMBER_HOST_NAME").ok()).unwrap_or_default();
+    let host_name = name
+        .or_else(|| std::env::var("EMBER_HOST_NAME").ok())
+        .unwrap_or_default();
     let bind = bind.unwrap_or_else(|| "127.0.0.1:7783".to_string());
     let listener = TcpListener::bind(&bind)
         .map_err(|e| io::Error::new(e.kind(), format!("failed to bind {bind}: {e}")))?;
     // the first line a human sees when they attach to the console
     drop(io::stdout().flush());
-    league_server::run(listener, league_server::ServerConfig { host_name, ..Default::default() })
+    league_server::run(
+        listener,
+        league_server::ServerConfig {
+            host_name,
+            ..Default::default()
+        },
+    )
 }

@@ -3,8 +3,16 @@
 // prediction hazard.
 #![allow(clippy::suboptimal_flops)]
 #![allow(clippy::imprecise_flops)]
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
-#![allow(clippy::must_use_candidate, clippy::missing_errors_doc, clippy::missing_panics_doc)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+#![allow(
+    clippy::must_use_candidate,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc
+)]
 #![allow(clippy::needless_range_loop, clippy::module_name_repetitions)]
 
 //! Ultimate League — the shared simulation and wire format.

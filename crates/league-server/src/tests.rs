@@ -1,0 +1,450 @@
+use super::*;
+
+#[derive(Default)]
+struct Hub {
+    conns: HashMap<u64, Conn>,
+    lobbies: HashMap<String, Lobby>,
+    inbox: HashMap<u64, Receiver<Message>>,
+    cfg: ServerConfig,
+}
+
+impl Hub {
+    fn connect(&mut self, id: u64, version: Option<u16>) {
+        let (tx, rx) = mpsc::sync_channel(OUTBOUND_QUEUE);
+        self.inbox.insert(id, rx);
+        handle_event(
+            Ev::Connected {
+                id,
+                tx,
+                peer: "test".into(),
+            },
+            &mut self.conns,
+            &mut self.lobbies,
+            &self.cfg,
+        );
+        if let Some(proto) = version {
+            self.msg(
+                id,
+                C2S::Hello {
+                    proto,
+                    handle: format!("player-{id}"),
+                },
+            );
+        }
+    }
+
+    fn msg(&mut self, id: u64, msg: C2S) -> Vec<S2C> {
+        handle_event(
+            Ev::Msg { id, msg },
+            &mut self.conns,
+            &mut self.lobbies,
+            &self.cfg,
+        );
+        self.drain(id)
+    }
+
+    fn drain(&self, id: u64) -> Vec<S2C> {
+        self.inbox[&id]
+            .try_iter()
+            .map(|m| serde_json::from_str(m.to_text().unwrap()).unwrap())
+            .collect()
+    }
+
+    fn create(&mut self, id: u64, name: &str, mode: u8) -> Vec<S2C> {
+        self.msg(
+            id,
+            C2S::CreateLobby {
+                name: name.into(),
+                password: None,
+                mode,
+            },
+        )
+    }
+
+    fn join(&mut self, id: u64, name: &str) -> Vec<S2C> {
+        self.msg(
+            id,
+            C2S::JoinLobby {
+                name: name.into(),
+                password: None,
+            },
+        )
+    }
+
+    fn pick(&mut self, id: u64, champ: u8) -> Vec<S2C> {
+        self.msg(
+            id,
+            C2S::Pick {
+                champ,
+                d: 0,
+                f: 1,
+                runes: [0, 1, 2],
+            },
+        )
+    }
+}
+
+fn rejected(messages: &[S2C]) -> bool {
+    messages.iter().any(|m| matches!(m, S2C::Rejected { .. }))
+}
+
+#[test]
+fn protocol_gate_allows_listing_but_requires_one_compatible_hello_to_join() {
+    let mut hub = Hub::default();
+    hub.connect(1, None);
+    assert!(matches!(
+        hub.msg(1, C2S::ListLobbies).as_slice(),
+        [S2C::Lobbies { .. }]
+    ));
+    assert!(rejected(&hub.create(1, "duel", 1)));
+    hub.connect(2, Some(0));
+    assert!(matches!(
+        hub.msg(2, C2S::ListLobbies).as_slice(),
+        [S2C::Lobbies { .. }]
+    ));
+    assert!(rejected(&hub.create(2, "duel", 1)));
+    assert!(rejected(&hub.msg(
+        2,
+        C2S::Hello {
+            proto: proto::PROTO_VERSION,
+            handle: "changed".into()
+        }
+    )));
+    assert_eq!(hub.conns[&2].proto, 0);
+    hub.connect(3, Some(proto::PROTO_VERSION));
+    assert!(!rejected(&hub.create(3, "duel", 1)));
+    assert!(rejected(&hub.join(2, "duel")));
+}
+
+#[test]
+fn creating_a_second_lobby_removes_the_old_membership() {
+    let mut hub = Hub::default();
+    hub.connect(1, Some(proto::PROTO_VERSION));
+    hub.connect(2, Some(proto::PROTO_VERSION));
+    hub.create(1, "old", 1);
+    hub.join(2, "old");
+    assert!(!rejected(&hub.create(1, "new", 3)));
+    assert_eq!(hub.conns[&1].lobby.as_deref(), Some("new"));
+    assert_eq!(hub.lobbies["old"].members.len(), 1);
+    assert!(hub.lobbies["old"].m.roster[0].bot);
+    assert_eq!(hub.lobbies["new"].members.get(&0), Some(&1));
+    assert!(rejected(&hub.create(1, "old", 1)));
+    assert_eq!(hub.conns[&1].lobby.as_deref(), Some("new"));
+    hub.msg(1, C2S::LeaveLobby);
+    assert!(!hub.lobbies.contains_key("new"));
+    assert!(!hub.lobbies["old"].members.values().any(|id| *id == 1));
+}
+
+#[test]
+fn rejected_lobby_switch_preserves_the_current_seat_and_pick() {
+    let mut hub = Hub::default();
+    for id in 1..=4 {
+        hub.connect(id, Some(proto::PROTO_VERSION));
+    }
+    hub.create(1, "mine", 1);
+    hub.pick(1, 2);
+    hub.create(2, "full", 1);
+    hub.join(3, "full");
+    hub.msg(
+        4,
+        C2S::CreateLobby {
+            name: "private".into(),
+            password: Some("secret".into()),
+            mode: 3,
+        },
+    );
+    for name in ["missing", "full", "private"] {
+        assert!(rejected(&hub.join(1, name)));
+        assert_eq!(hub.conns[&1].lobby.as_deref(), Some("mine"));
+        assert_eq!(hub.lobbies["mine"].m.roster[0].champ, 2);
+    }
+    assert!(!rejected(&hub.join(1, "mine")));
+    assert_eq!(hub.conns[&1].slot, Some(0));
+    assert_eq!(hub.lobbies["mine"].m.roster[0].champ, 2);
+    assert_eq!(hub.lobbies["mine"].members.len(), 1);
+    assert!(!rejected(&hub.msg(
+        1,
+        C2S::JoinLobby {
+            name: "private".into(),
+            password: Some("secret".into())
+        }
+    )));
+    assert!(!hub.lobbies.contains_key("mine"));
+}
+
+#[test]
+fn host_handoff_starts_the_match_and_live_disconnects_become_bots() {
+    let mut hub = Hub::default();
+    for id in 1..=3 {
+        hub.connect(id, Some(proto::PROTO_VERSION));
+    }
+    hub.create(1, "squad", 3);
+    hub.join(2, "squad");
+    assert!(rejected(&hub.msg(2, C2S::StartMatch)));
+    hub.msg(1, C2S::LeaveLobby);
+    let replies = hub.msg(2, C2S::StartMatch);
+    assert!(!rejected(&replies));
+    assert_eq!(hub.lobbies["squad"].m.phase, Phase::Live);
+    assert!(
+        replies
+            .iter()
+            .any(|m| matches!(m, S2C::State { champs, .. } if champs.len() == 6))
+    );
+    hub.lobbies.get_mut("squad").unwrap().m.fx.push(proto::Fx {
+        k: 8,
+        x: 0.0,
+        z: 0.0,
+        x2: 1.0,
+        z2: 1.0,
+        v: 0.0,
+    });
+    let replies = hub.join(3, "squad");
+    assert!(replies.iter().any(|m| matches!(m, S2C::State { .. })));
+    assert_eq!(hub.lobbies["squad"].m.fx.len(), 1, "a joining client must not consume effects owed to existing players");
+    handle_event(
+        Ev::Disconnected { id: 2 },
+        &mut hub.conns,
+        &mut hub.lobbies,
+        &hub.cfg,
+    );
+    assert!(hub.lobbies["squad"].m.roster[1].bot);
+    assert!(!hub.lobbies["squad"].m.roster[1].connected);
+    assert!(
+        hub.drain(3)
+            .iter()
+            .any(|m| matches!(m, S2C::PlayerLeft { slot: 1 }))
+    );
+}
+
+#[test]
+fn squad_draft_rejects_teammate_duplicates_and_accepts_mirror_picks() {
+    let mut hub = Hub::default();
+    for id in 1..=4 {
+        hub.connect(id, Some(proto::PROTO_VERSION));
+    }
+    hub.create(1, "squad", 3);
+    for id in 2..=4 {
+        hub.join(id, "squad");
+    }
+    assert!(!rejected(&hub.pick(1, 0)));
+    assert!(rejected(&hub.pick(2, 0)));
+    assert!(!rejected(&hub.pick(4, 0)));
+    assert!(rejected(&hub.msg(
+        2,
+        C2S::Pick {
+            champ: 1,
+            d: 0,
+            f: 0,
+            runes: [0, 1, 2]
+        }
+    )));
+    assert!(rejected(&hub.msg(
+        2,
+        C2S::Pick {
+            champ: 1,
+            d: 0,
+            f: 1,
+            runes: [0, 0, 2]
+        }
+    )));
+    hub.msg(1, C2S::StartMatch);
+    assert!(rejected(&hub.pick(4, 1)));
+    for team in 0..2 {
+        let mut picks: Vec<u8> = hub.lobbies["squad"]
+            .m
+            .roster
+            .iter()
+            .filter(|r| r.team == team)
+            .map(|r| r.champ)
+            .collect();
+        picks.sort_unstable();
+        picks.dedup();
+        assert_eq!(picks.len(), 3);
+    }
+}
+
+#[test]
+fn draft_clock_result_reset_and_silent_cleanup_follow_the_lifecycle() {
+    let mut hub = Hub::default();
+    hub.connect(1, Some(proto::PROTO_VERSION));
+    hub.create(1, "duel", 1);
+    hub.lobbies.get_mut("duel").unwrap().m.left = league_core::DT;
+    tick_lobbies(&mut hub.lobbies, &hub.conns);
+    assert_eq!(hub.lobbies["duel"].m.phase, Phase::Live);
+    assert!(hub.drain(1).iter().any(|m| matches!(
+        m,
+        S2C::Phase {
+            phase: Phase::Live,
+            ..
+        }
+    )));
+    let lobby = hub.lobbies.get_mut("duel").unwrap();
+    lobby.m.phase = Phase::Over;
+    lobby.m.left = 0.0;
+    let seed = lobby.m.seed;
+    tick_lobbies(&mut hub.lobbies, &hub.conns);
+    let lobby = &hub.lobbies["duel"];
+    assert_eq!(lobby.m.phase, Phase::Select);
+    assert_eq!(lobby.m.seed, seed.wrapping_add(1));
+    assert!(lobby.m.roster[0].connected);
+    assert!(!lobby.m.roster[0].picked);
+    hub.conns.get_mut(&1).unwrap().last_seen =
+        Instant::now() - Duration::from_secs(proto::CLIENT_TIMEOUT_SECS + 1);
+    drop_silent(&mut hub.conns, &mut hub.lobbies);
+    assert!(hub.conns.is_empty());
+    assert!(hub.lobbies.is_empty());
+}
+
+type Wire = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
+
+fn wire_send(ws: &mut Wire, msg: &C2S) {
+    ws.send(Message::text(serde_json::to_string(msg).unwrap()))
+        .unwrap();
+}
+
+fn wire_until(ws: &mut Wire, matches: impl Fn(&S2C) -> bool) -> S2C {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match ws.read() {
+            Ok(Message::Text(text)) => {
+                let msg: S2C = serde_json::from_str(&text).unwrap();
+                if matches(&msg) {
+                    return msg;
+                }
+            }
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
+            Err(e) => panic!("WebSocket failed: {e}"),
+        }
+    }
+    panic!("timed out waiting for the expected server message");
+}
+
+#[test]
+fn real_websockets_fill_both_modes_and_apply_live_player_commands() {
+    for mode in [1u8, 3] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+        let server = thread::spawn(move || {
+            let hub = thread::spawn(move || hub_loop(&rx, &ServerConfig::default()).unwrap());
+            let mut connections = Vec::new();
+            for id in 0..=u64::from(2 * mode) {
+                let stream = listener.accept().unwrap().0;
+                let events = tx.clone();
+                connections.push(thread::spawn(move || conn_thread(id, stream, &events)));
+            }
+            drop(tx);
+            for connection in connections {
+                connection.join().unwrap();
+            }
+            hub.join().unwrap();
+        });
+        let mut clients = Vec::new();
+        for slot in 0..=2 * mode {
+            let (mut ws, _) = tungstenite::connect(&url).unwrap();
+            if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+                stream
+                    .set_read_timeout(Some(Duration::from_millis(100)))
+                    .unwrap();
+            }
+            wire_send(
+                &mut ws,
+                &C2S::Hello {
+                    proto: if slot == 2 * mode {
+                        0
+                    } else {
+                        proto::PROTO_VERSION
+                    },
+                    handle: format!("wire-{slot}"),
+                },
+            );
+            wire_until(
+                &mut ws,
+                |m| matches!(m, S2C::Welcome { proto: p, .. } if *p == proto::PROTO_VERSION),
+            );
+            clients.push(ws);
+        }
+        let browser = usize::from(2 * mode);
+        wire_send(
+            &mut clients[browser],
+            &C2S::CreateLobby {
+                name: "wrong-version".into(),
+                password: None,
+                mode,
+            },
+        );
+        wire_until(&mut clients[browser], |m| matches!(m, S2C::Rejected { .. }));
+        wire_send(
+            &mut clients[0],
+            &C2S::CreateLobby {
+                name: "wire-game".into(),
+                password: None,
+                mode,
+            },
+        );
+        wire_until(&mut clients[0], |m| matches!(m, S2C::Joined { id: 0, .. }));
+        for slot in 1..2 * mode {
+            wire_send(
+                &mut clients[usize::from(slot)],
+                &C2S::JoinLobby {
+                    name: "wire-game".into(),
+                    password: None,
+                },
+            );
+            wire_until(
+                &mut clients[usize::from(slot)],
+                |m| matches!(m, S2C::Joined { id, .. } if *id == slot),
+            );
+        }
+        wire_send(&mut clients[browser], &C2S::ListLobbies);
+        wire_until(
+            &mut clients[browser],
+            |m| matches!(m, S2C::Lobbies { lobbies } if lobbies.len() == 1 && lobbies[0].players == 2 * mode && lobbies[0].cap == 2 * mode),
+        );
+        for slot in 0..2 * mode {
+            wire_send(
+                &mut clients[usize::from(slot)],
+                &C2S::Pick {
+                    champ: slot % mode,
+                    d: 0,
+                    f: 1,
+                    runes: [0, 1, 2],
+                },
+            );
+            wire_until(
+                &mut clients[usize::from(slot)],
+                |m| matches!(m, S2C::Roster { roster } if roster[usize::from(slot)].picked && roster[usize::from(slot)].champ == slot % mode),
+            );
+        }
+        wire_send(&mut clients[0], &C2S::StartMatch);
+        let first = wire_until(
+            &mut clients[0],
+            |m| matches!(m, S2C::State { champs, .. } if champs.len() == usize::from(2 * mode)),
+        );
+        let S2C::State { units, .. } = first else {
+            unreachable!()
+        };
+        let start_x = units.iter().find(|u| u.k == 0 && u.slot == 0).unwrap().x;
+        for cmd in [
+            Cmd::Rank { slot: 0 },
+            Cmd::Buy { item: 1 },
+            Cmd::Move { x: -40.0, z: 0.0 },
+        ] {
+            wire_send(&mut clients[0], &C2S::Cmd(cmd));
+        }
+        wire_until(
+            &mut clients[0],
+            |m| matches!(m, S2C::State { tick, units, champs, .. } if *tick > 0 && units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > start_x + 0.5) && champs[0].ranks[0] == 1 && champs[0].items[0] == 1),
+        );
+        wire_send(&mut clients[0], &C2S::LeaveLobby);
+        wire_until(&mut clients[1], |m| {
+            matches!(m, S2C::PlayerLeft { slot: 0 })
+        });
+        for client in &mut clients {
+            drop(client.close(None));
+        }
+        drop(clients);
+        server.join().unwrap();
+    }
+}

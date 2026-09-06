@@ -42,29 +42,35 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
     } else {
         data::CORE_X - 4.0
     };
+    if (u.x - home_x).abs() <= 3.0
+        && u.z.abs() <= 6.0
+        && let Some(item) = shop_pick(m, ui)
+    {
+        return Some(Cmd::Buy { item });
+    }
     if u.hp < u.max_hp * 0.28 {
         let enemies_nea = (0..m.units.len()).any(|i| {
             let o = &m.units[i];
-            o.kind == Kind::Champ && o.team != u.team && !o.dead && sim::dist(u.x, u.z, o.x, o.z) < 14.0
+            o.kind == Kind::Champ
+                && o.team != u.team
+                && !o.dead
+                && sim::dist(u.x, u.z, o.x, o.z) < 14.0
         });
-        if u.hp < u.max_hp * 0.15 && enemies_nea && u.scds[index_of_flash(u)] <= 0.0 {
+        if let Some(flash) = index_of_flash(u)
+            .filter(|&slot| u.hp < u.max_hp * 0.15 && enemies_nea && u.scds[slot] <= 0.0)
+        {
             let away = if u.team == 0 { u.x - 7.0 } else { u.x + 7.0 };
             return Some(Cmd::Spell {
-                slot: 0,
+                slot: flash as u8,
                 x: away,
                 z: u.z,
             });
         }
         let in_fountain = (u.x - home_x).abs() <= data::FOUNTAIN_R + 1.0 && u.z.abs() <= 6.0;
-        if in_fountain {
-            if let Some(item) = shop_pick(m, ui) {
-                return Some(Cmd::Buy { item });
-            }
+        if in_fountain && let Some(item) = shop_pick(m, ui) {
+            return Some(Cmd::Buy { item });
         }
-        return Some(Cmd::Move {
-            x: home_x,
-            z: 0.0,
-        });
+        return Some(Cmd::Move { x: home_x, z: 0.0 });
     }
 
     // 3. fight: the nearest enemy champion within a leashed window.
@@ -84,8 +90,9 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
         let fid = m.units[fi].id;
         // abilities, gated by a fresh roll about every half second
         for ab in 0..4u8 {
+            let demon_blink = ab == 3 && u.def == data::KNIGHT && u.form > 0.0 && u.tp > 0;
             let ready = u.ranks[usize::from(ab)] > 0
-                && u.cds[usize::from(ab)] <= 0.0
+                && (u.cds[usize::from(ab)] <= 0.0 || demon_blink)
                 && !(ab == 3 && u.level < data::R_LEVELS[usize::from(u.ranks[3].max(1) - 1)])
                 && (ab != 3 || u.form <= 0.0 || u.tp > 0);
             if ready && rng::unit(m.seed, tick / 30, who * 4 + u64::from(ab), 11) > 0.62 {
@@ -100,17 +107,22 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
         if sim::dist(u.x, u.z, fx, fz) > reach {
             return Some(Cmd::Attack { target: fid });
         }
-        // hold the attack order and let auto-attacks run; smite a low one
-        if u.d == data::SPELL_SMITE || u.f == data::SPELL_SMITE {
-            if m.units[fi].hp < m.units[fi].max_hp * 0.25 && u.scds[usize::from(u.f == data::SPELL_SMITE)] <= 0.0 {
-                return Some(Cmd::Spell {
-                    slot: u8::from(u.f == data::SPELL_SMITE),
-                    x: fx,
-                    z: fz,
-                });
-            }
-        }
         return Some(Cmd::Attack { target: fid });
+    }
+
+    // Clear the wave so minions can escort the push and pay experience.
+    if let Some(minion) = m
+        .units
+        .iter()
+        .filter(|o| {
+            matches!(o.kind, Kind::Melee | Kind::Caster)
+                && !o.dead
+                && o.team != u.team
+                && sim::dist(u.x, u.z, o.x, o.z) <= 10.0
+        })
+        .min_by(|a, b| sim::dist(u.x, u.z, a.x, a.z).total_cmp(&sim::dist(u.x, u.z, b.x, b.z)))
+    {
+        return Some(Cmd::Attack { target: minion.id });
     }
 
     // 4. no champion around: take a court if the lane fight is near one,
@@ -120,23 +132,30 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
             continue;
         }
         let [cx, cz] = data::COURT_POS[c];
-        if sim::dist(u.x, u.z, cx, cz) <= 12.0 {
-            if let Some(ci) = m.units.iter().position(|o| {
-                o.kind == if c == 0 { Kind::CourtN } else { Kind::CourtS } && !o.dead
-            }) {
-                let cid = m.units[ci].id;
-                return Some(Cmd::Attack { target: cid });
-            }
-        }
-    }
-    let enemy_core_x = -home_x;
-    if sim::dist(u.x, u.z, enemy_core_x, 0.0) <= 10.0 {
-        if let Some(ci) = m.units.iter().position(|o| {
-            o.kind == if u.team == 0 { Kind::CoreRed } else { Kind::CoreBlue } && !o.dead
-        }) {
+        if sim::dist(u.x, u.z, cx, cz) <= 12.0
+            && let Some(ci) = m
+                .units
+                .iter()
+                .position(|o| o.kind == if c == 0 { Kind::CourtN } else { Kind::CourtS } && !o.dead)
+        {
             let cid = m.units[ci].id;
             return Some(Cmd::Attack { target: cid });
         }
+    }
+    let enemy_core_x = -home_x;
+    if sim::dist(u.x, u.z, enemy_core_x, 0.0) <= 10.0
+        && let Some(ci) = m.units.iter().position(|o| {
+            o.kind
+                == if u.team == 0 {
+                    Kind::CoreRed
+                } else {
+                    Kind::CoreBlue
+                }
+                && !o.dead
+        })
+    {
+        let cid = m.units[ci].id;
+        return Some(Cmd::Attack { target: cid });
     }
     // push the lane on a slow, tick-indexed wander so five bots do not
     // walk in a single file
@@ -147,8 +166,10 @@ pub fn think(m: &Match, slot: u8) -> Option<Cmd> {
     })
 }
 
-fn index_of_flash(u: &sim::Unit) -> usize {
-    usize::from(u.d == data::SPELL_FLASH)
+fn index_of_flash(u: &sim::Unit) -> Option<usize> {
+    [u.d, u.f]
+        .iter()
+        .position(|&spell| spell == data::SPELL_FLASH)
 }
 
 /// What a returning bot buys: potions when nearly out of consumables,
@@ -156,8 +177,19 @@ fn index_of_flash(u: &sim::Unit) -> usize {
 fn shop_pick(m: &Match, ui: usize) -> Option<u16> {
     let u = &m.units[ui];
     let pot = data::item(17).unwrap();
-    if u.items.iter().zip(&u.charges).any(|(it, c)| *it == pot.id && *c < pot.charges) {
-        return if u.gold >= pot.cost { Some(pot.id) } else { None };
+    if u.items
+        .iter()
+        .zip(&u.charges)
+        .any(|(it, c)| *it == pot.id && *c < pot.charges)
+    {
+        return if u.gold >= pot.cost {
+            Some(pot.id)
+        } else {
+            None
+        };
+    }
+    if !u.items.contains(&0) {
+        return None;
     }
     let mage = matches!(u.def, data::SWARM | data::HALLOW | data::TESSERA);
     // a fixed ladder; the first affordable step is the pick
@@ -190,10 +222,10 @@ mod tests {
         for _ in 0..60 * 90 {
             let mut acts = Vec::new();
             for slot in 0..m.roster.len() as u8 {
-                if m.roster[usize::from(slot)].bot {
-                    if let Some(c) = think(&m, slot) {
-                        acts.push((slot, c));
-                    }
+                if m.roster[usize::from(slot)].bot
+                    && let Some(c) = think(&m, slot)
+                {
+                    acts.push((slot, c));
                 }
             }
             for (slot, c) in acts {
