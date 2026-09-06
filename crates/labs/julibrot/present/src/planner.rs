@@ -869,6 +869,7 @@ mod tests {
                 raw.approx_p95_error_px.expect("the percentile was measured"),
             );
         }
+        panic!("diagnostic measurement round: pin the printed field after server execution");
     }
 
     fn frame(pose: &Pose) -> SceneFrame {
