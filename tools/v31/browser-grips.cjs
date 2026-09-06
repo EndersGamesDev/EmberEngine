@@ -1,10 +1,13 @@
 // Rendering-only grip fixtures through the real browser client and its assets.
-// No keyboard, mouse, pointer, foreground APIs, or real game-server connections.
+// No OS input, foreground activation or real game-server connections. ADS uses
+// authored DOM PointerEvents only, with focus/capture/fullscreen APIs stubbed.
 // After wasm-bindgen has populated web/pkg, run from the repository root:
 // EMBER_QA_PLAYWRIGHT=<module path> node tools/v31/browser-grips.cjs
 // Optional: EMBER_QA_WEB_ROOT=<other checkout/web>, EMBER_QA_OUTPUT=<directory>,
 // EMBER_QA_BROWSER=<Chromium executable>, EMBER_QA_WEAPONS=1,3,7,
 // EMBER_QA_VIEWS=first-person,front,side,crouch,aim-up,aim-down,shield.
+// Shotgun-only additions: first-person-ads, first-person-reload-32,
+// first-person-reload-53, first-person-reload-72, third-person-reload-53.
 // Reported states are deterministic visual fixtures, not gameplay/network proof.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -22,16 +25,24 @@ const weapons = process.env.EMBER_QA_WEAPONS
   ? process.env.EMBER_QA_WEAPONS.split(',').map(Number) : [8];
 if (weapons.some(id => !Number.isInteger(id) || id < 1 || id > 8)) throw new Error('Weapon IDs must be in 1..8');
 const defaultViews = ['first-person', 'front', 'side', 'crouch', 'aim-up'];
-const allViews = [...defaultViews, 'aim-down', 'shield'];
+const shotgunViews = ['first-person-ads', 'first-person-reload-32', 'first-person-reload-53', 'first-person-reload-72', 'third-person-reload-53'];
+const reloadProgress = Object.freeze({ 'first-person-reload-32': 0.32, 'first-person-reload-53': 0.53,
+  'first-person-reload-72': 0.72, 'third-person-reload-53': 0.53 });
+const shotgunReloadSeconds = 2.8;
+const allViews = [...defaultViews, 'aim-down', 'shield', ...shotgunViews];
 const views = process.env.EMBER_QA_VIEWS ? process.env.EMBER_QA_VIEWS.split(',') : defaultViews;
 if (views.includes('first-person-shield')) throw new Error('First-person shield is local input state, not a protocol fixture; use the native EMBER_SCRIPT capture workflow');
 if (views.some(view => !allViews.includes(view))) throw new Error('Unknown fixture view');
+if (views.some(view => shotgunViews.includes(view)) && !weapons.includes(8)) throw new Error('Shotgun ADS/reload views require weapon8');
 const started = Date.now();
 const result = {
   purpose: 'Rendering-only protocol fixtures; not gameplay or live networking verification',
   webRoot, output, captures: [], errors: [], warnings: [],
   dimensions: { width: 1600, height: 900 },
   fixture: { map: 'freight-yard', observer: [60, 0, 0], remoteDistance: 2.15 },
+  limits: ['Rendering-only injected states, not authoritative reload/ADS gameplay.',
+    'Requested reload progress is frozen in each packet; real client presentation subtracts at most50ms age (at most1.79 percentage points for Breach-12).',
+    'First-person ADS is authored right-button DOM intent; OS-facing input/focus/capture methods are stubbed, not tested.'],
 };
 let webServer;
 let browser;
@@ -41,6 +52,7 @@ let socket;
 let ack = 0;
 let tick = 0;
 let current = { weapon: weapons[0], view: 'first-person' };
+let lastInput = null;
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const html = `<!doctype html><meta charset="utf-8"><title>Grip rendering fixture</title>
@@ -52,14 +64,18 @@ function player(id, weapon, overrides = {}) {
   // cannot enclose the camera or shadow the contact points being reviewed.
   return { id, x: 60, z: 0, y: 0, vy: 0, ax: 1, az: 0, pitch: 0,
     hp: 5, score: 0, alive: true, crouch: false, shield: false, weapon,
-    ammo: [6, 30, 30, 30, 6, 5, 1, 6][weapon - 1], reserve: 60, reloading: false, deaths: 0,
+    ammo: [6, 30, 30, 30, 6, 5, 1, 6][weapon - 1], reserve: weapon === 8 ? 24 : 60,
+    reloading: false, reload_remaining: 0, ads_fraction: 0, deaths: 0,
     ack, ack_age_ticks: 0, team: 0, ...overrides };
 }
 
 function fixture() {
-  const ownView = current.view === 'first-person';
+  const ownView = current.view.startsWith('first-person');
   const shield = current.weapon === 1 && current.view.includes('shield');
-  const me = player(0, current.weapon, { alive: ownView, hp: ownView ? 5 : 0, shield: ownView && shield });
+  const progress = reloadProgress[current.view];
+  const reload = progress === undefined ? {} : { reloading: true, reload_remaining: shotgunReloadSeconds * (1 - progress), ammo: 5 };
+  const me = player(0, current.weapon, { alive: ownView, hp: ownView ? 5 : 0, shield: ownView && shield,
+    ads_fraction: current.view === 'first-person-ads' ? 1 : 0, ...(ownView ? reload : {}) });
   const other = player(1, current.weapon, {
     x: 62.15, alive: !ownView,
     ax: current.view === 'front' ? -1 : 0,
@@ -67,6 +83,7 @@ function fixture() {
     crouch: current.view === 'crouch',
     pitch: current.view === 'aim-up' ? 0.9 : current.view === 'aim-down' ? -0.9 : 0,
     shield: !ownView && shield,
+    ...(!ownView ? reload : {}),
   });
   return { t: 'state', tick: tick += 2, players: [me, other], bullets: [],
     pads: [], loot: [], team_score: [0, 0], hill: 255, round_pause: 0 };
@@ -74,6 +91,19 @@ function fixture() {
 
 function sendState() {
   if (socket) socket.send(JSON.stringify(fixture()));
+}
+
+async function setAdsIntent(page, held) {
+  // Same synthetic PointerEvent path as the actual-client controls harness.
+  // This is not a Playwright mouse device action and never requests OS input.
+  await page.evaluate(held => {
+    const canvas = document.querySelector('canvas');
+    if (!canvas) throw new Error('Missing fixture canvas');
+    canvas.dispatchEvent(new PointerEvent(held ? 'pointerdown' : 'pointerup', {
+      bubbles: true, cancelable: true, pointerType: 'mouse', pointerId: 1, isPrimary: true,
+      button: 2, buttons: held ? 2 : 0, clientX: 800, clientY: 450,
+    }));
+  }, held);
 }
 
 async function main() {
@@ -129,6 +159,7 @@ async function main() {
         stream = setInterval(sendState, 1000 / 30);
       } else if (message.t === 'input') {
         ack = message.seq;
+        lastInput = message;
       } else if (message.t === 'ping') {
         ws.send(JSON.stringify({ t: 'pong', nonce: message.nonce }));
       }
@@ -139,6 +170,33 @@ async function main() {
     Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
     // The harness never queries the operator's real gamepad or produces input.
     Object.defineProperty(navigator, 'getGamepads', { value: () => [], configurable: true });
+    let locked = null;
+    window.__fixtureApiCalls = { focus: 0, capture: 0, fullscreen: 0 };
+    Object.defineProperty(document, 'pointerLockElement', { get: () => locked, configurable: true });
+    HTMLElement.prototype.focus = function() {
+      window.__fixtureApiCalls.focus++;
+      this.dispatchEvent(new FocusEvent('focus'));
+      this.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    };
+    window.focus = () => { window.__fixtureApiCalls.focus++; };
+    Element.prototype.setPointerCapture = () => {};
+    Element.prototype.releasePointerCapture = () => {};
+    Element.prototype.hasPointerCapture = () => false;
+    Element.prototype.requestPointerLock = function() {
+      window.__fixtureApiCalls.capture++; locked = this;
+      queueMicrotask(() => document.dispatchEvent(new Event('pointerlockchange')));
+      return Promise.resolve();
+    };
+    document.exitPointerLock = () => {
+      locked = null; queueMicrotask(() => document.dispatchEvent(new Event('pointerlockchange')));
+    };
+    Element.prototype.requestFullscreen = () => {
+      window.__fixtureApiCalls.fullscreen++;
+      return Promise.reject(new DOMException('Fullscreen is disabled in this rendering-only fixture.', 'NotAllowedError'));
+    };
+    document.exitFullscreen = () => Promise.resolve();
+    document.addEventListener('contextmenu', event => event.preventDefault());
+    window.emberUpdateKillshotHud = value => { window.__gripHud = typeof value === 'string' ? JSON.parse(value) : value; };
     window.__drawCalls = 0;
     const getContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, ...args) {
@@ -165,6 +223,7 @@ async function main() {
       action: 'create', lobby: 'grip-fixture', handle: 'fixture-observer', map: 'freight-yard', mode: 'ffa' }));
   }, origin);
   await page.waitForFunction(() => window.__drawCalls > 100 && /Sidearm|Vityaz|AK-47|M4|Revolver|Sniper|RPG-7|Breach-12/.test(document.querySelector('#status').textContent), null, { timeout: 90000 });
+  if (result.protocol !== 24) throw new Error(`Expected the v31/protocol24 build, got protocol${result.protocol}`);
   // The first-person frames precede the remote views, so the observer's
   // standing eye is initialized before its dead/non-viewmodel fixture state.
   for (const view of views) {
@@ -172,15 +231,34 @@ async function main() {
       // Shield is a sidearm-only gameplay state. Do not manufacture an
       // impossible rifle/shield pose when a broad weapon selection is used.
       if (view.includes('shield') && weapon !== 1) continue;
+      if (shotgunViews.includes(view) && weapon !== 8) continue;
+      await setAdsIntent(page, false);
       current = { weapon, view };
       sendState();
+      if (view === 'first-person-ads') await setAdsIntent(page, true);
       const before = await page.evaluate(() => window.__drawCalls);
       await page.waitForTimeout(1100);
       await page.waitForFunction(previous => window.__drawCalls > previous + 100, before, { timeout: 30000 });
+      if (view === 'first-person-ads' && !lastInput?.ads) throw new Error('Authored ADS intent did not reach the actual browser client');
+      if (view !== 'first-person-ads' && lastInput?.ads) throw new Error('ADS intent leaked into a non-ADS fixture');
       const file = path.join(output, `${weapon}-${names[weapon - 1].toLowerCase()}-${view}.png`);
       const bytes = await page.locator('canvas').screenshot({ path: file });
-      const detail = await page.evaluate(() => ({ status: document.querySelector('#status').textContent, drawCalls: window.__drawCalls, gpu: window.__gpu }));
-      const item = { weapon, name: names[weapon - 1], view, file, sha256: sha(bytes), state: fixture(), ...detail };
+      const detail = await page.evaluate(() => ({ status: document.querySelector('#status').textContent, drawCalls: window.__drawCalls, gpu: window.__gpu,
+        hud: window.__gripHud, stubbedApiCalls: window.__fixtureApiCalls }));
+      const progress = reloadProgress[view];
+      if (view.startsWith('first-person-reload')) {
+        const expectedRemaining = shotgunReloadSeconds * (1 - progress);
+        if (detail.hud?.weapon !== 8 || detail.hud.reserve !== 24 || detail.hud.magazine !== 5
+          || Math.abs(detail.hud.reload_duration - shotgunReloadSeconds) > 0.0001
+          || detail.hud.reload_remaining > expectedRemaining + 0.001 || detail.hud.reload_remaining < expectedRemaining - 0.051) {
+          throw new Error(`Actual reload telemetry differs from frozen phase${progress}: ${JSON.stringify(detail.hud)}`);
+        }
+      }
+      const item = { weapon, name: names[weapon - 1], view, file, sha256: sha(bytes), state: fixture(),
+        requestedReloadProgress: progress ?? null,
+        observedFirstPersonReloadProgress: detail.hud?.reload_duration > 0 && detail.hud?.reload_remaining > 0
+          ? 1 - detail.hud.reload_remaining / detail.hud.reload_duration : null,
+        authoredAdsIntent: view === 'first-person-ads', lastClientInput: lastInput, ...detail };
       result.captures.push(item);
       console.log(JSON.stringify({ weapon, view, file, status: detail.status }));
     }
@@ -193,7 +271,8 @@ async function main() {
     await gallery.setContent(`<style>body{margin:0;background:#20252b;color:white;font:16px sans-serif}main{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px}figure{margin:0}img{display:block;width:100%}figcaption{padding:6px}</style><h3>${view} · rendering-only fixture</h3><main>${shots.map(item => `<figure><img src="data:image/png;base64,${fs.readFileSync(item.file).toString('base64')}"><figcaption>${item.weapon} · ${item.name}</figcaption></figure>`).join('')}</main>`);
     await gallery.screenshot({ path: path.join(output, `sheet-${view}.png`), fullPage: true });
   }
-  const expectedCaptures = views.reduce((sum, view) => sum + (view.includes('shield') ? Number(weapons.includes(1)) : weapons.length), 0);
+  const expectedCaptures = views.reduce((sum, view) => sum + (view.includes('shield') ? Number(weapons.includes(1))
+    : shotgunViews.includes(view) ? Number(weapons.includes(8)) : weapons.length), 0);
   result.passed = result.errors.length === 0 && result.captures.length === expectedCaptures;
 }
 

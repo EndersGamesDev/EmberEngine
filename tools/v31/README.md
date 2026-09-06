@@ -18,6 +18,8 @@ Do not run these while another worker owns a build, browser/GPU or QA server gat
 
 Projectile identity is `((tick & (2^40 - 1)) << 12) | (original_player_id << 4) | pellet_index`. Use integer division rather than JavaScript's 32-bit bitwise operators: `Math.floor(projectile_id / 16)` is the shared shell key, modulo 16 is pellet index 0–7, and `Math.floor(projectile_id / 4096)` recovers the low 40 tick bits. All values fit below `2^52`. The original owner is `Math.floor(projectile_id / 16) % 256`.
 
+`tools/v31/browser-grips.cjs` is a separate rendering-only fixture with no game server: its synthetic socket drives the real client/assets in a hidden WebGL2 browser. Default weapon is 8; select view names with `EMBER_QA_VIEWS`. Besides the original first-person/front/side/crouch/aim-up/aim-down views, the shotgun adds `first-person-ads`, `first-person-reload-32`, `first-person-reload-53`, `first-person-reload-72` and `third-person-reload-53`. ADS uses authored DOM intent with capture/focus/fullscreen APIs stubbed; reload packets freeze the requested phase and the report records the real client's bounded interpolation. These pictures prove rendering only, not reload timing or damage. Set a separate `EMBER_QA_OUTPUT` when retaining multiple capture sets.
+
 ## Scoped publication · coordinator only
 
 These are existing GitHub Pages release helpers, not a new hosting service. No helper creates tunnels, restarts services, changes `hosts`/`mirrors` entries or builds another game. Run operational publisher modules only after the required user authorization and successful game/CI gates; even preparation fetches refs, probes public Welcome messages and creates a retained temporary worktree.
