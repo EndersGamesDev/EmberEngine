@@ -213,9 +213,11 @@ impl World {
                     "lv": c.level, "g": c.gold, "pt": c.points,
                     "rk": c.ranks, "cd": c.cds, "scd": c.scds,
                     "items": c.items, "charges": c.charges, "d": c.d, "f": c.f,
-                    "stats": {"ad": stats.ad, "ap": stats.ap, "haste": stats.haste,
-                        "crit": stats.crit, "critd": stats.critd,
-                        "attackSpeed": (1.0 + stats.aspd) / data::CHAMPS[usize::from(def)].atk_cd}
+                    // Core bonuses are percentage points; the page reads
+                    // crit/haste as fractions and attack speed as attacks/s.
+                    "stats": {"ad": stats.ad, "ap": stats.ap, "haste": stats.haste / 100.0,
+                        "crit": stats.crit / 100.0, "critd": stats.critd,
+                        "attackSpeed": (1.0 + stats.aspd / 100.0) / data::CHAMPS[usize::from(def)].atk_cd}
                 })
             });
         let units: Vec<_> = self
@@ -391,5 +393,27 @@ mod tests {
                 .any(|i| i["charges"].as_u64().unwrap() > 0)
         );
         assert_eq!(data["champs"][0]["q"]["mana"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn hud_converts_rune_percentage_points_to_display_units() {
+        let mut m = league_core::sim::Match::new(1, 7);
+        m.join("rune test");
+        // Fury: 7 attack speed; Haste: 7 haste; Cruelty: 5 crit, 6 crit damage.
+        m.set_pick(0, data::SWARM, 0, 1, [0, 5, 6]);
+        m.start();
+        let proto::S2C::State { units, champs, .. } = m.snapshot() else {
+            panic!("match snapshot must contain state");
+        };
+        let mut w = World::new(1);
+        w.roster = m.roster.clone();
+        w.champs = champs;
+        w.set_units(&units);
+        let state: serde_json::Value = serde_json::from_str(&w.state_json()).unwrap();
+        let stats = &state["me"]["stats"];
+        assert!((stats["attackSpeed"].as_f64().unwrap() - 1.126_315_8).abs() < 0.0001);
+        assert!((stats["crit"].as_f64().unwrap() - 0.05).abs() < 0.0001);
+        assert!((stats["haste"].as_f64().unwrap() - 0.07).abs() < 0.0001);
+        assert_eq!(stats["critd"], 181.0);
     }
 }

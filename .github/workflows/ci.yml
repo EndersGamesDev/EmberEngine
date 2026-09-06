@@ -52,13 +52,14 @@ jobs:
       - name: test
         run: >
           cargo test --locked
-          -p arena-core -p fire-core -p kings-core
-          -p arena-server -p fire-server -p kings-server
+          -p arena-core -p fire-core -p kings-core -p league-core
+          -p arena-server -p fire-server -p kings-server -p league-server
       - name: the host's probes build
         run: |
           cargo build --locked --release -p arena-server --example wsbot
           cargo build --locked --release -p fire-server --example probe
           cargo build --locked --release -p kings-server --example probe
+          cargo build --locked --release -p league-server --example wsprobe
 
   deploy-scripts:
     name: deploy scripts (shim suites)
