@@ -300,6 +300,20 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## UltimateLegue (league)
 
+### v2 — 2026-09-06
+
+proto 1 · stamp r1592 · source `2bc7dc98` · tag `league-v2` · published `b01bd38d` (release stamp)
+
+Crystalforge: five fleet-created champions, a textured garden arena, distinct combat animations, a redesigned HUD and saved keybindings.
+
+A visual overhaul, not a rules change. The five champions are generated, reviewed and textured models; the arena is an elevated garden in weathered ivory, aged bronze, luminous turquoise and amber crystal, with three ground surfaces and three props, about 7.2 MB converted. Forty-two original emblems cover abilities, spells and items, and the art manifest keeps each generator prompt, seed and hash. Combat gains twenty individual Q/W/E/R cast designs and five projectile, strike and impact families, drawn from the engine's existing meshes and alpha particles; champion bodies recoil, lunge or hover on authoritative attack-start events, and that displacement never moves a health bar, a selection ring, collision or the authoritative unit position.
+
+**Protocol 1 is retained**, deliberately. The new wire fields are presentation metadata — `ProjSnap.champ`, `Fx.champ` and `Fx.ability`, absent defaulting to the generic value, an effect kind announcing an accepted cast, and one spare bit in the auto-attack field beside the existing crit and spell bits. A v1 peer ignores all of it and applies the same gameplay rules, which is the test this repository applies to a bump: an old peer that plays a *different* game needs one, and an old peer that merely draws less does not. Cooldowns, damage, mana, hit tests, RNG and movement are unchanged and still authoritative.
+
+The release carries its own stamp beside its page: `games/league/v2/version.json` names r1592, the full source sha and the SHA-256 of the bundle, and the published `league_bg.wasm` — 13,380,924 bytes — hashes to exactly that value. The publication's own message agrees, and as with v1 the root ticker does not: it still reads r1511 `05aeea2b`, because a targeted publication does not rewrite it. `2bc7dc98` is the commit that fixed the last thing standing in the way: the shared Pages assembler was hardcoded to League v1, so it now selects the validated live catalogue path and copies that version's complete UI and art tree while retaining the other League versions.
+
+Verified at the source: 54 core presentation tests and core Clippy; 31 integrated client tests covering all twenty cast designs, five attack families, body poses, finite transforms and mesh validity; 8 server checks; and the actual wasm passing 104 gameplay and lobby checks, 46 interface checks and 42 binding checks across five champions, 1v1 and 3v3 practice, two-player online play, inventory, abilities, persistence, invalid saves, nested menus, Tab navigation and a narrow screen. Renderer-heavy suites must run sequentially — a concurrent run failed a fixed-delay keyboard assertion. A draft defect was found and fixed: a rejected or unconfirmed pick now resets card and detail together and keeps its feedback visible until a fresh choice is sent or acknowledged, proven by a controlled first-pick-drop test with no automatic resend. The combat gallery's eleven renderer checks use authored mocked fixtures and are visual evidence, not gameplay tests. `docs/plans/ultimate-league-v2.md` ends at a candidate checkpoint saying v2 is not yet live; the launcher and the published branch both now carry it as the live version, so that checkpoint is behind its own release. Design and gate record: `docs/plans/ultimate-league-v2.md`.
+
 ### v1 — 2026-09-06
 
 proto 1 · stamp r1554 · source `4e069d5a` · tag `league-v1` · published `468eb61d` (release stamp)

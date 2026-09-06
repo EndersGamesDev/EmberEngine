@@ -2,6 +2,8 @@
 
 The owner requested a visual overhaul using the LAN asset fleet, coordinated with Fable and OpenCode through Barza. Champions are generated and reviewed in order: SW4RM, EmberKnight, The Hallow One, Bog Maw, Tessera the Clockmaker; environment generation follows the five champions. The game remains on Ember, with authoritative online 1v1/3v3 and local practice.
 
+What v2 actually shipped — its protocol, build stamp and source commit — is the `v2` entry under UltimateLegue in `CHANGELOG.md`; the checkpoint below predates the publication.
+
 The original visual direction is Crystalforge: weathered ivory, aged bronze, luminous turquoise and amber crystal, carved geometric motifs, and an elevated garden arena. Strong silhouettes, clearly visible team affiliation, readable combat effects, and legible controls take priority over ornamental density.
 
 ## Ownership and interfaces
