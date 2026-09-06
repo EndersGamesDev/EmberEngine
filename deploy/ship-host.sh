@@ -146,11 +146,16 @@ builder_ssh() {
 }
 # A bounded ssh, for the read-only questions `check` asks: a probe that hangs
 # must become an answer, not a scheduler that never returns.
+#
+# `-n` is load-bearing. ssh reads its own stdin and forwards it, so a call
+# inside `while read` swallows the rest of the list: the first game was
+# probed, the other two vanished, and check reported success over servers it
+# had never spoken to.
 host_ssh_t() {
     local secs="$1"; shift
     local opts=("${SSH_BASE[@]}")
     [ -z "$EMBER_SHIP_HOST_SSH_CONFIG" ] || opts=(-F "$EMBER_SHIP_HOST_SSH_CONFIG" "${opts[@]}")
-    timeout "$secs" ssh "${opts[@]}" "$EMBER_SHIP_HOST" "$@"
+    timeout "$secs" ssh -n "${opts[@]}" "$EMBER_SHIP_HOST" "$@"
 }
 builder_scp() {
     local opts=("${SSH_BASE[@]}")
@@ -258,6 +263,10 @@ proto() {
     grep -oE 'PROTO_VERSION: u16 = [0-9]+' "crates/\$1/src/proto.rs" | grep -oE '[0-9]+\$' | head -1
 }
 if [ -d crates/arena-core ]; then ARENA_CRATE=arena-core; else ARENA_CRATE=pong-core; fi
+# The RESOLVED staging path, because scp speaks SFTP and does not expand a
+# remote shell's variables: a stage configured as \$WORKSPACE/... is a real
+# directory on the builder and a literal seven characters to the copy.
+echo "SHIP stage=\$(cd "\$STAGE" && pwd)"
 echo "SHIP version=\$VERSION"
 echo "SHIP commit=\$SHORT"
 echo "SHIP full_commit=\$FULL"
@@ -289,15 +298,16 @@ cmd_deploy() {
     printf '%s\n' "$out"
     echo "   built in $(( $(date +%s) - tb ))s"
 
-    local version commit full arena_proto fire_proto kings_proto
+    local version commit full arena_proto fire_proto kings_proto stage_path
     ship_field() { printf '%s' "$out" | grep -E "^SHIP $1=" | head -1 | sed "s/^SHIP $1=//"; }
+    stage_path="$(ship_field stage)"
     version="$(ship_field version)"
     commit="$(ship_field commit)"
     full="$(ship_field full_commit)"
     arena_proto="$(ship_field arena_proto)"
     fire_proto="$(ship_field fire_proto)"
     kings_proto="$(ship_field kings_proto)"
-    for field in version commit full arena_proto fire_proto kings_proto; do
+    for field in stage_path version commit full arena_proto fire_proto kings_proto; do
         [ -n "${!field}" ] || die "the builder did not report $field"
     done
     # The stamp must name the commit the PAGES name. A builder that resolved
@@ -311,7 +321,7 @@ cmd_deploy() {
     rm -rf "$stage"
     mkdir -p "$stage"
     local tc; tc="$(date +%s)"
-    builder_scp -r "$EMBER_SHIP_BUILDER:$EMBER_SHIP_BUILDER_STAGE" "$stage/products" \
+    builder_scp -r "$EMBER_SHIP_BUILDER:$stage_path" "$stage/products" \
         || die "could not copy the products off $EMBER_SHIP_BUILDER"
     {
         echo "version=$version"
@@ -342,13 +352,15 @@ cmd_deploy() {
     echo "   shipped in $(( $(date +%s) - ts ))s"
 
     say "bootstrapping $EMBER_SHIP_HOST"
-    host_ssh "EMBER_PREBUILT='\$HOME/$dest' bash \"\$HOME/$root/deploy/bootstrap-host.sh\"" \
+    # Double quotes, so the REMOTE shell expands $HOME. Single ones travel as
+    # seven literal characters and name no directory on any machine.
+    host_ssh "EMBER_PREBUILT=\"\$HOME/$dest\" bash \"\$HOME/$root/deploy/bootstrap-host.sh\"" \
         || die "bootstrap failed on $EMBER_SHIP_HOST"
 
     say "host.sh up on $EMBER_SHIP_HOST"
     local name_env=""
     [ -z "$EMBER_SHIP_HOST_NAME" ] || name_env="EMBER_HOST_NAME='$EMBER_SHIP_HOST_NAME' "
-    host_ssh "${name_env}EMBER_PREBUILT='\$HOME/$dest' EMBER_PUBLISH='$EMBER_SHIP_PUBLISH' bash \"\$HOME/$root/deploy/host.sh\" up" \
+    host_ssh "${name_env}EMBER_PREBUILT=\"\$HOME/$dest\" EMBER_PUBLISH='$EMBER_SHIP_PUBLISH' bash \"\$HOME/$root/deploy/host.sh\" up" \
         || die "host.sh up failed on $EMBER_SHIP_HOST"
 
     # Keep the three newest product directories. Older ones are the previous

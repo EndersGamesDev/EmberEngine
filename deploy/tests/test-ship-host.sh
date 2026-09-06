@@ -128,6 +128,7 @@ contains "$BUILD" 'cp "$TD/release/examples/probe" "$TD/release/examples/kings-p
 contains "$BUILD" 'cp "$TD/release/examples/kings-probe" "$STAGE/kings-probe"' "and staged under the name the host looks for"
 contains "$BUILD" 'if [ -d crates/arena-core ]; then ARENA=arena-server; else ARENA=pong-server; fi' "a pre-rename commit is still buildable"
 contains "$BUILD" 'echo "SHIP full_commit=$FULL"' "the builder reports the full commit"
+contains "$BUILD" 'echo "SHIP stage=$(cd "$STAGE" && pwd)"' "and the resolved staging path, because scp expands no remote variable"
 case "$BUILD" in
     *cargo*install*|*rustup*) bad "the build script installs a toolchain" ;;
     *) ok "the build script installs nothing" ;;
@@ -142,7 +143,7 @@ is "$(grep '^arena_proto=' "$STAMP" | cut -d= -f2)" "22" "and the arena protocol
 
 echo "== the copy list =="
 contains "$LOG" "scp [-F] [$EMBER_SHIP_BUILDER_SSH_CONFIG]" "the builder is reached through its own ssh config"
-contains "$LOG" "[sokol-worker:ember-ship-products] [$TMP/stage/products]" "the products came off the builder"
+contains "$LOG" "[sokol-worker:/workspace/loops/ember/ember-ship-products] [$TMP/stage/products]" "the products came off the path the builder resolved"
 contains "$LOG" "[lundi-ember:ember-prebuilt/$PUB_COMMIT/]" "and went to a directory named by the commit"
 contains "$LOG" "[$DEPLOY/host.sh]" "deploy/ travelled with them"
 contains "$LOG" "[$DEPLOY/bootstrap-host.sh]" "bootstrap-host.sh included"
@@ -152,8 +153,8 @@ if [ -s "$TMP/stage/host.json" ]; then ok "and was written down"; else bad "the 
 contains "$DEPLOY_OUT" '"name": "lundi"' "the entry was printed"
 
 echo "== what the host was told to run =="
-contains "$LOG" "EMBER_PREBUILT='\$HOME/ember-prebuilt/$PUB_COMMIT' bash \"\$HOME/ember-prebuilt/deploy/bootstrap-host.sh\"" "bootstrap ran in prebuilt mode"
-contains "$LOG" "EMBER_HOST_NAME='lundi' EMBER_PREBUILT='\$HOME/ember-prebuilt/$PUB_COMMIT' EMBER_PUBLISH='none' bash \"\$HOME/ember-prebuilt/deploy/host.sh\" up" "host.sh up ran in prebuilt mode, publishing nothing"
+contains "$LOG" "EMBER_PREBUILT=\"\$HOME/ember-prebuilt/$PUB_COMMIT\" bash \"\$HOME/ember-prebuilt/deploy/bootstrap-host.sh\"" "bootstrap ran in prebuilt mode, with a path the remote shell will expand"
+contains "$LOG" "EMBER_HOST_NAME='lundi' EMBER_PREBUILT=\"\$HOME/ember-prebuilt/$PUB_COMMIT\" EMBER_PUBLISH='none' bash \"\$HOME/ember-prebuilt/deploy/host.sh\" up" "host.sh up ran in prebuilt mode, publishing nothing"
 case "$LOG" in
     *pkill*) bad "something reached for pkill" ;;
     *) ok "nothing reached for pkill" ;;
@@ -185,7 +186,9 @@ OK_RC=$?
 set -e
 is "$OK_RC" "0" "0 when the host runs the published commit and every game answered"
 contains "$(cat "$TMP/check-ok.log")" "arena answered through wss://arena.example" "each game is probed by its own address"
+contains "$(cat "$TMP/check-ok.log")" "fire answered through wss://fire.example" "fire included"
 contains "$(cat "$TMP/check-ok.log")" "kings answered through wss://kings.example" "Kings included"
+is "$(grep -c 'answered through' "$TMP/check-ok.log")" "3" "all three were probed, not one and a swallowed list"
 contains "$(cat "$SHIM_LOG")" "ember-prebuilt/$PUB_COMMIT/kings-probe" "the probe that runs is the one already on the host"
 contains "$(cat "$SHIM_LOG")" "--expect-commit" "and Kings is asked which build answered"
 

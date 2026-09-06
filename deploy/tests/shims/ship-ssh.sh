@@ -22,11 +22,17 @@ LOG="${SHIM_LOG:-/dev/null}"
 { printf 'ssh'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
 
 ARGS="$*"
+# Model ssh's own stdin handling: without -n it reads and forwards stdin, so a
+# caller inside `while read` loses the rest of its list to it. A shim kinder
+# than the real thing would let exactly that bug through.
+DRAIN=1
+for a in "$@"; do [ "$a" = "-n" ] && DRAIN=""; done
 case "$ARGS" in
     *"bash -s"*)
         # The builder. Keep the script it was handed, then report the build.
         cat > "${SHIP_BUILD_SCRIPT:-/dev/null}"
         commit="${SHIP_BUILT_COMMIT:-129bcac4}"
+        echo "SHIP stage=${SHIP_BUILT_STAGE:-/workspace/loops/ember/ember-ship-products}"
         echo "SHIP version=${SHIP_BUILT_VERSION:-r1490}"
         echo "SHIP commit=$commit"
         echo "SHIP full_commit=${SHIP_BUILT_FULL:-129bcac4000000000000000000000000000000ff}"
@@ -38,6 +44,7 @@ case "$ARGS" in
         cat "${SHIP_HOST_JSON:-/dev/null}"
         ;;
     *wsbot*|*fire-probe*|*kings-probe*)
+        [ -z "$DRAIN" ] || cat >/dev/null 2>&1 || true
         [ -z "${SHIP_PROBE_FAIL:-}" ] || exit 1
         ;;
 esac
