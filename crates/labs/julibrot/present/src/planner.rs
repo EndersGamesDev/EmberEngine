@@ -893,8 +893,7 @@ mod tests {
         let mut to = *from;
         to.zoom_log2 += zoom_delta;
         set_extent(&mut to, extent);
-        to.centre_from_reference_px =
-            anchor.map(|value| value * displacement_scale * extent_scale);
+        to.centre_from_reference_px = anchor.map(|value| value * displacement_scale * extent_scale);
         to
     }
 
@@ -1308,9 +1307,7 @@ mod tests {
             assert!(
                 (plan.approx_max_error_px.expect("measured maximum") - expected_max).abs() < 0.005
             );
-            assert!(
-                (plan.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005
-            );
+            assert!((plan.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005);
             assert!(matches!(
                 plan.refusal_reason,
                 Some(WarpRefusalReason::ErrorCeiling { .. })
