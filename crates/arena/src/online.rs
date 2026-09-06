@@ -619,13 +619,36 @@ fn push_weapon(
     action: Action,
     loaded: bool,
 ) {
+    push_reload_weapon(frame, assets, id, pos, rot, action, loaded, None);
+}
+
+#[allow(clippy::too_many_arguments)] // Extends the shared weapon draw with its authoritative reload pose.
+fn push_reload_weapon(
+    frame: &mut Frame,
+    assets: &Assets,
+    id: u8,
+    pos: Vec3,
+    rot: Quat,
+    action: Action,
+    loaded: bool,
+    reload: Option<crate::reload::ReloadPose>,
+) {
     let (parts, own) = assets.weapon_parts(id);
+    let first = frame.instances.len();
     push_parts(frame, parts, pos, rot, weapon_accent(id), action);
-    if own && weapon_stats(id).kind == Projectile::Rocket && loaded {
+    if let Some(reload) = reload {
+        for (part, instance) in parts.iter().zip(&mut frame.instances[first..]) {
+            if part.anim == PartAnim::Cylinder {
+                instance.position += rot * Vec3::new(0.0, -0.008, -0.065) * reload.cylinder_open;
+            }
+        }
+    }
+    let rocket = reload.map_or_else(|| f32::from(u8::from(loaded)), |r| r.rocket_load);
+    if own && weapon_stats(id).kind == Projectile::Rocket && rocket > 0.0 {
         push_parts(
             frame,
             &assets.rocket,
-            pos,
+            pos + rot * Vec3::X * (0.34 * (1.0 - rocket)),
             rot,
             weapon_accent(id),
             Action::REST,
@@ -728,6 +751,10 @@ pub struct OnlineConfig {
     /// empty is free for all. Ignored on a `join`, like `map`.
     #[serde(default)]
     pub mode: String,
+    #[serde(default)]
+    pub loadout: String,
+    #[serde(default)]
+    pub starting_weapon: u8,
 }
 
 impl OnlineConfig {
@@ -738,6 +765,8 @@ impl OnlineConfig {
                 password: self.password.clone().filter(|p| !p.is_empty()),
                 map: self.map.clone(),
                 mode: self.mode.clone(),
+                loadout: self.loadout.clone(),
+                starting_weapon: self.starting_weapon,
             },
             "join" => C2S::JoinLobby {
                 name: self.lobby.clone(),
@@ -1588,6 +1617,8 @@ pub struct ShooterGame {
     prev_e: bool,
     melee_pending: bool,
     jump_pending: bool,
+    slot_input: crate::hud::SlotInput,
+    since_hud: f32,
     /// The same press the server will get, held until prediction spends it.
     /// Predicting on the raw frame edge instead let the local view and the
     /// server disagree about whether a press near a landing happened at all.
@@ -1607,6 +1638,8 @@ pub struct ShooterGame {
     assets: Option<Assets>,
     pads_pos: Vec<[f32; 2]>,
     pads_active: Vec<bool>,
+    supplies: Vec<arena_core::shooter::SupplySpawn>,
+    supplies_active: Vec<bool>,
     /// ADS: 0 = hip, 1 = fully zoomed (RMB).
     zoom: f32,
     /// A newly equipped gun must complete its own raise, not inherit a scope.
@@ -1814,6 +1847,8 @@ impl ShooterGame {
             prev_e: false,
             melee_pending: false,
             jump_pending: false,
+            slot_input: crate::hud::SlotInput::default(),
+            since_hud: 1.0,
             pred_jump: false,
             last_state_at: 0.0,
             state_interval: 1.0 / 30.0,
@@ -1825,6 +1860,8 @@ impl ShooterGame {
             assets,
             pads_pos: Vec::new(),
             pads_active: Vec::new(),
+            supplies: Vec::new(),
+            supplies_active: Vec::new(),
             zoom: 0.0,
             ads_weapon: 0,
             shield_raise: 0.0,
@@ -2513,6 +2550,7 @@ impl EmberGame for ShooterGame {
             self.controls_paused = controls_paused;
         }
         if controls_paused {
+            self.slot_input.update(0, false);
             self.jump_pending = false;
             self.pred_jump = false;
             self.melee_pending = false;
@@ -2527,6 +2565,7 @@ impl EmberGame for ShooterGame {
         self.since_input += dt;
         self.since_ping += dt;
         self.since_status += dt;
+        self.since_hud += dt;
         self.bullets_age += dt;
 
         let mut status_event: Option<String> = None;
@@ -2577,6 +2616,7 @@ impl EmberGame for ShooterGame {
                     players,
                     map,
                     mode,
+                    ..
                 } => {
                     self.my_id = Some(id);
                     self.mode = GameMode::from_name(&mode).unwrap_or_default();
@@ -2598,6 +2638,8 @@ impl EmberGame for ShooterGame {
                         self.occlusion_cache
                             .for_level(&map, self.arena_half, &self.obstacles);
                     self.pads_pos = level.pads;
+                    self.supplies = level.supplies;
+                    self.supplies_active = vec![false; self.supplies.len()];
                     self.decor = level.decor;
                     self.pads_active = vec![true; self.pads_pos.len()];
                     // The blocks, in obstacle order: the index space the
@@ -2657,12 +2699,14 @@ impl EmberGame for ShooterGame {
                     bullets,
                     pads,
                     loot,
+                    supplies,
                     team_score,
                     hill,
                     round_pause,
                 } => {
                     self.last_tick = tick;
                     self.pads_active = pads;
+                    self.supplies_active = supplies;
                     // The round restarting: the pause ran out in this
                     // state. Everyone is respawned with the sidearm and
                     // every score is zero, none of which is a holster, a
@@ -2777,17 +2821,25 @@ impl EmberGame for ShooterGame {
                                 // A looted gun ran dry: the sidearm is back.
                                 self.holster_started = Some(self.time);
                                 self.cue(feel::holster(), &mut sfx);
+                            } else if changed
+                                && me.inventory[usize::from(new_me.weapon.saturating_sub(1)).min(8)]
+                                    .weapon
+                                    != 0
+                            {
+                                self.holster_started = Some(self.time);
+                                self.cue(feel::holster(), &mut sfx);
                             } else if changed && self.time - self.last_pop_at > 0.5 {
                                 // A grant with no pop before it: a pad.
                                 sfx.push(Play::centre(Sfx::Upgrade, 0.55));
                                 status_event =
                                     Some(format!("⬆ picked up: {}", loadout_of(new_me.weapon)));
                             }
-                            if new_me.reloading && !me.reloading {
+                            if new_me.reloading && (!me.reloading || changed) {
                                 self.cue(feel::reload_start(new_me.weapon), &mut sfx);
                                 self.reload_started = Some(self.time);
                             } else if !new_me.reloading {
-                                if me.reloading && new_me.alive {
+                                if me.reloading && new_me.alive && !changed && new_me.ammo > me.ammo
+                                {
                                     self.cue(feel::reload_end(), &mut sfx);
                                 }
                                 self.reload_started = None;
@@ -3161,6 +3213,18 @@ impl EmberGame for ShooterGame {
             || ControlAction::Reload.down(&self.settings, input) || pad_down(PadButton::West),
             |t| t.held.down(script::Hold::Reload),
         );
+        let selected_slot = if tick.is_none() {
+            self.settings.selected_slot(input)
+        } else {
+            0
+        };
+        self.slot_input.update(
+            selected_slot,
+            !controls_paused
+                && !self.lost
+                && self.round_pause <= 0.0
+                && me_latest.is_some_and(|p| p.alive),
+        );
         let shield_held = tick.as_ref().map_or_else(
             || ControlAction::Shield.down(&self.settings, input) || pad_down(PadButton::LB),
             |t| t.held.down(script::Hold::Shield),
@@ -3407,6 +3471,7 @@ impl EmberGame for ShooterGame {
                 sprint,
                 crouch,
                 reload: reload_held,
+                select_slot: if me_alive { self.slot_input.take() } else { 0 },
                 jump: jump_press,
                 // Sent raw: the trigger gate lives in the sim, so `fire` is
                 // reported honestly even while Q is down and the server is
@@ -3568,6 +3633,15 @@ impl EmberGame for ShooterGame {
         }
 
         // ---- Tab scoreboard overlay ----
+        if self.since_hud >= 0.05 {
+            self.since_hud = 0.0;
+            crate::hud::Snapshot::from_player(
+                me_latest.as_ref(),
+                self.my_id.is_some() && !self.lost,
+                self.time - self.last_state_at,
+            )
+            .publish();
+        }
         // Forced on through the pause after a round: the round's result
         // is the one moment the whole table matters, and nobody should
         // have to find Tab to see it.
@@ -3783,6 +3857,8 @@ impl EmberGame for ShooterGame {
                 }
             }
         }
+        crate::supplies::push(&mut frame, &self.supplies, &self.supplies_active);
+
         // Weapon-upgrade pads: base slab always, a spinning pickup while
         // active (positions are seeded, availability comes from State).
         for (i, pad) in self.pads_pos.iter().enumerate() {
@@ -3991,6 +4067,13 @@ impl EmberGame for ShooterGame {
                     steps_queued += 1;
                 }
             }
+            let mut remote_reload = p.reloading.then(|| {
+                crate::reload::pose(
+                    p.weapon,
+                    1.0 - crate::hud::remaining(p, self.time - self.last_state_at)
+                        / weapon_stats(p.weapon).reload,
+                )
+            });
             let mut attachment = None;
             let grip = self
                 .assets
@@ -4007,8 +4090,53 @@ impl EmberGame for ShooterGame {
                     walk_phase, walk_amp, *crouch, self.time, &rc.dims,
                 );
                 if let Some(grip) = grip {
-                    let mount = grips::mount(rc, &pose, grip, pos, feet_y, aim, p.pitch, p.shield);
-                    grips::pose_arms(rc, &mut pose, grip, mount, pos, feet_y, aim, p.shield);
+                    let mut animated_grip = *grip;
+                    if let Some(reload) = remote_reload.filter(|_| !p.shield) {
+                        animated_grip.left.wrist = grip.left.palm
+                            + reload.left_offset
+                            + reload.left_rotation * (grip.left.wrist - grip.left.palm);
+                    }
+                    let mut mount = grips::mount(
+                        rc,
+                        &pose,
+                        &animated_grip,
+                        pos,
+                        feet_y,
+                        aim,
+                        p.pitch,
+                        p.shield,
+                    );
+                    if let Some(reload) = remote_reload {
+                        mount.base += mount.rotation * reload.offset * 0.45;
+                        mount.rotation *= reload.rotation;
+                        if let Some(constrained) = grips::constrain_mount(
+                            rc,
+                            &pose,
+                            &animated_grip,
+                            mount,
+                            pos,
+                            feet_y,
+                            aim,
+                            p.shield,
+                        ) {
+                            mount = constrained;
+                        } else {
+                            remote_reload = None;
+                            animated_grip = *grip;
+                            mount =
+                                grips::mount(rc, &pose, grip, pos, feet_y, aim, p.pitch, p.shield);
+                        }
+                    }
+                    grips::pose_arms(
+                        rc,
+                        &mut pose,
+                        &animated_grip,
+                        mount,
+                        pos,
+                        feet_y,
+                        aim,
+                        p.shield,
+                    );
                     attachment = Some(mount);
                 }
                 // The replacement gloves already contain articulated fingers.
@@ -4098,7 +4226,7 @@ impl EmberGame for ShooterGame {
                 // real aim elevation, so a player shooting down off a
                 // container looks like it; the rocket rides the tube only
                 // while there is one to fire.
-                push_weapon(
+                push_reload_weapon(
                     &mut frame,
                     a,
                     shown_weapon(p.weapon),
@@ -4106,9 +4234,20 @@ impl EmberGame for ShooterGame {
                     attachment.map_or_else(|| weapon_rot(yaw, p.pitch), |m| m.rotation),
                     Action::REST,
                     p.ammo > 0 && !p.reloading,
+                    remote_reload,
                 );
                 if let (Some(mount), Some(grip)) = (attachment, grip) {
-                    grips::push(&mut frame, grip, mount.base, mount.rotation, !p.shield);
+                    if remote_reload.is_none() {
+                        grips::push(&mut frame, grip, mount.base, mount.rotation, !p.shield);
+                        continue;
+                    }
+                    grips::push_hand(&mut frame, &grip.right, mount.base, mount.rotation);
+                    if !p.shield {
+                        let (base, rot) = remote_reload.map_or((mount.base, mount.rotation), |r| {
+                            r.left_hand(mount.base, mount.rotation, grip.left.palm)
+                        });
+                        grips::push_hand(&mut frame, &grip.left, base, rot);
+                    }
                 }
             } else {
                 push_gun(&mut frame, hand, aim, accent);
@@ -4325,17 +4464,13 @@ impl EmberGame for ShooterGame {
             let loaded = me_latest.is_some_and(|p| p.ammo > 0 && !p.reloading);
             let accent = weapon_accent(my_weapon);
 
-            // Reload animation: the gun dips and rolls out of the way, over
-            // this weapon's own reload time.
-            let reload_dip = if reloading {
-                let t0 = self.reload_started.unwrap_or(self.time);
-                let progress = ((self.time - t0) / weapon_stats(my_weapon).reload).clamp(0.0, 1.0);
-                (progress * std::f32::consts::PI).sin() * 0.24
-            } else {
-                0.0
-            };
-            // The holster: a looted gun ran dry, the model drops 0.3 m and
-            // the sidearm comes back up over 0.35 s.
+            // Server time drives all7 distinct reloads and the HUD; never infer
+            // a fresh full-duration reload merely because we joined mid-animation.
+            let reload = me_latest.filter(|_| reloading).map(|p| {
+                let remaining = crate::hud::remaining(&p, self.time - self.last_state_at);
+                crate::reload::pose(my_weapon, 1.0 - remaining / weapon_stats(my_weapon).reload)
+            });
+            // Weapon selection lowers and raises the viewmodel over0.35s.
             let holster_drop = self.holster_started.map_or(0.0, |t0| {
                 let k = (self.time - t0) / 0.35;
                 if k < 1.0 {
@@ -4367,14 +4502,15 @@ impl EmberGame for ShooterGame {
             let ads_offset = look * sight.distance - aim_rotation * sight.point;
             let base = eye + hip_offset.lerp(ads_offset, raised)
                 - look * (0.06 * recoil + my_feel.push * recoil)
-                + Vec3::Y
-                    * (bob * 0.4 * (1.0 - raised) - reload_dip - holster_drop + 0.03 * recoil);
+                + Vec3::Y * (bob * 0.4 * (1.0 - raised) - holster_drop + 0.03 * recoil)
+                + reload.map_or(Vec3::ZERO, |r| aim_rotation * r.offset);
             // Tilts with aim elevation, plus the muzzle-up kick and the
             // alternating sideways kick per shot.
             let kick_yaw = yaw + my_feel.yaw_alt * kick_side * recoil;
             let kick_pitch = self.pitch + my_feel.kick_model * recoil;
             let rot = weapon_rot(kick_yaw, kick_pitch + sight.raise_pitch * settle)
-                * Quat::from_rotation_x(sight.raise_roll * settle);
+                * Quat::from_rotation_x(sight.raise_roll * settle)
+                * reload.map_or(Quat::IDENTITY, |r| r.rotation);
             // The melee drops the rifle out of the frame, in the weapon's
             // own frame, and the sword comes out in its place.
             let melee_since = self.melee_started.map(|t0| self.time - t0);
@@ -4399,16 +4535,27 @@ impl EmberGame for ShooterGame {
                 // rocket's smoke, which is not a sniper's.
                 base + look * 0.95
             } else if let Some(a) = &self.assets {
-                push_weapon(&mut frame, a, my_weapon, base, rot, action, loaded);
+                push_reload_weapon(&mut frame, a, my_weapon, base, rot, action, loaded, reload);
                 if let Some(grip) = a.grip_of(my_weapon) {
                     let support = self.shield_raise <= 0.01;
-                    grips::push(&mut frame, grip, base, rot, support);
+                    grips::push_hand(&mut frame, &grip.right, base, rot);
+                    let (left_base, left_rot) = reload.map_or((base, rot), |r| {
+                        (
+                            base + rot
+                                * (grip.left.palm + r.left_offset
+                                    - r.left_rotation * grip.left.palm),
+                            rot * r.left_rotation,
+                        )
+                    });
+                    if support {
+                        grips::push_hand(&mut frame, &grip.left, left_base, left_rot);
+                    }
                     if let Some(rc) = &self.rig_character {
                         crate::viewarms::push(
                             &mut frame,
                             rc,
                             base + rot * grip.right.wrist,
-                            support.then_some(base + rot * grip.left.wrist),
+                            support.then_some(left_base + left_rot * grip.left.wrist),
                             eye,
                             weapon_rot(yaw, self.pitch),
                             Vec3::ONE,
@@ -5236,6 +5383,12 @@ mod wire_tests {
     const fn me(id: u8) -> PState {
         PState {
             id,
+            inventory: [arena_core::shooter::WeaponSlot {
+                weapon: 0,
+                ammo: 0,
+                reserve: 0,
+            }; 9],
+            reload_remaining: 0.0,
             x: 0.0,
             z: 0.0,
             y: 0.0,
@@ -5265,6 +5418,70 @@ mod wire_tests {
     }
 
     #[test]
+    fn slot_press_is_sent_once_without_predicting_a_weapon_grant() {
+        let (chan, _inbox, wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.script = None;
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        let press = InputState::from_parts(&[KeyCode::Digit9], &[], (0.0, 0.0), None);
+        game.update(&press, 0.01);
+        game.update(&InputState::default(), 0.05);
+        let selections: Vec<u8> = wire
+            .try_iter()
+            .filter_map(|msg| match msg {
+                C2S::Input { select_slot, .. } => Some(select_slot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selections, [9]);
+        assert_eq!(
+            game.latest[&2].weapon, 3,
+            "only authority grants/selects a gun"
+        );
+        game.update(&InputState::default(), 0.06);
+        assert!(wire.try_iter().all(|msg| !matches!(
+            msg,
+            C2S::Input {
+                select_slot: 1..=9,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn paused_and_dead_slot_keys_need_release_after_resume_or_respawn() {
+        for paused in [false, true] {
+            let (chan, _inbox, wire) = net::NetChan::detached_duplex();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.script = None;
+            game.my_id = Some(2);
+            let mut p = me(2);
+            p.alive = paused;
+            game.latest.insert(2, p);
+            game.settings.paused = paused;
+            let held = InputState::from_parts(&[KeyCode::Digit1], &[], (0.0, 0.0), None);
+            game.update(&held, 0.06);
+            game.latest.get_mut(&2).unwrap().alive = true;
+            game.settings.paused = false;
+            game.update(&held, 0.06);
+            assert!(wire.try_iter().all(|msg| !matches!(
+                msg,
+                C2S::Input {
+                    select_slot: 1..=9,
+                    ..
+                }
+            )));
+            game.update(&InputState::default(), 0.06);
+            game.update(&held, 0.06);
+            assert!(
+                wire.try_iter()
+                    .any(|msg| matches!(msg, C2S::Input { select_slot: 1, .. }))
+            );
+        }
+    }
+
+    #[test]
     // One continuous join/replay/map-change sequence verifies cache ownership.
     #[allow(clippy::too_many_lines)]
     fn harbor_join_selects_port_art_and_prediction_replays_outside_old_bounds() {
@@ -5274,6 +5491,8 @@ mod wire_tests {
         game.set_harbor(1000);
         inbox
             .send(S2C::GameJoined {
+                loadout: String::new(),
+                starting_weapon: 1,
                 id: 2,
                 seed: 37,
                 arena_half: 48.0,
@@ -5342,6 +5561,7 @@ mod wire_tests {
         p.ack = 7;
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 30,
                 players: vec![p],
                 bullets: Vec::new(),
@@ -5362,6 +5582,8 @@ mod wire_tests {
         // Joining an old map must also switch the art and movement bound back.
         inbox
             .send(S2C::GameJoined {
+                loadout: String::new(),
+                starting_weapon: 1,
                 id: 2,
                 seed: 37,
                 arena_half: 24.0,
@@ -5475,6 +5697,7 @@ mod wire_tests {
         });
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 30,
                 players: vec![state],
                 bullets: Vec::new(),
@@ -5699,6 +5922,7 @@ mod wire_tests {
         );
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 60,
                 players: vec![state],
                 bullets: Vec::new(),
@@ -5790,6 +6014,7 @@ mod wire_tests {
         assert!(!game.pred_jump && !game.jump_pending);
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 60,
                 players: vec![me(2)],
                 bullets: Vec::new(),
@@ -6154,6 +6379,7 @@ mod wire_tests {
         });
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 60,
                 players: vec![PState {
                     ack: 7,
@@ -6438,6 +6664,7 @@ mod wire_tests {
         rewound.vy = 5.0;
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 1,
                 players: vec![rewound],
                 bullets: Vec::new(),
@@ -7573,6 +7800,7 @@ mod wire_tests {
         assert_eq!(felt, 1, "announced once");
         assert_eq!(game.round_line.as_deref(), Some("BLUE wins the round"));
         let state = |pause: f32| S2C::State {
+            supplies: Vec::new(),
             tick: 1,
             players: vec![me(2), other],
             bullets: Vec::new(),
@@ -7844,6 +8072,12 @@ mod grip_muzzle_tests {
 
     fn remote(case: CaptureCase) -> PState {
         PState {
+            inventory: [arena_core::shooter::WeaponSlot {
+                weapon: 0,
+                ammo: 0,
+                reserve: 0,
+            }; 9],
+            reload_remaining: 0.0,
             id: REMOTE,
             x: 9.0,
             z: -2.0,
@@ -8297,6 +8531,12 @@ mod ads_tests {
 
     const fn player(weapon: u8) -> PState {
         PState {
+            inventory: [arena_core::shooter::WeaponSlot {
+                weapon: 0,
+                ammo: 0,
+                reserve: 0,
+            }; 9],
+            reload_remaining: 0.0,
             id: 2,
             x: 0.0,
             z: 0.0,
@@ -8521,6 +8761,7 @@ mod ads_tests {
         game.round_pause = 0.5;
         inbox
             .send(S2C::State {
+                supplies: Vec::new(),
                 tick: 10,
                 players: vec![player(3)],
                 bullets: Vec::new(),
