@@ -18,9 +18,10 @@ mod warp_shader;
 
 pub use contract::{
     DropReason, FenceRefusal, FramePartition, FrameReceipt, FrameState, PresentBackdrop,
-    PresentConfig, PresentError, PresentEvent, PresentEvents, PresentFacts, PresentHot,
-    PresentMain, PresentStatus, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WarpKind, WarpPlan, WarpValidation,
+    PresentConfig, PresentError, PresentEvent, PresentEvents, PresentFacts, PresentHot, PresentMain,
+    PresentStatus, PresentationLedger, PresentationLedgerEntry, SampleClass, SceneFrame,
+    SubmissionKind, SubmissionMeasurement, WarpKind, WarpPlan, WarpRefusalReason, WarpValidation,
+    PRESENTATION_LEDGER_CAPACITY,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};

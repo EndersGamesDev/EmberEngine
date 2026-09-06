@@ -34,6 +34,12 @@ impl Presenter {
         self.facts.clone()
     }
 
+    /// Borrows the latest immutable facts without polling, submitting, or cloning the ledger.
+    #[must_use]
+    pub const fn facts_ref(&self) -> &PresentFacts {
+        &self.facts
+    }
+
     fn poll_scene(&mut self, now_ms: f64) -> Option<PresentEvent> {
         let pending = self.scene_fence.as_mut()?;
         let decision = observe_fence(pending, now_ms);
@@ -145,6 +151,12 @@ impl Presenter {
                 let id = pending.ledger.id();
                 self.gpu.warp_fence.unmap();
                 self.warp_fence = None;
+                if self
+                    .pending_presentation
+                    .is_some_and(|(pending_id, _)| pending_id == id)
+                {
+                    self.pending_presentation = None;
+                }
                 Some(PresentEvent::FenceRefused {
                     kind: SubmissionKind::Warp,
                     id,

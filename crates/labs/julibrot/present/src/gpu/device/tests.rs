@@ -3,7 +3,7 @@ use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_p
 use ember_julibrot_worker::MainState;
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
-use super::ledger::LatticeRefusal;
+use super::ledger::{LatticeRefusal, presentation_ledger_entry};
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
@@ -278,8 +278,12 @@ fn clear_plan_is_identity_but_never_samples() {
 fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 37);
+    let refused = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::Matrix),
+        ..clear_warp_plan(false, true)
+    };
     let held = apply_hold_policy(
-        clear_warp_plan(false, true),
+        refused,
         ledger.retained(),
         true,
         BINDING_EXTENT,
@@ -290,11 +294,13 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     assert!(held.source_valid);
     assert!(!held.exposed);
     assert_eq!(held.rows, crate::identity_warp_rows());
+    assert_eq!(held.refusal_reason, refused.refusal_reason);
 
     let mut facts = PresentFacts::default();
     facts.record_warp_plan(&held, Some(0.0));
     assert_eq!(facts.warp_kind, WarpKind::HoldStale);
     assert_eq!(facts.warp_kind.as_str(), "HoldStale");
+    assert_eq!(facts.warp_refusal_reason, refused.refusal_reason);
 
     let mut hot = WarpSourceSlot::default();
     hot.write_hot(&held, false);
@@ -1123,6 +1129,55 @@ fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan 
         PrecisionMode::PictureFast,
         crate::WarpValidation::Ordinary,
     )
+}
+
+#[test]
+fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
+    let presented_extent = [960, 540];
+    let requested = pose_on(presented_extent);
+    let mut preview = frame_on(81, [120, 68], [120, 68]);
+    preview.level = RefinementLevel::Preview;
+    let preview_plan = reproject_onto(&preview, &requested);
+    let preview_entry = presentation_ledger_entry(
+        &preview_plan,
+        &requested,
+        Some(&preview),
+        presented_extent,
+    );
+
+    let mut final_frame = frame_on(82, presented_extent, presented_extent);
+    final_frame.level = RefinementLevel::Final;
+    let final_plan = reproject_onto(&final_frame, &requested);
+    let final_entry = presentation_ledger_entry(
+        &final_plan,
+        &requested,
+        Some(&final_frame),
+        presented_extent,
+    );
+
+    assert_eq!(preview_entry.requested_centre_px, Some([480.0, 270.0]));
+    assert_eq!(preview_entry.anchor_px, Some([0.0, 0.0]));
+    assert_eq!(final_entry.requested_centre_px, preview_entry.requested_centre_px);
+    assert_eq!(final_entry.anchor_px, preview_entry.anchor_px);
+    assert_eq!(preview_entry.level, Some(RefinementLevel::Preview));
+    assert_eq!(final_entry.level, Some(RefinementLevel::Final));
+}
+
+#[test]
+fn a_centred_zoom_hold_keeps_the_centre_but_exposes_the_corner_correction() {
+    let extent = [960, 540];
+    let source = frame_on(83, extent, extent);
+    let mut requested = pose_on(extent);
+    requested.zoom_log2 += 0.1;
+    let held = apply_hold_policy(clear_warp_plan(false, true), Some(&source), true, extent);
+    let held_entry = presentation_ledger_entry(&held, &requested, Some(&source), extent);
+    let moved = reproject_onto(&source, &requested);
+    let moved_entry = presentation_ledger_entry(&moved, &requested, Some(&source), extent);
+
+    assert_eq!(held_entry.requested_centre_px, Some([480.0, 270.0]));
+    assert_eq!(moved_entry.requested_centre_px, held_entry.requested_centre_px);
+    assert_eq!(held_entry.anchor_px, Some([32.14, 18.08]));
+    assert_eq!(moved_entry.anchor_px, Some([0.0, 0.0]));
 }
 
 /// Asserts a plan names exactly this pairing and returns the pair it named.

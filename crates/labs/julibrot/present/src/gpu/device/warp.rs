@@ -7,7 +7,7 @@ use crate::{
 };
 use ember_julibrot_math::scene_uncovered_fraction;
 
-use super::ledger::LatticeRefusal;
+use super::ledger::{LatticeRefusal, presentation_ledger_entry};
 use super::readback::OffscreenCapturePlan;
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
@@ -142,6 +142,7 @@ impl Presenter {
         self.hot[slot.index() as usize] = pose;
         self.latest_hot_slot = Some(slot);
         self.hot_warp_source[slot.index() as usize].write_hot(&plan, hold_refused_warp);
+        self.hot_warp_plan[slot.index() as usize] = Some(plan);
         // A refusal against the pose the retained scene was rendered at is not a disocclusion.
         // Exposure means the destination shows ground the source cannot cover, and the answer to
         // it is a completed scene; when the source already is the completed scene at this exact
@@ -251,6 +252,8 @@ impl Presenter {
             self.main.as_ref(),
         );
         let source_slot = self.hot_warp_source[hot_slot.index() as usize];
+        let mut presented_plan = self.hot_warp_plan[hot_slot.index() as usize]
+            .unwrap_or_else(|| clear_warp_plan(false, true));
         let source = source_slot
             .frame(self.ledger.retained(), self.ledger.held())
             .cloned();
@@ -263,6 +266,7 @@ impl Presenter {
             .is_some();
         if source.is_none() {
             self.clear_hot_source(hot_slot);
+            presented_plan = clear_warp_plan(presented_plan.edge_on, true);
         }
         let selected = self
             .main
@@ -298,6 +302,7 @@ impl Presenter {
             self.rewrite_hot_warp(hot_slot, &fallback);
             self.hot_exposed[hot_slot.index() as usize] = fallback.exposed;
             self.facts.record_warp_plan(&fallback, None);
+            presented_plan = fallback;
             held_stale = fallback.kind == WarpKind::HoldStale;
             if !fallback.source_valid {
                 source_scene_id = None;
@@ -368,6 +373,18 @@ impl Presenter {
         };
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
+        let requested = self.hot[hot_slot.index() as usize]
+            .as_ref()
+            .expect("try_frame already checked that the HOT slot was written");
+        self.pending_presentation = Some((
+            warp_id,
+            presentation_ledger_entry(
+                &presented_plan,
+                requested,
+                source.as_ref(),
+                [state.canvas_width, state.canvas_height],
+            ),
+        ));
         // The map may only be asked for once the commands carrying the copy have been submitted.
         if let Some(copy) = armed_capture {
             self.retain_encoded_readback(copy);
@@ -398,6 +415,17 @@ impl Presenter {
             exposed: self.hot_exposed[hot_slot.index() as usize],
             status: self.facts.status.clone(),
         })
+    }
+
+    /// Commits one completed warp's mapped positions after the app presents its surface texture.
+    pub fn record_presented(&mut self, warp_id: u64) {
+        let Some((pending_id, entry)) = self.pending_presentation else {
+            return;
+        };
+        if pending_id == warp_id {
+            self.pending_presentation = None;
+            self.facts.presentation_ledger.record(entry);
+        }
     }
 
     /// Publishes the destination lattice the plan rows were built against to the warp fragment.

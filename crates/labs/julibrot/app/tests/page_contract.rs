@@ -29,7 +29,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 123] = [
+const PAGE_FACT_FIELDS: [&str; 125] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -131,6 +131,8 @@ const PAGE_FACT_FIELDS: [&str; 123] = [
     "warp_p95_error_px",
     "warp_exposed_fraction",
     "warp_kind",
+    "warp_refusal_reason",
+    "presentation_ledger",
     "scene_wall_ms",
     "scene_fence_wait_ms",
     "scene_polls",
@@ -748,6 +750,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(MAIN.contains("wasm_bundle_bytes"));
     assert!(MAIN.contains("javascript_bundle_bytes"));
     assert!(MAIN.contains("wasm_instance_count: 2"));
+    assert!(MAIN.contains("for (const [name, value] of Object.entries(facts))"));
     assert!(FACTS.contains("precision_mode: requested.precision_mode.as_str()"));
     assert!(
         FACTS.contains(

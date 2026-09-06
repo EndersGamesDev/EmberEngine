@@ -5,8 +5,8 @@ use ember_julibrot_math::{
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpValidation,
-    apply_homography, compose_homography, height_for_record, identity_warp_rows,
+    LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpRefusalReason,
+    WarpValidation, apply_homography, compose_homography, height_for_record, identity_warp_rows,
     pack_homography_rows,
 };
 
@@ -53,23 +53,27 @@ impl Warp {
             return edge_on();
         }
         if last_frame.pose != *from_pose {
-            return clear_only(true);
+            return clear_only(true, Some(WarpRefusalReason::PoseMismatch));
         }
         if renders_same_picture(from_pose, to_pose) {
-            return exact_self(last_frame, to_pose).unwrap_or_else(|| clear_only(true));
+            return exact_self(last_frame, to_pose)
+                .unwrap_or_else(|| clear_only(true, Some(WarpRefusalReason::Matrix)));
         }
         if !object_samples_match(from_pose, to_pose) {
-            return clear_only(true);
+            return clear_only(true, Some(WarpRefusalReason::ObjectSamples));
         }
         let Ok(flat) = warp_matrix(from_pose, to_pose) else {
-            return clear_only(true);
+            return clear_only(true, Some(WarpRefusalReason::Matrix));
         };
         let chart_residual = chart_residual(from_pose, to_pose);
         if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
-            return clear_only(true);
+            return clear_only(
+                true,
+                Some(WarpRefusalReason::ChartResidual { px: chart_residual }),
+            );
         }
         anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual).map_or_else(
-            || clear_only(true),
+            || clear_only(true, Some(WarpRefusalReason::Matrix)),
             |plan| enforce_error_ceiling(plan, from_pose, to_pose),
         )
     }
@@ -78,7 +82,10 @@ impl Warp {
 /// Selects retained-record redraw when the image homography exceeds the displayed-error ceiling.
 ///
 /// A measured over-ceiling plan keeps its source identity only in the geometrically exact redraw
-/// family. Every other over-ceiling or unmeasurable plan clears and waits for a sampled scene.
+/// family. Every other over-ceiling plan clears and waits for a sampled scene. A corpus with
+/// scene-limit refusals retains the metrics from its finite subset but remains refused: those
+/// numbers describe the error where both scenes draw, not permission to paint a source point
+/// where the destination scene draws sky.
 ///
 /// A plan only reaches here once the retained records have been shown to describe the destination:
 /// the object samples match and the plane-chart residual is inside its limit. What remains is
@@ -91,18 +98,34 @@ impl Warp {
 /// escape records still describe the destination exactly, so redrawing them under the new pose
 /// reprojects the motion with no new sampling at all.
 ///
-/// An unmeasurable corpus is a different matter. It means a perspective limit fell on the sampled
+/// A corpus refusal is a different matter. It means a perspective limit fell on the sampled
 /// relief of one of the poses, where that pose has no drawn point to compare against, so the plan
-/// stays an honest `ClearOnly`.
+/// stays an honest `ClearOnly` even if every resolved displacement is below one pixel.
 fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
-    match plan.approx_max_error_px {
-        Some(error) if error <= WARP_MAX_ERROR_PX => return plan,
-        Some(_) if exact_relief_redraw_family(from_pose, to_pose) => {
-            plan.exposed = true;
-            plan.kind = WarpKind::ReliefRedraw;
+    if let Some(max_px) = plan.approx_max_error_px {
+        if max_px <= WARP_MAX_ERROR_PX && plan.refusal_reason.is_none() {
             return plan;
         }
-        Some(_) | None => {}
+        if max_px > WARP_MAX_ERROR_PX
+            && plan.refusal_reason.is_none()
+            && exact_relief_redraw_family(from_pose, to_pose)
+        {
+            plan.exposed = true;
+            plan.kind = WarpKind::ReliefRedraw;
+            plan.refusal_reason = None;
+            return plan;
+        }
+        if max_px > WARP_MAX_ERROR_PX {
+            plan.refusal_reason = Some(WarpRefusalReason::ErrorCeiling {
+                max_px,
+                p95_px: plan.approx_p95_error_px.unwrap_or(max_px),
+            });
+        }
+    }
+    if plan.refusal_reason.is_none() {
+        plan.refusal_reason = Some(WarpRefusalReason::ErrorCorpus {
+            refused_samples: 0,
+        });
     }
     plan.source_scene_id = None;
     plan.source_texture_index = None;
@@ -169,7 +192,7 @@ fn object_samples_match(from: &Pose, to: &Pose) -> bool {
     plane_chart_relation(from.plane, to.plane).is_some()
 }
 
-const fn clear_only(exposed: bool) -> WarpPlan {
+const fn clear_only(exposed: bool, refusal_reason: Option<WarpRefusalReason>) -> WarpPlan {
     WarpPlan {
         rows: identity_warp_rows(),
         // A clear plan samples nothing, so it maps between no lattices. The rows are the neutral
@@ -181,6 +204,7 @@ const fn clear_only(exposed: bool) -> WarpPlan {
         edge_on: false,
         exposed,
         kind: WarpKind::ClearOnly,
+        refusal_reason,
         chart_residual: 0.0,
         approx_max_error_px: None,
         approx_p95_error_px: None,
@@ -239,6 +263,7 @@ fn exact_self(last_frame: &SceneFrame, to_pose: &Pose) -> Option<WarpPlan> {
         edge_on: false,
         exposed: false,
         kind: WarpKind::AnchorHomography,
+        refusal_reason: None,
         chart_residual: 0.0,
         approx_max_error_px: Some(0.0),
         approx_p95_error_px: Some(0.0),
@@ -249,7 +274,7 @@ const fn edge_on() -> WarpPlan {
     WarpPlan {
         edge_on: true,
         exposed: false,
-        ..clear_only(false)
+        ..clear_only(false, Some(WarpRefusalReason::EdgeOn))
     }
 }
 
@@ -285,8 +310,17 @@ fn anchor_plan(
     // Rounding to f32 is what the corpus is there to catch, so it reads the rounded rows.
     let displayed_sampling = pack_homography_rows(inverse_sampling)
         .map(|solved| core::array::from_fn(|index| f64::from(solved[index / 3][index % 3])))?;
-    let metrics = sampled_errors(from_pose, to_pose, displayed_sampling)
-        .and_then(ErrorSamples::maximum_and_p95);
+    let (metrics, refusal_reason) = sampled_errors(from_pose, to_pose, displayed_sampling).map_or(
+        (None, Some(WarpRefusalReason::Matrix)),
+        |samples| {
+            let refused_samples = samples.refused_samples;
+            let metrics = samples.maximum_and_p95();
+            let reason = (refused_samples > 0).then_some(WarpRefusalReason::ErrorCorpus {
+                refused_samples,
+            });
+            (metrics, reason)
+        },
+    );
     Some(WarpPlan {
         rows,
         lattice: Some(lattice),
@@ -296,6 +330,7 @@ fn anchor_plan(
         edge_on: false,
         exposed: warp_exposes_source(inverse_sampling, from_pose, to_pose),
         kind: WarpKind::AnchorHomography,
+        refusal_reason,
         chart_residual,
         approx_max_error_px: metrics.map(|value| value.0),
         approx_p95_error_px: metrics.map(|value| value.1),
@@ -361,14 +396,16 @@ fn in_front_of_horizon(pose: &Pose, screen: [f64; 2]) -> bool {
 /// exterior sky is what the scene pass leaves there and the warp pass carries it across, so there
 /// is no reprojection error to measure. Refusing instead cleared the surface of every pose whose
 /// horizon crossed the frame, a settled pose warping onto itself included. Everything else that
-/// cannot be projected — a perspective pole on the sampled surface — still refuses, as does a
-/// non-finite error, which is broken arithmetic rather than geometry. `None` means the corpus
-/// could not be measured at all.
+/// cannot be projected — a perspective limit on the sampled surface — is counted as a refusal
+/// while the finite subset remains measured. The eventual plan still refuses, because omitting
+/// such a point from the error maximum cannot prove that painting it is honest. Broken homography
+/// arithmetic or a non-finite error still abandons the measurement.
 #[derive(Clone)]
 struct ErrorSamples {
     values: [f64; ERROR_SAMPLE_CAPACITY],
     len: usize,
     maximum: f64,
+    refused_samples: u16,
 }
 
 impl ErrorSamples {
@@ -377,6 +414,7 @@ impl ErrorSamples {
             values: [0.0; ERROR_SAMPLE_CAPACITY],
             len: 0,
             maximum: 0.0,
+            refused_samples: 0,
         }
     }
 
@@ -385,6 +423,10 @@ impl ErrorSamples {
         self.len += 1;
         self.maximum = self.maximum.max(error);
         Some(())
+    }
+
+    const fn refuse(&mut self) {
+        self.refused_samples = self.refused_samples.saturating_add(1);
     }
 
     #[cfg(test)]
@@ -425,14 +467,18 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
                 continue;
             }
             for height in HEIGHT_SAMPLES {
-                // A refusal on either side abandons the whole measurement. Skipping the sample
-                // instead is fail-open in one direction: where the destination refuses a sample
-                // the source draws, an approved homography paints the source's relief into ground
-                // the settled frame shows as sky, which is the same wrong claim the scene pass
-                // refuses to make itself. The horizon skip above is not that case, because a
-                // sample beyond the destination's horizon is sky in the warp output too.
-                let destination_relief = project_scene_point(to_pose, target_screen, height)?;
-                let expected_source = project_scene_point(from_pose, source_screen, height)?;
+                // A refusal on either side still refuses the eventual plan. The finite subset is
+                // retained only as a fact: where the destination refuses a sample the source
+                // draws, an approved homography would paint relief into ground the settled frame
+                // shows as sky. The horizon skip above is not that case, because a sample beyond
+                // the destination's horizon is sky in the warp output too.
+                let (Some(destination_relief), Some(expected_source)) = (
+                    project_scene_point(to_pose, target_screen, height),
+                    project_scene_point(from_pose, source_screen, height),
+                ) else {
+                    errors.refuse();
+                    continue;
+                };
                 let approximate_source = apply_homography(approximate, destination_relief)?;
                 let pixel_error = (approximate_source[0] - expected_source[0])
                     .hypot(approximate_source[1] - expected_source[1]);
@@ -694,8 +740,6 @@ fn project_scene_vertex_with_shortcut(
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::Write as _;
-
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
         Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, ViewControls, construct_plane,
@@ -835,10 +879,6 @@ mod tests {
         posed
     }
 
-    #[allow(
-        dead_code,
-        reason = "the diagnostic panic renders these fields through Debug"
-    )]
     #[derive(Clone, Copy, Debug)]
     struct ProjectionRefusalProbe {
         stage: &'static str,
@@ -916,8 +956,8 @@ mod tests {
             world[1],
             (-yaw_sine).mul_add(world[0], yaw_cosine * world[2]),
         ];
-        let view_z = pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2])
-            - pose.view.distance_four;
+        let view_z =
+            pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - pose.view.distance_four;
         let clip_w = -view_z;
         if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
             return ProjectionRefusalProbe {
@@ -934,27 +974,202 @@ mod tests {
     }
 
     #[test]
-    fn zoom_jump_owner_row_abandons_a_partly_measurable_corpus() {
+    fn zoom_jump_owner_row_pins_the_partial_error_field_and_refusal() {
         let from = zoom_jump_owner_pose();
-        let mut report = String::new();
-        for zoom_delta in [0.1, 0.5] {
+        let expected = [
+            (
+                0.1,
+                0.000_021_977,
+                392.085_472_392,
+                240.877_878_211,
+                [
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(19.911_291),
+                    Some(33.254_552),
+                    Some(49.754_385),
+                    Some(68.988_327),
+                    None,
+                    None,
+                    Some(21.880_124),
+                    Some(25.636_723),
+                    Some(34.168_389),
+                    Some(47.285_329),
+                    Some(64.069_364),
+                    Some(83.797_534),
+                    Some(105.982_738),
+                    Some(44.244_403),
+                    Some(45.245_518),
+                    Some(48.565_945),
+                    Some(55.790_670),
+                    Some(67.413_193),
+                    Some(83.036_910),
+                    Some(101.994_403),
+                    Some(123.688_176),
+                    Some(147.657_360),
+                    Some(74.638_051),
+                    Some(77.483_225),
+                    Some(83.565_241),
+                    Some(93.523_058),
+                    Some(107.372_366),
+                    Some(124.730_478),
+                    Some(145.087_059),
+                    Some(167.959_965),
+                    Some(192.945_631),
+                    Some(111.075_316),
+                    Some(116.136_646),
+                    Some(124.564_892),
+                    Some(136.566_346),
+                    Some(152.005_436),
+                    Some(170.545_123),
+                    Some(191.779_995),
+                    Some(215.317_692),
+                    Some(240.813_196),
+                    Some(152.434_306),
+                    Some(159.487_858),
+                    Some(169.758_263),
+                    Some(183.260_912),
+                    Some(199.816_019),
+                    Some(219.132_034),
+                    Some(240.877_878),
+                    Some(264.729_551),
+                    Some(290.393_211),
+                    Some(197.427_379),
+                    Some(206.119_107),
+                    Some(217.793_085),
+                    Some(232.380_697),
+                    Some(249.696_248),
+                    Some(269.487_732),
+                    Some(291.479_144),
+                    Some(315.399_005),
+                    Some(340.996_112),
+                    Some(244.948_566),
+                    Some(254.936_419),
+                    Some(267.659_192),
+                    Some(283.012_864),
+                    Some(300.820_015),
+                    Some(320.861_881),
+                    Some(342.904_669),
+                    Some(366.717_917),
+                    Some(392.085_472),
+                ],
+            ),
+            (
+                0.5,
+                0.000_016_655,
+                462_160.819_165_915,
+                13_115.006_849_981,
+                [
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(165.364_629),
+                    Some(277.295_411),
+                    Some(425.338_209),
+                    Some(612.998_006),
+                    None,
+                    None,
+                    Some(178.220_419),
+                    Some(236.979_251),
+                    Some(335.507_823),
+                    Some(478.091_260),
+                    Some(668.037_274),
+                    Some(910.934_624),
+                    Some(1_215.696_358),
+                    Some(352.180_183),
+                    Some(406.511_407),
+                    Some(492.214_256),
+                    Some(622.250_031),
+                    Some(806.458_578),
+                    Some(1_054.074_457),
+                    Some(1_376.935_702),
+                    Some(1_792.335_558),
+                    Some(2_326.321_194),
+                    Some(760.941_865),
+                    Some(890.557_684),
+                    Some(1_074.949_776),
+                    Some(1_330.507_244),
+                    Some(1_676.420_434),
+                    Some(2_138.604_488),
+                    Some(2_755.798_500),
+                    Some(3_589.870_531),
+                    Some(4_745.828_890),
+                    Some(1_505.318_475),
+                    Some(1_790.767_820),
+                    Some(2_183.983_565),
+                    Some(2_725.972_147),
+                    Some(3_479.752_509),
+                    Some(4_551.444_108),
+                    Some(6_137.725_065),
+                    Some(8_649.875_320),
+                    Some(13_115.006_850),
+                    Some(2_986.485_101),
+                    Some(3_685.475_758),
+                    Some(4_699.632_589),
+                    Some(6_236.740_504),
+                    Some(8_741.034_663),
+                    Some(13_372.019_457),
+                    Some(24_424.223_505),
+                    Some(82_031.845_980),
+                    Some(82_015.314_400),
+                    Some(6_813.626_937),
+                    Some(9_430.420_190),
+                    Some(14_471.188_675),
+                    Some(27_599.386_698),
+                    Some(135_017.537_547),
+                    Some(56_785.904_105),
+                    Some(25_529.152_305),
+                    Some(17_337.308_606),
+                    Some(13_598.386_384),
+                    Some(33_646.531_805),
+                    Some(462_160.819_166),
+                    Some(44_310.691_351),
+                    Some(22_488.521_652),
+                    Some(15_709.416_576),
+                    Some(12_446.994_679),
+                    Some(10_551.842_982),
+                    Some(9_327.762_066),
+                    Some(8_481.343_553),
+                ],
+            ),
+        ];
+        for expected_case in expected {
+            let (zoom_delta, expected_residual, expected_max, expected_p95, expected_field) =
+                expected_case;
             let mut to = from;
             to.zoom_log2 += zoom_delta;
             let flat = warp_matrix(&from, &to).expect("a centred zoom has a finite flat map");
             let residual = chart_residual(&from, &to);
-            let raw = anchor_plan(
-                &frame(&from),
-                &from,
-                &to,
-                flat.forward,
-                residual,
-            )
-            .expect("the owner row has a finite anchor plan");
+            let raw = anchor_plan(&frame(&from), &from, &to, flat.forward, residual)
+                .expect("the owner row has a finite anchor plan");
             let approximate = unpack_rows(raw.rows);
             let mut resolved = ErrorSamples::new();
             let mut screen_maxima = [None; 81];
-            let mut horizons = Vec::new();
-            let mut refusals = Vec::new();
+            let mut horizon_points = 0_u16;
+            let mut near_limit_refusals = 0_u16;
             for row in 0..SCREEN_STEPS {
                 for column in 0..SCREEN_STEPS {
                     let target_screen = [
@@ -968,7 +1183,7 @@ mod tests {
                     if !in_front_of_horizon(&to, target_screen)
                         || !in_front_of_horizon(&from, source_screen)
                     {
-                        horizons.push((row, column));
+                        horizon_points = horizon_points.saturating_add(1);
                         continue;
                     }
                     for height in HEIGHT_SAMPLES {
@@ -988,17 +1203,24 @@ mod tests {
                                         .map_or(error, |maximum: f64| maximum.max(error)),
                                 );
                             }
-                            (destination, source) => refusals.push((
-                                row,
-                                column,
-                                height,
-                                destination
-                                    .is_none()
-                                    .then(|| projection_refusal_probe(&to, target_screen, height)),
-                                source.is_none().then(|| {
-                                    projection_refusal_probe(&from, source_screen, height)
-                                }),
-                            )),
+                            (destination, source) => {
+                                for refusal in [
+                                    destination.is_none().then(|| {
+                                        projection_refusal_probe(&to, target_screen, height)
+                                    }),
+                                    source.is_none().then(|| {
+                                        projection_refusal_probe(&from, source_screen, height)
+                                    }),
+                                ]
+                                .into_iter()
+                                .flatten()
+                                {
+                                    assert_eq!(refusal.stage, "fifth-dimensional near limit");
+                                    assert!((refusal.limit - 0.4).abs() < 1.0e-12);
+                                    assert!(refusal.value < refusal.limit);
+                                }
+                                near_limit_refusals = near_limit_refusals.saturating_add(1);
+                            }
                         }
                     }
                 }
@@ -1009,19 +1231,29 @@ mod tests {
                 .expect("some owner-row samples resolve");
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
-            assert_eq!(plan.approx_max_error_px, None);
+            assert_eq!(plan.approx_max_error_px, Some(metrics.0));
+            assert_eq!(plan.approx_p95_error_px, Some(metrics.1));
+            assert_eq!(plan.refusal_reason, Some(WarpRefusalReason::ErrorCeiling {
+                max_px: metrics.0,
+                p95_px: metrics.1,
+            }));
             assert!(raw.source_valid);
-            assert!(residual <= MAX_CHART_RESIDUAL_PX);
-            writeln!(
-                report,
-                "owner zoom +{zoom_delta:.1}: chart_residual={residual:.9} resolved={} max={:.9} p95={:.9}\nfield={screen_maxima:.6?}\nhorizons={horizons:?}\nrefusals={refusals:#?}",
-                resolved.len(),
-                metrics.0,
-                metrics.1,
-            )
-            .expect("writing to a String cannot fail");
+            assert_eq!(resolved.len(), 320);
+            assert_eq!(horizon_points, 5);
+            assert_eq!(near_limit_refusals, 60);
+            assert!((residual - expected_residual).abs() < 5.0e-10);
+            assert!((metrics.0 - expected_max).abs() < 5.0e-7);
+            assert!((metrics.1 - expected_p95).abs() < 5.0e-7);
+            for (actual, expected) in screen_maxima.into_iter().zip(expected_field) {
+                match (actual, expected) {
+                    (Some(actual), Some(expected)) => {
+                        assert!((actual - expected).abs() < 1.0e-6);
+                    }
+                    (None, None) => {}
+                    _ => panic!("owner-row screen field changed: {actual:?} != {expected:?}"),
+                }
+            }
         }
-        panic!("diagnostic measurement round:\n{report}");
     }
 
     fn frame(pose: &Pose) -> SceneFrame {
@@ -1081,9 +1313,10 @@ mod tests {
         let mut large_object = large.object;
         large_object.rho_13 += 0.3;
         set_object(&mut large, large_object);
+        let large_plan = reproject(&frame(&from), &from, &large);
         assert_eq!(
-            reproject(&frame(&from), &from, &large).kind,
-            WarpKind::ClearOnly
+            (large_plan.kind, large_plan.refusal_reason),
+            (WarpKind::ClearOnly, Some(WarpRefusalReason::ObjectSamples))
         );
 
         let mut rounded = from;
@@ -1605,11 +1838,10 @@ mod tests {
 
     #[test]
     fn the_five_dimensional_near_limit_refuses_and_resampling_still_clears() {
-        // Three of this fixture's five census heights lift past `0.05 * d5` and are refused, so
-        // the corpus has a height it cannot measure and abandons the measurement. Moving the
-        // sampling lattice still requires fresh records either way, so the plan clears rather
-        // than mislabelling stale records as an exact redraw; what the refusal changes is that
-        // the clear is now the unmeasurable one rather than an over-ceiling number.
+        // Three of this fixture's five census heights lift past `0.05 * d5` and are refused.
+        // Moving the sampling lattice still requires fresh records, so the plan clears rather
+        // than mislabelling stale records as an exact redraw. Finite samples remain publishable,
+        // but they do not turn the refused heights into drawable points.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
@@ -1622,10 +1854,14 @@ mod tests {
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::ClearOnly);
         assert!(!plan.source_valid);
-        assert_eq!(
-            plan.approx_max_error_px, None,
-            "a corpus holding a refused height reports no error rather than a partial one"
-        );
+        assert!(plan.approx_max_error_px.is_none_or(f64::is_finite));
+        match plan.refusal_reason {
+            Some(WarpRefusalReason::ErrorCorpus { refused_samples }) => {
+                assert!(refused_samples > 0);
+            }
+            Some(WarpRefusalReason::ErrorCeiling { .. }) => {}
+            other => panic!("the near-limit corpus needs its measured refusal: {other:?}"),
+        }
     }
 
     /// The owner's broken row, taken from the page's own Copy row JSON.

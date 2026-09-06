@@ -2,10 +2,14 @@
 
 use ember_julibrot_kernels::{KernelMode, RefinementLevel};
 use ember_julibrot_math::{precision_for, scaled_pixel_scale};
-use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
+use ember_julibrot_present::{
+    PresentationLedger, PresentationLedgerEntry, SampleClass, SubmissionMeasurement,
+    WarpRefusalReason,
+};
 use std::fmt;
 use std::sync::Arc;
 
+use serde::ser::{SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
 use crate::{App, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingLedger};
@@ -27,6 +31,53 @@ impl Serialize for String {
         S: Serializer,
     {
         serializer.serialize_str(&self.0)
+    }
+}
+
+/// One planner refusal serialized as its stable human-readable fact string.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WarpRefusalFact(WarpRefusalReason);
+
+impl Serialize for WarpRefusalFact {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(&self.0)
+    }
+}
+
+/// Borrowed oldest-to-newest view of the presenter's fixed-capacity position ledger.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresentationLedgerFacts<'a>(&'a PresentationLedger);
+
+impl Serialize for PresentationLedgerFacts<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(None)?;
+        for entry in self.0.iter() {
+            sequence.serialize_element(&PresentationLedgerEntryFacts(entry))?;
+        }
+        sequence.end()
+    }
+}
+
+struct PresentationLedgerEntryFacts<'a>(&'a PresentationLedgerEntry);
+
+impl Serialize for PresentationLedgerEntryFacts<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("PresentationLedgerEntry", 5)?;
+        state.serialize_field("scene_id", &self.0.scene_id)?;
+        state.serialize_field("level", &self.0.level.map(refinement_level))?;
+        state.serialize_field("warp_kind", &self.0.warp_kind.as_str())?;
+        state.serialize_field("requested_centre_px", &self.0.requested_centre_px)?;
+        state.serialize_field("anchor_px", &self.0.anchor_px)?;
+        state.end()
     }
 }
 
@@ -208,6 +259,8 @@ pub struct PageFacts<'a> {
     pub warp_p95_error_px: Option<f64>,
     pub warp_exposed_fraction: Option<f64>,
     pub warp_kind: &'static str,
+    pub warp_refusal_reason: Option<WarpRefusalFact>,
+    pub presentation_ledger: PresentationLedgerFacts<'a>,
     pub scene_wall_ms: Option<f64>,
     pub scene_fence_wait_ms: Option<f64>,
     pub scene_callback_observation_wall_ms: Option<f64>,
@@ -254,7 +307,7 @@ impl<'a> PageFacts<'a> {
             .scene_footprint([device.width, device.height])
             .ok();
         let loop_facts = app.frame_loop();
-        let present = loop_facts.present_facts();
+        let present = loop_facts.present_facts_ref();
         let dispatch = loop_facts.dispatch_facts();
         let worker = loop_facts.worker_facts();
         let plan = loop_facts.plan();
@@ -385,6 +438,8 @@ impl<'a> PageFacts<'a> {
             warp_p95_error_px: present.warp_p95_error_px,
             warp_exposed_fraction: present.warp_exposed_fraction,
             warp_kind: present.warp_kind.as_str(),
+            warp_refusal_reason: present.warp_refusal_reason.map(WarpRefusalFact),
+            presentation_ledger: PresentationLedgerFacts(&present.presentation_ledger),
             scene_wall_ms: None,
             scene_fence_wait_ms: None,
             scene_callback_observation_wall_ms: present.last_scene.map(|sample| sample.wall_ms),
@@ -499,4 +554,48 @@ fn nonzero(value: u32) -> Option<u32> {
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn ceil_nonnegative_to_u32(value: f64) -> u32 {
     value.max(0.0).ceil().min(f64::from(u32::MAX)) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use ember_julibrot_present::WarpKind;
+
+    use super::*;
+
+    #[test]
+    fn warp_refusal_is_one_string_with_its_measured_errors() {
+        let fact = WarpRefusalFact(WarpRefusalReason::ErrorCeiling {
+            max_px: 392.085_472_392,
+            p95_px: 240.877_878_211,
+        });
+        assert_eq!(
+            serde_json::to_string(&fact).expect("the refusal fact serializes"),
+            "\"ErrorCeiling(max_px=392.09,p95_px=240.88)\""
+        );
+    }
+
+    #[test]
+    fn presentation_entry_serializes_the_driver_facing_shape() {
+        let entry = PresentationLedgerEntry {
+            scene_id: Some(17),
+            level: Some(RefinementLevel::Preview),
+            warp_kind: WarpKind::AnchorHomography,
+            requested_centre_px: Some([480.0, 270.0]),
+            anchor_px: Some([0.0, 0.0]),
+        };
+        let value = serde_json::to_value(PresentationLedgerEntryFacts(&entry))
+            .expect("the presentation ledger entry serializes");
+        assert_eq!(value["scene_id"], 17);
+        assert_eq!(value["level"], "Preview");
+        assert_eq!(value["warp_kind"], "AnchorHomography");
+        assert_eq!(value["requested_centre_px"], serde_json::json!([480.0, 270.0]));
+        assert_eq!(value["anchor_px"], serde_json::json!([0.0, 0.0]));
+
+        let empty = PresentationLedger::default();
+        assert_eq!(
+            serde_json::to_string(&PresentationLedgerFacts(&empty))
+                .expect("the empty ledger serializes"),
+            "[]"
+        );
+    }
 }
