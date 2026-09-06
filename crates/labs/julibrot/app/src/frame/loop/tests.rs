@@ -721,6 +721,7 @@ struct FakePresenter {
     forced_warp_kind: Option<WarpKind>,
     warp_kind: Option<WarpKind>,
     warp_hold_count: u64,
+    warp_relief_redraw_count: u64,
     presented_clear_only: u64,
 }
 
@@ -823,6 +824,10 @@ impl PresenterPoll for FakePresenter {
                 if matches!(event, FakeEvent::WarpCompleted(_)) {
                     if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
                         self.presented_clear_only = self.presented_clear_only.saturating_add(1);
+                    }
+                    if self.pending_warp_kind == Some(WarpKind::ReliefRedraw) {
+                        self.warp_relief_redraw_count =
+                            self.warp_relief_redraw_count.saturating_add(1);
                     }
                     self.presented_scene = self.pending_warp_source.take();
                 }
@@ -2409,7 +2414,6 @@ fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
 struct HeightDragRow {
     name: &'static str,
     distance_five: f64,
-    expected_clear_only: u64,
 }
 
 fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
@@ -2504,7 +2508,6 @@ fn manual_final_height_change_keeps_the_accepted_relief_redraw_live() {
             HeightDragRow {
                 name: "close-d5-2",
                 distance_five: 2.0,
-                expected_clear_only: 81,
             },
             0.0,
             0.4,
@@ -2538,12 +2541,12 @@ struct HeightDragStats {
     clear_only_before: u64,
     clear_only_presentations: u64,
     hold_presentations: u64,
+    relief_redraw_presentations: u64,
     final_after_drag_ms: f64,
 }
 
-/// Drives a moving retained source while the counterfactual `clear_only_before` classification is
-/// measured from one fixed flat source; they agree at these owner rows only because refusal is
-/// destination-driven there.
+/// Drives a moving retained source while the `clear_only_before` classification is also measured
+/// from one fixed flat source; both must remain painted throughout either height-drag fixture.
 #[allow(
     clippy::print_stderr,
     clippy::too_many_lines,
@@ -2656,45 +2659,38 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
         clear_only_before,
         clear_only_presentations: presenter.presented_clear_only,
         hold_presentations: presenter.warp_hold_count,
+        relief_redraw_presentations: presenter.warp_relief_redraw_count,
         final_after_drag_ms: clock.now_ms - drag_ended_ms,
     };
     eprintln!(
-        "height_drag row={} clear_only_before={} clear_only_after={} holds={} final_ms={:.3}",
+        "height_drag row={} clear_only_plans={} clear_only_presented={} holds={} relief_redraws={} final_ms={:.3}",
         row.name,
         stats.clear_only_before,
         stats.clear_only_presentations,
         stats.hold_presentations,
+        stats.relief_redraw_presentations,
         stats.final_after_drag_ms,
     );
     stats
 }
 
 #[test]
-fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_round() {
+fn three_second_height_drag_keeps_both_measured_rows_painted_and_settles_in_one_round() {
     for row in [
         HeightDragRow {
             name: "gentle-d5-8",
             distance_five: 8.0,
-            expected_clear_only: 24,
         },
         HeightDragRow {
             name: "close-d5-2",
             distance_five: 2.0,
-            expected_clear_only: 81,
         },
     ] {
         let stats = drive_height_drag(row);
-        assert_eq!(
-            stats.clear_only_before, row.expected_clear_only,
-            "{}",
-            row.name
-        );
+        assert_eq!(stats.clear_only_before, 0, "{}", row.name);
         assert_eq!(stats.clear_only_presentations, 0, "{}", row.name);
-        assert_eq!(
-            stats.hold_presentations, row.expected_clear_only,
-            "{}",
-            row.name
-        );
+        assert_eq!(stats.hold_presentations, 0, "{}", row.name);
+        assert!(stats.relief_redraw_presentations > 0, "{}", row.name);
         assert!(
             stats.final_after_drag_ms <= 3.0 * (1_000.0 / 30.0),
             "{}",
