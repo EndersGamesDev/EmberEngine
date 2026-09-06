@@ -1,4 +1,4 @@
-// Read-only public release proof; run after the existing Pages publisher.
+// Read-only public release proof; run after the scoped v28 UI publisher.
 // Compares deployed bytes to local built artifacts, including frozen v27.
 'use strict';
 const fs = require('node:fs');
@@ -26,7 +26,8 @@ async function main() {
   assert.equal(live[0].proto, 21);
   const html = String(await get('games/arena/v28/index.html'));
   const settingsHash = sha(fs.readFileSync('web/games/arena/v28/settings.js'));
-  assert(html.includes(`./settings.js?v=${book.v}`) || html.includes(`./settings.js?v=${settingsHash.slice(0, 12)}`));
+  assert.equal(html, fs.readFileSync('web/games/arena/v28/index.html', 'utf8')
+    .replace('./settings.js?v=1', `./settings.js?v=${settingsHash.slice(0, 12)}`), 'v28 HTML and settings cache token');
   const pairs = [['web/games/arena/v28/settings.js', 'games/arena/v28/settings.js']];
   for (const [name, directory] of [['arena', 'games/arena/v28'],
     ['kings', 'games/kings/v1'], ['what_is_this', 'games/what-is-this/v1'],
