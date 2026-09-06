@@ -54,5 +54,11 @@
       "kings_version": "r582",
       "kings_commit": "3926c07"
     }
+  ],
+  "mirrors": [
+    {
+      "url": "https://raw.githubusercontent.com/enderPeer/barza/ember-host/host.json",
+      "name": "knecht24"
+    }
   ]
 }
