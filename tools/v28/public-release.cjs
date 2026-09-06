@@ -25,7 +25,8 @@ async function main() {
   assert.equal(live[0].path, 'games/arena/v28/');
   assert.equal(live[0].proto, 21);
   const html = String(await get('games/arena/v28/index.html'));
-  assert(html.includes(`./settings.js?v=${book.v}`));
+  const settingsHash = sha(fs.readFileSync('web/games/arena/v28/settings.js'));
+  assert(html.includes(`./settings.js?v=${book.v}`) || html.includes(`./settings.js?v=${settingsHash.slice(0, 12)}`));
   const pairs = [['web/games/arena/v28/settings.js', 'games/arena/v28/settings.js']];
   for (const [name, directory] of [['arena', 'games/arena/v28'],
     ['kings', 'games/kings/v1'], ['what_is_this', 'games/what-is-this/v1'],

@@ -22,6 +22,12 @@ Shared combat tests: five-health spawn/respawn, head versus shoulder/edge/body r
 
 ## Status
 
+### Fullscreen menu follow-up (2026-09-06)
+
+Added a prominent Fullscreen mode card near the top of Settings, available before and during a match, with current state, Enter/Exit, browser-F11 guidance and unavailable/refused feedback. The existing quick button shares the same controller. Fullscreen now targets the document so lobby, HUD and menu remain available; match-only styling expands the canvas, and an open modal is restored above the fullscreen top-layer entry. The button cancels pending rebinding without assigning a mouse button, never resumes gameplay or requests pointer lock, and keeps Resume pinned on mobile. This is a DOM-only UI change: no Rust/WASM/protocol/server restart, no other game's release changes. Publish only `games/arena/v28/index.html` and `settings.js`, using the first 12 SHA256 characters of settings.js as its cache token; preserve deployed server/version/catalog and all other files. Do not run the broad publisher while main has older Fire source.
+
+Verified: 69 pure settings/inline/storage checks and 42 real-page/WASM/private-server browser assertions (7.436 seconds browser; 7.929 seconds combined command), including fullscreen state/refusal/unavailable, pre-match/in-match pointer gesture during rebinding, neutral outgoing input, shared button and mobile visibility. Desktop/mobile screenshots inspected. Independent read-only review found no blocker. Not verified: actual trusted fullscreen/pointer-lock permission or real browser Escape/top-layer transitions, deliberately stubbed to avoid operating the user's screen. Public byte verification follows scoped publication. PR posting is unavailable without the repository's WSL gh setup; source branch and Barza carry the handoff.
+
 Completed and publicly verified on 2026-09-06. Arena v28 and its protocol21 server serve source `f28a145f` / r1469. Public URL: https://endersgamesdev.github.io/EmberEngine/games/arena/v28/. Worktree: `C:/Users/end/dev/ember-controls`, branch `codex/combat-controls`, base main `7500af5d`. Checkpoint `0df4f4af` remains available in history.
 
 ### Implemented

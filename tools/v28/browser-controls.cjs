@@ -25,6 +25,7 @@ const entry = `${origin}/games/arena/v28/index.html`;
 const started = Date.now();
 const report = { passed: false, proto, checks: [], errors: [], warnings: [], serverLog: [], screenshots: [], limits: [
   'Synthetic DOM events only; trusted pointer-lock/fullscreen permission is deliberately stubbed.',
+  'Fullscreen state and refusal handling are tested with DOM stubs, not actual fullscreen layout or browser permissions.',
   'One real player on a disposable private server; no claim about remote-player combat.',
   'No physical gamepad or native settings GUI coverage.',
 ] };
@@ -99,10 +100,12 @@ function instrument({ gameUrl, proto }) {
   Object.defineProperty(navigator, 'gpu', { value: undefined, configurable: true });
   Object.defineProperty(navigator, 'getGamepads', { value: () => [], configurable: true });
   window.__qa = { inputs: [], states: 0, shots: 0, joined: null, welcome: null, draws: 0,
-    sockets: [], focusCalls: 0, captureCalls: 0, fullscreenCalls: 0, errors: [] };
+    sockets: [], focusCalls: 0, captureCalls: 0, fullscreenCalls: 0, fullscreenExitCalls: 0,
+    fullscreenSupported: true, rejectFullscreen: false, errors: [] };
   let locked = null, fullscreen = null;
   Object.defineProperty(document, 'pointerLockElement', { get: () => locked, configurable: true });
   Object.defineProperty(document, 'fullscreenElement', { get: () => fullscreen, configurable: true });
+  Object.defineProperty(document, 'fullscreenEnabled', { get: () => window.__qa.fullscreenSupported, configurable: true });
   HTMLElement.prototype.focus = function() {
     window.__qa.focusCalls++;
     this.dispatchEvent(new FocusEvent('focus'));
@@ -121,9 +124,21 @@ function instrument({ gameUrl, proto }) {
     locked = null; queueMicrotask(() => document.dispatchEvent(new Event('pointerlockchange')));
   };
   Element.prototype.requestFullscreen = function() {
-    window.__qa.fullscreenCalls++; fullscreen = this; return Promise.resolve();
+    window.__qa.fullscreenCalls++;
+    if (window.__qa.rejectFullscreen) return Promise.reject(new DOMException('Synthetic fullscreen rejection.', 'NotAllowedError'));
+    fullscreen = this;
+    queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+    return Promise.resolve();
   };
-  document.exitFullscreen = () => { fullscreen = null; return Promise.resolve(); };
+  document.exitFullscreen = () => {
+    window.__qa.fullscreenExitCalls++; fullscreen = null;
+    queueMicrotask(() => document.dispatchEvent(new Event('fullscreenchange')));
+    return Promise.resolve();
+  };
+  window.__qa.externalFullscreenExit = () => {
+    fullscreen = null;
+    document.dispatchEvent(new Event('fullscreenchange'));
+  };
   const NativeWebSocket = window.WebSocket;
   window.WebSocket = class ObservedWebSocket extends NativeWebSocket {
     constructor(url, protocols) {
@@ -256,11 +271,96 @@ async function shot(name) {
   report.screenshots.push({ file, sha256: crypto.createHash('sha256').update(bytes).digest('hex') });
 }
 
+const fullscreenSnapshot = () => page.evaluate(() => ({
+  state: document.querySelector('#settings-fullscreen-state')?.textContent.trim(),
+  help: document.querySelector('#settings-fullscreen-help')?.textContent.trim(),
+  disabled: document.querySelector('#settings-fullscreen')?.disabled,
+  wholeDocument: document.fullscreenElement === document.documentElement,
+  active: Boolean(document.fullscreenElement),
+  menu: document.querySelector('#arena-settings').open,
+  paused: window.__emberArenaSettings.paused,
+  inputPaused: window.__emberInputPaused,
+  bindings: JSON.stringify(window.__emberArenaSettings.bindings),
+  captures: window.__qa.captureCalls,
+  enters: window.__qa.fullscreenCalls,
+  exits: window.__qa.fullscreenExitCalls,
+}));
+async function waitFullscreen(state) {
+  await page.waitForFunction(state => document.querySelector('#settings-fullscreen-state')?.textContent.trim() === state,
+    state, { timeout: 5000 });
+}
+async function fullscreenMenu(phase) {
+  const before = await fullscreenSnapshot();
+  check(before.state === 'Windowed' && !before.active && !before.disabled,
+    `${phase}: menu fullscreen control starts supported and windowed`);
+  // Use the complete authored pointer gesture while a binding capture is armed.
+  // A click-only test would miss an input router that rebinds on pointerdown.
+  await domClick(actionSelector('Move forward'));
+  await pointer(0, true, '#settings-fullscreen');
+  await pointer(0, false, '#settings-fullscreen');
+  await domClick('#settings-fullscreen');
+  await waitFullscreen('Fullscreen');
+  let state = await fullscreenSnapshot();
+  check(state.wholeDocument && state.enters === before.enters + 1 && state.menu
+    && state.paused && state.inputPaused && state.captures === before.captures
+    && state.bindings === before.bindings,
+  `${phase}: fullscreen pointer gesture enters the whole document without rebinding or resuming`, state);
+  // Either retaining or cancelling the pending capture is acceptable; make the
+  // remainder of this fixture independent of that UI choice.
+  await key('Escape', true, '#arena-settings'); await key('Escape', false, '#arena-settings');
+  await domClick('#settings-fullscreen'); await waitFullscreen('Windowed');
+  state = await fullscreenSnapshot();
+  check(!state.active && state.exits === before.exits + 1 && state.menu
+    && state.paused && state.inputPaused && state.captures === before.captures,
+  `${phase}: menu fullscreen exit keeps gameplay paused`);
+
+  await domClick('#settings-fullscreen'); await waitFullscreen('Fullscreen');
+  const exits = (await fullscreenSnapshot()).exits;
+  await page.evaluate(() => window.__qa.externalFullscreenExit());
+  await waitFullscreen('Windowed');
+  state = await fullscreenSnapshot();
+  check(!state.active && state.exits === exits && state.menu && state.paused
+    && state.inputPaused && state.captures === before.captures,
+  `${phase}: external fullscreen exit synchronizes status without recapturing`);
+
+  const helpBefore = state.help;
+  await page.evaluate(() => { window.__qa.rejectFullscreen = true; });
+  await domClick('#settings-fullscreen');
+  await page.waitForFunction(previous => {
+    const text = document.querySelector('#settings-fullscreen-help')?.textContent.trim();
+    return text && text !== previous;
+  }, helpBefore, { timeout: 5000 });
+  state = await fullscreenSnapshot();
+  check(state.state === 'Windowed' && !state.active && state.menu && state.paused && state.inputPaused
+    && state.captures === before.captures && /refus|deni|could not|fail|block|not allow/i.test(state.help),
+  `${phase}: rejected fullscreen request reports an error without resuming`, { help: state.help });
+  await page.evaluate(() => { window.__qa.rejectFullscreen = false; });
+  await page.evaluate(() => { window.__qa.fullscreenSupported = false; window.__qa.externalFullscreenExit(); });
+  state = await fullscreenSnapshot();
+  check(state.disabled && state.menu && state.paused && /unavailable/i.test(state.help),
+    `${phase}: unsupported fullscreen is disabled with a browser fallback hint`);
+  await page.evaluate(() => { window.__qa.fullscreenSupported = true; window.__qa.externalFullscreenExit(); });
+}
+
+async function fullscreenSharedButton() {
+  const before = await fullscreenSnapshot();
+  check(!before.menu && !before.paused && !before.active, 'shared fullscreen test begins in active windowed gameplay');
+  await domClick('#btn-fullscreen'); await waitFullscreen('Fullscreen');
+  let state = await fullscreenSnapshot();
+  check(state.wholeDocument && !state.menu && !state.paused && !state.inputPaused
+    && state.captures === before.captures, 'in-match shared button uses the same fullscreen state without changing controls');
+  await domClick('#btn-fullscreen'); await waitFullscreen('Windowed');
+  state = await fullscreenSnapshot();
+  check(!state.active && !state.menu && !state.paused && !state.inputPaused
+    && state.captures === before.captures, 'in-match shared button exits fullscreen without changing controls');
+}
+
 async function preferencesBeforeMatch() {
   await page.goto(entry);
   await page.waitForFunction(() => window.__qa.welcome && document.querySelector('#host-chip').textContent.includes('controls-qa'), null, { timeout: 60000 });
   await domClick('#btn-settings');
   check(await page.evaluate(() => document.querySelector('#arena-settings').open && window.__emberInputPaused), 'settings opens before a match');
+  await fullscreenMenu('before match');
   await slider(2);
   await rebind('Move forward', 'KeyS');
   check((await config()).bindings.forward[0] === 'KeyW' && /already used/.test(await page.locator('#settings-feedback').textContent()), 'duplicate assignment rejected');
@@ -287,6 +387,20 @@ async function preferencesBeforeMatch() {
   check(layout.left >= 0 && layout.right <= layout.width + 1 && layout.top >= 0 && layout.bottom <= layout.height + 1
     && layout.resumeTop >= layout.top && layout.resumeBottom <= layout.bottom
     && (!layout.scroll || ['auto', 'scroll'].includes(layout.overflow)), '390px settings dialog fits, scrolls and keeps Resume visible', layout);
+  const display = await page.evaluate(() => {
+    const button = document.querySelector('#settings-fullscreen'), state = document.querySelector('#settings-fullscreen-state');
+    const bounds = button.getBoundingClientRect(), stateBounds = state.getBoundingClientRect();
+    const content = document.querySelector('#arena-settings .settings-inner').getBoundingClientRect();
+    return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+      contentTop: content.top, contentBottom: content.bottom, width: bounds.width, height: bounds.height,
+      stateTop: stateBounds.top, stateBottom: stateBounds.bottom, stateHeight: stateBounds.height,
+      hidden: getComputedStyle(button).visibility === 'hidden' || getComputedStyle(button).display === 'none' };
+  });
+  check(!display.hidden && display.width > 0 && display.height > 0 && display.stateHeight > 0
+    && display.left >= layout.left && display.right <= layout.right
+    && display.top >= display.contentTop && display.bottom <= display.contentBottom
+    && display.stateTop >= display.contentTop && display.stateBottom <= display.contentBottom,
+  '390px fullscreen control and current state are visible in the mobile settings card', display);
   await shot('settings-mobile');
   await page.setViewportSize({ width: 1600, height: 900 });
   await domClick('#settings-reset');
@@ -308,7 +422,11 @@ async function joinPrivateMatch() {
   const details = await page.evaluate(() => ({ welcome: window.__qa.welcome, gl: window.__qa.gl, joined: window.__qa.joined }));
   check(details.welcome.proto === proto && details.gl && details.joined, 'actual WASM joins owned protocol21 server and draws WebGL2', details);
   check((await config()).paused, 'match begins paused until explicit Resume');
+  const pausedMark = await index();
+  await fullscreenMenu('in match');
+  check((await packetsAfter(pausedMark)).every(neutral), 'fullscreen menu interactions keep every actual outgoing action neutral');
   await resume();
+  await fullscreenSharedButton();
   const mark = await index(); await key('KeyW', true);
   check((await packetsAfter(mark)).some(moving), 'default W produces actual movement packets');
   await key('KeyW', false); await packetsAfter(await index());
@@ -407,7 +525,9 @@ main().catch(async error => {
   if (page) {
     report.failureState = await page.evaluate(() => ({ settings: window.__emberArenaSettings, qa: window.__qa,
       dialog: document.querySelector('#arena-settings')?.open, status: document.querySelector('#status')?.textContent,
-      feedback: document.querySelector('#settings-feedback')?.textContent })).catch(() => null);
+      feedback: document.querySelector('#settings-feedback')?.textContent,
+      fullscreenState: document.querySelector('#settings-fullscreen-state')?.textContent,
+      fullscreenHelp: document.querySelector('#settings-fullscreen-help')?.textContent })).catch(() => null);
     await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
   }
 }).finally(async () => {

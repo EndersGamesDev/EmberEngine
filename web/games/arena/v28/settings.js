@@ -89,6 +89,7 @@
     .arena-settings[open]{display:flex;flex-direction:column;overflow:hidden}.arena-settings .settings-inner{padding:24px 26px;min-height:0;overflow-y:auto}.arena-settings .settings-top{display:flex;align-items:start;justify-content:space-between;gap:16px}
     .arena-settings h2{font-size:1.45rem;letter-spacing:-.03em;margin:0;color:#fff}.arena-settings .eyebrow{font-size:.7rem;text-transform:uppercase;letter-spacing:.18em;color:#f0b429;margin:0 0 5px}
     .arena-settings p{margin:6px 0 16px;color:#a8bad3}.arena-settings .settings-note{background:#f0b42910;border:1px solid #f0b42935;border-radius:9px;padding:10px 12px;color:#f0cf84;font-size:.82rem}
+    .arena-settings .display-card{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:18px 0;padding:15px;background:linear-gradient(115deg,#23436280,#0b1b2e);border:1px solid #49678c;border-radius:12px}.arena-settings .display-title{display:flex;align-items:center;gap:9px;font-size:1rem;font-weight:650;color:#fff}.arena-settings .display-icon{font-size:1.5rem;color:#f0b429;line-height:1}.arena-settings .display-state{display:block;color:#9cc9ef;font-size:.75rem;margin-top:3px}.arena-settings .display-help{font-size:.75rem;margin:5px 0 0;max-width:36ch}.arena-settings #settings-fullscreen{flex-shrink:0;background:#d8e9fa;color:#0a1a2c;border-color:#d8e9fa;font-weight:700;padding:10px 14px}.arena-settings #settings-fullscreen:hover{background:#fff}.arena-settings #settings-fullscreen:disabled{cursor:default}
     .arena-settings .sensitivity-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:20px}.arena-settings label{opacity:1;color:#e5edf8;font-size:.9rem}.arena-settings output{color:#f0b429;font-weight:650;font-variant-numeric:tabular-nums}
     .arena-settings input[type=range]{padding:8px 0;accent-color:#f0b429;width:100%;border:0;background:transparent}.arena-settings .range-labels{display:flex;justify-content:space-between;color:#8ea4c2;font-size:.75rem}
     .arena-settings fieldset{border:0;padding:0;margin:22px 0 0;min-width:0}.arena-settings legend{padding:0;font-weight:650;font-size:.95rem}.arena-settings .binding-help{font-size:.78rem;margin:4px 0 12px}
@@ -97,6 +98,7 @@
     .arena-settings .binding-button{font-size:.76rem;white-space:nowrap;max-width:64%;overflow:hidden;text-overflow:ellipsis}.arena-settings .binding-button[aria-pressed=true]{border-color:#f0b429;color:#f0cf84;background:#684a1540}
     .arena-settings .settings-feedback{min-height:2.8em;font-size:.8rem;margin:12px 0;color:#f0cf84}.arena-settings .settings-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid #2b3e58;padding:16px 26px;flex-shrink:0;background:#091523}.arena-settings .resume-button{background:#eab336;color:#07101b;border-color:#eab336;font-weight:700;padding:10px 20px}.arena-settings .resume-button:hover{background:#ffd068}.arena-settings .save-caption{font-size:.7rem;color:#8ea4c2;margin:10px 0 0}
     @media(max-width:540px){.arena-settings .settings-inner{padding:18px 16px}.arena-settings .binding-grid{grid-template-columns:1fr}.arena-settings .binding-button{max-width:60%}.arena-settings .settings-actions{align-items:stretch}.arena-settings h2{font-size:1.25rem}}
+    @media(max-width:400px){.arena-settings .display-card{flex-wrap:wrap;gap:10px}.arena-settings #settings-fullscreen{width:100%}}
     @media(prefers-reduced-transparency:reduce){.arena-settings::backdrop{backdrop-filter:none;background:#020912ee}}
   `;
   document.head.append(style);
@@ -106,8 +108,9 @@
   dialog.setAttribute('aria-describedby', 'settings-notice');
   dialog.innerHTML = `<div class="settings-inner">
     <div class="settings-top"><div><div class="eyebrow">Ember Arena · Personal setup</div><h2 id="settings-title">Make it feel right.</h2></div></div>
-    <p>Mouse sensitivity and controls, saved on this browser.</p>
+    <p>Display mode, plus mouse sensitivity and controls saved on this browser.</p>
     <div id="settings-notice" class="settings-note">Set up before joining. In multiplayer, opening this menu does not pause the match.</div>
+    <section class="display-card" aria-labelledby="settings-display-title"><div><div class="display-title" id="settings-display-title"><span class="display-icon" aria-hidden="true">⛶</span> Fullscreen mode</div><span id="settings-fullscreen-state" class="display-state" role="status">Windowed</span><p id="settings-fullscreen-help" class="display-help">Fill your screen with the game. F11 is the separate browser shortcut on desktop.</p></div><button type="button" id="settings-fullscreen" aria-describedby="settings-fullscreen-help" aria-pressed="false">Enter fullscreen</button></section>
     <div class="sensitivity-head"><label for="arena-sensitivity">Mouse sensitivity</label><output id="arena-sensitivity-value" for="arena-sensitivity">1.00×</output></div>
     <input id="arena-sensitivity" type="range" min="0.1" max="3" step="0.05" value="1" aria-describedby="sensitivity-help">
     <div id="sensitivity-help" class="range-labels"><span>0.10× · precise</span><span>1× default</span><span>3× · fast</span></div>
@@ -119,6 +122,53 @@
   const $ = id => document.getElementById(id);
   const slider = $('arena-sensitivity'), sensitivityValue = $('arena-sensitivity-value');
   const feedback = $('settings-feedback'), resumeButton = $('settings-resume');
+  const fullscreenButton = $('settings-fullscreen'), fullscreenState = $('settings-fullscreen-state');
+  const fullscreenHelp = $('settings-fullscreen-help');
+  let fullscreenPending = false, fullscreenError = '';
+  const browserFullscreen = root.matchMedia?.('(display-mode: fullscreen)');
+  function refreshFullscreen() {
+    const active = Boolean(document.fullscreenElement);
+    const browserMode = !active && Boolean(browserFullscreen?.matches);
+    const supported = Boolean(document.documentElement.requestFullscreen) && document.fullscreenEnabled !== false;
+    fullscreenState.textContent = active ? 'Fullscreen' : browserMode ? 'Fullscreen · browser' : 'Windowed';
+    fullscreenButton.textContent = active ? 'Exit fullscreen' : browserMode ? 'Use F11 to exit' : 'Enter fullscreen';
+    fullscreenButton.setAttribute('aria-pressed', String(active || browserMode));
+    fullscreenButton.disabled = fullscreenPending || browserMode || (!active && !supported);
+    fullscreenHelp.textContent = fullscreenError || (browserMode
+      ? 'Browser fullscreen is controlled by F11 or your browser menu.'
+      : !supported && !active ? 'Fullscreen is unavailable here. Try your browser’s fullscreen option on desktop.'
+      : 'Fill your screen with the game. F11 is the separate browser shortcut on desktop.');
+    const quickButton = $('btn-fullscreen');
+    if (quickButton) {
+      quickButton.textContent = active ? '⛶ Exit fullscreen' : browserMode ? 'F11 to exit fullscreen' : '⛶ Fullscreen';
+      quickButton.disabled = fullscreenButton.disabled;
+      quickButton.setAttribute('aria-pressed', String(active || browserMode));
+    }
+  }
+  async function toggleFullscreen() {
+    if (fullscreenButton.disabled) return;
+    capturing = null; fullscreenError = ''; fullscreenPending = true;
+    refresh(); refreshFullscreen();
+    try {
+      // Fullscreen the page so the lobby, HUD and settings remain available.
+      // Only this click requests fullscreen; it never resumes game input.
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch {
+      fullscreenError = 'Fullscreen was refused by the browser. Try again, or use F11 on desktop.';
+    } finally { fullscreenPending = false; refreshFullscreen(); }
+  }
+  fullscreenButton.addEventListener('click', toggleFullscreen);
+  $('btn-fullscreen')?.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    fullscreenError = ''; refreshFullscreen();
+    // Keep the modal above a newly fullscreen element in the top layer.
+    if (dialog.open) {
+      const focused = document.activeElement;
+      dialog.close(); dialog.showModal(); focused?.focus?.({ preventScroll: true });
+    }
+  });
+  browserFullscreen?.addEventListener?.('change', refreshFullscreen);
   const buttons = new Map();
   function announce(message) { feedback.textContent = message; }
   function save(message) {
@@ -165,7 +215,7 @@
       dialog.showModal();
     }
     if (document.pointerLockElement) document.exitPointerLock();
-    refresh(); announce(message || initialNote || (playing ? 'Changes apply immediately. Choose Resume game when ready.' : 'Changes apply immediately. Choose Done when ready.'));
+    refresh(); refreshFullscreen(); announce(message || initialNote || (playing ? 'Changes apply immediately. Choose Resume game when ready.' : 'Changes apply immediately. Choose Done when ready.'));
     initialNote = '';
   }
   function closeMenu() {
@@ -223,7 +273,7 @@
       if (playing) { openMenu(); stop(event); return; }
     }
     if (dialog.open) {
-      const menuAction = event.target?.closest?.('#binding-cancel, #settings-resume, #settings-reset');
+      const menuAction = event.target?.closest?.('#binding-cancel, #settings-resume, #settings-reset, #settings-fullscreen');
       if (capturing && down && !event.repeat && !menuAction) {
         if (event.altKey || event.ctrlKey || event.metaKey) announce('Browser shortcut combinations cannot be assigned.');
         else acceptBinding(code);
@@ -277,10 +327,11 @@
     open: () => openMenu(),
     setPlaying(value) {
       playing = Boolean(value);
+      document.documentElement.classList.toggle('arena-playing', playing);
       if (playing) openMenu('Choose Resume game to capture your mouse.');
       else { publish(true); pendingLock = false; closeMenu(); }
       refresh();
     },
   });
-  refresh();
+  refresh(); refreshFullscreen();
 })(typeof window === 'undefined' ? null : window);
