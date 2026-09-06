@@ -1,5 +1,6 @@
 // Scoped Arena-only Pages publisher. PREPARE ONLY unless --push is explicit.
 // Run after a clean source commit, its Arena build, and server-first proto22 deployment.
+// The client protocol/address transition is atomic with the eight allowed files.
 // Required build attestation: --build-commit=<full SHA> --wasm-sha256=<tested SHA256>.
 // Those values must be recorded by the operator at build/QA time, not guessed here.
 // No builds, service changes, address-book writes, force push or peer rebuilds.
@@ -10,6 +11,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const { readyHost, arenaBook } = require('./release-book.cjs');
 const root = process.cwd(), started = Date.now();
 const args = process.argv.slice(2);
 const option = name => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -21,22 +23,9 @@ const git = (directory, ...argv) => execFileSync('git', ['-c', 'core.autocrlf=fa
 const text = (directory, ...argv) => String(git(directory, ...argv)).trim();
 const read = file => fs.readFileSync(path.join(root, file));
 const entry = 'games/arena/v29';
-const allowed = ['index.html', 'games.json', 'version.json', `${entry}/index.html`,
+const allowed = ['index.html', 'games.json', 'version.json', 'server.json', `${entry}/index.html`,
   `${entry}/settings.js`, `${entry}/pkg/arena.js`, `${entry}/pkg/arena_bg.wasm`];
 let worktree;
-async function welcome(url) {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const done = (error, result) => { clearTimeout(timer); socket.close(); error ? reject(error) : resolve(result); };
-    const timer = setTimeout(() => done(new Error('Compatible host Welcome timed out')), 12000);
-    socket.onopen = () => socket.send(JSON.stringify({ t: 'hello', proto: 0, handle: 'v29-publish-readonly' }));
-    socket.onmessage = event => {
-      const message = JSON.parse(event.data);
-      if (message.t === 'welcome') done(null, message);
-    };
-    socket.onerror = () => done(new Error('Compatible host socket failed'));
-  });
-}
 async function main() {
   os.setPriority(0, os.constants.priority.PRIORITY_LOW);
   assert.equal(text(root, 'status', '--porcelain'), '', 'Source must be completely clean, including untracked files');
@@ -53,12 +42,10 @@ async function main() {
   const base = text(root, 'rev-parse', 'origin/gh-pages');
   const getBase = file => git(root, 'show', `${base}:${file}`);
   const bookBytes = getBase('server.json'), book = JSON.parse(bookBytes);
-  assert.equal(book.proto, 22, 'Address-book top-level Arena protocol must already be22');
-  const host = book.hosts?.find(host => host.proto === 22 && host.ws === book.ws);
-  assert(host, 'Legacy Arena address must select a published protocol22 host');
-  const live = await welcome(host.ws);
-  assert.equal(live.proto, 22, 'Published compatible host does not actually serve protocol22');
-  assert(live.commit && commit.startsWith(live.commit), 'Live Arena server is not the clean source revision');
+  const expected = { fullCommit: commit, version: `r${text(root, 'rev-list', '--count', 'HEAD')}` };
+  const selected = await readyHost(book, expected);
+  const live = selected.welcome;
+  const nextBook = arenaBook(book, selected);
 
   const catalog = JSON.parse(getBase('games.json'));
   const sourceCatalog = JSON.parse(read('web/games.json'));
@@ -85,13 +72,13 @@ async function main() {
   worktree = path.join(temporary, 'pages');
   assert(path.resolve(worktree).startsWith(path.resolve(temporary) + path.sep), 'Invalid temporary worktree');
   git(root, 'worktree', 'add', '--detach', '--no-checkout', worktree, base);
-  git(worktree, 'sparse-checkout', 'set', '--no-cone', '/index.html', '/games.json', '/version.json', `/${entry}/`);
+  git(worktree, 'sparse-checkout', 'set', '--no-cone', '/index.html', '/games.json', '/version.json', '/server.json', `/${entry}/`);
   // --no-checkout can leave an empty index. Populate the ENTIRE tracked index
   // before staging, otherwise a partial checkout can silently delete peers.
   git(worktree, 'read-tree', '-mu', 'HEAD');
   assert.equal(text(worktree, 'write-tree'), text(root, 'rev-parse', `${base}^{tree}`), 'Sparse index does not preserve the original complete tree');
   const writes = { 'index.html': index, 'games.json': JSON.stringify(catalog, null, 2) + '\n',
-    'version.json': JSON.stringify(version, null, 2) + '\n', [`${entry}/index.html`]: html,
+    'version.json': JSON.stringify(version, null, 2) + '\n', 'server.json': JSON.stringify(nextBook, null, 2) + '\n', [`${entry}/index.html`]: html,
     [`${entry}/settings.js`]: settings, [`${entry}/pkg/arena.js`]: arenaJs, [`${entry}/pkg/arena_bg.wasm`]: wasm };
   for (const [relative, bytes] of Object.entries(writes)) {
     const file = path.join(worktree, relative);
@@ -106,16 +93,19 @@ async function main() {
     assert(['A', 'M'].includes(status) && allowed.includes(file), `Out-of-scope staged change: ${change}`);
   }
   const tree = text(worktree, 'write-tree');
-  assert.deepEqual(git(worktree, 'show', `${tree}:server.json`), bookBytes, 'Address book changed');
+  assert.deepEqual(JSON.parse(git(worktree, 'show', `${tree}:server.json`)), nextBook, 'Unexpected address-book change');
   const frozen = ['games/fire', 'games/kings', 'games/what-is-this', 'labs', 'games/arena/v28'];
   for (const prefix of frozen) assert.equal(text(root, 'rev-parse', `${base}:${prefix}`),
     text(worktree, 'rev-parse', `${tree}:${prefix}`), `Peer/frozen tree changed: ${prefix}`);
   assert.equal(text(root, 'status', '--porcelain'), '', 'Source changed during publication preparation');
   assert.equal(sha(read('web/pkg/arena_bg.wasm')), option('wasm-sha256'), 'Build changed during preparation');
+  const rechecked = await readyHost(book, expected);
+  assert.equal(rechecked.host.name, selected.host.name, 'Selected server changed; rerun preparation');
+  assert.equal(rechecked.host.ws, selected.host.ws, 'Host tunnel rotated; rerun preparation');
   const remote = text(root, 'ls-remote', 'origin', 'refs/heads/gh-pages').split(/\s+/)[0];
   assert.equal(remote, base, 'Another worker updated Pages; rerun preparation against their new tree');
   const report = { prepared: true, pushed: false, sourceCommit: commit, base, tree, worktree, version,
-    wasmSha256: sha(wasm), settingsSha256: settingsHash, liveWelcome: live, changes,
+    wasmSha256: sha(wasm), settingsSha256: settingsHash, liveWelcome: live, selectedHost: selected.host.name, changes,
     frozen, buildAttestation: 'Operator-supplied clean-build revision and tested WASM hash; no compiler is run by this publisher.' };
   if (push) {
     git(worktree, 'commit', '-m', `Publish Arena v29 ${version.version} (${version.commit}); preserve peer releases`);

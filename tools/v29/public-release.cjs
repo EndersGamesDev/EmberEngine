@@ -7,7 +7,11 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const preserved = process.env.EMBER_QA_PRESERVED_PAGES || '3dc66e0a';
+const { readyHost, arenaBook } = require('./release-book.cjs');
+const publication = JSON.parse(fs.readFileSync('target/parkour-publish/results.json'));
+assert(publication.pushed && publication.pagesCommit, 'A successful publication report is required');
+const preserved = process.env.EMBER_QA_PRESERVED_PAGES || publication.base;
+assert.equal(preserved, publication.base, 'Preservation base differs from actual publication');
 const base = 'https://endersgamesdev.github.io/EmberEngine/';
 const output = path.resolve(process.env.EMBER_QA_OUTPUT || 'target/parkour-public');
 const started = Date.now(), files = [];
@@ -30,6 +34,8 @@ async function main() {
     .map(async file => JSON.parse(await get(file))));
   assert.deepEqual(version, JSON.parse(fs.readFileSync('web/version.json')), 'Build stamp differs');
   assert.equal(book.proto, 22);
+  const oldBook = JSON.parse(git('show', `${preserved}:server.json`));
+  assert.deepEqual(book, arenaBook(oldBook, { host: { ws: book.ws } }, book.v), 'Only Arena legacy address/protocol/cache may change');
   const live = catalog.games.find(game => game.id === 'arena').versions.filter(version => version.live);
   assert.equal(live.length, 1); assert.equal(live[0].path, 'games/arena/v29/'); assert.equal(live[0].proto, 22);
   const html = String(await get('games/arena/v29/index.html'));
@@ -53,17 +59,8 @@ async function main() {
   const oldIndex = String(git('show', `${preserved}:index.html`));
   assert.equal(String(await get('index.html')), oldIndex.replace("let arenaLivePath = 'games/arena/v28/';", "let arenaLivePath = 'games/arena/v29/';"),
     'Root launcher must only change its Arena fallback');
-  const welcome = await new Promise((resolve, reject) => {
-    const socket = new WebSocket(book.ws);
-    const timeout = setTimeout(() => { socket.close(); reject(new Error('Public Welcome timed out')); }, 12000);
-    socket.onopen = () => socket.send(JSON.stringify({ t: 'hello', proto: 0, handle: 'v29-release-readonly' }));
-    socket.onmessage = event => {
-      const message = JSON.parse(event.data);
-      if (message.t === 'welcome') { clearTimeout(timeout); resolve(message); socket.close(); }
-    };
-    socket.onerror = () => { clearTimeout(timeout); reject(new Error('Public socket failed')); };
-  });
-  assert.equal(welcome.proto, 22); assert.equal(welcome.commit, version.commit);
+  const { host, welcome } = await readyHost(book, { fullCommit: publication.sourceCommit, version: version.version });
+  assert.equal(host.ws, book.ws, 'Current discovered host and published Arena fallback differ');
   const result = { passed: true, preservedPages: preserved, version, welcome, files,
     limits: 'HTTP bytes and read-only Welcome only. Gameplay and eight-player parkour require separate network/browser gates.',
     elapsedSeconds: (Date.now() - started) / 1000 };

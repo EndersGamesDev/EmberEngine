@@ -1,5 +1,9 @@
 # Arena v29: vertical Breakwater Harbor and parkour
 
+## Rollout approval (supersedes historical hold below)
+
+The user explicitly approved proceeding after the final confirmation named automatic Arena, Fire and Kings restarts. Publication is now authorized. A fresh deployment check found the pre-existing Knecht oneshot killing all six server/tunnel children immediately after successful publication, and an inherited lock descriptor that would prevent later ticks once those children survive. The release includes the bounded installer/tick repair and its isolated tests. Pages publication now changes eight paths atomically: the original seven Arena artifacts/catalog/stamp/launcher paths plus only top-level Arena proto/ws/cache keys in server.json. Hosts, mirrors and all peer fields remain untouched; this avoids masking Knecht's rotating mirror. The historical seven-path/server-first-book requirement below is superseded by tools/v29/README.md and the tested current publisher.
+
 ## Scope and ownership
 
 Start from main `b97b87bf` in clean worktree `C:/Users/end/dev/ember-parkour`, branch `codex/harbor-parkour-v29`. Preserve original checkout's unrelated Arena/League changes and every independently published peer release. Root owns protocol/server snapshot/client prediction integration, gates and coordinated release. Workers own shared parkour simulation, authored Harbor geometry/art, and browser page/test preparation plus read-only deployment audit. Only root runs Cargo at Idle priority; no process may operate the user's keyboard, cursor, focus, fullscreen or pointer lock.
