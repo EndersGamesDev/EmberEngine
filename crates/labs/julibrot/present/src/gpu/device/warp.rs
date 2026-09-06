@@ -1,10 +1,3 @@
-use crate::fence::FenceLedger;
-use crate::{
-    FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
-    PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
-    WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
-    exterior_zero, identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
-};
 use super::ledger::{LatticeRefusal, presentation_ledger_entry};
 use super::readback::OffscreenCapturePlan;
 use super::{
@@ -12,6 +5,26 @@ use super::{
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
     enforce_lattice, pose_is_finite, warp_exposed_fraction,
 };
+use crate::fence::FenceLedger;
+use crate::{
+    FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
+    PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
+    WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
+    exterior_zero, identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
+};
+
+/// Keeps the displayed redraw accepted while a render temporarily leases its record span.
+pub(super) const fn retain_relief_plan_during_scene(
+    planned_kind: WarpKind,
+    records_ready: bool,
+    scene_in_flight: bool,
+    presented_kind: Option<WarpKind>,
+) -> bool {
+    planned_kind == WarpKind::ReliefRedraw
+        && !records_ready
+        && scene_in_flight
+        && matches!(presented_kind, Some(WarpKind::ReliefRedraw))
+}
 
 impl Presenter {
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
@@ -70,12 +83,27 @@ impl Presenter {
                 }
             },
         );
+        let relief_records_ready = self.ledger.retained().is_some_and(|source| {
+            plan.destination_pose.is_some_and(|destination| {
+                self.retained_records_support_relief_redraw(source, &destination, selected.1)
+            })
+        });
+        let presented_kind = self
+            .facts
+            .presentation_ledger
+            .iter()
+            .last()
+            .map(|entry| entry.warp_kind);
+        let retain_visible_relief = retain_relief_plan_during_scene(
+            plan.kind,
+            relief_records_ready,
+            self.facts.in_flight_scene_id.is_some(),
+            presented_kind,
+        );
         let plan = if plan.kind == WarpKind::ReliefRedraw
-            && self.ledger.retained().is_none_or(|source| {
-                plan.destination_pose.is_none_or(|destination| {
-                    !self.retained_records_support_relief_redraw(source, &destination, selected.1)
-                })
-            }) {
+            && !relief_records_ready
+            && !retain_visible_relief
+        {
             clear_warp_plan(plan.edge_on, true)
         } else {
             plan
@@ -97,7 +125,7 @@ impl Presenter {
         // Every plan that samples a source states the two lattices it maps between, and a plan
         // whose destination corners leave that source is refused here rather than presented at a
         // scale the geometry does not have.
-        let (plan, lattice_refusal) = enforce_lattice(plan, warp_destination_extent);
+        let (plan, lattice_refusal) = enforce_lattice(&plan, warp_destination_extent);
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -284,11 +312,13 @@ impl Presenter {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
             })?;
-            let destination = presented_plan.destination_pose.as_ref().ok_or(
-                PresentError::Device {
-                    operation: "select relief redraw destination",
-                },
-            )?;
+            let destination =
+                presented_plan
+                    .destination_pose
+                    .as_ref()
+                    .ok_or(PresentError::Device {
+                        operation: "select relief redraw destination",
+                    })?;
             self.prepare_relief_redraw(
                 source,
                 destination,
@@ -302,7 +332,7 @@ impl Presenter {
         let mut held_stale = source_slot.held_stale;
         if planned_relief_redraw && !relief_redraw {
             let (fallback, refusal) = enforce_lattice(
-                apply_hold_policy(
+                &apply_hold_policy(
                     clear_warp_plan(false, true),
                     source.as_ref(),
                     source_slot.hold_on_redraw_refusal,

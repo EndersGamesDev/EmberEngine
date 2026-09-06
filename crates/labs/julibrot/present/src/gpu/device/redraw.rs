@@ -1,4 +1,4 @@
-use crate::{PaletteRecord, PresentDataError, PresentError, Pose, SceneUniform};
+use crate::{PaletteRecord, Pose, PresentDataError, PresentError, SceneUniform};
 
 use super::{
     GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts,

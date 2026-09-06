@@ -502,7 +502,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
         &sampled.pose,
         crate::CLASSIC_PALETTE,
     )
-        .expect("compatible records form a scene uniform");
+    .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
     assert_eq!(uniform.span[1], 64 * 36);
@@ -747,6 +747,36 @@ fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
 }
 
 #[test]
+fn a_presented_relief_plan_survives_only_while_final_leases_its_records() {
+    use super::warp::retain_relief_plan_during_scene;
+
+    assert!(retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        true,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        true,
+        true,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        false,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        true,
+        Some(WarpKind::AnchorHomography),
+    ));
+}
+
+#[test]
 fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_frame() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 62);
@@ -781,13 +811,7 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
         main.grid.span.directory_index
     );
     assert!(
-        relief_scene_uniform(
-            &main.grid,
-            &sampled,
-            &sampled.pose,
-            crate::CLASSIC_PALETTE
-        )
-        .is_ok()
+        relief_scene_uniform(&main.grid, &sampled, &sampled.pose, crate::CLASSIC_PALETTE).is_ok()
     );
 }
 
@@ -1115,8 +1139,8 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
         .expect("the known source vertex reaches the destination chart");
     assert!((uniform_chart[0] - 1.5).abs() < 1.0e-6);
     assert!((uniform_chart[1] + 1.55).abs() < 1.0e-6);
-    let chart_scale = 4.0 * f64::from(uniform.screen_to_plane_row_2[3])
-        / f64::from(uniform.grid[0]);
+    let chart_scale =
+        4.0 * f64::from(uniform.screen_to_plane_row_2[3]) / f64::from(uniform.grid[0]);
     let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
     assert!((display[0] - 0.75).abs() < 1.0e-6);
     assert!((display[1] + 0.775).abs() < 1.0e-6);
@@ -1133,6 +1157,11 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     )
     .expect("the record height is valid")
     .expect("the redraw vertex projects");
+    let destination_pixel_scale =
+        f64::from(destination.grid_width) / f64::from(source.extent[0]);
+    let actual_destination_px = actual
+        .0
+        .map(|coordinate| coordinate * destination_pixel_scale);
     let expected = crate::project_scene_record_vertex(
         &destination,
         [12.0, -12.4],
@@ -1142,8 +1171,8 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     )
     .expect("the record height is valid")
     .expect("the destination vertex projects");
-    assert!((actual.0[0] - expected.0[0]).abs() < 1.0e-9);
-    assert!((actual.0[1] - expected.0[1]).abs() < 1.0e-9);
+    assert!((actual_destination_px[0] - expected.0[0]).abs() < 1.0e-9);
+    assert!((actual_destination_px[1] - expected.0[1]).abs() < 1.0e-9);
     assert!((actual.1 - expected.1).abs() < 1.0e-9);
 }
 
@@ -1380,7 +1409,7 @@ fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
         ];
         for plan in plans {
             assert_eq!(
-                enforce_lattice(plan, destination_extent).1,
+                enforce_lattice(&plan, destination_extent).1,
                 None,
                 "a plan that states its pair is refused on {source_extent:?} to \
                  {destination_extent:?}"
@@ -1395,10 +1424,10 @@ fn a_clear_plan_names_no_lattice_pair_and_is_never_refused_for_one() {
     for (_, destination_extent) in ladder_pairs() {
         let plan = clear_warp_plan(false, true);
         assert_eq!(plan.lattice, None);
-        assert_eq!(enforce_lattice(plan, destination_extent).1, None);
+        assert_eq!(enforce_lattice(&plan, destination_extent).1, None);
         let edge_on = clear_warp_plan(true, false);
         assert_eq!(edge_on.lattice, None);
-        assert_eq!(enforce_lattice(edge_on, destination_extent).1, None);
+        assert_eq!(enforce_lattice(&edge_on, destination_extent).1, None);
     }
 }
 
@@ -1424,7 +1453,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         lattice: None,
         ..held
     };
-    let (refused, reason) = enforce_lattice(unstated, destination_extent);
+    let (refused, reason) = enforce_lattice(&unstated, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert!(!refused.source_valid);
     assert!(
@@ -1440,7 +1469,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         lattice: crate::LatticePair::new(source_extent, [480, 270]),
         ..held
     };
-    let (refused, reason) = enforce_lattice(elsewhere, destination_extent);
+    let (refused, reason) = enforce_lattice(&elsewhere, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert_eq!(
         reason.map(LatticeRefusal::as_str),
@@ -1453,7 +1482,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         rows: crate::identity_warp_rows(),
         ..held
     };
-    let (refused, reason) = enforce_lattice(thumbnail, destination_extent);
+    let (refused, reason) = enforce_lattice(&thumbnail, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert_eq!(
         reason.map(LatticeRefusal::as_str),
@@ -1467,7 +1496,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         exposed: true,
         ..held
     };
-    assert_eq!(enforce_lattice(declared, destination_extent).1, None);
+    assert_eq!(enforce_lattice(&declared, destination_extent).1, None);
 }
 
 /// A hold whose scale cannot be stated stays a clear plan rather than placing the picture.

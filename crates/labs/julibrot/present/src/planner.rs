@@ -247,8 +247,7 @@ fn relief_redraw_exposed_fraction(
             exposed = exposed.saturating_add(u32::from(outside));
         }
     }
-    let coverage =
-        f64::from(exposed) / f64::from(RELIEF_EXPOSURE_STEPS * RELIEF_EXPOSURE_STEPS);
+    let coverage = f64::from(exposed) / f64::from(RELIEF_EXPOSURE_STEPS * RELIEF_EXPOSURE_STEPS);
     Some(if exact_family {
         coverage
     } else {
@@ -276,58 +275,10 @@ pub fn relief_redraw_source_pose(
     };
     if source_extent.contains(&0)
         || [destination.grid_width, destination.grid_height].contains(&0)
-        || plane_chart_relation(source.plane, destination.plane).is_none()
     {
         return None;
     }
-    let source_scale = pixel_scale(source.zoom_log2, source.grid_width).ok()?;
-    let destination_scale = pixel_scale(destination.zoom_log2, destination.grid_width).ok()?;
-    let scale = source_scale / destination_scale;
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    let origin_delta: [f64; 4] =
-        core::array::from_fn(|axis| source.plane_origin[axis] - destination.plane_origin[axis]);
-    let source_basis = [source.plane.basis_u, source.plane.basis_v];
-    let destination_basis = [destination.plane.basis_u, destination.plane.basis_v];
-    let relation: [[f64; 2]; 2] = core::array::from_fn(|destination_axis| {
-        core::array::from_fn(|source_axis| {
-            source_basis[source_axis]
-                .into_iter()
-                .zip(destination_basis[destination_axis])
-                .fold(0.0, |sum, (source, destination)| {
-                    f64::from(source).mul_add(f64::from(destination), sum)
-                })
-                * scale
-        })
-    });
-    let shift: [f64; 2] = core::array::from_fn(|axis| {
-        let origin = origin_delta
-            .into_iter()
-            .zip(destination_basis[axis])
-            .fold(0.0, |sum, (value, basis)| {
-                value.mul_add(f64::from(basis), sum)
-            })
-            / destination_scale;
-        relation[axis][0].mul_add(
-            source.centre_from_reference_px[0],
-            relation[axis][1].mul_add(
-                source.centre_from_reference_px[1],
-                origin - destination.centre_from_reference_px[axis],
-            ),
-        )
-    });
-    let source_to_destination = [
-        relation[0][0],
-        relation[0][1],
-        shift[0],
-        relation[1][0],
-        relation[1][1],
-        shift[1],
-        0.0,
-        0.0,
-        1.0,
-    ];
+    let source_to_destination = source_to_destination_chart(source, destination)?;
     let delivery_to_source = [
         f64::from(source.grid_width) / f64::from(source_extent[0]),
         0.0,
@@ -373,6 +324,58 @@ pub fn relief_redraw_source_pose(
     Some(redraw)
 }
 
+fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<[f64; 9]> {
+    plane_chart_relation(source.plane, destination.plane)?;
+    let source_scale = pixel_scale(source.zoom_log2, source.grid_width).ok()?;
+    let destination_scale = pixel_scale(destination.zoom_log2, destination.grid_width).ok()?;
+    let scale = source_scale / destination_scale;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let origin_delta: [f64; 4] =
+        core::array::from_fn(|axis| source.plane_origin[axis] - destination.plane_origin[axis]);
+    let source_basis = [source.plane.basis_u, source.plane.basis_v];
+    let destination_basis = [destination.plane.basis_u, destination.plane.basis_v];
+    let relation: [[f64; 2]; 2] = core::array::from_fn(|destination_axis| {
+        core::array::from_fn(|source_axis| {
+            source_basis[source_axis]
+                .into_iter()
+                .zip(destination_basis[destination_axis])
+                .fold(0.0, |sum, (source, destination)| {
+                    f64::from(source).mul_add(f64::from(destination), sum)
+                })
+                * scale
+        })
+    });
+    let shift: [f64; 2] = core::array::from_fn(|axis| {
+        let origin = origin_delta
+            .into_iter()
+            .zip(destination_basis[axis])
+            .fold(0.0, |sum, (value, basis)| {
+                value.mul_add(f64::from(basis), sum)
+            })
+            / destination_scale;
+        relation[axis][0].mul_add(
+            source.centre_from_reference_px[0],
+            relation[axis][1].mul_add(
+                source.centre_from_reference_px[1],
+                origin - destination.centre_from_reference_px[axis],
+            ),
+        )
+    });
+    Some([
+        relation[0][0],
+        relation[0][1],
+        shift[0],
+        relation[1][0],
+        relation[1][1],
+        shift[1],
+        0.0,
+        0.0,
+        1.0,
+    ])
+}
+
 fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
     let determinant = matrix[2].mul_add(
         matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
@@ -395,7 +398,10 @@ fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
         matrix[1].mul_add(matrix[6], -matrix[0] * matrix[7]) / determinant,
         matrix[0].mul_add(matrix[4], -matrix[1] * matrix[3]) / determinant,
     ];
-    inverse.iter().all(|value| value.is_finite()).then_some(inverse)
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
 }
 
 const fn clear_only(exposed: bool, refusal_reason: Option<WarpRefusalReason>) -> WarpPlan {
@@ -1524,9 +1530,7 @@ mod tests {
             assert!(
                 (raw.approx_max_error_px.expect("measured maximum") - expected_max).abs() < 0.005
             );
-            assert!(
-                (raw.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005
-            );
+            assert!((raw.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005);
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ReliefRedraw);
             assert_eq!(plan.destination_pose, Some(to));
@@ -1945,7 +1949,7 @@ mod tests {
     }
 
     #[test]
-    fn pole_counterexamples_use_the_vertex_stage_refusal_in_a_relief_redraw() {
+    fn pole_counterexamples_hold_when_their_source_exposure_exceeds_the_redraw_limit() {
         let cases = [
             (
                 counterexample_view(
@@ -1989,10 +1993,18 @@ mod tests {
             let mut to = pose(to_view, displacement);
             to.zoom_log2 = zoom_log2;
             let plan = reproject(&frame(&from), &from, &to);
-            assert_eq!(plan.kind, WarpKind::ReliefRedraw);
-            assert!(plan.source_valid);
-            assert_eq!(plan.destination_pose, Some(to));
-            assert_eq!(plan.approx_max_error_px, None);
+            assert_eq!(plan.kind, WarpKind::ClearOnly);
+            assert!(!plan.source_valid);
+            assert_eq!(plan.destination_pose, None);
+            let Some(WarpRefusalReason::ReliefExposure {
+                predicted_fraction,
+                limit,
+            }) = plan.refusal_reason
+            else {
+                panic!("the extreme pole fixture must name its relief exposure refusal");
+            };
+            assert!(predicted_fraction > limit);
+            assert_eq!(limit, RELIEF_REDRAW_MAX_EXPOSED_FRACTION);
         }
     }
 
@@ -2067,7 +2079,10 @@ mod tests {
         }
 
         fn maximum(from: &Pose, to: &Pose) -> f64 {
-            reproject(&frame(from), from, to)
+            let flat = warp_matrix(from, to).expect("the published relief pair has a flat map");
+            let residual = chart_residual(from, to);
+            anchor_plan(&frame(from), from, to, flat.forward, residual)
+                .expect("the published relief pair has an image candidate")
                 .approx_max_error_px
                 .expect("the published relief fixture is measurable")
         }
@@ -2413,8 +2428,8 @@ mod tests {
                     .expect("the swept plan reports a sampled percentile");
                 assert!(p95 <= error);
                 let plan = enforce_error_ceiling(raw, &from, &to);
-                relief_redraws = relief_redraws
-                    .saturating_add(u32::from(plan.kind == WarpKind::ReliefRedraw));
+                relief_redraws =
+                    relief_redraws.saturating_add(u32::from(plan.kind == WarpKind::ReliefRedraw));
                 observed_max = observed_max.max(error);
                 observed_p95 = observed_p95.max(p95);
             }

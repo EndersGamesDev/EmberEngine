@@ -16,9 +16,9 @@ pub(super) fn presentation_ledger_entry(
     let level = source.map(|frame| frame.level);
     let destination = plan.lattice.map(LatticePair::destination);
     let points = match (plan.kind, destination) {
-        (WarpKind::ReliefRedraw, Some(_)) => source.and_then(|source| {
-            relief_requested_points(plan, source, presented_extent)
-        }),
+        (WarpKind::ReliefRedraw, Some(_)) => {
+            source.and_then(|source| relief_requested_points(plan, source, presented_extent))
+        }
         (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(_)) => source
             .and_then(|source| mapped_requested_points(plan, requested, source, presented_extent)),
         (WarpKind::ClearOnly, _) | (_, None) => None,
@@ -49,6 +49,7 @@ fn relief_requested_points(
     let PoseMap::Mapped(redraw_map) = redraw.map else {
         return None;
     };
+    let redraw_chart_scale = f64::from(source.extent[0]) / f64::from(destination.grid_width);
     let half_source = source.extent.map(|extent| f64::from(extent) * 0.5);
     let requested_points = [
         [0.0, 0.0],
@@ -59,12 +60,15 @@ fn relief_requested_points(
     ];
     let mapped = requested_points.map(|requested_point| {
         apply_homography(destination_map.rows, requested_point)
-            .and_then(|chart| apply_homography(redraw_map.inverse, chart))
+            .map(|chart| chart.map(|coordinate| coordinate * redraw_chart_scale))
+            .and_then(|redraw_chart| apply_homography(redraw_map.inverse, redraw_chart))
             .filter(|source_point| {
-                source_point[0].abs() <= half_source[0]
-                    && source_point[1].abs() <= half_source[1]
+                source_point[0].abs() <= half_source[0] && source_point[1].abs() <= half_source[1]
             })
             .and_then(|source_point| apply_homography(redraw_map.rows, source_point))
+            .map(|redraw_chart| {
+                redraw_chart.map(|coordinate| coordinate / redraw_chart_scale)
+            })
             .and_then(|chart| apply_homography(destination_map.inverse, chart))
             .map(|actual_destination| {
                 presented_pixel(actual_destination, lattice.destination(), presented_extent)
@@ -345,11 +349,11 @@ impl LatticeRefusal {
 /// exposure and does not sample the source texture at all; it draws the retained records as a
 /// mesh, so its rows are not read by the warp fragment.
 pub(super) fn enforce_lattice(
-    plan: crate::WarpPlan,
+    plan: &crate::WarpPlan,
     destination_extent: [u32; 2],
 ) -> (crate::WarpPlan, Option<LatticeRefusal>) {
     if !plan.source_valid {
-        return (plan, None);
+        return (*plan, None);
     }
     let refusal = match plan.lattice {
         None => Some(LatticeRefusal::Unstated),
@@ -361,7 +365,7 @@ pub(super) fn enforce_lattice(
         }
         Some(_) => None,
     };
-    refusal.map_or((plan, None), |refusal| {
+    refusal.map_or((*plan, None), |refusal| {
         (clear_warp_plan(plan.edge_on, true), Some(refusal))
     })
 }

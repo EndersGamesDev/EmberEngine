@@ -412,12 +412,8 @@ fn barycentric(point: [f64; 2], triangle: [RedrawVertex; 3]) -> Option<[f64; 3]>
 }
 
 fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Option<RedrawVertex>> {
-    let redraw_pose = relief_redraw_source_pose(
-        from,
-        [from.grid_width, from.grid_height],
-        to,
-    )
-    .expect("the oracle's relief pair composes a source-lattice pose");
+    let redraw_pose = relief_redraw_source_pose(from, [from.grid_width, from.grid_height], to)
+        .expect("the oracle's relief pair composes a source-lattice pose");
     retained
         .iter()
         .enumerate()
@@ -849,13 +845,8 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.0,
         [0.0; 2],
     );
-    let footprint = scene_footprint(
-        &ObjectAngles::JULIA,
-        &measured_height,
-        EXTENT[0],
-        EXTENT[1],
-    )
-    .expect("the measured height has a finite backdrop footprint");
+    let footprint = scene_footprint(&ObjectAngles::JULIA, &measured_height, EXTENT[0], EXTENT[1])
+        .expect("the measured height has a finite backdrop footprint");
     assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
     assert_eq!(footprint.uncovered_fraction, 0.0);
     assert_fixture(
