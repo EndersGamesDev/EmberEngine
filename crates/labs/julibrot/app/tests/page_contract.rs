@@ -29,7 +29,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 119] = [
+const PAGE_FACT_FIELDS: [&str; 120] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -60,6 +60,7 @@ const PAGE_FACT_FIELDS: [&str; 119] = [
     "kernel_mode",
     "refinement_level",
     "refinement_pending",
+    "picture_finished",
     "scene_mode",
     "scene_update_pending",
     "draft_skipped_count",
@@ -882,6 +883,14 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
         "the module re-schedules from the finished turn, whether or not it threw, and from the wake-up"
     );
     assert!(MAIN.contains("const scheduleFrame = () => lab.schedule();"));
+    // The page's own re-entries ask the loop first. A stopped loop has published a typed cause and
+    // one more turn only restates it, so the automatic-scene checkbox is guarded exactly as the
+    // three loader sites it inherited from were.
+    assert_eq!(
+        MAIN.matches("if (lab.turning()) scheduleFrame();").count(),
+        1,
+        "the page guards its automatic scene re-entry on a loop that is still turning"
+    );
     assert!(FRAME.contains("runtime.complete_warp"));
 }
 
@@ -1000,7 +1009,7 @@ fn the_lab_can_be_opened_settled_and_read_by_a_script() {
         "applyRow(row) {",
         "set(field, value) {",
         "facts() {",
-        "settle({ level = \"Final\", timeoutMs = SETTLE_TIMEOUT_MS } = {}) {",
+        "settle({ level = \"Final\", timeoutMs = SETTLE_TIMEOUT_MS, requireNewScene = false } = {}) {",
         "async frame({ timeoutMs = SETTLE_TIMEOUT_MS } = {}) {",
         "requestMeasurement() {",
         "stop() {",
@@ -1008,13 +1017,13 @@ fn the_lab_can_be_opened_settled_and_read_by_a_script() {
     ] {
         assert!(LAB.contains(required), "missing lab entry: {required}");
     }
-    // Settling is three conditions and no fewer: the delivered level is the one asked for, nothing
-    // is pending, and no scene is in flight. A number read off a moving frame is a number about a
-    // picture that no longer exists.
-    assert!(LAB.contains("facts.refinement_level === level &&"));
-    assert!(LAB.contains("facts.refinement_pending === false &&"));
-    assert!(LAB.contains("facts.scene_update_pending === false &&"));
-    assert!(LAB.contains("facts.in_flight_scene_id === null"));
+    // Settling asks the app's own composed answer rather than reassembling one: the named level
+    // must be the delivered one AND the picture must be finished at the view now being asked for.
+    // A number read off a moving frame is a number about a picture that no longer exists, and a
+    // number read off a delivered level alone is a number about the picture before this one.
+    assert!(
+        LAB.contains("if (facts.refinement_level === level && facts.picture_finished === true) {")
+    );
     assert!(LAB.contains("if (facts.loop_stopped_reason) {"));
     // The module is the lab, not a second page: the document beyond the canvas it is handed, and
     // the storage the control page keeps its boxes in, are none of its business.
@@ -1034,6 +1043,7 @@ fn the_lab_can_be_opened_settled_and_read_by_a_script() {
 #[test]
 fn the_presented_frame_is_read_back_without_a_context_flag() {
     const READBACK: &str = include_str!("../../present/src/gpu/device/readback.rs");
+    const WARP_SUBMIT: &str = include_str!("../../present/src/gpu/device/warp.rs");
     // The flag that used to be needed is named nowhere: a readback that requires the page to be
     // rebuilt with a different context cannot claim to report what the page draws.
     for source in [INDEX, MAIN, LAB, DRIVE, WORKER, RUNTIME, LIB] {
@@ -1062,12 +1072,52 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
     assert!(capture < present);
     assert!(RUNTIME.contains("capture(&frame.texture);"));
     assert!(RUNTIME.contains("frame_copy_supported"));
+    // Two routes, chosen from what the surface answered and from nothing else. The direct one is
+    // unavailable on the floor this lab targets — a WebGL2 swapchain surface offers no copy usage —
+    // so a lab with only that route would refuse every request on the device class it is for.
+    assert!(RUNTIME.contains("let frame_copy_route = frame_readback_route(capabilities.usages);"));
+    assert!(READBACK.contains("pub const fn frame_readback_route(surface_usages: wgpu::TextureUsages) -> FrameReadbackRoute {"));
+    assert!(READBACK.contains("Self::Surface => \"copied from the surface\","));
+    assert!(READBACK.contains(
+        "Self::OffscreenRerender => \"copied from an offscreen re-render of the presented pass\","
+    ));
+    assert!(FRAME.contains("fn stage_frame_capture(&mut self) {"));
+    assert!(LIB.contains("\"frame_capture_route\": facts.route,"));
+    assert!(LIB.contains("\"frame_capture_copy_route\": facts.copy_route,"));
+    // The fallback draws the same call into a copy source inside the presentation submission, so
+    // the two encodes cannot be separated: the second is appended to the first's encoder before it
+    // is submitted, and nothing runs between them. A target of another extent would be a second
+    // draw of a different picture, and that is the refusal the guard names.
+    let present_encode = WARP_SUBMIT
+        .find("encode_image_warp(")
+        .expect("the presentation pass encodes the warp");
+    let capture_encode = WARP_SUBMIT
+        .find("self.encode_offscreen_capture(&mut encoder, extent, plan)")
+        .expect("the capture is encoded in the presentation submission");
+    let submit = WARP_SUBMIT
+        .find("self.queue.submit([encoder.finish()]);")
+        .expect("one submission");
+    assert!(present_encode < capture_encode && capture_encode < submit);
+    assert!(READBACK.contains("operation: \"copy a frame whose target extent is not the presented extent\","));
+    // Neither route answers an empty picture. A failed map is a typed refusal, a copy short of its
+    // own extent is a typed refusal, a capture the pass could not encode leaves its reason behind
+    // for the loop to publish, and the module refuses a byte count the extent does not justify.
+    assert!(READBACK.contains("operation: \"map a presented frame copy\","));
+    assert!(READBACK.contains("if rgba.len() != packed_bytes(extent) {"));
+    assert!(READBACK.contains("operation: \"assemble a complete frame copy\","));
+    assert!(READBACK.contains("pub const fn take_frame_readback_refusal(&mut self) -> Option<PresentError> {"));
+    assert!(WARP_SUBMIT.contains("self.frame_readback_refusal = Some(error);"));
+    assert!(FRAME.contains("if let Some(refusal) = self.presenter.take_frame_readback_refusal() {"));
+    assert!(LAB.contains("if (state.frame_capture_refusal) {"));
+    assert!(LAB.contains("if (bytes.length !== expected) {"));
     // On request only. A loop that copied the surface every turn would spend its budget measuring
     // its own readback rather than the picture.
     assert!(LIB.contains("pub fn app_request_frame_capture()"));
     assert!(LIB.contains("pub fn app_take_frame_rgba()"));
     assert!(LIB.contains("pub fn app_frame_capture_json()"));
-    assert!(FRAME.contains("let armed =\n                            self.frame_capture.armed && !self.presenter.frame_readback_pending();"));
+    assert!(FRAME.contains("let armed = crate::CaptureArming {"));
+    assert!(FRAME.contains("route_matches: self.frame_capture.route"));
+    assert!(FRAME.contains(".surface_due();"));
 }
 
 /// The driver page is a canvas, a report, and nothing a person has to move.
@@ -1103,4 +1153,162 @@ fn the_driver_page_states_the_row_and_prints_the_census_beside_the_facts() {
     assert!(DRIVE.contains("new URLSearchParams(globalThis.location.search)"));
     assert!(DRIVE.contains("event.data.kind === \"JulibrotRow\""));
     assert!(!DRIVE.contains("localStorage"));
+}
+
+/// A settle must not resolve on the picture before the one it was called about.
+///
+/// The delivered refinement level is a property of the last completed scene and survives a control
+/// move: applying a row on top of a delivered Final leaves `refinement_level` at Final, the pending
+/// flags clear and nothing in flight, until the loop next turns. A predicate reading only those
+/// three answers "finished" about the previous picture, and a driver applying rows in a loop
+/// measures every one of them one row late. The fourth condition is the one that cannot be faked by
+/// a persisting level: the image on the canvas belongs to the view being asked for now.
+#[test]
+fn a_finished_picture_is_finished_at_the_current_view_and_not_merely_at_a_delivered_level() {
+    use ember_lab_julibrot::PictureState;
+    const IDLE: PictureState = PictureState {
+        refinement_pending: false,
+        scene_update_pending: false,
+        scene_in_flight: false,
+        presented_view_stale: false,
+    };
+    // The state the moment a row lands on a delivered Final: the ladder looks idle and the level
+    // still reads Final, and the answer is false because the presented image is the old row's.
+    assert!(
+        !PictureState {
+            presented_view_stale: true,
+            ..IDLE
+        }
+        .finished()
+    );
+    // The same state once the new scene has completed and the presented stamp matches the request.
+    assert!(IDLE.finished());
+    // Each of the other three alone is enough to say the picture is not finished.
+    assert!(
+        !PictureState {
+            refinement_pending: true,
+            ..IDLE
+        }
+        .finished()
+    );
+    assert!(
+        !PictureState {
+            scene_update_pending: true,
+            ..IDLE
+        }
+        .finished()
+    );
+    assert!(
+        !PictureState {
+            scene_in_flight: true,
+            ..IDLE
+        }
+        .finished()
+    );
+    // The fact is composed once, in the app, from exactly those four readings, so the page and a
+    // driver cannot each assemble their own idea of finished.
+    assert!(FACTS.contains("picture_finished: crate::PictureState {"));
+    assert!(FACTS.contains("loop_facts.presented_view_is_stale(app.viewer()),"));
+    // And the module reads that one fact rather than reassembling it from field names.
+    assert!(LAB.contains("if (facts.refinement_level === level && facts.picture_finished === true) {"));
+    assert!(!LAB.contains("facts.refinement_pending === false"));
+    // A verdict is never reached before a turn has run, because a row applied a moment ago has
+    // changed the controls and not yet reached the loop that marks the picture stale.
+    assert!(LAB.contains(
+        "      // Deliberately no synchronous verdict. A row applied a moment ago has changed the controls"
+    ));
+    assert!(LAB.contains("if (requireNewScene && facts.completed_scene_id === baselineScene) return false;"));
+}
+
+/// An armed copy is taken on the present it was armed for, and on no other.
+///
+/// The two guards are the whole of "on request only, never per frame": deleting either one turns a
+/// diagnostic that costs a surface-sized transfer into a cost every frame pays. They are stated as
+/// functions rather than as conditions inside the loop so that removing one is a failing test
+/// rather than a source-text search that a rewording would slip past.
+#[test]
+fn a_frame_copy_is_taken_only_where_one_was_armed_and_never_twice() {
+    use ember_lab_julibrot::CaptureArming;
+    const DUE: CaptureArming = CaptureArming {
+        armed: true,
+        route_matches: true,
+        readback_in_flight: false,
+        renderer_already_armed: false,
+    };
+    // The direct route, on the one present it has: armed, this device copies the surface, and no
+    // copy is already in flight.
+    assert!(DUE.surface_due());
+    // Not armed is the ordinary frame, and it must cost nothing.
+    assert!(
+        !CaptureArming {
+            armed: false,
+            ..DUE
+        }
+        .surface_due()
+    );
+    // A device whose surface cannot be copied does not take one here; its copy is drawn inside the
+    // submission instead, and taking both would encode two copies of one frame.
+    assert!(
+        !CaptureArming {
+            route_matches: false,
+            ..DUE
+        }
+        .surface_due()
+    );
+    // A copy still in flight is not replaced by a second one.
+    assert!(
+        !CaptureArming {
+            readback_in_flight: true,
+            ..DUE
+        }
+        .surface_due()
+    );
+    // The fallback route asks the same three and one more: an arming the renderer already holds is
+    // not handed over twice.
+    assert!(DUE.offscreen_due());
+    assert!(
+        !CaptureArming {
+            armed: false,
+            ..DUE
+        }
+        .offscreen_due()
+    );
+    assert!(
+        !CaptureArming {
+            route_matches: false,
+            ..DUE
+        }
+        .offscreen_due()
+    );
+    assert!(
+        !CaptureArming {
+            readback_in_flight: true,
+            ..DUE
+        }
+        .offscreen_due()
+    );
+    assert!(
+        !CaptureArming {
+            renderer_already_armed: true,
+            ..DUE
+        }
+        .offscreen_due()
+    );
+    // The loop asks these and does not restate them.
+    assert!(FRAME.contains("let armed = crate::CaptureArming {"));
+    assert!(FRAME.contains("if !arming.offscreen_due() {"));
+}
+
+/// A copy whose map never completes is abandoned with a reason rather than held forever.
+#[test]
+fn an_unmapped_frame_copy_is_abandoned_at_a_deadline() {
+    assert!(LIB.contains("pub const FRAME_CAPTURE_DEADLINE_MS: f64 = 5_000.0;"));
+    assert!(FRAME.contains("if now_ms - since > crate::FRAME_CAPTURE_DEADLINE_MS"));
+    assert!(FRAME.contains("&& self.presenter.abandon_frame_readback()"));
+    assert!(FRAME.contains("the frame copy was abandoned: its map did not complete within"));
+    // The deadline is measured from the turn the copy was first seen in flight, not from the turn
+    // it was asked for, so a copy armed while the tab was not painting is not abandoned unread.
+    assert!(FRAME.contains("in_flight_since_ms: Option<f64>,"));
+    assert!(FRAME.contains(".in_flight_since_ms"));
+    assert!(FRAME.contains(".get_or_insert(now_ms);"));
 }

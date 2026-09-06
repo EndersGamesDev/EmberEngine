@@ -80,7 +80,7 @@
       say(
         [
           `settled ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}`,
-          `frame ${frame.width}x${frame.height} rgba ${frame.rgba.length} bytes`,
+          `frame ${frame.width}x${frame.height} rgba ${frame.rgba.length} bytes, ${frame.route}, scene ${frame.scene_id}`,
           `census sky ${counts.sky} (${share(counts.sky).toFixed(4)}) passclear ${counts.passclear} (${share(counts.passclear).toFixed(4)}) exterior ${counts.exterior} (${share(counts.exterior).toFixed(4)}) other ${counts.other} (${share(counts.other).toFixed(4)})`,
           "",
           JSON.stringify(facts),

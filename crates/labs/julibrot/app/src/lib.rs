@@ -198,6 +198,12 @@ impl App {
         FrameCaptureFacts {
             supported: device.frame_copy_supported,
             status: device.frame_copy_status,
+            route: device.frame_copy_route.as_str(),
+            copy_route: self
+                .frame_loop
+                .frame_capture_ready_route()
+                .map(ember_julibrot_present::FrameReadbackRoute::as_str),
+            scene_id: self.frame_loop.frame_capture_scene_id(),
             pending: self.frame_loop.frame_capture_pending(),
             extent: self.frame_loop.frame_capture_extent(),
             refusal: self.frame_loop.frame_capture_refusal(),
@@ -214,8 +220,14 @@ impl App {
 pub struct FrameCaptureFacts<'a> {
     /// Whether the surface exposes the copy usage a readback needs.
     pub supported: bool,
-    /// Availability, or the reason a copy cannot be made on this device.
+    /// Which route a copy takes on this device, in the words the page publishes.
     pub status: &'static str,
+    /// The same route, named separately from the status sentence.
+    pub route: &'static str,
+    /// The route that produced the copy waiting to be taken, once one is waiting.
+    pub copy_route: Option<&'static str>,
+    /// The completed scene the waiting copy was drawn from.
+    pub scene_id: Option<u64>,
     /// Whether a copy has been asked for and has not yet been taken.
     pub pending: bool,
     /// The extent of a copy waiting to be taken.
@@ -226,6 +238,90 @@ pub struct FrameCaptureFacts<'a> {
 
 /// Version shared by the loader, wasm module, worker entry, and wire protocol.
 pub const JULIBROT_ABI_VERSION: u32 = ember_julibrot_worker::JULIBROT_ABI_VERSION;
+
+/// How long an in-flight frame copy may stay unmapped before it is abandoned.
+///
+/// A map that never completes is not a slow copy, it is a copy that is never coming: it holds a
+/// surface-sized buffer, refuses every later request, and keeps the loop turning for a caller that
+/// will wait out its whole timeout learning nothing. Five seconds is far longer than any measured
+/// map and short enough that the caller is told why rather than left counting.
+pub const FRAME_CAPTURE_DEADLINE_MS: f64 = 5_000.0;
+
+/// The four readings that together say whether the picture on the canvas is finished.
+///
+/// Four, and three of them is not finished. The first three say the ladder has nothing left to do;
+/// the fourth says the image belongs to the view being asked for now rather than to an older one,
+/// which is the condition a delivered refinement level cannot supply. A level is a property of the
+/// last completed scene and survives a control move, so a caller reading only the level and the
+/// pending flags reads the previous picture's finished state and calls it this picture's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent reading the loop already holds, and naming all four is the point: a caller that folded them would be back to guessing which condition failed"
+)]
+pub struct PictureState {
+    /// A refinement turn is still due.
+    pub refinement_pending: bool,
+    /// A manual scene update has been asked for and not run.
+    pub scene_update_pending: bool,
+    /// A scene submission has not completed.
+    pub scene_in_flight: bool,
+    /// The presented image belongs to an older requested view.
+    pub presented_view_stale: bool,
+}
+
+impl PictureState {
+    /// Whether the picture is finished and is the picture the current controls ask for.
+    #[must_use]
+    pub const fn finished(self) -> bool {
+        !self.refinement_pending
+            && !self.scene_update_pending
+            && !self.scene_in_flight
+            && !self.presented_view_stale
+    }
+}
+
+/// What decides whether an armed frame copy is taken at a given moment.
+///
+/// These two answers are the whole of "on request only, never per frame": without them a
+/// diagnostic that costs a surface-sized transfer becomes a cost every frame pays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent reading about one armed copy, and the two answers below are exactly which subsets of them mean yes"
+)]
+pub struct CaptureArming {
+    /// A copy has been asked for and not yet handed to the renderer.
+    pub armed: bool,
+    /// This device takes the route being considered.
+    pub route_matches: bool,
+    /// A copy is already in flight and has not been taken.
+    pub readback_in_flight: bool,
+    /// An arming has already been handed to the renderer for a later submission.
+    pub renderer_already_armed: bool,
+}
+
+impl CaptureArming {
+    /// Whether this presentation is the one a direct-route copy is taken on.
+    ///
+    /// The surface image exists only between its acquisition and its presentation, so the direct
+    /// route has exactly one moment; a device on the other route does not take one here, because
+    /// its copy is drawn inside the submission instead and taking both would encode two copies of
+    /// one frame; and a copy already in flight is not replaced by a second one.
+    #[must_use]
+    pub const fn surface_due(self) -> bool {
+        self.armed && self.route_matches && !self.readback_in_flight
+    }
+
+    /// Whether an armed fallback copy may be handed to the next presentation submission.
+    ///
+    /// Handing it over twice would encode two copies of one frame, so an arming the renderer
+    /// already holds blocks the next one until it has been taken.
+    #[must_use]
+    pub const fn offscreen_due(self) -> bool {
+        self.surface_due() && !self.renderer_already_armed
+    }
+}
 
 /// Refresh result returned without conflating submission and presentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -372,6 +468,9 @@ mod wasm_entry {
             serde_json::to_string(&serde_json::json!({
                 "frame_capture_supported": facts.supported,
                 "frame_capture_status": facts.status,
+                "frame_capture_route": facts.route,
+                "frame_capture_copy_route": facts.copy_route,
+                "frame_capture_scene_id": facts.scene_id,
                 "frame_capture_pending": facts.pending,
                 "frame_capture_ready": facts.extent.is_some(),
                 "frame_capture_width": extent[0],

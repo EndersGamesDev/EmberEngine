@@ -111,6 +111,13 @@ pub struct PageFacts<'a> {
     pub kernel_mode: Option<&'static str>,
     pub refinement_level: Option<&'static str>,
     pub refinement_pending: bool,
+    /// Whether the picture on the canvas is finished AND is the picture the controls now ask for.
+    ///
+    /// The delivered refinement level is a property of the last completed scene and survives a
+    /// control move, so a caller reading the level and the pending flags alone reads the previous
+    /// picture's finished state. This is the composed answer, published once so that everyone
+    /// asking "is it done" asks the same question.
+    pub picture_finished: bool,
     pub scene_mode: &'static str,
     pub scene_update_pending: bool,
     pub draft_skipped_count: u64,
@@ -280,6 +287,13 @@ impl<'a> PageFacts<'a> {
             kernel_mode: dispatch.map(|facts| kernel_mode(facts.mode)),
             refinement_level: present.delivered_level.map(refinement_level),
             refinement_pending: loop_facts.refinement_pending(),
+            picture_finished: crate::PictureState {
+                refinement_pending: loop_facts.refinement_pending(),
+                scene_update_pending: loop_facts.scene_update_pending(),
+                scene_in_flight: present.in_flight_scene_id.is_some(),
+                presented_view_stale: loop_facts.presented_view_is_stale(app.viewer()),
+            }
+            .finished(),
             scene_mode: loop_facts.scene_mode().as_str(),
             scene_update_pending: loop_facts.scene_update_pending(),
             draft_skipped_count: loop_facts.draft_skipped_count(),

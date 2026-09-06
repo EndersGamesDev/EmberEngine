@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use ember_julibrot_present::CLASSIC_PALETTE;
+use ember_julibrot_present::{CLASSIC_PALETTE, FrameReadbackRoute, frame_readback_route};
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -29,10 +29,12 @@ pub struct DeviceFacts {
     pub width: u32,
     /// Configured surface height.
     pub height: u32,
-    /// Whether the surface image can be copied, which is what a frame readback needs.
+    /// Whether this device offers a route to a copy of the presented frame.
     pub frame_copy_supported: bool,
-    /// Why a frame copy is unavailable, or that it is available.
+    /// Which route a copy takes on this device, in the words the page publishes.
     pub frame_copy_status: &'static str,
+    /// The route itself, for the loop that has to arm the right one.
+    pub frame_copy_route: FrameReadbackRoute,
 }
 
 /// App-owned browser device and sole surface.
@@ -169,18 +171,20 @@ impl BrowserRuntime {
         // A frame the page can copy is a frame a script can measure without editing the page to
         // read it. The copy usage is asked for only when the surface offers it, because a surface
         // configured with a usage it does not expose is a refused configuration and the picture
-        // matters more than the readback; what the surface answered is published either way.
-        let frame_copy_supported = capabilities.usages.contains(wgpu::TextureUsages::COPY_SRC);
-        let frame_copy_status = if frame_copy_supported {
-            "available"
-        } else {
-            "unavailable: the surface is not a copy source"
+        // matters more than the readback. On the WebGL2 floor the swapchain surface offers no copy
+        // usage at all — measured on ANGLE over Mesa Intel — so the route the renderer takes is
+        // read from what the surface answered rather than assumed, and published either way.
+        let frame_copy_route = frame_readback_route(capabilities.usages);
+        let usage = match frame_copy_route {
+            FrameReadbackRoute::Surface => {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            }
+            FrameReadbackRoute::OffscreenRerender => wgpu::TextureUsages::RENDER_ATTACHMENT,
         };
-        let usage = if frame_copy_supported {
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-        } else {
-            wgpu::TextureUsages::RENDER_ATTACHMENT
-        };
+        // Both routes reach a copy, so the published fact is which one produces the bytes rather
+        // than whether any can; a route that then refuses does so with its own typed reason.
+        let frame_copy_supported = true;
+        let frame_copy_status = frame_copy_route.as_str();
         let config = wgpu::SurfaceConfiguration {
             usage,
             format: surface_format,
@@ -207,6 +211,7 @@ impl BrowserRuntime {
                 height,
                 frame_copy_supported,
                 frame_copy_status,
+                frame_copy_route,
             },
         };
         runtime.clear_first_frame(0)?;

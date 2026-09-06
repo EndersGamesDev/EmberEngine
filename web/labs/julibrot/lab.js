@@ -325,14 +325,32 @@ class Lab {
   }
 
   /**
-   * Resolves with the facts once the named refinement level is the delivered one, nothing is
-   * pending and no scene is in flight; rejects with the facts on a stopped loop or a timeout.
+   * Resolves with the facts once the picture on the canvas is finished at the named level AND is
+   * the picture the current controls ask for; rejects with the facts on a stopped loop or a
+   * timeout.
    *
-   * Settling is the whole of what a measurement needs and none of what it must not have: a moving
-   * frame may be inaccurate, so a number read off one is a number about a picture that no longer
-   * exists. The three conditions together are the statement "this picture is finished".
+   * The delivered refinement level is a property of the last completed scene and survives a control
+   * move, so "Final and nothing pending" is true of the PREVIOUS picture the instant a row is
+   * applied: a settle that asked only that would resolve on the frame before the one it was called
+   * about, and every row after the first would be measured one row late. The app publishes the
+   * composed answer as `picture_finished`, which adds the condition a delivered level cannot carry
+   * — that the image on the canvas belongs to the view being asked for now.
+   *
+   * Two further rules make that answer honest here. The predicate is never read before a loop turn
+   * has run, because a row applied a moment ago has not yet reached the loop that would mark the
+   * picture stale. And `requireNewScene` is available for a caller that knows its change must
+   * produce a new scene and wants to wait for that scene rather than for the pose to agree.
+   *
+   * A settle on a picture that is already finished and current resolves on the first turn. That is
+   * not a loophole: it is the correct answer to "is this finished", asked of something that is.
    */
-  settle({ level = "Final", timeoutMs = SETTLE_TIMEOUT_MS } = {}) {
+  settle({ level = "Final", timeoutMs = SETTLE_TIMEOUT_MS, requireNewScene = false } = {}) {
+    let baselineScene = null;
+    try {
+      baselineScene = this.facts().completed_scene_id;
+    } catch (error) {
+      console.error(error);
+    }
     return new Promise((resolve, reject) => {
       let timer = null;
       let release = null;
@@ -347,12 +365,8 @@ class Lab {
           finish(reject, new SettleError(`the loop stopped: ${facts.loop_stopped_reason}`, facts));
           return true;
         }
-        if (
-          facts.refinement_level === level &&
-          facts.refinement_pending === false &&
-          facts.scene_update_pending === false &&
-          (facts.in_flight_scene_id === null || facts.in_flight_scene_id === undefined)
-        ) {
+        if (requireNewScene && facts.completed_scene_id === baselineScene) return false;
+        if (facts.refinement_level === level && facts.picture_finished === true) {
           finish(resolve, facts);
           return true;
         }
@@ -378,23 +392,22 @@ class Lab {
         }
         finish(reject, new SettleError(`${level} was not reached in ${timeoutMs} ms`, facts));
       }, timeoutMs);
-      let current = null;
-      try {
-        current = this.facts();
-      } catch (error) {
-        console.error(error);
-      }
-      if (!consider(current)) this.schedule();
+      // Deliberately no synchronous verdict. A row applied a moment ago has changed the controls
+      // and not yet reached the loop, so the facts read now can still describe the picture before
+      // it; one turn is what makes them describe this one.
+      this.schedule();
     });
   }
 
   /**
    * Returns the presented frame's pixels: RGBA, four bytes per pixel, rows top-down.
    *
-   * The copy is made inside the pass that already owns the frame texture, on the turn that presents
-   * it, and it happens on request only — never per frame. What comes back is the image the browser
-   * put on the canvas, not a re-render of it and not a picture read through a context flag the page
-   * had to be edited to obtain.
+   * The copy is made inside the renderer, on the turn that presents the frame, and it happens on
+   * request only — never per frame. It needs no context flag and therefore no edit to the page it
+   * reads. Which of the two routes produced the bytes comes back with them as `route`: the surface
+   * image copied directly where the surface is a copy source, and otherwise the presentation pass
+   * drawn once more into an offscreen copy source inside the same submission, which is the same
+   * call over the same state with nothing able to land between the two draws.
    *
    * It is valid to call at any time and it is only worth reading when the picture is finished: call
    * it after `settle` resolves.
@@ -417,9 +430,15 @@ class Lab {
       if (state.frame_capture_ready) {
         const bytes = this.#api.app_take_frame_rgba();
         if (bytes) {
+          const expected = state.frame_capture_width * state.frame_capture_height * 4;
+          if (bytes.length !== expected) {
+            throw new Error(`the frame copy is ${bytes.length} bytes, not the ${expected} its extent needs`);
+          }
           return {
             width: state.frame_capture_width,
             height: state.frame_capture_height,
+            route: state.frame_capture_copy_route,
+            scene_id: state.frame_capture_scene_id,
             rgba: bytes,
           };
         }

@@ -578,7 +578,9 @@ function bindControls(lab) {
       api.app_set_scene_mode(event.target.checked ? 1 : 0);
       const facts = refreshFacts();
       showStatus(liveStatus(facts));
-      scheduleFrame();
+      // A stopped loop is asked for no further turns: the scene mode changed, but a loop that has
+      // published a typed cause is finished, and one more turn only restates it.
+      if (lab.turning()) scheduleFrame();
     } catch (error) {
       fail(error);
     }
