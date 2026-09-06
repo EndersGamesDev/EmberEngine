@@ -65,7 +65,19 @@ impl App {
     ///
     /// Returns a typed device, surface, or canonical-viewer failure.
     pub async fn start(canvas_id: &str, status_id: &str) -> Result<Self, AppError> {
-        let runtime = BrowserRuntime::start(canvas_id, status_id).await?;
+        Self::assemble(BrowserRuntime::start(canvas_id, status_id).await?)
+    }
+
+    /// Performs the same startup on a canvas element, with no status element in the document.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed device, surface, or canonical-viewer failure.
+    pub async fn start_on_canvas(canvas: web_sys::HtmlCanvasElement) -> Result<Self, AppError> {
+        Self::assemble(BrowserRuntime::start_on_canvas(canvas).await?)
+    }
+
+    fn assemble(runtime: BrowserRuntime) -> Result<Self, AppError> {
         let mut viewer = ViewerController::new([runtime.facts().width, runtime.facts().height])?;
         let frame_loop = BrowserFrameLoop::new(&runtime, &mut viewer)?;
         Ok(Self {
@@ -143,6 +155,9 @@ impl App {
         self.requests.frame
             || self.requests.measurement
             || self.requests.scene_update
+            // A copy that has been asked for and not yet taken keeps the loop turning, because the
+            // copy is made on the turn that presents a frame and read on a later one.
+            || self.frame_loop.frame_capture_turning()
             || self.frame_loop.pending(&self.runtime, &self.viewer)
     }
 
@@ -165,10 +180,165 @@ impl App {
     pub const fn update_scene(&mut self) {
         self.requests.scene_update = true;
     }
+
+    /// Arms one copy of the next presented frame; the copy itself is taken at present time.
+    pub const fn request_frame_capture(&mut self) {
+        self.frame_loop.arm_frame_capture();
+    }
+
+    /// Takes the completed frame copy, leaving nothing behind for a second caller.
+    pub fn take_frame_capture(&mut self) -> Option<ember_julibrot_present::FrameReadback> {
+        self.frame_loop.take_frame_capture()
+    }
+
+    /// Returns what a caller needs to know about frame copying before asking for one.
+    #[must_use]
+    pub fn frame_capture_facts(&self) -> FrameCaptureFacts<'_> {
+        let device = self.runtime.facts();
+        FrameCaptureFacts {
+            supported: device.frame_copy_supported,
+            status: device.frame_copy_status,
+            route: device.frame_copy_route.as_str(),
+            copy_route: self
+                .frame_loop
+                .frame_capture_ready_route()
+                .map(ember_julibrot_present::FrameReadbackRoute::as_str),
+            scene_id: self.frame_loop.frame_capture_scene_id(),
+            pending: self.frame_loop.frame_capture_pending(),
+            extent: self.frame_loop.frame_capture_extent(),
+            refusal: self.frame_loop.frame_capture_refusal(),
+        }
+    }
+}
+
+/// What the page can honestly say about copying the presented frame.
+///
+/// A device that cannot copy its surface says so rather than answering an empty picture, and a
+/// copy that was refused names its refusal rather than staying silently absent.
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrameCaptureFacts<'a> {
+    /// Whether the surface exposes the copy usage a readback needs.
+    pub supported: bool,
+    /// Which route a copy takes on this device, in the words the page publishes.
+    pub status: &'static str,
+    /// The same route, named separately from the status sentence.
+    pub route: &'static str,
+    /// The route that produced the copy waiting to be taken, once one is waiting.
+    pub copy_route: Option<&'static str>,
+    /// The completed scene the waiting copy was drawn from.
+    pub scene_id: Option<u64>,
+    /// Whether a copy has been asked for and has not yet been taken.
+    pub pending: bool,
+    /// The extent of a copy waiting to be taken.
+    pub extent: Option<[u32; 2]>,
+    /// The typed reason the last copy did not happen.
+    pub refusal: Option<&'a str>,
 }
 
 /// Version shared by the loader, wasm module, worker entry, and wire protocol.
 pub const JULIBROT_ABI_VERSION: u32 = ember_julibrot_worker::JULIBROT_ABI_VERSION;
+
+/// How long an in-flight frame copy may stay unmapped before it is abandoned.
+///
+/// A map that never completes is not a slow copy, it is a copy that is never coming: it holds a
+/// surface-sized buffer, refuses every later request, and keeps the loop turning for a caller that
+/// will wait out its whole timeout learning nothing. Five seconds is far longer than any measured
+/// map and short enough that the caller is told why rather than left counting.
+pub const FRAME_CAPTURE_DEADLINE_MS: f64 = 5_000.0;
+
+/// The four readings that together say whether the picture on the canvas is finished.
+///
+/// Four, and three of them is not finished. The first three say the ladder has nothing left to do;
+/// the fourth says the image belongs to the view being asked for now rather than to an older one,
+/// which is the condition a delivered refinement level cannot supply. A level is a property of the
+/// last completed scene and survives a control move, so a caller reading only the level and the
+/// pending flags reads the previous picture's finished state and calls it this picture's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent reading the loop already holds, and naming all four is the point: a caller that folded them would be back to guessing which condition failed"
+)]
+pub struct PictureState {
+    /// A refinement turn is still due.
+    pub refinement_pending: bool,
+    /// A manual scene update has been asked for and not run.
+    pub scene_update_pending: bool,
+    /// A scene submission has not completed.
+    pub scene_in_flight: bool,
+    /// The presented image belongs to an older requested view.
+    pub presented_view_stale: bool,
+    /// The image on screen was warped from the completed scene rather than from an earlier one.
+    ///
+    /// A scene completes on one turn and reaches the canvas on a later present, so between those
+    /// two moments every other reading says finished while the eye is still on the previous
+    /// picture. A caller that copies the frame at that moment copies the wrong row.
+    pub presented_scene_is_completed: bool,
+    /// The presenter is holding an unmoved older picture instead of showing this one.
+    pub warp_holds_stale: bool,
+}
+
+impl PictureState {
+    /// Whether the picture on the canvas is finished and is the picture the controls ask for.
+    ///
+    /// The first three readings say the ladder has nothing left to do. The fourth says the pose on
+    /// screen is the pose being asked for. The last two say the pixels on screen are the finished
+    /// scene's: a scene completes one turn before its warp is presented, and a warp the presenter
+    /// refused to move is an older picture standing in for this one. A caller who is about to copy
+    /// the frame needs all six, because "the render finished" and "the finished render is on
+    /// screen" are one present apart and the copy lands in between.
+    #[must_use]
+    pub const fn finished(self) -> bool {
+        !self.refinement_pending
+            && !self.scene_update_pending
+            && !self.scene_in_flight
+            && !self.presented_view_stale
+            && self.presented_scene_is_completed
+            && !self.warp_holds_stale
+    }
+}
+
+/// What decides whether an armed frame copy is taken at a given moment.
+///
+/// These two answers are the whole of "on request only, never per frame": without them a
+/// diagnostic that costs a surface-sized transfer becomes a cost every frame pays.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one independent reading about one armed copy, and the two answers below are exactly which subsets of them mean yes"
+)]
+pub struct CaptureArming {
+    /// A copy has been asked for and not yet handed to the renderer.
+    pub armed: bool,
+    /// This device takes the route being considered.
+    pub route_matches: bool,
+    /// A copy is already in flight and has not been taken.
+    pub readback_in_flight: bool,
+    /// An arming has already been handed to the renderer for a later submission.
+    pub renderer_already_armed: bool,
+}
+
+impl CaptureArming {
+    /// Whether this presentation is the one a direct-route copy is taken on.
+    ///
+    /// The surface image exists only between its acquisition and its presentation, so the direct
+    /// route has exactly one moment; a device on the other route does not take one here, because
+    /// its copy is drawn inside the submission instead and taking both would encode two copies of
+    /// one frame; and a copy already in flight is not replaced by a second one.
+    #[must_use]
+    pub const fn surface_due(self) -> bool {
+        self.armed && self.route_matches && !self.readback_in_flight
+    }
+
+    /// Whether an armed fallback copy may be handed to the next presentation submission.
+    ///
+    /// Handing it over twice would encode two copies of one frame, so an arming the renderer
+    /// already holds blocks the next one until it has been taken.
+    #[must_use]
+    pub const fn offscreen_due(self) -> bool {
+        self.surface_due() && !self.renderer_already_armed
+    }
+}
 
 /// Refresh result returned without conflating submission and presentation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,6 +438,73 @@ mod wasm_entry {
             *slot = Some(app);
             Ok(())
         })
+    }
+
+    /// Starts the same runtime on a canvas element, for a page with no controls beside it.
+    ///
+    /// The control page keeps [`start_julibrot`] and its status paragraph. A driver has a canvas
+    /// and nothing else, and inventing a status element for it would put a page contract in the
+    /// way of a measurement rather than in the way of a bug.
+    #[wasm_bindgen]
+    pub async fn start_julibrot_on_canvas(
+        canvas: web_sys::HtmlCanvasElement,
+    ) -> Result<(), JsValue> {
+        let app = App::start_on_canvas(canvas)
+            .await
+            .map_err(|error| publish_start_error(&error))?;
+        APP.with(|slot| {
+            let mut slot = slot
+                .try_borrow_mut()
+                .map_err(|_| JsValue::from_str("Julibrot runtime startup is already publishing"))?;
+            if slot.is_some() {
+                return Err(JsValue::from_str("Julibrot runtime is already started"));
+            }
+            *slot = Some(app);
+            Ok(())
+        })
+    }
+
+    /// Arms one copy of the next presented frame.
+    ///
+    /// The copy is on request only and never per frame: it is a full surface-sized transfer, and a
+    /// loop that paid it every turn would spend its budget measuring its own readback.
+    #[wasm_bindgen]
+    pub fn app_request_frame_capture() -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.request_frame_capture();
+            Ok(())
+        })
+    }
+
+    /// Reports whether the frame can be copied, whether one is pending, and its extent.
+    #[wasm_bindgen]
+    pub fn app_frame_capture_json() -> Result<String, JsValue> {
+        with_app(|app| {
+            let facts = app.frame_capture_facts();
+            let extent = facts.extent.unwrap_or([0, 0]);
+            serde_json::to_string(&serde_json::json!({
+                "frame_capture_supported": facts.supported,
+                "frame_capture_status": facts.status,
+                "frame_capture_route": facts.route,
+                "frame_capture_copy_route": facts.copy_route,
+                "frame_capture_scene_id": facts.scene_id,
+                "frame_capture_pending": facts.pending,
+                "frame_capture_ready": facts.extent.is_some(),
+                "frame_capture_width": extent[0],
+                "frame_capture_height": extent[1],
+                "frame_capture_refusal": facts.refusal,
+            }))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+        })
+    }
+
+    /// Returns the copied frame's packed RGBA bytes, top-down, or nothing while none is ready.
+    ///
+    /// Reading takes the copy: a second call answers nothing until another one is asked for, so
+    /// two readers cannot both believe they hold the frame.
+    #[wasm_bindgen]
+    pub fn app_take_frame_rgba() -> Result<Option<Vec<u8>>, JsValue> {
+        with_app_mut(|app| Ok(app.take_frame_capture().map(|frame| frame.rgba)))
     }
 
     /// Returns the full honest facts snapshot as JSON.
@@ -748,12 +985,12 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_apply_saved_view, app_clear_crosshair, app_crosshair_json, app_facts_json, app_morph_view,
-    app_needs_refresh, app_pan_px, app_preset, app_refresh, app_request_frame,
-    app_request_measurement, app_saved_view_json, app_set_camera, app_set_camera_angles,
-    app_set_camera_translation, app_set_centre, app_set_distances, app_set_height,
-    app_set_iteration_cap, app_set_object_angles, app_set_palette, app_set_plane_angles,
-    app_set_plane_origin, app_set_precision_mode, app_set_scale, app_set_scene_mode,
-    app_set_target, app_set_view_angles, app_update_scene, app_zoom_box, julibrot_abi_version,
-    start_julibrot,
+    app_apply_saved_view, app_clear_crosshair, app_crosshair_json, app_facts_json,
+    app_frame_capture_json, app_morph_view, app_needs_refresh, app_pan_px, app_preset, app_refresh,
+    app_request_frame, app_request_frame_capture, app_request_measurement, app_saved_view_json,
+    app_set_camera, app_set_camera_angles, app_set_camera_translation, app_set_centre,
+    app_set_distances, app_set_height, app_set_iteration_cap, app_set_object_angles,
+    app_set_palette, app_set_plane_angles, app_set_plane_origin, app_set_precision_mode,
+    app_set_scale, app_set_scene_mode, app_set_target, app_set_view_angles, app_take_frame_rgba,
+    app_update_scene, app_zoom_box, julibrot_abi_version, start_julibrot, start_julibrot_on_canvas,
 };

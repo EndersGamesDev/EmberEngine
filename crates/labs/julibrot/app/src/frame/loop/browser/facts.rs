@@ -166,6 +166,15 @@ impl BrowserFrameLoop {
         self.last_warp_source
     }
 
+    /// Returns the scene the image now on the canvas was warped from.
+    ///
+    /// The submitted warp source says what is being drawn; this says what is being looked at, and
+    /// the two differ for exactly one present after every completed scene.
+    #[must_use]
+    pub const fn presented_scene_id(&self) -> Option<u64> {
+        self.presented_scene_id
+    }
+
     /// Returns the bounded per-edit timing records in oldest-to-newest order.
     #[must_use]
     pub const fn level_timings(&self) -> &LevelTimingLedger {

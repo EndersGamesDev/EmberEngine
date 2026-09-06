@@ -8,6 +8,7 @@ use crate::{
 use ember_julibrot_math::scene_uncovered_fraction;
 
 use super::ledger::LatticeRefusal;
+use super::readback::OffscreenCapturePlan;
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,
@@ -281,6 +282,7 @@ impl Presenter {
             None
         };
         let relief_redraw = relief_redraw_backdrop.is_some();
+        let capture_has_backdrop = relief_redraw_backdrop.unwrap_or(false);
         let mut held_stale = source_slot.held_stale;
         if planned_relief_redraw && !relief_redraw {
             let (fallback, refusal) = enforce_lattice(
@@ -338,8 +340,38 @@ impl Presenter {
                 self.facts.record_warp_hold();
             }
         }
+        // An armed copy is drawn here or not at all. The second encode is the same call the
+        // presentation just made, appended to the same encoder before it is submitted, so nothing
+        // — a scene promotion, a control move, a uniform write — can land between the two draws:
+        // there is no turn of the loop between them to land in. A capture that cannot be encoded
+        // refuses with its reason and leaves the frame alone; the picture is not a casualty of a
+        // measurement of it.
+        let armed_capture = if self.frame_readback_armed {
+            let plan = OffscreenCapturePlan {
+                relief_redraw,
+                has_backdrop: capture_has_backdrop,
+                texture_index,
+                hot_slot,
+                selected: selected.1,
+            };
+            let extent = [state.canvas_width, state.canvas_height];
+            match self.encode_offscreen_capture(&mut encoder, extent, plan) {
+                Ok(copy) => Some(copy),
+                Err(error) => {
+                    self.disarm_offscreen_frame_readback();
+                    self.frame_readback_refusal = Some(error);
+                    None
+                }
+            }
+        } else {
+            None
+        };
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
+        // The map may only be asked for once the commands carrying the copy have been submitted.
+        if let Some(copy) = armed_capture {
+            self.retain_encoded_readback(copy);
+        }
         self.warp_fence = Some(arm_fence(
             &self.gpu.warp_fence,
             None,

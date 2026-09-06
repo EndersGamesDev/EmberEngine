@@ -24,7 +24,7 @@ pub use contract::{
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};
-pub use gpu::Presenter;
+pub use gpu::{FrameReadback, FrameReadbackRoute, Presenter, frame_readback_route};
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };

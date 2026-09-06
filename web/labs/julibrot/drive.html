@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Julibrot driver</title>
+  <style>
+    body { margin: 0; background: #101014; color: #e8e8ea; font: 13px/1.5 ui-monospace, monospace; }
+    canvas { display: block; }
+    pre { margin: 0; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <canvas id="julibrot" width="960" height="540"></canvas>
+  <pre id="report">waiting for a row</pre>
+  <script type="module">
+    // A page with no controls, for measuring rather than for driving by hand.
+    //
+    // Everything the control page carries — sliders, view boxes, storage, a facts grid — is a way
+    // for a person to reach the lab, and every one of them is a thing between a measurement and the
+    // picture it is about. This page has a canvas and a report, and it takes its row from the query
+    // string or from a message, so a driver states the row and reads the answer without editing
+    // anything. The lab object is published as `globalThis.lab`, so a driver that wants to go on
+    // moving controls after the first settle can.
+    import { openLab } from "./lab.js?v=1";
+
+    const REPORT = document.getElementById("report");
+    const CANVAS = document.getElementById("julibrot");
+
+    // The four classes the orchestrator's proofs use, in this order because they overlap: the pass
+    // clear is an exact colour that also satisfies the exterior band, so an exact test that runs
+    // second would never fire. `other` is everything left, which is the relief palette.
+    function census(rgba) {
+      const counts = { sky: 0, passclear: 0, exterior: 0, other: 0 };
+      for (let index = 0; index + 3 < rgba.length; index += 4) {
+        const r = rgba[index];
+        const g = rgba[index + 1];
+        const b = rgba[index + 2];
+        if (r === 13 && g === 13 && b === 13) counts.sky += 1;
+        else if (r === 255 && g === 129 && b === 129) counts.passclear += 1;
+        else if (r > 200 && g > 100 && g < 190 && b > 90 && b < 170) counts.exterior += 1;
+        else counts.other += 1;
+      }
+      return counts;
+    }
+
+    function say(text) {
+      REPORT.textContent = text;
+    }
+
+    function rowFromQuery() {
+      const query = new URLSearchParams(globalThis.location.search);
+      const row = query.get("row");
+      return row === null ? null : JSON.parse(row);
+    }
+
+    function optionsFromQuery() {
+      const query = new URLSearchParams(globalThis.location.search);
+      const level = query.get("level");
+      const timeout = Number(query.get("timeoutMs"));
+      return {
+        level: level === null ? "Final" : level,
+        ...(Number.isFinite(timeout) && timeout > 0 ? { timeoutMs: timeout } : {}),
+      };
+    }
+
+    // One run: hold the row, settle it, then report the facts and the census of the pixels the
+    // browser actually presented. The census is stated beside the facts rather than instead of
+    // them, because a count of colours is not a reading of a picture on its own.
+    async function run(lab, row, options) {
+      say("applying the row");
+      lab.applyRow(row);
+      say(`settling to ${options.level}`);
+      const facts = await lab.settle(options);
+      say("copying the frame");
+      const frame = await lab.frame();
+      // The census is about one row or it is about nothing. The copy names the scene it came from
+      // and the facts name the scene that has completed; a report that did not say they agree
+      // would be a set of numbers with no row attached to them.
+      const after = lab.facts();
+      if (frame.scene_id !== (after.completed_scene_id ?? null)) {
+        throw new Error(`the copy is of scene ${frame.scene_id} and the completed scene is ${after.completed_scene_id}`);
+      }
+      const counts = census(frame.rgba);
+      const total = frame.width * frame.height;
+      const share = value => (total === 0 ? 0 : value / total);
+      say(
+        [
+          `settled ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}`,
+          `frame ${frame.width}x${frame.height} rgba ${frame.rgba.length} bytes, ${frame.route}, scene ${frame.scene_id} = completed scene ${after.completed_scene_id}`,
+          `census sky ${counts.sky} (${share(counts.sky).toFixed(4)}) passclear ${counts.passclear} (${share(counts.passclear).toFixed(4)}) exterior ${counts.exterior} (${share(counts.exterior).toFixed(4)}) other ${counts.other} (${share(counts.other).toFixed(4)})`,
+          "",
+          JSON.stringify(facts),
+        ].join("\n"),
+      );
+      globalThis.dispatchEvent(new CustomEvent("julibrot-settled", { detail: { facts, counts, width: frame.width, height: frame.height } }));
+      return { facts, counts };
+    }
+
+    async function boot() {
+      try {
+        const lab = await openLab({ canvas: CANVAS });
+        globalThis.lab = lab;
+        globalThis.census = census;
+        say("lab open; no row yet");
+        // A row posted into the page runs the same path a row in the query string takes, so a
+        // driver that cannot put a nine-hundred-byte row in a URL is not driving a different page.
+        globalThis.addEventListener("message", event => {
+          const row = event.data && event.data.kind === "JulibrotRow" ? event.data.row : null;
+          if (row) void run(lab, row, { ...optionsFromQuery(), ...(event.data.options ?? {}) }).catch(reportFailure);
+        });
+        const row = rowFromQuery();
+        if (row) await run(lab, row, optionsFromQuery());
+      } catch (error) {
+        reportFailure(error);
+      }
+    }
+
+    function reportFailure(error) {
+      const facts = error && error.facts ? `\n\n${JSON.stringify(error.facts)}` : "";
+      say(`failed: ${String(error)}${facts}`);
+      console.error(error);
+    }
+
+    void boot();
+  </script>
+</body>
+</html>

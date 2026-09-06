@@ -23,6 +23,7 @@ use ledger::{
     apply_hold_policy, clear_warp_plan, enforce_lattice, pose_is_finite, select_warp_source,
     warp_exposed_fraction,
 };
+use readback::{PendingFrameReadback, ReadbackTarget};
 use redraw::encode_relief_redraw;
 #[cfg(test)]
 use redraw::relief_scene_uniform;
@@ -41,6 +42,7 @@ use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fra
 mod census;
 mod ledger;
 mod poll;
+pub mod readback;
 mod redraw;
 mod scene;
 mod uniforms;
@@ -327,6 +329,14 @@ pub struct Presenter {
     ledger: SceneLedger,
     scene_fence: Option<PendingFence>,
     warp_fence: Option<PendingFence>,
+    /// The one requested frame copy in flight, if a caller has asked for one.
+    frame_readback: Option<PendingFrameReadback>,
+    /// An offscreen copy asked for and not yet encoded into a presentation submission.
+    frame_readback_armed: bool,
+    /// The offscreen colour target the fallback route draws into, kept across captures.
+    frame_readback_target: Option<ReadbackTarget>,
+    /// Why the last armed copy was not encoded, held until a caller reads it.
+    frame_readback_refusal: Option<PresentError>,
     next_scene_id: u64,
     next_warp_id: u64,
     scene_samples: SampleTracker,
@@ -366,6 +376,10 @@ impl Presenter {
             ledger: SceneLedger::default(),
             scene_fence: None,
             warp_fence: None,
+            frame_readback: None,
+            frame_readback_armed: false,
+            frame_readback_target: None,
+            frame_readback_refusal: None,
             next_scene_id: 1,
             next_warp_id: 1,
             scene_samples: SampleTracker::default(),

@@ -34,6 +34,8 @@ Every refinement grid is screen-aligned: each grid pixel samples the inverse ima
 
 Each slice is a package with its own tests and its own example or page where one makes sense; `app` integrates the other four through the interfaces their documents pin, and no slice edits another slice's package.
 
+The lab is reachable by a script as well as by hand: `web/labs/julibrot/lab.js` opens it on a canvas, settles it to a named refinement level and copies the presented frame's pixels, and `web/labs/julibrot/drive.html` is the page that does exactly that and prints the numbers. The control page is one client of the same module rather than the only way in. `docs/julibrot/app.md` section 10 states the entry, the settle contract, what the frame copy reads and what it costs.
+
 ## 4. Laws that bind every slice
 
 - Substrate: wgpu 24 `Backends::GL` over WebGL2 only, at the project's established minimum device floor, nothing more.

@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex};
 
-use ember_julibrot_present::CLASSIC_PALETTE;
+use ember_julibrot_present::{CLASSIC_PALETTE, FrameReadbackRoute, frame_readback_route};
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -29,6 +29,12 @@ pub struct DeviceFacts {
     pub width: u32,
     /// Configured surface height.
     pub height: u32,
+    /// Whether this device offers a route to a copy of the presented frame.
+    pub frame_copy_supported: bool,
+    /// Which route a copy takes on this device, in the words the page publishes.
+    pub frame_copy_status: &'static str,
+    /// The route itself, for the loop that has to arm the right one.
+    pub frame_copy_route: FrameReadbackRoute,
 }
 
 /// App-owned browser device and sole surface.
@@ -57,7 +63,21 @@ impl BrowserRuntime {
                 detail: format!("status id must be {STATUS_ID}, got {status_id}"),
             });
         }
-        let canvas = canvas_by_id(canvas_id)?;
+        Self::start_on_canvas(canvas_by_id(canvas_id)?).await
+    }
+
+    /// Starts the same runtime on a canvas element, with no status element in the document.
+    ///
+    /// A driver page carries a canvas and nothing else, and a lab that can only start beside a
+    /// status paragraph cannot be opened by a script without one being invented for it. The typed
+    /// startup failure still reaches the console and the caller's rejection either way; the status
+    /// element, where one exists, is only where the message is also written.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed device, capability, surface, or validation-scope failure.
+    pub async fn start_on_canvas(canvas: web_sys::HtmlCanvasElement) -> Result<Self, AppError> {
+        install_julibrot_panic_hook();
         validate_webgl2_floor()?;
         let width = canvas.width().max(1);
         let height = canvas.height().max(1);
@@ -148,8 +168,25 @@ impl BrowserRuntime {
                     operation: "surface selection",
                     detail: "surface exposes no alpha mode".to_string(),
                 })?;
+        // A frame the page can copy is a frame a script can measure without editing the page to
+        // read it. The copy usage is asked for only when the surface offers it, because a surface
+        // configured with a usage it does not expose is a refused configuration and the picture
+        // matters more than the readback. On the WebGL2 floor the swapchain surface offers no copy
+        // usage at all — measured on ANGLE over Mesa Intel — so the route the renderer takes is
+        // read from what the surface answered rather than assumed, and published either way.
+        let frame_copy_route = frame_readback_route(capabilities.usages);
+        let usage = match frame_copy_route {
+            FrameReadbackRoute::Surface => {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            }
+            FrameReadbackRoute::OffscreenRerender => wgpu::TextureUsages::RENDER_ATTACHMENT,
+        };
+        // Both routes reach a copy, so the published fact is which one produces the bytes rather
+        // than whether any can; a route that then refuses does so with its own typed reason.
+        let frame_copy_supported = true;
+        let frame_copy_status = frame_copy_route.as_str();
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: surface_format,
             width,
             height,
@@ -172,6 +209,9 @@ impl BrowserRuntime {
                 rgba32f_renderable: true,
                 width,
                 height,
+                frame_copy_supported,
+                frame_copy_status,
+                frame_copy_route,
             },
         };
         runtime.clear_first_frame(0)?;
@@ -247,11 +287,22 @@ impl BrowserRuntime {
         self.surfaces.release_unsubmitted(generation)
     }
 
-    /// Presents a matching completed warp after its measured fence region has ended.
+    /// Presents a matching completed warp after its measured fence region has ended, offering its
+    /// frame texture to one caller first.
+    ///
+    /// The offer is the whole of the readback path: the surface image exists only between its
+    /// acquisition and its presentation, so a copy of what the page shows has to be taken inside
+    /// that window and nowhere else. The closure runs once, immediately before the present, and
+    /// only for a warp that is actually being presented.
     #[must_use]
-    pub(crate) fn complete_warp(&mut self, warp_id: u64) -> bool {
+    pub(crate) fn complete_warp_capturing(
+        &mut self,
+        warp_id: u64,
+        capture: impl FnOnce(&wgpu::Texture),
+    ) -> bool {
         match self.surfaces.complete(warp_id) {
             SurfaceAction::Present(frame) => {
+                capture(&frame.texture);
                 frame.present();
                 true
             }

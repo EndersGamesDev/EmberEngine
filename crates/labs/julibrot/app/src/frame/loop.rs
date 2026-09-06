@@ -609,6 +609,22 @@ mod browser {
         cancelled: bool,
     }
 
+    /// One requested copy of the presented frame, and what happened to the request.
+    ///
+    /// The copy is on request only and never per frame: it costs a full surface-sized transfer,
+    /// 2,073,600 bytes at 960 by 540, and a frame loop that paid that every turn would be measuring
+    /// its own readback rather than the picture.
+    #[derive(Debug)]
+    struct FrameCapture {
+        armed: bool,
+        route: ember_julibrot_present::FrameReadbackRoute,
+        ready: Option<ember_julibrot_present::FrameReadback>,
+        refusal: Option<String>,
+        /// When the copy in flight was handed to the renderer, so a map that never fires can be
+        /// abandoned with a reason instead of holding its buffer and the loop forever.
+        in_flight_since_ms: Option<f64>,
+    }
+
     /// Browser-only owner of the heap, kernels, worker endpoint, presenter, and frame schedule.
     pub struct BrowserFrameLoop {
         device: std::sync::Arc<wgpu::Device>,
@@ -653,6 +669,11 @@ mod browser {
         last_warp_source: Option<u64>,
         pending_warp_view: Option<(u64, ViewStamp)>,
         presented_view: Option<ViewStamp>,
+        /// The scene the image now on the canvas was warped from.
+        ///
+        /// Recorded when a warp is PRESENTED, not when one is submitted: the submitted source says
+        /// what is being drawn, and only the presented one says what is being looked at.
+        presented_scene_id: Option<u64>,
         last_status: RefreshStatus,
         level_timings: LevelTimingLedger,
         precision_mode: PrecisionMode,
@@ -663,6 +684,7 @@ mod browser {
         map_condition_number: f64,
         edge_on: bool,
         facts_pose: (PoseMap, [u32; 2]),
+        frame_capture: FrameCapture,
     }
 
     impl BrowserFrameLoop {
@@ -820,6 +842,7 @@ mod browser {
                 last_warp_source: None,
                 pending_warp_view: None,
                 presented_view: None,
+                presented_scene_id: None,
                 last_status: RefreshStatus::Waiting,
                 level_timings: LevelTimingLedger::default(),
                 precision_mode: applied_precision_mode,
@@ -830,6 +853,13 @@ mod browser {
                 map_condition_number: initial_horizon.condition_number,
                 edge_on: initial_horizon.edge_on,
                 facts_pose: (map, grid_extent),
+                frame_capture: FrameCapture {
+                    armed: false,
+                    route: runtime.facts().frame_copy_route,
+                    ready: None,
+                    refusal: None,
+                    in_flight_since_ms: None,
+                },
             };
             Ok(frame_loop)
         }
@@ -840,6 +870,133 @@ mod browser {
         /// returns the same cause, so the page reports one honest reason instead of restating a
         /// broken invariant sixty times a second. A transient fence refusal never escapes.
         ///
+        /// Arms one copy of the next presented frame.
+        ///
+        /// Arming is not a copy: the surface image exists only between its acquisition and its
+        /// presentation, so the request waits for the turn that presents a frame and is taken
+        /// there. A second arming while one is already outstanding is the same one request.
+        pub const fn arm_frame_capture(&mut self) {
+            self.frame_capture.armed = true;
+        }
+
+        /// Reports whether an armed or in-flight frame copy still needs turns of the loop.
+        #[must_use]
+        pub fn frame_capture_turning(&self) -> bool {
+            self.frame_capture.armed
+                || self.presenter.offscreen_frame_readback_armed()
+                || self.presenter.frame_readback_pending()
+        }
+
+        /// Reports which route a copy takes on this device.
+        #[must_use]
+        pub const fn frame_capture_route(&self) -> ember_julibrot_present::FrameReadbackRoute {
+            self.frame_capture.route
+        }
+
+        /// Reports which route produced the copy waiting to be taken.
+        #[must_use]
+        pub fn frame_capture_ready_route(
+            &self,
+        ) -> Option<ember_julibrot_present::FrameReadbackRoute> {
+            self.frame_capture.ready.as_ref().map(|frame| frame.route)
+        }
+
+        /// Reports the completed scene the copy waiting to be taken was drawn from.
+        #[must_use]
+        pub fn frame_capture_scene_id(&self) -> Option<u64> {
+            self.frame_capture
+                .ready
+                .as_ref()
+                .and_then(|frame| frame.scene_id)
+        }
+
+        /// Reports whether a copy is armed or in flight and has not yet been taken.
+        #[must_use]
+        pub fn frame_capture_pending(&self) -> bool {
+            self.frame_capture_turning() && self.frame_capture.ready.is_none()
+        }
+
+        /// Returns the extent of the copy that is waiting to be taken.
+        #[must_use]
+        pub fn frame_capture_extent(&self) -> Option<[u32; 2]> {
+            self.frame_capture
+                .ready
+                .as_ref()
+                .map(|frame| [frame.width, frame.height])
+        }
+
+        /// Returns the typed reason the last copy did not happen, if one did not.
+        #[must_use]
+        pub fn frame_capture_refusal(&self) -> Option<&str> {
+            self.frame_capture.refusal.as_deref()
+        }
+
+        /// Takes the completed copy, leaving nothing behind for a second caller.
+        pub fn take_frame_capture(&mut self) -> Option<ember_julibrot_present::FrameReadback> {
+            self.frame_capture.ready.take()
+        }
+
+        /// Collects a completed copy without waiting on one that is still in flight.
+        ///
+        /// A capture the presentation pass could not encode left its reason behind; picking that up
+        /// here is what stops an armed copy from ending as a silent absence rather than a cause.
+        fn drain_frame_capture(&mut self, now_ms: f64) {
+            if let Some(refusal) = self.presenter.take_frame_readback_refusal() {
+                self.frame_capture.refusal = Some(refusal.to_string());
+                self.frame_capture.in_flight_since_ms = None;
+            }
+            if !self.presenter.frame_readback_pending() {
+                self.frame_capture.in_flight_since_ms = None;
+                return;
+            }
+            let since = *self.frame_capture.in_flight_since_ms.get_or_insert(now_ms);
+            match self.presenter.take_frame_readback() {
+                Ok(None) => {
+                    // A map that has not fired inside the deadline is not a slow copy: it is one
+                    // that is never coming, and waiting on it costs the caller its whole timeout,
+                    // the device a surface-sized buffer, and every later request its refusal.
+                    if now_ms - since > crate::FRAME_CAPTURE_DEADLINE_MS
+                        && self.presenter.abandon_frame_readback()
+                    {
+                        self.frame_capture.in_flight_since_ms = None;
+                        self.frame_capture.refusal = Some(format!(
+                            "the frame copy was abandoned: its map did not complete within {:.0} ms",
+                            crate::FRAME_CAPTURE_DEADLINE_MS
+                        ));
+                    }
+                }
+                Ok(Some(frame)) => {
+                    self.frame_capture.refusal = None;
+                    self.frame_capture.in_flight_since_ms = None;
+                    self.frame_capture.ready = Some(frame);
+                }
+                Err(error) => {
+                    self.frame_capture.in_flight_since_ms = None;
+                    self.frame_capture.refusal = Some(error.to_string());
+                }
+            }
+        }
+
+        /// Hands an armed copy to the presentation pass, on a device whose surface cannot be read.
+        ///
+        /// The offscreen route has to be armed before the pass is submitted, because the second
+        /// draw is appended to that submission's own encoder. The direct route is not armed here:
+        /// it copies the surface image, which exists only at present time, so it is taken there.
+        fn stage_frame_capture(&mut self) {
+            let arming = crate::CaptureArming {
+                armed: self.frame_capture.armed,
+                route_matches: self.frame_capture.route
+                    == ember_julibrot_present::FrameReadbackRoute::OffscreenRerender,
+                readback_in_flight: self.presenter.frame_readback_pending(),
+                renderer_already_armed: self.presenter.offscreen_frame_readback_armed(),
+            };
+            if !arming.offscreen_due() {
+                return;
+            }
+            self.presenter.arm_offscreen_frame_readback();
+            self.frame_capture.armed = false;
+        }
+
         /// # Errors
         ///
         /// Returns the first typed cross-slice refusal without looping or presenting an unfinished
@@ -886,6 +1043,8 @@ mod browser {
                 .refresh_id
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
+            self.drain_frame_capture(now_ms);
+            self.stage_frame_capture();
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let observed = self.handle_events(runtime, viewer, events)?;
             self.synchronize_precision_mode(viewer)?;
@@ -1220,8 +1379,31 @@ mod browser {
                         self.frame_policy
                             .record(measurement.wall_ms)
                             .map_err(|error| AppError::Present(error.to_string()))?;
-                        if runtime.complete_warp(measurement.id) {
+                        // The copy is taken here or nowhere: this is the one moment the frame the
+                        // page is about to show exists as a texture the renderer can read.
+                        let armed = crate::CaptureArming {
+                            armed: self.frame_capture.armed,
+                            route_matches: self.frame_capture.route
+                                == ember_julibrot_present::FrameReadbackRoute::Surface,
+                            readback_in_flight: self.presenter.frame_readback_pending(),
+                            renderer_already_armed: false,
+                        }
+                        .surface_due();
+                        let presenter = &mut self.presenter;
+                        let capture = &mut self.frame_capture;
+                        if runtime.complete_warp_capturing(measurement.id, |texture| {
+                            if !armed {
+                                return;
+                            }
+                            capture.armed = false;
+                            match presenter.request_frame_readback(texture) {
+                                Ok(()) => capture.refusal = None,
+                                Err(error) => capture.refusal = Some(error.to_string()),
+                            }
+                        }) {
                             observed.presented = true;
+                            // What is now on the canvas, as opposed to what was last submitted.
+                            self.presented_scene_id = measurement.source_scene_id;
                             if let Some((warp_id, stamp)) = self.pending_warp_view
                                 && warp_id == measurement.id
                             {
