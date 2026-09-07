@@ -728,8 +728,113 @@ fn push_unique<S: OwnerSlot>(owned: &mut Vec<S>, slot: S) -> Result<(), ChannelE
     Ok(())
 }
 
+/// One transport-independent ownership transition in the worker oracle.
 #[cfg(test)]
-mod tests {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnershipEvent {
+    /// A generation entered the bounded request path.
+    RequestSubmitted {
+        /// Accepted request generation.
+        generation: u32,
+        /// Immediate bounded-channel outcome.
+        outcome: SubmitOutcome,
+    },
+    /// A completed orbit became visible in the owner queue.
+    ResponseQueued {
+        /// Completed request generation.
+        generation: u32,
+        /// Centre revision associated with the latest response.
+        centre_revision: u32,
+        /// Stored orbit-record count.
+        length: u32,
+        /// Delivered bignum precision.
+        precision_bits: u32,
+        /// Whether the producer cancelled this generation.
+        cancelled: bool,
+    },
+    /// The owner acquired the response buffer's exclusive lease.
+    ResponseLeased {
+        /// Leased response generation.
+        generation: u32,
+    },
+    /// The owner returned the response buffer and its accounting disposition.
+    CreditReturned {
+        /// Credited response generation.
+        generation: u32,
+        /// Owner accounting decision.
+        disposition: OrbitDisposition,
+    },
+}
+
+/// Stable worker facts after transport-specific fields and wall measurements are removed.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NormalizedWorkerFacts {
+    /// Transport-normalized facts revision.
+    pub(crate) epoch: u64,
+    /// Latest generation installed by the owner.
+    pub(crate) last_applied_generation: u32,
+    /// Latest generation whose orbit buffer was credited.
+    pub(crate) last_ack_generation: u32,
+    /// Completed or cancelled orbit buffers waiting on main.
+    pub(crate) orbit_queue_depth: u32,
+    /// Pending shutdown acknowledgements.
+    pub(crate) shutdown_queue_depth: u32,
+    /// Remaining owner orbit budget.
+    pub(crate) credit_us: u32,
+    /// Applied response count.
+    pub(crate) applied_count: u32,
+    /// Stale response count.
+    pub(crate) stale_count: u32,
+    /// Credited cancellation count.
+    pub(crate) cancelled_count: u32,
+    /// Initial allocation plus reconciled resizes.
+    pub(crate) allocation_events: u32,
+    /// Request-pool buffers currently owned by main.
+    pub(crate) request_buffers_owned_main: u32,
+    /// Orbit-pool buffers queued or leased on main.
+    pub(crate) orbit_buffers_owned_main: u32,
+}
+
+/// Ordered ownership events and their settled accounting snapshot.
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OwnershipTrace {
+    /// Ordered transport-independent ownership transitions.
+    pub(crate) events: Vec<OwnershipEvent>,
+    /// Settled deterministic worker accounting.
+    pub(crate) facts: NormalizedWorkerFacts,
+}
+
+/// Removes wall measurements and reconciles the two transport epoch shapes.
+#[cfg(test)]
+pub(crate) fn normalized_facts(
+    facts: WorkerFacts,
+    browser_mode: bool,
+) -> NormalizedWorkerFacts {
+    // The browser owner observes credit return as one transport callback. The queue lowering
+    // records the accounting mutation and the slot transfer separately. Count both as the same
+    // two-part logical transition in the cross-lowering trace epoch.
+    let epoch = facts.epoch.saturating_add(u64::from(browser_mode));
+    NormalizedWorkerFacts {
+        epoch,
+        last_applied_generation: facts.last_applied_generation,
+        last_ack_generation: facts.last_ack_generation,
+        orbit_queue_depth: facts.orbit_queue_depth,
+        shutdown_queue_depth: facts.shutdown_queue_depth,
+        credit_us: facts.credit_us,
+        applied_count: facts.applied_count,
+        stale_count: facts.stale_count,
+        cancelled_count: facts.cancelled_count,
+        allocation_events: facts.allocation_events,
+        request_buffers_owned_main: facts.request_buffers_owned_main,
+        orbit_buffers_owned_main: facts.orbit_buffers_owned_main,
+    }
+}
+
+/// Browser-shaped test harnesses shared with the same-thread oracle.
+#[cfg(test)]
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
@@ -737,7 +842,10 @@ mod tests {
 
     use ember_julibrot_math::PrecisionMode;
 
-    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, TwoSlotQueue};
+    use super::{
+        ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnershipEvent, OwnershipTrace,
+        TwoSlotQueue, normalized_facts,
+    };
     use crate::wire::WireBuffer;
     use crate::{
         ChannelError, CoordinateDescriptor, EncodedCentre, ErrorCode, JULIBROT_ABI_VERSION,
@@ -1102,6 +1210,49 @@ mod tests {
 
     fn orbit_records(count: usize) -> Vec<ReferenceOrbitRecord> {
         vec![zero_record(); count]
+    }
+
+    /// Runs the browser-shaped owner and producer through the shared ownership oracle.
+    pub(crate) fn browser_ownership_trace() -> OwnershipTrace {
+        let mut harness = Harness::boot(64);
+        let generation = 11;
+        let outcome = harness.submit(generation, 64);
+        let mut events = vec![OwnershipEvent::RequestSubmitted {
+            generation,
+            outcome,
+        }];
+
+        harness.produce(1);
+        let epoch = harness.core.pool_epoch();
+        let (slot, centre_revision) = harness.core.take_arrival().expect("one queued response");
+        let header = slot.header().expect("a validated response header");
+        let kind = header.validate().expect("a typed response kind");
+        events.push(OwnershipEvent::ResponseQueued {
+            generation: header.generation,
+            centre_revision,
+            length: header.length,
+            precision_bits: header.precision_bits,
+            cancelled: kind == MessageKind::OrbitCancelled,
+        });
+        events.push(OwnershipEvent::ResponseLeased {
+            generation: header.generation,
+        });
+        let disposition = OrbitDisposition::Applied;
+        let now_us = harness.wire.borrow().now_us;
+        harness
+            .core
+            .return_slot(slot, epoch, disposition, now_us)
+            .expect("credit return remains valid");
+        harness.pump();
+        events.push(OwnershipEvent::CreditReturned {
+            generation: header.generation,
+            disposition,
+        });
+
+        OwnershipTrace {
+            events,
+            facts: normalized_facts(harness.core.facts(), true),
+        }
     }
 
     #[test]

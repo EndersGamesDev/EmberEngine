@@ -1156,6 +1156,7 @@ mod tests {
     use super::{
         Admission, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
     };
+    use crate::endpoint::{OwnershipEvent, OwnershipTrace, normalized_facts};
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
         OrbitVerificationFacts, ReferenceOrbitRecord, ReferenceVerification,
@@ -1413,38 +1414,51 @@ mod tests {
 
     #[test]
     fn logical_trace_and_browser_binding_are_mode_equivalent_contracts() {
-        fn trace(mode: WorkerMode) -> ((u32, u32, u32, bool), crate::WorkerFacts) {
-            let (owner, producer) =
-                WorkerChannel::new(WorkerConfig { max_iter: 64 }, mode).unwrap();
-            assert!(matches!(
-                producer.admit(100).unwrap(),
-                Admission::Ready { warm_up: true, .. }
-            ));
-            assert_eq!(owner.submit(request(11, 12)), SubmitOutcome::Transferred);
+        fn same_thread_trace() -> OwnershipTrace {
+            let (owner, producer) = WorkerChannel::new(
+                WorkerConfig { max_iter: 64 },
+                WorkerMode::SameThread,
+            )
+            .unwrap();
+            let generation = 11;
+            let outcome = owner.submit(request(generation, generation));
+            let mut events = vec![OwnershipEvent::RequestSubmitted {
+                generation,
+                outcome,
+            }];
             let lease = producer.next_request().unwrap().unwrap();
             producer
-                .complete(lease, &[zero_record()], 96, 1_000, 250_000)
+                .complete(lease, &[zero_record()], 64, 1_000, 250_000)
                 .unwrap();
             let mut response = owner.next_arrival().unwrap();
-            let observed = (
-                response.generation(),
-                response.length(),
-                response.precision_bits(),
-                response.cancelled(),
-            );
-            response
-                .records
-                .return_credit(OrbitDisposition::Applied, 200)
+            events.push(OwnershipEvent::ResponseQueued {
+                generation: response.generation(),
+                centre_revision: response.centre_revision(),
+                length: response.length(),
+                precision_bits: response.precision_bits(),
+                cancelled: response.cancelled(),
+            });
+            events.push(OwnershipEvent::ResponseLeased {
+                generation: response.generation(),
+            });
+            let disposition = OrbitDisposition::Applied;
+            let returned_generation = response.generation();
+            owner
+                .return_credit(&mut response, disposition, 0)
                 .unwrap();
-            (observed, owner.facts())
+            events.push(OwnershipEvent::CreditReturned {
+                generation: returned_generation,
+                disposition,
+            });
+            OwnershipTrace {
+                events,
+                facts: normalized_facts(owner.facts(), false),
+            }
         }
 
-        let (same_observed, mut same_facts) = trace(WorkerMode::SameThread);
-        let (web_observed, mut web_facts) = trace(WorkerMode::WebWorker);
-        assert_eq!(same_observed, web_observed);
-        same_facts.mode = 0;
-        web_facts.mode = 0;
-        assert_eq!(same_facts, web_facts);
+        let same_thread = same_thread_trace();
+        let browser = crate::endpoint::tests::browser_ownership_trace();
+        assert_eq!(same_thread, browser);
 
         let channel_source = include_str!("channel.rs");
         let browser_source = include_str!("browser_owner.rs");
