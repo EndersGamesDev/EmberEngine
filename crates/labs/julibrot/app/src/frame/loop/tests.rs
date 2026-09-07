@@ -2573,6 +2573,7 @@ struct ZoomTurnRecord {
     planned: WarpKind,
     selected: WarpKind,
     presented: Option<WarpKind>,
+    visible_kind: Option<WarpKind>,
     presented_exposed_fraction: Option<f64>,
     refusal_reason: Option<WarpRefusalReason>,
     edit_state: ZoomEditState,
@@ -2584,7 +2585,7 @@ struct ZoomTurnRecord {
     hold: ZoomHoldState,
     source_coverage: ZoomSourceCoverage,
     requested_revision: u32,
-    warp_in_flight: bool,
+    warp_in_flight_kind: Option<WarpKind>,
     scene_in_flight: bool,
     completed_requested_final: bool,
 }
@@ -2891,6 +2892,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             planned: plan.kind,
             selected,
             presented,
+            visible_kind: last_presented_kind,
             presented_exposed_fraction,
             refusal_reason: plan.refusal_reason,
             edit_state,
@@ -2914,7 +2916,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
                 ZoomSourceCoverage::NotCovering
             },
             requested_revision,
-            warp_in_flight: pending_warp.is_some(),
+            warp_in_flight_kind: pending_warp.map(|warp| warp.kind),
             scene_in_flight: pending_scene.is_some(),
             completed_requested_final,
         });
@@ -3130,12 +3132,18 @@ fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
         "the centred comparison must exercise retained-source coverage: {centred:#?}"
     );
 
-    let first_stalled = corner.iter().find(|turn| {
+    let first_uncovered = corner.iter().find(|turn| {
         turn.requested_revision != 0
             && !turn.completed_requested_final
-            && turn.presented.is_none()
-            && !turn.warp_in_flight
             && !turn.scene_in_flight
+            && !matches!(
+                turn.visible_kind,
+                Some(WarpKind::ReliefRedraw | WarpKind::HoldStale)
+            )
+            && !matches!(
+                turn.warp_in_flight_kind,
+                Some(WarpKind::ReliefRedraw | WarpKind::HoldStale)
+            )
     });
     let corner_final = corner.iter().find(|turn| turn.completed_requested_final);
     let centred_final = centred
@@ -3147,8 +3155,8 @@ fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
         })
     });
     assert!(
-        first_stalled.is_none() && corner_final.is_some(),
-        "a redraw, hold, or in-flight scene must cover every turn until the requested Final arrives; first stalled: {first_stalled:#?}; Final: {corner_final:#?}; trace: {corner:#?}"
+        first_uncovered.is_none() && corner_final.is_some(),
+        "a visible or in-flight redraw, visible or in-flight hold, or in-flight scene must cover every turn until the requested Final arrives; first uncovered: {first_uncovered:#?}; Final: {corner_final:#?}; trace: {corner:#?}"
     );
     assert_eq!(
         corner_final.map(|turn| turn.turn),

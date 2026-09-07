@@ -606,7 +606,7 @@ pub struct PresentFacts {
     pub reprojected_per_scene: Option<u32>,
     /// Retained-record relief redraws submitted as warp work.
     pub relief_redraw_count: u64,
-    /// Refused warps submitted as stale-picture holds while replacement work remains pending.
+    /// Coverage-qualified refused or unavailable redraws submitted as stale-picture holds.
     pub warp_hold_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,
