@@ -248,7 +248,10 @@ pub fn run_local() {
 /// opening message cannot be encoded or sent, or the loaded mesh count exceeds the engine ID
 /// space.
 // This public entry point retains ownership of its configuration for API compatibility.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "The public entry point retains configuration ownership for API compatibility"
+)]
 pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     // Tracing first, so asset-loading diagnostics are visible.
     #[cfg(not(target_arch = "wasm32"))]

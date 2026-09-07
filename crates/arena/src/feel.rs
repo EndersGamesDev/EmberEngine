@@ -76,7 +76,10 @@ const fn rumble(strong: f32, weak: f32, ms: u16) -> Rumble {
 /// is the sidearm, so an id this client does not know feels like the gun it
 /// also draws for it.
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Each match arm is one complete weapon-feedback row"
+)]
 pub const fn weapon_feel(id: u8) -> WeaponFeel {
     match id {
         2 => WeaponFeel {
@@ -923,7 +926,10 @@ fn tangents(normal: Vec3) -> (Vec3, Vec3, Vec3) {
 /// direction across the face (weight `across`) and straight up (weight
 /// `up`). A fixed fan, not random: there is no RNG on the client and a
 /// burst does not need one.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The scalar inputs are the authored dimensions of one particle recipe"
+)]
 fn fan(
     at: Vec3,
     normal: Vec3,

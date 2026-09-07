@@ -937,7 +937,10 @@ struct PSnap {
 /// One sent input command, kept until the server acks it — the base of
 /// client-side movement prediction.
 // Independent held input bits must survive reconciliation exactly as sent.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent held input bits must survive reconciliation exactly as sent"
+)]
 struct Cmd {
     seq: u32,
     mv: [f32; 2],
@@ -1570,7 +1573,10 @@ struct StepClocks {
 }
 
 // These flags represent independent input, connection, animation, and UI state transitions.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Flags record independent input, connection, animation, and UI transitions"
+)]
 pub struct ShooterGame {
     chan: net::NetChan,
     my_id: Option<u8>,
@@ -2000,7 +2006,11 @@ impl ShooterGame {
     /// gunshot. A rocket's segment draws no streak (the rocket is a mesh
     /// flown from the state) and no impact (the `Blast` beside it is the
     /// impact); it leaves its mark.
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "One wire event expands in arrival order into its coupled audiovisual effects"
+    )]
     fn on_shot(
         &mut self,
         projectile_id: u64,
@@ -2593,7 +2603,8 @@ impl EmberGame for ShooterGame {
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
         clippy::cast_sign_loss,
-        clippy::too_many_lines
+        clippy::too_many_lines,
+        reason = "One function preserves event intake, prediction, and render update order"
     )]
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         self.settings.refresh();
@@ -5545,7 +5556,10 @@ mod wire_tests {
 
     #[test]
     // One continuous join/replay/map-change sequence verifies cache ownership.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One join, replay, and map-change scenario verifies cache ownership"
+    )]
     fn harbor_join_selects_port_art_and_prediction_replays_outside_old_bounds() {
         let (chan, inbox, _wire) = net::NetChan::detached_duplex();
         let mut game = ShooterGame::with_chan(chan, None, None);
@@ -6760,7 +6774,10 @@ mod wire_tests {
     /// on from a pierced body is a streak and nothing else; a rocket's
     /// segment is no streak at all, only its mark.
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One scenario pins the coupled tracer, muzzle, crack, impact, and mark effects"
+    )]
     fn a_shot_event_produces_a_tracer() {
         use arena_core::shooter::{SHOT_COVER, SHOT_FLOOR};
 
@@ -7751,7 +7768,10 @@ mod wire_tests {
     /// 4 m down the look; on native the crosshair is two white hairlines
     /// 1.2 m ahead.
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One scenario compares the complete projectile trail across render paths"
+    )]
     fn a_tracer_is_the_round_with_a_streak_behind_it() {
         use arena_core::shooter::SHOT_COVER;
 
@@ -8627,7 +8647,10 @@ mod grip_muzzle_tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One frame advances interpolation, crouch, grip, and muzzle resolution together"
+    )]
     fn queued_remote_shot_uses_this_frames_moving_crouching_barrel() {
         let (meshes, assets) = load_assets();
         let assets = assets.expect("viewmodel loads");
