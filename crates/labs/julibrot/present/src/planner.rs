@@ -367,7 +367,7 @@ pub fn relief_redraw_source_covers_destination(source: &SceneFrame, destination:
 }
 
 /// Builds the affine map from retained source-chart pixels to requested chart pixels.
-pub(super) fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<[f64; 9]> {
+pub fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<[f64; 9]> {
     plane_chart_relation(source.plane, destination.plane)?;
     let source_scale = pixel_scale(source.zoom_log2, source.grid_width).ok()?;
     let destination_scale = pixel_scale(destination.zoom_log2, destination.grid_width).ok()?;
