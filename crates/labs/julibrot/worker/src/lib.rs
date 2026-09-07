@@ -15,7 +15,6 @@ mod endpoint;
 mod error;
 mod owner;
 mod registry;
-pub(crate) mod slots;
 mod wire;
 
 #[cfg(target_arch = "wasm32")]
