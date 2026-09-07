@@ -1641,6 +1641,227 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Debug)]
+    struct PlannerCorpusCase {
+        name: &'static str,
+        frame: SceneFrame,
+        from_pose: Pose,
+        to_pose: Pose,
+        precision_mode: PrecisionMode,
+        validation: WarpValidation,
+    }
+
+    impl PlannerCorpusCase {
+        fn new(
+            name: &'static str,
+            from_pose: &Pose,
+            to_pose: &Pose,
+            precision_mode: PrecisionMode,
+            validation: WarpValidation,
+        ) -> Self {
+            Self {
+                name,
+                frame: frame(from_pose),
+                from_pose: *from_pose,
+                to_pose: *to_pose,
+                precision_mode,
+                validation,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[allow(
+        dead_code,
+        reason = "the complete plan stays in Debug and equality for the later paired-entry oracle"
+    )]
+    struct PlannerCorpusResult {
+        name: &'static str,
+        plan: WarpPlan,
+    }
+
+    type PlannerEntry = fn(&SceneFrame, &Pose, &Pose, PrecisionMode, WarpValidation) -> WarpPlan;
+
+    fn current_planner_entry(
+        frame: &SceneFrame,
+        from_pose: &Pose,
+        to_pose: &Pose,
+        precision_mode: PrecisionMode,
+        validation: WarpValidation,
+    ) -> WarpPlan {
+        Warp::reproject(frame, from_pose, to_pose, precision_mode, validation)
+    }
+
+    fn extracted_planner_entry(
+        frame: &SceneFrame,
+        from_pose: &Pose,
+        to_pose: &Pose,
+        _precision_mode: PrecisionMode,
+        _validation: WarpValidation,
+    ) -> WarpPlan {
+        reproject(frame, from_pose, to_pose)
+    }
+
+    fn named_planner_corpus() -> Vec<PlannerCorpusCase> {
+        let exact = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut flat_pan_zoom = pose(ViewControls::NEUTRAL, [11.0, -7.0]);
+        flat_pan_zoom.zoom_log2 += 0.25;
+
+        let pose_mismatch_source = pose(ViewControls::NEUTRAL, [2.0, 3.0]);
+        let mut pose_mismatch_claim = pose_mismatch_source;
+        pose_mismatch_claim.epoch = pose_mismatch_claim.epoch.saturating_add(1);
+
+        let mut edge_on = exact;
+        edge_on.map = PoseMap::EdgeOn;
+
+        let mut object_samples = exact;
+        let mut changed_object = object_samples.object;
+        changed_object.rho_13 += 0.3;
+        set_object(&mut object_samples, changed_object);
+
+        let mut invalid_extent = exact;
+        invalid_extent.grid_width = 0;
+
+        // The image homography sees only the in-plane origin projection. Moving the requested
+        // origin in an orthogonal axis therefore leaves a finite flat map while the independent
+        // chart census exposes the out-of-plane residual.
+        let mut chart_residual = exact;
+        chart_residual.plane_origin[2] = 2.0e-12;
+
+        let measured_source = measured_relief_zoom_pose();
+        let measured_redraw =
+            screen_centred_measured_relief_zoom(&measured_source, -0.005, [960, 540]);
+        let measured_refusal =
+            screen_centred_measured_relief_zoom(&measured_source, -1.0, [960, 540]);
+
+        vec![
+            PlannerCorpusCase::new(
+                "exact-self",
+                &exact,
+                &exact,
+                PrecisionMode::Deterministic,
+                WarpValidation::Ordinary,
+            ),
+            PlannerCorpusCase::new(
+                "flat-pan-zoom",
+                &exact,
+                &flat_pan_zoom,
+                PrecisionMode::PictureFast,
+                WarpValidation::Measure,
+            ),
+            PlannerCorpusCase {
+                name: "pose-mismatch",
+                frame: frame(&pose_mismatch_source),
+                from_pose: pose_mismatch_claim,
+                to_pose: pose_mismatch_source,
+                precision_mode: PrecisionMode::Deterministic,
+                validation: WarpValidation::Final,
+            },
+            PlannerCorpusCase::new(
+                "edge-on",
+                &exact,
+                &edge_on,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
+            ),
+            PlannerCorpusCase::new(
+                "object-samples",
+                &exact,
+                &object_samples,
+                PrecisionMode::Deterministic,
+                WarpValidation::Measure,
+            ),
+            PlannerCorpusCase::new(
+                "matrix-invalid-extent",
+                &invalid_extent,
+                &invalid_extent,
+                PrecisionMode::Deterministic,
+                WarpValidation::Ordinary,
+            ),
+            PlannerCorpusCase::new(
+                "chart-residual",
+                &exact,
+                &chart_residual,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
+            ),
+            PlannerCorpusCase::new(
+                "measured-relief-redraw",
+                &measured_source,
+                &measured_redraw,
+                PrecisionMode::PictureFast,
+                WarpValidation::Final,
+            ),
+            PlannerCorpusCase::new(
+                "measured-relief-exposure-refusal",
+                &measured_source,
+                &measured_refusal,
+                PrecisionMode::Deterministic,
+                WarpValidation::Measure,
+            ),
+        ]
+    }
+
+    fn run_planner_corpus(entry: PlannerEntry) -> Vec<PlannerCorpusResult> {
+        named_planner_corpus()
+            .into_iter()
+            .map(|case| PlannerCorpusResult {
+                name: case.name,
+                plan: entry(
+                    &case.frame,
+                    &case.from_pose,
+                    &case.to_pose,
+                    case.precision_mode,
+                    case.validation,
+                ),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn named_paired_planner_corpus_matches_complete_warp_plans() {
+        let current = run_planner_corpus(current_planner_entry);
+        let extracted = run_planner_corpus(extracted_planner_entry);
+        assert_eq!(current, extracted);
+        assert_eq!(
+            current.iter().map(|result| result.name).collect::<Vec<_>>(),
+            [
+                "exact-self",
+                "flat-pan-zoom",
+                "pose-mismatch",
+                "edge-on",
+                "object-samples",
+                "matrix-invalid-extent",
+                "chart-residual",
+                "measured-relief-redraw",
+                "measured-relief-exposure-refusal",
+            ]
+        );
+        assert_eq!(
+            current
+                .iter()
+                .find(|result| result.name == "matrix-invalid-extent")
+                .map(|result| result.plan.refusal_reason),
+            Some(Some(WarpRefusalReason::Matrix))
+        );
+        assert!(matches!(
+            current
+                .iter()
+                .find(|result| result.name == "chart-residual")
+                .map(|result| result.plan.refusal_reason),
+            Some(Some(WarpRefusalReason::ChartResidual { px })) if px > MAX_CHART_RESIDUAL_PX
+        ));
+        // `HoldStale` cannot be emitted by this pure planner: device-side `apply_hold_policy`
+        // owns it and its complete-plan behavior is pinned by the present-policy corpus in the
+        // device tests. Likewise, a planner-created anchor plan always has a lattice, so
+        // `enforce_error_ceiling` converts ErrorCeiling/ErrorCorpus into ReliefRedraw or
+        // ReliefExposure; neither is a reachable terminal result of `Warp::reproject`.
+        assert!(current.iter().all(|result| !matches!(
+            result.plan.refusal_reason,
+            Some(WarpRefusalReason::ErrorCeiling { .. } | WarpRefusalReason::ErrorCorpus { .. })
+        )));
+    }
+
     fn unpack_rows(rows: [[f32; 4]; 3]) -> [f64; 9] {
         core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]))
     }

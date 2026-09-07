@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Julibrot whole-grid oracle</title>
+  <style>
+    body { margin: 0; background: #101014; color: #e8e8ea; font: 13px/1.5 ui-monospace, monospace; }
+    canvas { display: block; }
+    pre { margin: 0; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <canvas id="julibrot" width="960" height="540"></canvas>
+  <pre id="report">opening the served build</pre>
+  <script type="module">
+    // This test-only page runs one shipped row through the public lab driver and prints the exact
+    // fixture shape used for later whole-grid comparisons. `app_refresh()` both polls GPU fences
+    // and runs presentation turns, so owner epoch, presentation ledger, capture count, GPU poll
+    // counts and the probe-selected second-frame policy remain load-dependent evidence until R2-04d.
+    // `?generate=1` takes preset zero from the served wasm; without it, the committed fixture
+    // supplies the frozen row and comparison.
+    import { openLab } from "./lab.js?v=1";
+
+    const FIXTURE_URL = "./whole-grid-v1.json";
+    const LOSSLESS_FILE = "whole-grid-v1.rgba.deflate.bin";
+    const LOSSLESS_ENCODING = "zlib-rfc1950";
+    const MAX_INLINE_BINARY_BYTES = 600_000;
+    const FRAME_TIMEOUT_MS = 30_000;
+    // No-paint served runs reached Measured in 1, 10, 4 and 2 captures. Comparing duration as
+    // recency makes label convergence load-dependent; each individual attempt remains bounded.
+    const MAXIMUM_CAPTURES = 40;
+    const LOAD_DEPENDENT_REASON =
+      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls, warp_polls and second_frame_policy; that policy is decided from the measured PolicyProbe wall, and all remain reported evidence until R2-04d adds a poll-only production boundary";
+    const LOAD_DEPENDENT_FIELDS = [
+      "owner_epoch",
+      "presentation_ledger",
+      "capture_count",
+      "scene_polls",
+      "warp_polls",
+      "second_frame_policy",
+    ];
+    const CANVAS = document.getElementById("julibrot");
+    const REPORT = document.getElementById("report");
+    const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
+    const ENVIRONMENT_FIELDS = ["adapter_name", "backend"];
+    const PAGE_WALL_FIELDS = [
+      "worker_compute_us",
+      "worker_overfeed_us",
+      "scene_wall_ms",
+      "scene_fence_wait_ms",
+      "scene_callback_observation_wall_ms",
+      "scene_fence_callback_observation_wait_ms",
+      "warp_wall_ms",
+      "warp_fence_wait_ms",
+      "warp_callback_observation_wall_ms",
+      "warp_fence_callback_observation_wait_ms",
+      "timer_quantum_ms",
+    ];
+    const WORKER_WALL_FIELDS = ["last_compute_us", "last_overfeed_us"];
+    const LEVEL_WALL_FIELDS = [
+      "dispatch_us",
+      "scene_us",
+      "warp_us",
+      "scene_callback_observation_us",
+      "warp_callback_observation_us",
+      "worker_reference_us",
+      "worker_generation_us",
+      "credit_wait_us",
+      "request_transfer_us",
+      "worker_round_trip_callback_observation_us",
+      "acceptance_us",
+      "reference_upload_us",
+    ];
+
+    function omit(record, fields) {
+      for (const field of fields) delete record[field];
+    }
+
+    // S-05 normalization removes only named wall durations and environment strings. The approved
+    // load-dependent fields move beside the stable facts instead of being discarded.
+    function stableFacts(facts) {
+      const stable = JSON.parse(JSON.stringify(facts));
+      omit(stable, ENVIRONMENT_FIELDS);
+      omit(stable, PAGE_WALL_FIELDS);
+      omit(stable, [
+        "owner_epoch",
+        "presentation_ledger",
+        "scene_polls",
+        "warp_polls",
+        "second_frame_policy",
+      ]);
+      if (stable.worker_facts) omit(stable.worker_facts, WORKER_WALL_FIELDS);
+      if (Array.isArray(stable.level_timings)) {
+        for (const level of stable.level_timings) omit(level, LEVEL_WALL_FIELDS);
+      }
+      return stable;
+    }
+
+    function fnv1a64(bytes) {
+      let hash = 0xcbf29ce484222325n;
+      const prime = 0x100000001b3n;
+      for (const byte of bytes) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * prime);
+      return hash.toString(16).padStart(16, "0");
+    }
+
+    async function sha256(bytes) {
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function deflate(bytes) {
+      // WHATWG's `deflate` format is an RFC 1950 zlib wrapper around the deflate payload.
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    async function inflate(bytes) {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    function base64(bytes) {
+      let binary = "";
+      const chunkBytes = 32_768;
+      for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkBytes));
+      }
+      return btoa(binary);
+    }
+
+    function equalBytes(actual, expected) {
+      return actual.length === expected.length && actual.every((byte, index) => byte === expected[index]);
+    }
+
+    // SHA-256 authenticates the complete raw frame. Ordered row digests remain only as compact
+    // mismatch localizers; the deflate fixture is the lossless source of expected pixel bytes.
+    function rgbaRowDigests(bytes, width, height) {
+      const bytesPerRow = width * 4;
+      assert(bytes.length === bytesPerRow * height, "RGBA rows need the declared extent");
+      const rows = [];
+      for (let row = 0; row < height; row += 1) {
+        const start = row * bytesPerRow;
+        rows.push(fnv1a64(bytes.subarray(start, start + bytesPerRow)));
+      }
+      return rows;
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message);
+    }
+
+    async function loadExpected() {
+      const response = await fetch(FIXTURE_URL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`fixture request returned ${response.status}`);
+      return response.json();
+    }
+
+    async function loadLossless(expected) {
+      const descriptor = expected.rgba.lossless;
+      assert(descriptor.file === LOSSLESS_FILE, "fixture names an unexpected lossless file");
+      assert(descriptor.encoding === LOSSLESS_ENCODING, "fixture names an unexpected lossless encoding");
+      const response = await fetch(`./${descriptor.file}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`lossless fixture request returned ${response.status}`);
+      const compressed = new Uint8Array(await response.arrayBuffer());
+      assert(compressed.length === descriptor.byte_length, "lossless fixture byte length differs");
+      return compressed;
+    }
+
+    async function measuredFrame(lab) {
+      for (let capture = 1; capture <= MAXIMUM_CAPTURES; capture += 1) {
+        const frame = await lab.frame({ timeoutMs: FRAME_TIMEOUT_MS });
+        const facts = lab.facts();
+        if (facts.warmup_label === "Measured") return { frame, facts, captureCount: capture };
+      }
+      throw new Error(`warm-up did not reach Measured in ${MAXIMUM_CAPTURES} captured frames`);
+    }
+
+    function exactRecord(record) {
+      const exact = JSON.parse(JSON.stringify(record));
+      omit(exact.load_dependent, LOAD_DEPENDENT_FIELDS);
+      return exact;
+    }
+
+    function printable(value) {
+      return JSON.stringify(value);
+    }
+
+    function exactDifferences(actual, expected, path = "$") {
+      const actualArray = Array.isArray(actual);
+      const expectedArray = Array.isArray(expected);
+      if (actualArray || expectedArray) {
+        if (!actualArray || !expectedArray) {
+          return [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+        }
+        const differences = [];
+        if (actual.length !== expected.length) {
+          differences.push(`${path}.length: actual=${actual.length}, expected=${expected.length}`);
+        }
+        for (let index = 0; index < Math.max(actual.length, expected.length); index += 1) {
+          if (index >= actual.length) {
+            differences.push(`${path}[${index}]: actual=<missing>, expected=${printable(expected[index])}`);
+          } else if (index >= expected.length) {
+            differences.push(`${path}[${index}]: actual=${printable(actual[index])}, expected=<missing>`);
+          } else {
+            differences.push(...exactDifferences(actual[index], expected[index], `${path}[${index}]`));
+          }
+        }
+        return differences;
+      }
+
+      const actualRecord = actual !== null && typeof actual === "object";
+      const expectedRecord = expected !== null && typeof expected === "object";
+      if (actualRecord || expectedRecord) {
+        if (!actualRecord || !expectedRecord) {
+          return [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+        }
+        const differences = [];
+        const keys = [...new Set([...Object.keys(actual), ...Object.keys(expected)])].sort();
+        for (const key of keys) {
+          const childPath = `${path}.${key}`;
+          if (!Object.hasOwn(actual, key)) {
+            differences.push(`${childPath}: actual=<missing>, expected=${printable(expected[key])}`);
+          } else if (!Object.hasOwn(expected, key)) {
+            differences.push(`${childPath}: actual=${printable(actual[key])}, expected=<missing>`);
+          } else {
+            differences.push(...exactDifferences(actual[key], expected[key], childPath));
+          }
+        }
+        return differences;
+      }
+
+      return Object.is(actual, expected)
+        ? []
+        : [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+    }
+
+    function loadDependentReport(actual, expected) {
+      const report = {};
+      for (const field of LOAD_DEPENDENT_FIELDS) {
+        const actualValue = actual.load_dependent[field];
+        const expectedValue = expected.load_dependent[field];
+        report[field] = {
+          equal: JSON.stringify(actualValue) === JSON.stringify(expectedValue),
+          expected: expectedValue,
+          actual: actualValue,
+        };
+      }
+      return JSON.stringify(report, null, 2);
+    }
+
+    async function run() {
+      const expected = GENERATING ? null : await loadExpected();
+      const lab = await openLab({ canvas: CANVAS });
+      try {
+        const row = expected ? expected.row.value : JSON.parse(lab.api.app_preset(0));
+        lab.applyRow(row);
+        await lab.settle({ level: "Final" });
+        const measured = await measuredFrame(lab);
+        const { frame, facts } = measured;
+        assert(facts.warmup_label === "Measured", "captured frame is not in the deliberate sample class");
+        assert(frame.scene_id === (facts.completed_scene_id ?? null), "copied and completed scene ids differ");
+        assert(frame.rgba.length === frame.width * frame.height * 4, "RGBA byte count does not match the extent");
+        const stable = stableFacts(facts);
+        const compressed = GENERATING ? await deflate(frame.rgba) : await loadLossless(expected);
+        if (expected) {
+          const fixtureRgba = await inflate(compressed);
+          assert(equalBytes(frame.rgba, fixtureRgba), "served RGBA differs from the lossless fixture");
+        }
+        const actual = {
+          schema: 2,
+          row: { id: "preset:0", value: row },
+          route: frame.route,
+          extent: [frame.width, frame.height],
+          copied_scene_id: frame.scene_id,
+          completed_scene_id: facts.completed_scene_id ?? null,
+          stable_facts: stable,
+          determinism: {
+            warmup_label: facts.warmup_label,
+            completed_scene_id: facts.completed_scene_id ?? null,
+            copied_scene_id: frame.scene_id,
+            texture_reallocations: facts.texture_reallocations,
+          },
+          load_dependent: {
+            reason: LOAD_DEPENDENT_REASON,
+            owner_epoch: facts.owner_epoch,
+            presentation_ledger: facts.presentation_ledger,
+            capture_count: measured.captureCount,
+            scene_polls: facts.scene_polls,
+            warp_polls: facts.warp_polls,
+            second_frame_policy: facts.second_frame_policy,
+          },
+          rgba: {
+            byte_length: frame.rgba.length,
+            digest: { algorithm: "sha256", hex: await sha256(frame.rgba) },
+            rows: rgbaRowDigests(frame.rgba, frame.width, frame.height),
+            lossless: {
+              file: LOSSLESS_FILE,
+              encoding: LOSSLESS_ENCODING,
+              byte_length: compressed.length,
+              digest: { algorithm: "sha256", hex: await sha256(compressed) },
+            },
+          },
+        };
+        const text = JSON.stringify(actual, null, 2);
+        if (expected) {
+          const differences = exactDifferences(exactRecord(actual), exactRecord(expected));
+          assert(
+            differences.length === 0,
+            `served whole-grid fixture differs:\n${differences.join("\n")}`,
+          );
+          const loadReport = loadDependentReport(actual, expected);
+          REPORT.textContent = `PASS ${FIXTURE_URL}\n\nload-dependent comparison\n${loadReport}\n\n${text}`;
+        } else {
+          const size = compressed.length;
+          if (size <= MAX_INLINE_BINARY_BYTES) {
+            REPORT.textContent = `${text}\n\nBEGIN ${LOSSLESS_FILE} BASE64 (${size} bytes)\n${base64(compressed)}\nEND ${LOSSLESS_FILE} BASE64`;
+          } else {
+            REPORT.textContent = `LOSSLESS FIXTURE TOO LARGE: ${size} bytes exceeds ${MAX_INLINE_BINARY_BYTES}; no base64 emitted\n\n${text}`;
+          }
+        }
+      } finally {
+        lab.stop();
+      }
+    }
+
+    run().catch(error => {
+      REPORT.textContent = `failed: ${String(error)}`;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>
