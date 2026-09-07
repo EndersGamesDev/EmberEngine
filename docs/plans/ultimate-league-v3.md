@@ -88,6 +88,15 @@ playback, decoded frames, captions and seeking. Final release evidence records
 the exact tested hashes and public revisions separately; this plan is not proof
 that publication has completed.
 
+The final local gates passed 112 Rust tests (65 core, 38 client and 9 server),
+24 UI/fullscreen checks, 108 broad browser checks, 19 private online checks and
+111 landing/story/video checks. Strict core/client Clippy passed; the server's
+pre-existing style warnings are outside this change. The tested V3 WASM SHA-256
+is `a71887d82711fc96bf1151a4dcf50c441a51a1a05664d82639a809dfb1222700`.
+The 44-second trailer SHA-256 is
+`38fd8416deb0c20e52ac70bb465f8a02c3dd56d9b373ee75459c307f2d8bc4cd`.
+Its audio received numerical peak/RMS checks; no human audition is claimed.
+
 The GitHub Wiki URL was checked and redirected to the repository; the Wiki Git
 endpoint returned 404. No unavailable Wiki content was inferred. The repository
 simulation, kit definitions and documentation are the source of truth.
