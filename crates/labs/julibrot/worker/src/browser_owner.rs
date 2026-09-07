@@ -69,7 +69,12 @@ impl BrowserOwnerEndpoint {
             listener: None,
         };
         let endpoint = Self {
-            core: Rc::new(RefCell::new(OwnerCore::new(port, config)?)),
+            core: Rc::new(RefCell::new(OwnerCore::new(
+                port,
+                config,
+                crate::WorkerMode::WebWorker,
+                [0, 1],
+            )?)),
         };
         let weak = Rc::downgrade(&endpoint.core);
         let listener = Closure::<dyn FnMut(MessageEvent)>::new(move |event| {

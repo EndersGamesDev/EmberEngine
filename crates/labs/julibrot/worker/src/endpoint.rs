@@ -128,6 +128,16 @@ pub(crate) trait OwnerPort {
 
     /// Reads the owner-side monotonic clock in microseconds.
     fn now_us(&self) -> Result<u64, ChannelError>;
+
+    /// Reclaims the two idle producer-held orbit slots for a same-thread pool replacement.
+    fn reclaim_orbit_pool(&mut self) -> Option<[Self::Slot; 2]> {
+        None
+    }
+
+    /// Reports whether the same-thread producer has returned to its startup ownership state.
+    fn producer_reconciled(&self) -> bool {
+        false
+    }
 }
 
 /// One decoded producer object-handshake message.
@@ -158,6 +168,8 @@ struct Drain {
 pub(crate) struct OwnerCore<P: OwnerPort> {
     port: P,
     config: WorkerConfig,
+    mode: WorkerMode,
+    slot_order: [u32; 2],
     request_owned: Vec<P::Slot>,
     orbit_owned: Vec<P::Slot>,
     arrivals: TwoSlotQueue<P::Slot>,
@@ -177,7 +189,12 @@ pub(crate) struct OwnerCore<P: OwnerPort> {
 
 impl<P: OwnerPort> OwnerCore<P> {
     /// Allocates the startup pool and returns an endpoint that has not yet probed the producer.
-    pub(crate) fn new(port: P, config: WorkerConfig) -> Result<Self, ChannelError> {
+    pub(crate) fn new(
+        port: P,
+        config: WorkerConfig,
+        mode: WorkerMode,
+        slot_order: [u32; 2],
+    ) -> Result<Self, ChannelError> {
         if config.max_iter < MIN_MAX_ITER {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -190,6 +207,8 @@ impl<P: OwnerPort> OwnerCore<P> {
         let mut core = Self {
             port,
             config,
+            mode,
+            slot_order,
             request_owned: Vec::with_capacity(2),
             orbit_owned: Vec::with_capacity(2),
             arrivals: TwoSlotQueue::new(),
@@ -198,7 +217,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             latest_centre_revision: 0,
             last_error: None,
             credit: CreditAccount::new(),
-            facts: WorkerFacts::new(WorkerMode::WebWorker),
+            facts: WorkerFacts::new(mode),
             orbit_leases: 0,
             pool_epoch: 0,
             ready: false,
@@ -207,6 +226,9 @@ impl<P: OwnerPort> OwnerCore<P> {
             drain: None,
         };
         core.allocate_pool(config.max_iter)?;
+        if mode == WorkerMode::SameThread {
+            core.install_same_thread_pool()?;
+        }
         core.refresh_facts();
         Ok(core)
     }
@@ -324,7 +346,11 @@ impl<P: OwnerPort> OwnerCore<P> {
         }
         self.record_credit(old, disposition, charge.overfeed_us);
         self.orbit_leases = self.orbit_leases.saturating_sub(1);
+        if self.mode == WorkerMode::SameThread {
+            self.bump_facts();
+        }
         self.advance();
+        self.pump_request();
         self.bump_facts();
         self.refresh_facts();
         #[cfg(test)]
@@ -349,6 +375,9 @@ impl<P: OwnerPort> OwnerCore<P> {
         let generation = slot.header()?.generation;
         #[cfg(test)]
         let mut transition = None;
+        let defer_request_pump = self.mode == WorkerMode::SameThread
+            && pool == Pool::Request
+            && kind == MessageKind::RequestReturn;
         match (pool, kind) {
             (Pool::Request, MessageKind::RequestReturn) => {
                 push_unique(&mut self.request_owned, slot)?;
@@ -404,7 +433,9 @@ impl<P: OwnerPort> OwnerCore<P> {
             }
         }
         self.advance();
-        self.pump_request();
+        if !defer_request_pump {
+            self.pump_request();
+        }
         self.bump_facts();
         self.refresh_facts();
         #[cfg(test)]
@@ -443,6 +474,14 @@ impl<P: OwnerPort> OwnerCore<P> {
 
     /// Begins the closing drain; completion is reported by `shutdown_acknowledged`.
     pub(crate) fn shutdown(&mut self) -> Result<(), ChannelError> {
+        if self.mode == WorkerMode::SameThread {
+            if !self.same_thread_reconciled() {
+                return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
+            }
+            self.closed = true;
+            self.reconciled = true;
+            return Ok(());
+        }
         self.closed = true;
         self.pending_request = None;
         self.drain = Some(Drain {
@@ -560,6 +599,18 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn arm_resize(&mut self, max_iter: u32) {
+        if self.mode == WorkerMode::SameThread {
+            if self.same_thread_owner_idle() {
+                let Some(slots) = self.port.reclaim_orbit_pool() else {
+                    return;
+                };
+                self.orbit_owned.extend(slots);
+                if let Err(error) = self.replace_pool(max_iter) {
+                    self.last_error = Some(error);
+                }
+            }
+            return;
+        }
         if !self.ready && self.drain.is_none() && self.four_slots_home() {
             if let Err(error) = self.replace_pool(max_iter) {
                 self.last_error = Some(error);
@@ -598,6 +649,19 @@ impl<P: OwnerPort> OwnerCore<P> {
             && self.orbit_owned.len() == 2
             && self.arrivals.is_empty()
             && self.orbit_leases == 0
+    }
+
+    const fn same_thread_owner_idle(&self) -> bool {
+        self.request_owned.len() == 2
+            && self.arrivals.is_empty()
+            && self.orbit_leases == 0
+            && self.drain.is_none()
+    }
+
+    fn same_thread_reconciled(&self) -> bool {
+        self.same_thread_owner_idle()
+            && self.pending_request.is_none()
+            && self.port.producer_reconciled()
     }
 
     fn first_missing_slot(&self) -> (Pool, u32) {
@@ -643,6 +707,9 @@ impl<P: OwnerPort> OwnerCore<P> {
 
     fn replace_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
         self.allocate_pool(max_iter)?;
+        if self.mode == WorkerMode::SameThread {
+            self.install_same_thread_pool()?;
+        }
         self.arrivals.clear();
         self.orbit_leases = 0;
         self.config.max_iter = max_iter;
@@ -656,7 +723,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     fn allocate_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
         let mut request_owned = Vec::with_capacity(2);
         let mut orbit_owned = Vec::with_capacity(2);
-        for slot in 0..=1 {
+        for slot in self.slot_order {
             request_owned.push(self.port.allocate(Pool::Request, slot, max_iter)?);
             orbit_owned.push(self.port.allocate(Pool::Orbit, slot, max_iter)?);
         }
@@ -665,9 +732,27 @@ impl<P: OwnerPort> OwnerCore<P> {
         Ok(())
     }
 
+    fn install_same_thread_pool(&mut self) -> Result<(), ChannelError> {
+        while let Some(slot) = self.orbit_owned.pop() {
+            self.port.post(slot)?;
+        }
+        self.ready = true;
+        Ok(())
+    }
+
     fn pump_request(&mut self) -> bool {
         if !self.ready || self.closed || self.drain.is_some() || self.pending_request.is_none() {
             return false;
+        }
+        let requested_cap = self
+            .pending_request
+            .as_ref()
+            .map_or(self.config.max_iter, OrbitRequest::max_iter);
+        if requested_cap > self.config.max_iter {
+            self.arm_resize(requested_cap);
+            if requested_cap > self.config.max_iter {
+                return false;
+            }
         }
         let Some(slot) = self.request_owned.pop() else {
             return false;
@@ -676,13 +761,6 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.request_owned.push(slot);
             return false;
         };
-        if request.max_iter() > self.config.max_iter {
-            let requested_cap = request.max_iter();
-            self.pending_request = Some(request);
-            self.request_owned.push(slot);
-            self.arm_resize(requested_cap);
-            return false;
-        }
         if let Err(error) = slot.encode_request(&request) {
             self.last_error = Some(error);
             self.pending_request = Some(request);
@@ -699,6 +777,10 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.last_error = Some(error);
             self.pending_request = Some(request);
             return false;
+        }
+        if self.mode == WorkerMode::SameThread {
+            self.bump_facts();
+            self.refresh_facts();
         }
         #[cfg(test)]
         self.trace_transition(
@@ -1281,7 +1363,13 @@ pub(crate) mod tests {
                 wire: Rc::clone(&wire),
             };
             let mut harness = Self {
-                core: OwnerCore::new(port, WorkerConfig { max_iter }).unwrap(),
+                core: OwnerCore::new(
+                    port,
+                    WorkerConfig { max_iter },
+                    WorkerMode::WebWorker,
+                    [0, 1],
+                )
+                .unwrap(),
                 wire,
             };
             harness.core.probe_abi().unwrap();
