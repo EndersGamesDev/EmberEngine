@@ -1018,19 +1018,22 @@ fn attack_start(fx: &FxLite) -> bool {
     fx.k == 0 && fx.ability == 4 && fx.v.is_finite() && fx.v.rem_euclid(8.0) >= 4.0
 }
 
-/// Recoil, swing or lunge for the latest nearby start belonging to this actor.
+/// Recoil, swing or lunge for the latest start emitted by this exact actor.
 pub fn attack_pose(unit: &UnitLite, effects: &[FxLite]) -> AttackPose {
     if unit.dead || unit.def > 4 || ![unit.x, unit.z, unit.fa].iter().all(|v| v.is_finite()) {
         return AttackPose::default();
     }
+    // Origins can precede a dash, and mirrors/clones can overlap. Legacy
+    // unknown sources still draw their effects but cannot identify a body.
     let belongs = |fx: &&FxLite| {
-        fx.champ == unit.def
+        fx.source != 0
+            && fx.source == unit.id
+            && fx.champ == unit.def
             && fx.life.is_finite()
             && fx.life > 0.0
             && fx.left.is_finite()
             && fx.left > 0.0
             && [fx.x, fx.z, fx.x2, fx.z2].iter().all(|v| v.is_finite())
-            && (fx.x - unit.x).powi(2) + (fx.z - unit.z).powi(2) < 0.8 * 0.8
     };
     // A cast owns its short visual window, including a cooldown-ready auto
     // released later in the same simulation tick. Damage and shots survive.
@@ -1092,6 +1095,7 @@ mod tests {
     fn effect(champ: u8, ability: u8, kind: u8) -> FxLite {
         FxLite {
             k: kind,
+            source: 1,
             champ,
             ability,
             x: -4.0,
@@ -1307,9 +1311,9 @@ mod tests {
             fx.v = 0.0;
             assert_eq!(attack_pose(&unit, &[fx]), AttackPose::default());
             fx.v = 4.0;
-            fx.x += 5.0;
+            fx.source = 2;
             assert_eq!(attack_pose(&unit, &[fx]), AttackPose::default());
-            fx.x = unit.x;
+            fx.source = 1;
             fx.champ = (champ + 1) % 5;
             assert_eq!(attack_pose(&unit, &[fx]), AttackPose::default());
         }
@@ -1335,12 +1339,166 @@ mod tests {
                 let mut cast = effect(champ, ability, 13);
                 assert_eq!(attack_pose(&unit, &[attack, cast]), AttackPose::default());
                 assert_eq!(attack_pose(&unit, &[cast, attack]), AttackPose::default());
-                cast.x += 5.0;
+                cast.source = 2;
                 assert_eq!(attack_pose(&unit, &[attack, cast]), original);
-                cast.x = unit.x;
+                cast.source = 1;
                 cast.left = 0.0;
                 assert_eq!(attack_pose(&unit, &[attack, cast]), original);
             }
         }
+    }
+
+    #[test]
+    fn moved_actors_keep_their_cast_window_for_all_twenty_abilities() {
+        for champ in 0..5 {
+            let mut world = World::new(1);
+            world.set_units(&[UnitSnap {
+                id: 1,
+                k: 0,
+                def: champ,
+                x: 6.0,
+                z: 3.0,
+                ..UnitSnap::default()
+            }]);
+            let unit = world.units[0];
+            let mut attack = effect(champ, 4, 0);
+            // The actor walked, dashed or blinked after this earlier attack.
+            assert_ne!(attack_pose(&unit, &[attack]), AttackPose::default());
+            attack.x = unit.x;
+            attack.z = unit.z;
+            let original = attack_pose(&unit, &[attack]);
+            for ability in 0..4 {
+                // Cast origins are intentionally pre-movement coordinates.
+                let mut cast = effect(champ, ability, 13);
+                assert_eq!(attack_pose(&unit, &[attack, cast]), AttackPose::default());
+                assert_eq!(attack_pose(&unit, &[cast, attack]), AttackPose::default());
+                cast.left = 0.0;
+                assert_eq!(attack_pose(&unit, &[attack, cast]), original);
+            }
+        }
+    }
+
+    #[test]
+    fn overlapping_mirrors_and_holograms_only_use_their_own_events() {
+        for champ in 0..5 {
+            let mut world = World::new(1);
+            world.set_units(&[1, 2, 3].map(|id| UnitSnap {
+                id,
+                k: if id == 3 { 3 } else { 0 },
+                t: u8::from(id == 2),
+                def: champ,
+                x: -4.0,
+                z: 1.0,
+                ..UnitSnap::default()
+            }));
+            for source in [1, 2, 3] {
+                let mut attack = effect(champ, 4, 0);
+                attack.source = source;
+                let mut cast = effect(champ, 0, 13);
+                cast.source = source;
+                for unit in &world.units {
+                    assert_eq!(
+                        attack_pose(unit, &[attack]) == AttackPose::default(),
+                        unit.id != source
+                    );
+                    let mut own_attack = attack;
+                    own_attack.source = unit.id;
+                    let expected = if unit.id == source {
+                        AttackPose::default()
+                    } else {
+                        attack_pose(unit, &[own_attack])
+                    };
+                    assert_eq!(attack_pose(unit, &[own_attack, cast]), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn casts_preserve_source_through_simulation_wire_and_world_for_all_twenty_abilities() {
+        use league_core::proto::{Cmd, Fx, S2C};
+        use league_core::sim::Match;
+
+        for champ in 0..5 {
+            for ability in 0..4 {
+                let mut game = Match::new(1, 777);
+                game.set_pick(0, champ, 0, 1, [0, 1, 2]);
+                game.set_pick(1, 1, 0, 1, [0, 1, 2]);
+                game.start();
+                let caster = game.champ_by_slot(0).unwrap();
+                let target = game.champ_by_slot(1).unwrap();
+                let source = game.units[caster].id;
+                game.units[caster].level = league_core::data::MAX_LEVEL;
+                game.units[caster].ranks = [3; 4];
+                game.units[caster].x = 0.0;
+                game.units[caster].z = 0.0;
+                game.units[target].x = 4.0;
+                game.units[target].z = 0.0;
+                game.fx.clear();
+                game.command(
+                    0,
+                    Cmd::Cast {
+                        slot: ability,
+                        x: 4.0,
+                        z: 0.0,
+                    },
+                );
+                game.step();
+                let S2C::State { units, fx, .. } = game.snapshot() else {
+                    unreachable!()
+                };
+                let cast = fx.iter().find(|f| f.k == 13).expect("accepted cast");
+                let wire: Fx = serde_json::from_str(&serde_json::to_string(cast).unwrap()).unwrap();
+                let mut world = World::new(1);
+                world.set_units(&units);
+                world.push_fx(wire.into());
+                let unit = world.units.iter().find(|u| u.id == source).unwrap();
+                let cast = world.fx[0];
+                assert_eq!(
+                    (cast.source, cast.champ, cast.ability),
+                    (source, champ, ability)
+                );
+                if ability == 2 && matches!(champ, 3 | 4) {
+                    assert!(
+                        (unit.x - cast.x).abs() > 1.0,
+                        "dash must move the actor"
+                    );
+                }
+                let mut attack = effect(champ, 4, 0);
+                attack.source = source;
+                attack.x = unit.x;
+                attack.z = unit.z;
+                assert_ne!(attack_pose(unit, &[attack]), AttackPose::default());
+                assert_eq!(attack_pose(unit, &[attack, cast]), AttackPose::default());
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_unknown_sources_render_effects_without_guessing_actor_poses() {
+        let old = r#"{"k":0,"champ":0,"ability":4,"x":-4.0,"z":1.0,"x2":2.0,"z2":3.0,"v":4.0}"#;
+        let wire: league_core::proto::Fx = serde_json::from_str(old).unwrap();
+        let mut world = World::new(1);
+        world.set_units(&[UnitSnap {
+            id: 1,
+            k: 0,
+            def: 0,
+            ..UnitSnap::default()
+        }]);
+        world.push_fx(wire.into());
+        assert_eq!(world.fx[0].source, 0);
+        assert_eq!(attack_pose(&world.units[0], &world.fx), AttackPose::default());
+        let mut frame = Frame::default();
+        assert!(draw_fx(&mut frame, &world.fx[0], 0.3));
+        assert!(!frame.instances.is_empty());
+        let mut own_attack = effect(0, 4, 0);
+        own_attack.source = 1;
+        let original = attack_pose(&world.units[0], &[own_attack]);
+        let mut unknown_cast = effect(0, 0, 13);
+        unknown_cast.source = 0;
+        assert_eq!(
+            attack_pose(&world.units[0], &[own_attack, unknown_cast]),
+            original
+        );
     }
 }

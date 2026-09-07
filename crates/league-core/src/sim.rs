@@ -1022,6 +1022,7 @@ impl Match {
                 self.units[ui].dead = true;
                 let (x, z) = (self.units[ui].x, self.units[ui].z);
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
@@ -1485,6 +1486,7 @@ impl Match {
             let (sx, sz) = (self.units[ui].x, self.units[ui].z);
             let (tx, tz) = (self.units[ti].x, self.units[ti].z);
             self.fx.push(Fx {
+                source: aid,
                 champ,
                 ability: 4,
                 k: 0,
@@ -1527,6 +1529,7 @@ impl Match {
             // later impact. This adds no projectile, damage or cooldown work.
             if champ != proto::UNKNOWN_PRESENTATION {
                 self.fx.push(Fx {
+                    source: aid,
                     champ,
                     ability: 4,
                     k: 0,
@@ -1645,6 +1648,7 @@ impl Match {
                 add_buff(&mut self.units[ti], BuffKind::Slow, 1.0, 40.0, owner);
             }
             self.fx.push(Fx {
+                source: owner,
                 champ,
                 ability,
                 k: 10,
@@ -1665,6 +1669,7 @@ impl Match {
                 add_buff(&mut self.units[ti], BuffKind::Slow, slow_ttl, slow, owner);
             }
             self.fx.push(Fx {
+                source: owner,
                 champ,
                 ability,
                 k: 0,
@@ -1731,6 +1736,7 @@ impl Match {
                         add_buff(&mut self.units[i], BuffKind::Root, root, 0.0, owner);
                         self.zones[zi].ttl = 0.0;
                         self.fx.push(Fx {
+                            source: 0,
                             champ,
                             ability,
                             k: 2,
@@ -1777,6 +1783,7 @@ impl Match {
                         }
                     }
                     self.fx.push(Fx {
+                        source: 0,
                         champ,
                         ability,
                         k: 2,
@@ -1968,6 +1975,7 @@ impl Match {
                     u.hp = mx * pct / 100.0;
                     u.dmg_log = [(u8::MAX, 0); 8];
                     self.fx.push(Fx {
+                        source: 0,
                         champ: data::HALLOW,
                         ability: 3,
                         k: 9,
@@ -1995,6 +2003,7 @@ impl Match {
                 self.units[ti].order = Order::Hold;
                 self.units[ti].target = 0;
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
@@ -2092,6 +2101,7 @@ impl Match {
             Kind::Melee | Kind::Caster => {
                 self.units[ti].dead = true;
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 5,
@@ -2157,6 +2167,7 @@ impl Match {
                 self.boon[usize::from(winners)] = if kind == Kind::CourtN { 1 } else { 2 };
                 self.boon_left[usize::from(winners)] = data::BOON_SECS;
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 2,
@@ -2188,6 +2199,7 @@ impl Match {
                 self.units[ti].dead = true;
                 self.units[ti].hp = 0.0;
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 2,
@@ -2225,6 +2237,7 @@ impl Match {
         self.earned[team] += g;
         let (x, z) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 7,
@@ -2268,6 +2281,7 @@ impl Match {
             u.mana = (u.mana + (mm1 - mm0)).min(mm1);
             let (x, z) = (u.x, u.z);
             self.fx.push(Fx {
+                source: 0,
                 champ: crate::proto::UNKNOWN_PRESENTATION,
                 ability: crate::proto::UNKNOWN_PRESENTATION,
                 k: 6,
@@ -2436,12 +2450,14 @@ mod tests {
             for ability in 0..4 {
                 let mut m = visual_duel(champ);
                 let caster = m.champ_by_slot(0).unwrap();
+                let source = m.units[caster].id;
                 m.cast(caster, ability, 4.0, 0.0);
                 assert!(m.units[caster].cds[usize::from(ability)] > 0.0);
                 let casts: Vec<_> = m.fx.iter().filter(|f| f.k == 13).collect();
                 assert_eq!(casts.len(), 1, "champ {champ} ability {ability}");
                 let event = casts[0];
                 assert_eq!((event.champ, event.ability), (champ, ability));
+                assert_eq!(event.source, source);
                 assert!(event.x.abs() < f32::EPSILON && event.z.abs() < f32::EPSILON);
                 assert!((event.x2 - 4.0).abs() < f32::EPSILON && event.z2.abs() < f32::EPSILON);
                 for fx in m.fx.iter().filter(|f| !matches!(f.k, 5..=7)) {
@@ -2454,7 +2470,9 @@ mod tests {
                     assert_eq!((z.champ, z.ability), (champ, ability));
                 }
                 let proto::S2C::State { fx, projs, .. } = m.snapshot() else { unreachable!() };
-                assert!(fx.iter().any(|f| f.k == 13 && f.champ == champ && f.ability == ability));
+                assert!(fx.iter().any(|f| {
+                    f.k == 13 && f.champ == champ && f.ability == ability && f.source == source
+                }));
                 assert!(projs.iter().all(|p| p.champ == champ));
             }
         }
@@ -2466,9 +2484,11 @@ mod tests {
             let mut m = visual_duel(champ);
             let caster = m.champ_by_slot(0).unwrap();
             let target = m.champ_by_slot(1).unwrap();
+            let source = m.units[caster].id;
             m.do_attack(caster, target);
             let start = m.fx.iter().find(|f| f.k == 0).expect("attack-start event");
             assert_eq!((start.champ, start.ability), (champ, 4));
+            assert_eq!(start.source, source);
             assert_eq!(start.v as u8 & 4, 4);
             assert!(start.x.abs() < f32::EPSILON && (start.x2 - 4.0).abs() < f32::EPSILON);
             if !m.projs.is_empty() {
@@ -2479,6 +2499,7 @@ mod tests {
                 }
                 let impact = m.fx.iter().find(|f| f.k == 0).expect("projectile impact");
                 assert_eq!((impact.champ, impact.ability), (champ, 4));
+                assert_eq!(impact.source, source);
                 assert_eq!(impact.v as u8 & 4, 0);
                 assert!((impact.x - 4.0).abs() < f32::EPSILON);
             }
@@ -2514,6 +2535,9 @@ mod tests {
         let clone_id = m.units[clone].id;
         let target = m.champ_by_slot(1).unwrap();
         m.do_attack(clone, target);
+        let start = m.fx.iter().find(|f| f.k == 0 && f.ability == 4).unwrap();
+        assert_eq!(start.source, clone_id);
+        assert_ne!(start.source, m.units[caster].id);
         m.projs.retain(|p| p.owner == clone_id);
         assert!(m.projs.iter().any(|p| p.ability == 3));
         assert!(m.projs.iter().any(|p| p.ability == 4));
@@ -2526,8 +2550,12 @@ mod tests {
                 m.step_proj(pi);
             }
         }
-        assert!(m.fx.iter().any(|f| f.k == 0 && f.champ == data::SWARM && f.ability == 3));
-        assert!(m.fx.iter().any(|f| f.k == 0 && f.champ == data::SWARM && f.ability == 4));
+        assert!(m.fx.iter().any(|f| {
+            f.k == 0 && f.champ == data::SWARM && f.ability == 3 && f.source == clone_id
+        }));
+        assert!(m.fx.iter().any(|f| {
+            f.k == 0 && f.champ == data::SWARM && f.ability == 4 && f.source == clone_id
+        }));
     }
 
     #[test]
@@ -2552,7 +2580,9 @@ mod tests {
         assert_eq!(m.units[caster].tp, 2);
         assert!((m.units[caster].mana - mana).abs() < f32::EPSILON);
         assert!((m.units[caster].cds[3] - cooldown).abs() < f32::EPSILON);
-        assert!(m.fx.iter().any(|f| f.k == 13 && f.champ == data::KNIGHT && f.ability == 3));
+        assert!(m.fx.iter().any(|f| {
+            f.k == 13 && f.champ == data::KNIGHT && f.ability == 3 && f.source == m.units[caster].id
+        }));
     }
 
     #[test]

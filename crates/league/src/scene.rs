@@ -1819,6 +1819,7 @@ mod tests {
             .collect();
         let fx: Vec<FxLite> = (0..13u8)
             .map(|k| FxLite {
+                source: 0,
                 champ: 255,
                 ability: 255,
                 k,
@@ -1831,6 +1832,7 @@ mod tests {
                 left: 0.2,
             })
             .chain(std::iter::once(FxLite {
+                source: 0,
                 champ: 255,
                 ability: 255,
                 k: 0,

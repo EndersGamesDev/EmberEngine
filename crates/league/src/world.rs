@@ -36,6 +36,7 @@ pub struct UnitLite {
 #[derive(Clone, Copy, Debug)]
 pub struct FxLite {
     pub k: u8,
+    pub source: u32,
     pub champ: u8,
     pub ability: u8,
     pub x: f32,
@@ -51,6 +52,7 @@ impl From<proto::Fx> for FxLite {
     fn from(f: proto::Fx) -> Self {
         Self {
             k: f.k,
+            source: f.source,
             champ: f.champ,
             ability: f.ability,
             x: f.x,

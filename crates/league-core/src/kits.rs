@@ -36,6 +36,7 @@ impl Match {
     pub(crate) fn cast(&mut self, ui: usize, ab: u8, ax: f32, az: f32) {
         let u = &self.units[ui];
         debug_assert!(matches!(u.kind, Kind::Champ));
+        let source = u.id;
         let a = usize::from(ab);
         // Demon-form blinks are a free re-cast of R while the form holds.
         if ab == 3 && u.def == data::KNIGHT && u.form > 0.0 && u.tp > 0 {
@@ -46,6 +47,7 @@ impl Match {
             u.tp -= 1;
             let (x, z) = (u.x, u.z);
             self.fx.push(Fx {
+                source,
                 champ: data::KNIGHT,
                 ability: 3,
                 k: 8,
@@ -56,6 +58,7 @@ impl Match {
                 v: 0.0,
             });
             self.fx.push(Fx {
+                source,
                 champ: data::KNIGHT,
                 ability: 3,
                 k: 13,
@@ -129,6 +132,7 @@ impl Match {
                 zone.ability = ab;
             }
             self.fx.push(Fx {
+                source,
                 champ: def,
                 ability: ab,
                 k: 13,
@@ -234,6 +238,7 @@ impl Match {
         let id = self.units[ui].id;
         add_buff(&mut self.units[ui], BuffKind::Ms, 1.0, 20.0, id);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
@@ -386,6 +391,7 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 3,
@@ -409,6 +415,7 @@ impl Match {
         );
         let (x, z) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 12,
@@ -453,6 +460,7 @@ impl Match {
         add_buff(u, BuffKind::DmgAmp, dur, 100.0, id);
         let (x, z) = (u.x, u.z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
@@ -476,6 +484,7 @@ impl Match {
         u.hp = (u.hp + amount).min(mx);
         let (x, z) = (u.x, u.z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
@@ -495,6 +504,7 @@ impl Match {
         add_buff(&mut self.units[ti], BuffKind::Ms, 3.0, 35.0, id);
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
@@ -520,6 +530,7 @@ impl Match {
         );
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 12,
@@ -545,6 +556,7 @@ impl Match {
         );
         let (x, z) = (self.units[ti].x, self.units[ti].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 9,
@@ -617,6 +629,7 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
@@ -627,6 +640,7 @@ impl Match {
             v: 0.0,
         });
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
@@ -653,6 +667,7 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 2,
@@ -726,6 +741,7 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 4,
@@ -750,6 +766,7 @@ impl Match {
         add_buff(&mut self.units[ui], BuffKind::Ms, 1.5, 25.0, id);
         let (nx, nz) = (self.units[ui].x, self.units[ui].z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 8,
@@ -790,6 +807,7 @@ impl Match {
         self.next_id += 1;
         self.zones.push(z);
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 3,
@@ -831,6 +849,7 @@ impl Match {
                 }
                 let (nx, nz) = (self.units[ui].x, self.units[ui].z);
                 self.fx.push(Fx {
+                    source: 0,
                     champ: crate::proto::UNKNOWN_PRESENTATION,
                     ability: crate::proto::UNKNOWN_PRESENTATION,
                     k: 8,
@@ -855,6 +874,7 @@ impl Match {
                         u.hp = (u.hp + amount).min(mx);
                         let (hx, hz) = (u.x, u.z);
                         self.fx.push(Fx {
+                            source: 0,
                             champ: crate::proto::UNKNOWN_PRESENTATION,
                             ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 9,
@@ -893,6 +913,7 @@ impl Match {
                     if dealt > 0.0 {
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
+                            source: 0,
                             champ: crate::proto::UNKNOWN_PRESENTATION,
                             ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 2,
@@ -913,6 +934,7 @@ impl Match {
                         add_buff(&mut self.units[ti], BuffKind::Exhaust, 3.0, 0.0, id);
                         let (tx, tz) = (self.units[ti].x, self.units[ti].z);
                         self.fx.push(Fx {
+                            source: 0,
                             champ: crate::proto::UNKNOWN_PRESENTATION,
                             ability: crate::proto::UNKNOWN_PRESENTATION,
                             k: 11,
@@ -1045,6 +1067,7 @@ impl Match {
             }
         }
         self.fx.push(Fx {
+            source: 0,
             champ: crate::proto::UNKNOWN_PRESENTATION,
             ability: crate::proto::UNKNOWN_PRESENTATION,
             k: 1,

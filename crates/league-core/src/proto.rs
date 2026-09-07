@@ -269,6 +269,10 @@ pub struct ZoneSnap {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct Fx {
     pub k: u8,
+    /// Actual emitting unit for attack starts and accepted casts; 0 is unknown.
+    /// A hologram uses its own unit id, not its parent's id.
+    #[serde(default)]
+    pub source: u32,
     /// Champion definition responsible for the effect; 255 means generic.
     #[serde(default = "unknown_presentation")]
     pub champ: u8,
@@ -434,10 +438,13 @@ mod tests {
         let old_fx = r#"{"k":0,"x":1.0,"z":2.0,"x2":3.0,"z2":4.0,"v":0.0}"#;
         let mut fx: Fx = serde_json::from_str(old_fx).unwrap();
         assert_eq!((fx.champ, fx.ability), (UNKNOWN_PRESENTATION, UNKNOWN_PRESENTATION));
+        assert_eq!(fx.source, 0);
         fx.champ = 4;
         fx.ability = 3;
+        fx.source = 77;
         let round_trip: Fx = serde_json::from_str(&serde_json::to_string(&fx).unwrap()).unwrap();
         assert_eq!((round_trip.champ, round_trip.ability), (4, 3));
+        assert_eq!(round_trip.source, 77);
 
         let old_proj = r#"{"id":7,"k":0,"t":1,"x":1.0,"z":2.0,"dx":1.0,"dz":0.0}"#;
         let mut proj: ProjSnap = serde_json::from_str(old_proj).unwrap();

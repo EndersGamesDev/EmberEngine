@@ -228,6 +228,7 @@ fn host_handoff_starts_the_match_and_live_disconnects_become_bots() {
             .any(|m| matches!(m, S2C::State { champs, .. } if champs.len() == 6))
     );
     hub.lobbies.get_mut("squad").unwrap().m.fx.push(proto::Fx {
+        source: 0,
         champ: proto::UNKNOWN_PRESENTATION,
         ability: proto::UNKNOWN_PRESENTATION,
         k: 8,
