@@ -1621,6 +1621,7 @@ mod tests {
             measurement: SubmissionMeasurement {
                 kind: SubmissionKind::Scene,
                 id: 3,
+                completion_sequence: 3,
                 source_scene_id: None,
                 sample_class: SampleClass::Measured,
                 precision_mode: PrecisionMode::PictureFast.as_str(),

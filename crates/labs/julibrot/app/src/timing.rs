@@ -243,6 +243,7 @@ mod tests {
         SubmissionMeasurement {
             kind,
             id,
+            completion_sequence: id,
             source_scene_id,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::Deterministic.as_str(),

@@ -203,6 +203,7 @@ fn binding_measurement(id: u64) -> SubmissionMeasurement {
     SubmissionMeasurement {
         kind: SubmissionKind::Scene,
         id,
+        completion_sequence: id,
         source_scene_id: None,
         sample_class: SampleClass::Measured,
         precision_mode: PrecisionMode::PictureFast.as_str(),

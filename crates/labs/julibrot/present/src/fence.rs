@@ -145,11 +145,12 @@ mod tests {
     #[test]
     fn callback_completion_counts_every_observation_and_separates_wait() {
         let mut fence = ledger(30_000.0, 4_096);
-        assert_eq!(fence.observe(102.0, None), FenceDecision::Pending);
-        let FenceDecision::Complete(measurement) = fence.observe(105.5, Some(Ok(()))) else {
+        assert_eq!(fence.observe(102.0, None, 11), FenceDecision::Pending);
+        let FenceDecision::Complete(measurement) = fence.observe(105.5, Some(Ok(())), 11) else {
             panic!("successful callback must complete");
         };
         assert_eq!(measurement.id, 7);
+        assert_eq!(measurement.completion_sequence, 11);
         assert_eq!(measurement.polls, 2);
         assert_eq!(measurement.precision_mode, "Deterministic");
         assert_eq!(measurement.wall_ms, 5.5);
@@ -160,16 +161,16 @@ mod tests {
     fn deadline_poll_limit_and_mapping_error_are_distinct() {
         let mut deadline = ledger(10.0, 100);
         assert!(matches!(
-            deadline.observe(110.0, None),
+            deadline.observe(110.0, None, 1),
             FenceDecision::Refused {
                 reason: FenceRefusal::Deadline,
                 ..
             }
         ));
         let mut poll_limit = ledger(1_000.0, 2);
-        assert_eq!(poll_limit.observe(101.0, None), FenceDecision::Pending);
+        assert_eq!(poll_limit.observe(101.0, None, 1), FenceDecision::Pending);
         assert!(matches!(
-            poll_limit.observe(102.0, None),
+            poll_limit.observe(102.0, None, 1),
             FenceDecision::Refused {
                 reason: FenceRefusal::PollLimit,
                 polls: 2,
@@ -178,7 +179,7 @@ mod tests {
         ));
         let mut device = ledger(1_000.0, 2);
         assert!(matches!(
-            device.observe(101.0, Some(Err(()))),
+            device.observe(101.0, Some(Err(())), 1),
             FenceDecision::Refused {
                 reason: FenceRefusal::Device,
                 ..

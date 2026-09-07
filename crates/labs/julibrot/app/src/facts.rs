@@ -560,9 +560,41 @@ fn ceil_nonnegative_to_u32(value: f64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_present::WarpKind;
+    use ember_julibrot_present::{SubmissionKind, WarpKind};
 
     use super::*;
+
+    #[test]
+    fn warmup_label_uses_cross_kind_completion_order_instead_of_duration() {
+        let scene = SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id: 8,
+            completion_sequence: 12,
+            source_scene_id: None,
+            sample_class: SampleClass::PolicyProbe,
+            precision_mode: "PictureFast",
+            wall_ms: 120.0,
+            fence_wait_ms: 119.0,
+            polls: 4,
+        };
+        let warp = SubmissionMeasurement {
+            kind: SubmissionKind::Warp,
+            id: 3,
+            completion_sequence: 13,
+            source_scene_id: Some(8),
+            sample_class: SampleClass::Measured,
+            precision_mode: "PictureFast",
+            wall_ms: 4.0,
+            fence_wait_ms: 3.0,
+            polls: 2,
+        };
+
+        // This regression fails on main: the longer, earlier scene is mistaken for the newer one.
+        assert_eq!(
+            newest_measurement(Some(scene), Some(warp)).map(|sample| sample.sample_class),
+            Some(SampleClass::Measured)
+        );
+    }
 
     #[test]
     fn warp_refusal_is_one_string_with_its_measured_errors() {

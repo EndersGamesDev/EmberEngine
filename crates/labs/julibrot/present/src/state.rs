@@ -371,6 +371,7 @@ mod tests {
         SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: scene_id,
+            completion_sequence: scene_id,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: MODE,
