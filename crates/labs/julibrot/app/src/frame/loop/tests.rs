@@ -1,4 +1,5 @@
 use std::{
+    fmt::Write as _,
     num::NonZeroU32,
     time::{Duration, Instant},
 };
@@ -801,11 +802,30 @@ enum BrowserAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct WorkerTurn {
-    arrivals: [Option<WorkerArrival>; 2],
-    applications: [Option<WorkerApplication>; 2],
-    submission: Option<WorkerSubmission>,
+enum WorkerServiceEvent {
+    Drained(WorkerArrival),
+    Applied(WorkerApplication),
+    Submitted(WorkerSubmission),
+    Facts(WorkerFacts),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkerTurnInput {
+    arrivals: Vec<WorkerArrival>,
+    submitted_generations: Vec<u32>,
+    request: Option<OrbitRequest>,
+    submit_outcome: SubmitOutcome,
     facts: WorkerFacts,
+    error: Option<String>,
+    latest_generation: u32,
+    pending_request_depth: u32,
+    owner_now_us: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkerTurn {
+    input: WorkerTurnInput,
+    events: Vec<WorkerServiceEvent>,
 }
 
 #[derive(Debug)]
@@ -814,6 +834,9 @@ struct ReplayWorkerService {
     pending_response: Option<WorkerArrival>,
     submit_outcome: SubmitOutcome,
     facts: WorkerFacts,
+    error: Option<String>,
+    latest_generation: u32,
+    pending_request_depth: u32,
 }
 
 impl Default for ReplayWorkerService {
@@ -823,6 +846,23 @@ impl Default for ReplayWorkerService {
             pending_response: None,
             submit_outcome: SubmitOutcome::Transferred,
             facts: WorkerFacts::new(WorkerMode::SameThread),
+            error: None,
+            latest_generation: 0,
+            pending_request_depth: 0,
+        }
+    }
+}
+
+impl ReplayWorkerService {
+    fn from_input(input: &WorkerTurnInput) -> Self {
+        Self {
+            arrivals: input.arrivals.iter().cloned().collect(),
+            pending_response: None,
+            submit_outcome: input.submit_outcome,
+            facts: input.facts,
+            error: input.error.clone(),
+            latest_generation: input.latest_generation,
+            pending_request_depth: input.pending_request_depth,
         }
     }
 }
@@ -868,17 +908,15 @@ impl WorkerServicePort for ReplayWorkerService {
     }
 
     fn take_error(&mut self) -> Option<AppError> {
-        None
+        self.error.take().map(AppError::Worker)
     }
 
     fn latest_generation(&self) -> u32 {
-        self.pending_response
-            .as_ref()
-            .map_or(0, |response| response.generation)
+        self.latest_generation
     }
 
     fn pending_request_depth(&self) -> u32 {
-        u32::try_from(self.arrivals.len()).unwrap_or(u32::MAX)
+        self.pending_request_depth
     }
 }
 
@@ -886,20 +924,29 @@ impl WorkerServicePort for ReplayWorkerService {
 struct ReplayWorkerAcceptance;
 
 impl WorkerAcceptance<WorkerArrival> for ReplayWorkerAcceptance {
-    type Submission = ();
+    type Submission = u32;
 
     fn accept(
         &mut self,
         arrival: &WorkerArrival,
-        _response: &WorkerArrival,
-        _submitted: Option<Self::Submission>,
-        _latest_generation: u32,
+        response: &WorkerArrival,
+        submitted: Option<Self::Submission>,
+        latest_generation: u32,
     ) -> Result<WorkerApplication, AppError> {
+        debug_assert_eq!(response, arrival);
+        let reference_applied = submitted == Some(arrival.generation)
+            && arrival.generation == latest_generation
+            && !arrival.cancelled
+            && arrival.records.is_ok();
         Ok(WorkerApplication {
             generation: arrival.generation,
             centre_revision: arrival.centre_revision,
-            disposition: OrbitDisposition::Stale,
-            reference_applied: false,
+            disposition: if reference_applied {
+                OrbitDisposition::Applied
+            } else {
+                OrbitDisposition::Stale
+            },
+            reference_applied,
         })
     }
 
@@ -1001,6 +1048,8 @@ struct FakePresenter {
     main_epoch: u64,
     worker_service: WorkerServiceOwner<ReplayWorkerService>,
     worker_submission: Option<OrbitRequest>,
+    worker_submitted_generations: Vec<u32>,
+    worker_owner_now_us: u64,
     worker_turns: Vec<WorkerTurn>,
     runtime: FakeRuntime,
     capture: TraceCaptureState,
@@ -1484,39 +1533,64 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
         let FencesObserved = stage;
         let has_retained_scene = self.presenter.retained_scene.is_some();
         self.presenter.write_hot_for_slot(has_retained_scene, 0);
+        let input = WorkerTurnInput {
+            arrivals: self
+                .presenter
+                .worker_service
+                .port
+                .arrivals
+                .iter()
+                .cloned()
+                .collect(),
+            submitted_generations: self.presenter.worker_submitted_generations.clone(),
+            request: self.presenter.worker_submission.clone(),
+            submit_outcome: self.presenter.worker_service.port.submit_outcome,
+            facts: self.presenter.worker_service.port.facts,
+            error: self.presenter.worker_service.port.error.clone(),
+            latest_generation: self.presenter.worker_service.port.latest_generation,
+            pending_request_depth: self.presenter.worker_service.port.pending_request_depth,
+            owner_now_us: self.presenter.worker_owner_now_us,
+        };
         if let Some(error) = self.presenter.worker_service.take_error() {
             unreachable!("replay worker reported an input error: {error}");
         }
         let _request_depth = self.presenter.worker_service.pending_request_depth();
-        let mut arrivals = std::array::from_fn(|_| None);
-        let mut applications = [None; 2];
-        for (arrival_facts, application_facts) in arrivals.iter_mut().zip(&mut applications) {
+        let mut events = Vec::new();
+        for _ in 0..2 {
             let Some(arrival) = self.presenter.worker_service.drain() else {
                 break;
             };
-            *arrival_facts = Some(arrival.clone());
-            let mut acceptance = ReplayWorkerAcceptance;
-            match self
+            events.push(WorkerServiceEvent::Drained(arrival.clone()));
+            let submitted = self
                 .presenter
-                .worker_service
-                .apply(&mut acceptance, arrival, None, 0)
-            {
-                Ok(applied) => *application_facts = Some(applied),
+                .worker_submitted_generations
+                .iter()
+                .position(|generation| *generation == arrival.generation)
+                .map(|index| {
+                    self.presenter
+                        .worker_submitted_generations
+                        .swap_remove(index)
+                });
+            let mut acceptance = ReplayWorkerAcceptance;
+            match self.presenter.worker_service.apply(
+                &mut acceptance,
+                arrival,
+                submitted,
+                self.presenter.worker_owner_now_us,
+            ) {
+                Ok(applied) => events.push(WorkerServiceEvent::Applied(applied)),
                 Err(error) => unreachable!("replay worker apply failed: {error}"),
             }
         }
-        let submission = self
-            .presenter
-            .worker_submission
-            .take()
-            .map(|request| self.presenter.worker_service.submit(request));
+        if let Some(request) = self.presenter.worker_submission.take() {
+            let submission = self.presenter.worker_service.submit(request);
+            events.push(WorkerServiceEvent::Submitted(submission));
+        }
         let facts = self.presenter.worker_service.facts();
-        self.presenter.worker_turns.push(WorkerTurn {
-            arrivals,
-            applications,
-            submission,
-            facts,
-        });
+        events.push(WorkerServiceEvent::Facts(facts));
+        self.presenter
+            .worker_turns
+            .push(WorkerTurn { input, events });
         Ok(())
     }
 
@@ -1589,39 +1663,118 @@ fn drive_refresh(
     .scene_id
 }
 
-fn recorded_worker_service_turn() -> WorkerTurn {
-    let mut frame_loop = FrameLoop::default();
-    let mut presenter = FakePresenter::default();
-    let arrival = WorkerArrival {
-        generation: 7,
-        centre_revision: 3,
-        length: 41,
-        compute_us: 250,
-        precision_bits: 192,
-        admission_credit_us: 17,
-        reference_verification: ReferenceVerification::Deferred,
-        max_consumed_word_error_ulps: None,
-        precision_escalations: 0,
-        cancelled: false,
-        records: Ok(vec![0; 41 * REFERENCE_TEXEL_BYTES]),
-        response_observed_us: None,
-        upload_started_us: None,
-    };
-    presenter.worker_service.port.arrivals.push_back(arrival);
+const WORKER_SERVICE_REPLAY_FIXTURE: &str = "\
+accepted-arrival: input arrivals=1 submitted=[7] request=None outcome=Transferred facts_epoch=0 error=None latest=7 depth=1 now_us=101
+  drained generation=7 centre_revision=3 length=2 compute_us=250 precision_bits=192 admission_credit_us=17 verification=Stable max_error=Some(2) escalations=1 cancelled=false payload_bytes=32 payload_checksum=224 payload_error=None observed=Some(7000) upload_started=Some(7010)
+  applied generation=7 centre_revision=3 disposition=Applied reference_applied=true
+  facts epoch=0 applied_generation=0 ack_generation=0 orbit_depth=0 shutdown_depth=0 credit_us=250000 last_compute_us=0 overfeed_us=0 applied_count=0 stale_count=0 cancelled_count=0 allocations=1 request_main=2 orbit_main=0 mode=1
+submit-plus-arrival: input arrivals=1 submitted=[8] request=Some(9) outcome=Transferred facts_epoch=0 error=None latest=8 depth=2 now_us=202
+  drained generation=8 centre_revision=4 length=2 compute_us=350 precision_bits=224 admission_credit_us=23 verification=Deferred max_error=None escalations=0 cancelled=false payload_bytes=32 payload_checksum=256 payload_error=None observed=Some(8000) upload_started=Some(8010)
+  applied generation=8 centre_revision=4 disposition=Applied reference_applied=true
+  submitted generation=9 outcome=Transferred
+  facts epoch=0 applied_generation=0 ack_generation=0 orbit_depth=0 shutdown_depth=0 credit_us=250000 last_compute_us=0 overfeed_us=0 applied_count=0 stale_count=0 cancelled_count=0 allocations=1 request_main=2 orbit_main=0 mode=1
+";
+
+fn replay_worker_request(generation: u32, centre_revision: u32) -> OrbitRequest {
     let centre = BigCentre::from_f64([0.0; 4], 192).expect("finite replay centre");
-    let encoded = EncodedCentre::encode_math(&centre, 3).expect("encodable replay centre");
-    presenter.worker_submission = Some(
-        OrbitRequest::new(
-            8,
-            encoded,
-            1,
-            192,
-            64,
-            PrecisionMode::Deterministic,
-            OrbitReason::CENTRE_THRESHOLD,
-        )
-        .expect("valid replay request"),
-    );
+    let encoded =
+        EncodedCentre::encode_math(&centre, centre_revision).expect("encodable replay centre");
+    OrbitRequest::new(
+        generation,
+        encoded,
+        1,
+        192,
+        64,
+        PrecisionMode::Deterministic,
+        OrbitReason::CENTRE_THRESHOLD,
+    )
+    .expect("valid replay request")
+}
+
+fn replay_worker_arrival(
+    generation: u32,
+    centre_revision: u32,
+    compute_us: u32,
+    precision_bits: u32,
+    admission_credit_us: u32,
+    reference_verification: ReferenceVerification,
+    max_consumed_word_error_ulps: Option<u32>,
+) -> WorkerArrival {
+    let observed_us = u64::from(generation) * 1_000;
+    WorkerArrival {
+        generation,
+        centre_revision,
+        length: 2,
+        compute_us,
+        precision_bits,
+        admission_credit_us,
+        reference_verification,
+        max_consumed_word_error_ulps,
+        precision_escalations: u32::from(max_consumed_word_error_ulps.is_some()),
+        cancelled: false,
+        records: Ok(vec![
+            u8::try_from(generation).unwrap_or(u8::MAX);
+            2 * REFERENCE_TEXEL_BYTES
+        ]),
+        response_observed_us: Some(observed_us),
+        upload_started_us: Some(observed_us + 10),
+    }
+}
+
+fn worker_turn_inputs() -> [WorkerTurnInput; 2] {
+    let facts = WorkerFacts::new(WorkerMode::SameThread);
+    [
+        WorkerTurnInput {
+            arrivals: vec![replay_worker_arrival(
+                7,
+                3,
+                250,
+                192,
+                17,
+                ReferenceVerification::Stable,
+                Some(2),
+            )],
+            submitted_generations: vec![7],
+            request: None,
+            submit_outcome: SubmitOutcome::Transferred,
+            facts,
+            error: None,
+            latest_generation: 7,
+            pending_request_depth: 1,
+            owner_now_us: 101,
+        },
+        WorkerTurnInput {
+            arrivals: vec![replay_worker_arrival(
+                8,
+                4,
+                350,
+                224,
+                23,
+                ReferenceVerification::Deferred,
+                None,
+            )],
+            submitted_generations: vec![8],
+            request: Some(replay_worker_request(9, 5)),
+            submit_outcome: SubmitOutcome::Transferred,
+            facts,
+            error: None,
+            latest_generation: 8,
+            pending_request_depth: 2,
+            owner_now_us: 202,
+        },
+    ]
+}
+
+fn record_worker_service_turn(input: WorkerTurnInput) -> WorkerTurn {
+    let mut frame_loop = FrameLoop::default();
+    let worker_service = WorkerServiceOwner::new(ReplayWorkerService::from_input(&input));
+    let mut presenter = FakePresenter {
+        worker_service,
+        worker_submission: input.request,
+        worker_submitted_generations: input.submitted_generations,
+        worker_owner_now_us: input.owner_now_us,
+        ..FakePresenter::default()
+    };
     let _outcome = drive_turn(
         &mut frame_loop,
         &mut presenter,
@@ -1629,37 +1782,113 @@ fn recorded_worker_service_turn() -> WorkerTurn {
         FramePolicy::SingleFrameOnDemand,
         false,
     );
-    presenter.worker_turns[0].clone()
+    presenter
+        .worker_turns
+        .pop()
+        .unwrap_or_else(|| unreachable!("the native refresh records its worker turn"))
+}
+
+fn append_worker_facts(output: &mut String, facts: WorkerFacts) {
+    let _written = writeln!(
+        output,
+        "  facts epoch={} applied_generation={} ack_generation={} orbit_depth={} shutdown_depth={} credit_us={} last_compute_us={} overfeed_us={} applied_count={} stale_count={} cancelled_count={} allocations={} request_main={} orbit_main={} mode={}",
+        facts.epoch,
+        facts.last_applied_generation,
+        facts.last_ack_generation,
+        facts.orbit_queue_depth,
+        facts.shutdown_queue_depth,
+        facts.credit_us,
+        facts.last_compute_us,
+        facts.last_overfeed_us,
+        facts.applied_count,
+        facts.stale_count,
+        facts.cancelled_count,
+        facts.allocation_events,
+        facts.request_buffers_owned_main,
+        facts.orbit_buffers_owned_main,
+        facts.mode,
+    );
+}
+
+fn append_worker_turn(output: &mut String, name: &str, turn: &WorkerTurn) {
+    let input = &turn.input;
+    let _written = writeln!(
+        output,
+        "{name}: input arrivals={} submitted={:?} request={:?} outcome={:?} facts_epoch={} error={:?} latest={} depth={} now_us={}",
+        input.arrivals.len(),
+        input.submitted_generations,
+        input.request.as_ref().map(OrbitRequest::generation),
+        input.submit_outcome,
+        input.facts.epoch,
+        input.error,
+        input.latest_generation,
+        input.pending_request_depth,
+        input.owner_now_us,
+    );
+    for event in &turn.events {
+        match event {
+            WorkerServiceEvent::Drained(arrival) => {
+                let (payload_bytes, payload_checksum, payload_error) = match &arrival.records {
+                    Ok(records) => (
+                        records.len(),
+                        records.iter().map(|byte| u64::from(*byte)).sum::<u64>(),
+                        None,
+                    ),
+                    Err(error) => (0, 0, Some(error.as_str())),
+                };
+                let _written = writeln!(
+                    output,
+                    "  drained generation={} centre_revision={} length={} compute_us={} precision_bits={} admission_credit_us={} verification={:?} max_error={:?} escalations={} cancelled={} payload_bytes={} payload_checksum={} payload_error={:?} observed={:?} upload_started={:?}",
+                    arrival.generation,
+                    arrival.centre_revision,
+                    arrival.length,
+                    arrival.compute_us,
+                    arrival.precision_bits,
+                    arrival.admission_credit_us,
+                    arrival.reference_verification,
+                    arrival.max_consumed_word_error_ulps,
+                    arrival.precision_escalations,
+                    arrival.cancelled,
+                    payload_bytes,
+                    payload_checksum,
+                    payload_error,
+                    arrival.response_observed_us,
+                    arrival.upload_started_us,
+                );
+            }
+            WorkerServiceEvent::Applied(application) => {
+                let _written = writeln!(
+                    output,
+                    "  applied generation={} centre_revision={} disposition={:?} reference_applied={}",
+                    application.generation,
+                    application.centre_revision,
+                    application.disposition,
+                    application.reference_applied,
+                );
+            }
+            WorkerServiceEvent::Submitted(submission) => {
+                let _written = writeln!(
+                    output,
+                    "  submitted generation={} outcome={:?}",
+                    submission.generation, submission.outcome,
+                );
+            }
+            WorkerServiceEvent::Facts(facts) => append_worker_facts(output, *facts),
+        }
+    }
 }
 
 #[test]
 fn native_refresh_replays_plain_worker_service_transactions() {
-    let recorded = recorded_worker_service_turn();
-    let replayed = recorded_worker_service_turn();
-    assert_eq!(replayed, recorded);
-    assert_eq!(
-        recorded.arrivals[0]
-            .as_ref()
-            .map(|arrival| arrival.generation),
-        Some(7)
-    );
-    assert_eq!(
-        recorded.applications[0],
-        Some(WorkerApplication {
-            generation: 7,
-            centre_revision: 3,
-            disposition: OrbitDisposition::Stale,
-            reference_applied: false,
-        })
-    );
-    assert_eq!(
-        recorded.submission,
-        Some(WorkerSubmission {
-            generation: 8,
-            outcome: SubmitOutcome::Transferred,
-        })
-    );
-    assert_eq!(recorded.facts, WorkerFacts::new(WorkerMode::SameThread));
+    let recorded = worker_turn_inputs().map(record_worker_service_turn);
+    for turn in &recorded {
+        let replayed = record_worker_service_turn(turn.input.clone());
+        assert_eq!(replayed.events, turn.events);
+    }
+    let mut fixture = String::new();
+    append_worker_turn(&mut fixture, "accepted-arrival", &recorded[0]);
+    append_worker_turn(&mut fixture, "submit-plus-arrival", &recorded[1]);
+    assert_eq!(fixture, WORKER_SERVICE_REPLAY_FIXTURE);
 }
 
 fn drive_viewer_harness(

@@ -656,7 +656,6 @@ struct WorkerServiceOwner<P> {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl<P: WorkerServicePort> WorkerServiceOwner<P> {
-    #[cfg(target_arch = "wasm32")]
     const fn new(port: P) -> Self {
         Self { port }
     }
