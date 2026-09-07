@@ -26,7 +26,6 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
         FrameState<'a>,
         HotSlot,
     ) -> Result<FrameReceipt, PresentError> = Presenter::frame;
-    let poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
     let poll_fixed: fn(&mut Presenter, f64) -> PresentEvents = Presenter::poll_fixed;
     let facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
     let record_presented: fn(&mut Presenter, u64) = Presenter::record_presented;
@@ -40,7 +39,6 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
     std::hint::black_box(write_hot);
     std::hint::black_box(submit_scene);
     std::hint::black_box(frame);
-    std::hint::black_box(poll);
     std::hint::black_box(poll_fixed);
     std::hint::black_box(facts);
     std::hint::black_box(record_presented);
