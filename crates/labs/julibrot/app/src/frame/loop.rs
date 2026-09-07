@@ -905,9 +905,18 @@ struct PresentEventRecord {
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, Default, PartialEq)]
 struct PresentEventTurn {
+    #[cfg(test)]
+    now_ms_bits: u64,
     facts: PresentEventFacts,
     #[cfg(test)]
     events: Vec<PresentEventRecord>,
+}
+
+/// A retained turn paired with the outcome observed after its events were applied.
+#[cfg(any(target_arch = "wasm32", test))]
+struct PresentEventObservation<E> {
+    turn: PresentEventTurn,
+    finish: Result<(), E>,
 }
 
 /// Browser or native lowering used by the replayable present-event transaction owner.
@@ -946,13 +955,13 @@ impl PresentEventOwner {
     fn observe<P: PresentEventPort>(
         port: &mut P,
         now_ms: f64,
-    ) -> Result<PresentEventTurn, P::Error> {
+    ) -> PresentEventObservation<P::Error> {
         let transactions = port.poll(now_ms);
         let mut facts = PresentEventFacts::default();
         let mut last_completion_sequence = None;
         #[cfg(test)]
         let mut events = Vec::with_capacity(transactions.len());
-        for event in transactions {
+        let applied = transactions.into_iter().try_for_each(|event| {
             let transaction = PresentEventTransaction::from_presenter(&event);
             let view = transaction
                 .view()
@@ -986,13 +995,17 @@ impl PresentEventOwner {
                 receipt,
                 effect,
             });
-        }
-        port.finish()?;
-        Ok(PresentEventTurn {
+            Ok(())
+        });
+        let turn = PresentEventTurn {
+            #[cfg(test)]
+            now_ms_bits: now_ms.to_bits(),
             facts,
             #[cfg(test)]
             events,
-        })
+        };
+        let finish = applied.and_then(|()| port.finish());
+        PresentEventObservation { turn, finish }
     }
 }
 
@@ -2100,7 +2113,9 @@ mod browser {
                 viewer: self.viewer,
                 refusal: None,
             };
-            self.observed = PresentEventOwner::observe(&mut port, self.now_ms)?.facts;
+            let observation = PresentEventOwner::observe(&mut port, self.now_ms);
+            observation.finish?;
+            self.observed = observation.turn.facts;
             Ok(())
         }
 
