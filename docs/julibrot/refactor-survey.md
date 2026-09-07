@@ -277,6 +277,53 @@
 
 ## 4. Oracle for rounds two and three
 
+### What exists now
+
+|Status|Required observation|Existing producer|Present evidence and limit|
+|---|---|---|---|
+|Verified|Worker event trace|`logical_trace_and_browser_binding_are_mode_equivalent_contracts` drives the same public request/complete/return sequence in `SameThread` and `WebWorker` modes; the `OwnerCore` `FakePort`/`Harness` separately drives transport controls, resize, credit, cancellation, and shutdown (`crates/labs/julibrot/worker/src/channel.rs:1415-1460`, `crates/labs/julibrot/worker/src/endpoint.rs:732-1034`).|It compares one observed four-tuple and normalized `WorkerFacts`; it does not retain the ordered submit, admission, transfer, completion, return, resize, fact-epoch, and ownership events required by the design oracle.|
+|Verified|App frame-loop trace|`FakePresenter`, `FakeClock`, `drive_turn`, `drive_refresh`, and `drive_viewer_harness` exercise poll-before-submit, refinement, warp, refusal, retention, and presentation; `ZoomScript` and the height-drag driver add longer scenarios (`crates/labs/julibrot/app/src/frame/loop/tests.rs:685-1124`, `crates/labs/julibrot/app/src/frame/loop/tests.rs:2402-2927`, `crates/labs/julibrot/app/src/frame/loop/tests.rs:3148-3406`).|The fakes keep separate counters and vectors, and each test asserts a subset; no one value records the complete per-turn HOT writes, accepted epochs, scene identities, fence observations, surface actions, and facts.|
+|Verified|Present planner result|`Warp::reproject` is pure, `WarpPlan` is `PartialEq`, and planner tests cover homography, relief, lattice, exposure, refusal, and direct full-chain projection; the native `reprojection_oracle`, `steep_row`, and `steep_frame` tests provide independent numerical and pixel-shaped oracles (`crates/labs/julibrot/present/src/planner.rs:45-109`, `crates/labs/julibrot/present/src/contract.rs:219-257`, `crates/labs/julibrot/present/src/planner.rs:1001-2617`, `crates/labs/julibrot/present/tests/reprojection_oracle.rs:1`, `crates/labs/julibrot/present/tests/steep_row.rs:1`, `crates/labs/julibrot/present/tests/steep_frame.rs:1`).|Tests assert selected fields and tolerances but do not serialize a named input/result corpus or compare old and extracted planner arms.|
+|Verified|Whole-grid pixels and facts|`final_conformance` compares exact and picture-fast records; `steep_row` and `steep_frame` provide CPU placement/frame evidence; the device test `two_palettes_recolour_one_completed_scene_through_the_offscreen_route` reads a native rendered frame; `drive.html` settles a row, calls `lab.frame`, checks copied and completed scene ids, computes a census, and publishes facts (`crates/labs/julibrot/app/tests/final_conformance.rs:1`, `crates/labs/julibrot/present/tests/steep_row.rs:242-492`, `crates/labs/julibrot/present/tests/steep_frame.rs:1452-1871`, `crates/labs/julibrot/present/src/gpu/device/tests.rs:385-458`, `web/labs/julibrot/drive.html:70-97`).|`lab.frame` returns the raw RGBA bytes, route, extent, and scene id, but the drive event retains only facts and four census totals; no checked-in runner stores or compares the raw frame and stable fact subset (`web/labs/julibrot/lab.js:417-450`, `web/labs/julibrot/drive.html:82-97`).|
+
+### Availability verdict and formats round two must establish first
+
+**Derived.** Measurement unavailable for the required worker event trace. Before the J-02 state-machine edit, round two must add a deterministic `WorkerTraceEvent` enum in the `channel.rs` test module and make a shared scenario return `Vec<WorkerTraceEvent>` plus `WorkerFacts`; events must include call/result, buffer identity and owner, generation, pool epoch, fact epoch, credit, queue depths, and allocation count, with elapsed microseconds normalized only where the test deliberately supplies them.
+
+**Derived.** Measurement unavailable for the required app frame-loop trace. Before extracting J-03/J-12 ports, round two must add one `FrameTraceTurn` record to `frame/loop/tests.rs` containing input time, drained HOT/MAIN epochs, HOT-write count/order, due rung, submitted/completed/refused scene id, submitted/completed warp id and kind, retained source id, `SurfaceAction`, fence-observation order, and the stable facts snapshot; existing short, zoom, and height drivers must all emit that record.
+
+**Derived.** Measurement unavailable for a captured, directly comparable planner result. Before deleting a planner argument or routing through a port, round two must define a named input corpus in `planner.rs` tests and assert equality of complete `WarpPlan` values from the current and extracted entries; floating fields use exact equality because both arms call the same current implementation during extraction, while independent numerical oracles retain their existing tolerances.
+
+**Derived.** Measurement unavailable for a repeatable pre/post whole-grid pixel-and-facts artifact. Round two must first define a versioned capture record containing scenario id, extent, capture route, completed/copied scene ids, raw RGBA bytes or a lossless file plus a cryptographic digest, and a normalized facts object; normalization may remove only explicitly nondeterministic wall times and device strings, never counts, epochs, identities, extents, modes, fence order, or pixel bytes. The current Rust and browser harnesses can supply the fields, but an allowed location for the browser runner/golden is an open scope question because round two otherwise edits only the named Rust files.
+
+**Proposed.** Use line-delimited JSON with a schema number for externally captured browser records and ordinary strongly typed Rust values for in-process traces. JSON makes a before/after artifact inspectable without imposing a serialization dependency on production records; the Rust comparisons keep NaN and enum behavior explicit. A whole-grid comparison passes only when worker and app traces are equal, `WarpPlan` values are equal, scene ids and fence order are equal, stable facts are equal, raw RGBA digests are equal for deterministic device/backend captures, and existing cross-device pixel tolerances still pass where exact bytes are not promised.
+
+### Exact verification commands
+
+**Verified.** These are the current native/unit harness commands; package names come from the three crate manifests, and each filter names an existing test/module (`crates/labs/julibrot/worker/Cargo.toml:2`, `crates/labs/julibrot/app/Cargo.toml:2`, `crates/labs/julibrot/present/Cargo.toml:2`).
+
+```text
+cargo test -p ember-julibrot-worker --lib logical_trace_and_browser_binding_are_mode_equivalent_contracts
+cargo test -p ember-julibrot-app --lib 'frame::loop::tests::'
+cargo test -p ember-julibrot-present --lib 'planner::tests::'
+cargo test -p ember-julibrot-present --test reprojection_oracle
+cargo test -p ember-julibrot-present --test steep_row --test steep_frame
+cargo test -p ember-julibrot-app --test final_conformance
+cargo test -p ember-julibrot-present --lib two_palettes_recolour_one_completed_scene_through_the_offscreen_route
+```
+
+**Verified.** The served proof uses the repository's release build/bindgen sequence, then the driver page's own settle/capture path (`deploy/deploy-pages.sh:88-109`, `web/labs/julibrot/drive.html:70-97`).
+
+```text
+cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
+wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
+python3 -m http.server 8000 --directory web
+```
+
+**Derived.** With that server running, the exact existing interactive operation is to open `http://127.0.0.1:8000/labs/julibrot/drive.html`, post a `JulibrotRow` message or supply the page's encoded `row` query, and wait for `julibrot-settled`. It proves a visible settled frame and census, but because no repository command drives the page and saves raw RGBA plus normalized facts, the automated browser comparison remains measurement unavailable until the first round-two bite.
+
+**Derived.** None of these commands is to be run in round one: the lane has no compiler, the deliverable is a read-only source survey, and this section records commands for the later execution environment rather than claiming fresh results.
+
 ## 5. Plan for rounds two and three
 
 ## 6. Open questions
