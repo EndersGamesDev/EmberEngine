@@ -28,6 +28,7 @@ use crate::capabilities::{HostEpoch, SessionCapabilities};
 use crate::connection::{
     ConnectionConfig, ConnectionEvent, DataFrame, Ingress, OutboundCommand, spawn_acceptor,
 };
+use crate::digest::update_length_prefixed;
 use crate::registry::{Registry, RegistryBuilder, RegistryEntry, RegistryError, SelectionError};
 
 const DEFAULT_MANIFEST_PATH: &str = "games/hosted.toml";
@@ -2089,11 +2090,6 @@ fn lobby_seed(key: &GameKey, lobby_name: &str, session_id: SessionId) -> LobbySe
     LobbySeed(digest.finalize().into())
 }
 
-fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    digest.update(bytes);
-}
-
 fn outbound_targets(lobby: &Lobby, target: OutboundTarget) -> Result<BTreeSet<PeerId>, ()> {
     match target {
         OutboundTarget::Unicast(handle) => Ok(BTreeSet::from([handle.peer_id()])),
@@ -2145,6 +2141,22 @@ fn enqueue_inner(
 mod tests {
     use super::*;
     use ember_legacy::{DecodedInput, MonotonicDuration, SchedulingRequest};
+
+    #[test]
+    fn lobby_seed_fingerprint_is_unchanged() {
+        let key = GameKey {
+            game_id: "arena".to_string(),
+            game_version: 12,
+        };
+        assert_eq!(
+            lobby_seed(&key, "room", SessionId::from_host_value(7)).0,
+            [
+                0x0a, 0x61, 0x35, 0x23, 0x9f, 0x73, 0x2f, 0xbb, 0x2e, 0xe0, 0x6d, 0xe9, 0x2f, 0x50,
+                0x6c, 0x40, 0xa5, 0xe6, 0xc3, 0x58, 0x3c, 0xcc, 0x76, 0x7d, 0x3e, 0x5a, 0xf9, 0x22,
+                0x4b, 0x78, 0x23, 0xbf,
+            ]
+        );
+    }
 
     #[test]
     fn charging_happens_before_frame_rejection() {

@@ -15,6 +15,8 @@ use ember_legacy::{
 };
 use sha2::{Digest, Sha256};
 
+use crate::digest::update_length_prefixed;
+
 const MAX_PENDING_SCHEDULES: usize = 1_024;
 const RANDOM_DOMAIN: &[u8] = b"ember-legacy-random-v1\0";
 
@@ -136,11 +138,6 @@ impl LegacyRandom for HostRandom {
             block.copy_from_slice(&result[..block.len()]);
         }
     }
-}
-
-fn update_length_prefixed(digest: &mut Sha256, bytes: &[u8]) {
-    digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-    digest.update(bytes);
 }
 
 pub(crate) struct HostTransport {
@@ -270,6 +267,21 @@ impl SessionCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ember_legacy::{LobbySeed, RandomStreamKey};
+
+    #[test]
+    fn keyed_random_fingerprint_is_unchanged() {
+        let key = RandomDrawKey {
+            game_key: GameKey {
+                game_id: "arena".to_string(),
+                game_version: 12,
+            },
+            lobby_seed: LobbySeed([0x5a; 32]),
+            stream_key: RandomStreamKey("spawn/player".to_string()),
+            event_index: 7,
+        };
+        assert_eq!(HostRandom.draw_u64(&key), 0x72b4_461f_9591_d3db);
+    }
 
     #[test]
     fn live_targets_receive_constructed_handles() {

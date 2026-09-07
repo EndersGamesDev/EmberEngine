@@ -9,6 +9,7 @@
 // Public host and registry qualifiers remain clear when imported beside version-owned types.
 mod capabilities;
 mod connection;
+mod digest;
 #[cfg(any(test, feature = "demo"))]
 mod fixture;
 #[cfg(not(feature = "demo"))]
