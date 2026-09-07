@@ -177,19 +177,27 @@ impl BrowserFrameLoop {
         let old_plan = self.plan;
         let requested_extent = self.plan.requested_extent;
         self.retire_main_grid_pair()?;
-        let next = match JulibrotKernels::plan_grid_pair(
+        let next = match self.kernel_submission.plan(
             &self.executor,
-            requested_extent,
-            EscapeParams::new(requested_max_iter),
+            KernelPlan {
+                target: KernelGridTarget::Main,
+                requested_extent,
+                requested_max_iter,
+                precision_mode: Some(self.precision_mode),
+            },
         ) {
-            Ok(plan) => plan.with_precision_mode(self.precision_mode),
+            Ok(planning) => planning.into_plan(),
             Err(error) => {
                 self.restore_main_grid_pair(&old_plan)?;
                 return Err(kernel_error(error));
             }
         };
-        let [grid, spare] = match self.kernels.allocate_grid_pair(&mut self.executor, &next) {
-            Ok(pair) => pair,
+        let [grid, spare] = match self.kernel_submission.allocate_grid_pair(
+            &mut self.executor,
+            KernelGridTarget::Main,
+            &next,
+        ) {
+            Ok(allocation) => allocation.into_grids(),
             Err(error) => {
                 self.restore_main_grid_pair(&old_plan)?;
                 return Err(kernel_error(error));
@@ -213,22 +221,27 @@ impl BrowserFrameLoop {
         self.release_backdrop()?;
         let old_plan = self.plan;
         self.retire_main_grid_pair()?;
-        let next_plan = match JulibrotKernels::plan_grid_pair(
+        let next_plan = match self.kernel_submission.plan(
             &self.executor,
-            old_plan.requested_extent,
-            EscapeParams::new(old_plan.requested_max_iter),
+            KernelPlan {
+                target: KernelGridTarget::Main,
+                requested_extent: old_plan.requested_extent,
+                requested_max_iter: old_plan.requested_max_iter,
+                precision_mode: Some(next),
+            },
         ) {
-            Ok(plan) => plan.with_precision_mode(next),
+            Ok(planning) => planning.into_plan(),
             Err(error) => {
                 self.restore_main_grid_pair(&old_plan)?;
                 return Err(kernel_error(error));
             }
         };
-        let [next_grid, next_spare] = match self
-            .kernels
-            .allocate_grid_pair(&mut self.executor, &next_plan)
-        {
-            Ok(pair) => pair,
+        let [next_grid, next_spare] = match self.kernel_submission.allocate_grid_pair(
+            &mut self.executor,
+            KernelGridTarget::Main,
+            &next_plan,
+        ) {
+            Ok(allocation) => allocation.into_grids(),
             Err(error) => {
                 self.restore_main_grid_pair(&old_plan)?;
                 return Err(kernel_error(error));
@@ -241,8 +254,8 @@ impl BrowserFrameLoop {
             &mut self.plan,
             viewer,
         ) {
-            self.free_grid(&next_grid)?;
-            self.free_grid(&next_spare)?;
+            self.free_grid(KernelGridTarget::Main, &next_grid)?;
+            self.free_grid(KernelGridTarget::Main, &next_spare)?;
             self.restore_main_grid_pair(&old_plan)?;
             return Err(error);
         }
@@ -261,16 +274,16 @@ impl BrowserFrameLoop {
                 "main grid replacement has no alternate grid".to_string(),
             ));
         };
-        if let Err(error) = self.free_grid(&spare) {
+        if let Err(error) = self.free_grid(KernelGridTarget::Main, &spare) {
             self.spare_grid = Some(spare);
             return Err(error);
         }
         let current = self.grid.clone();
-        if let Err(error) = self.free_grid(&current) {
+        if let Err(error) = self.free_grid(KernelGridTarget::Main, &current) {
             self.spare_grid = self
-                .kernels
-                .allocate_grid(&mut self.executor, &self.plan)
-                .map(Some)
+                .kernel_submission
+                .allocate_grid(&mut self.executor, KernelGridTarget::Main, &self.plan)
+                .map(|allocation| Some(allocation.into_grid()))
                 .map_err(kernel_error)?;
             return Err(error);
         }
@@ -279,9 +292,10 @@ impl BrowserFrameLoop {
 
     fn restore_main_grid_pair(&mut self, plan: &RefinementPlan) -> Result<(), AppError> {
         let [grid, spare] = self
-            .kernels
-            .allocate_grid_pair(&mut self.executor, plan)
-            .map_err(kernel_error)?;
+            .kernel_submission
+            .allocate_grid_pair(&mut self.executor, KernelGridTarget::Main, plan)
+            .map_err(kernel_error)?
+            .into_grids();
         self.grid = grid;
         self.spare_grid = Some(spare);
         self.plan = *plan;
@@ -289,10 +303,17 @@ impl BrowserFrameLoop {
         Ok(())
     }
 
-    pub(super) fn free_grid(&mut self, grid: &EscapeGrid) -> Result<(), AppError> {
-        self.kernels
-            .free_grid(&mut self.executor, grid.clone())
+    pub(super) fn free_grid(
+        &mut self,
+        target: KernelGridTarget,
+        grid: &EscapeGrid,
+    ) -> Result<(), AppError> {
+        let retirement = self
+            .kernel_submission
+            .retire(&mut self.executor, target, grid.clone())
             .map_err(kernel_error)?;
+        debug_assert_eq!(retirement.target, target);
+        debug_assert_eq!(retirement.span, grid.span_generation());
         self.presenter.forget_retained_grid(grid);
         Ok(())
     }
@@ -331,13 +352,8 @@ impl BrowserFrameLoop {
         let facts = if let PoseMap::Mapped(screen_to_plane) = map {
             self.presenter.forget_retained_records(&self.grid);
             let params = EscapeParams::new(viewer.requested().iteration_cap);
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Julibrot kernels SCRATCH and DATA copy"),
-                });
             let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
-            let facts = match mode {
+            let publication = match mode {
                 KernelMode::Shallow => {
                     let centre = self
                         .shallow_centre
@@ -349,19 +365,31 @@ impl BrowserFrameLoop {
                         self.plan.level(level).extent.width,
                     )
                     .map_err(math_error)?;
-                    self.kernels
-                        .encode_shallow(
-                            &self.executor,
-                            &mut encoder,
+                    self.kernel_submission
+                        .submit(
+                            BrowserKernelDispatch {
+                                executor: &self.executor,
+                                device: &self.device,
+                                queue: &self.queue,
+                                plane: &plane,
+                                screen_to_plane: &screen_to_plane,
+                                params,
+                                mode: BrowserKernelMode::Shallow {
+                                    centre: &split,
+                                    pixel_scale: scale,
+                                },
+                            },
                             &mut self.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            &screen_to_plane,
-                            &split,
-                            scale,
-                            params,
+                            KernelJob {
+                                target: KernelGridTarget::Main,
+                                owner_epoch,
+                                precision_mode: viewer.requested().precision_mode,
+                                mode,
+                                level,
+                                requested_extent: self.plan.requested_extent,
+                                requested_max_iter: viewer.requested().iteration_cap,
+                                orbit_generation: None,
+                            },
                         )
                         .map_err(kernel_error)?
                 }
@@ -375,32 +403,43 @@ impl BrowserFrameLoop {
                         self.plan.level(level).extent.width,
                     )
                     .map_err(math_error)?;
-                    self.kernels
-                        .encode_perturbation(
-                            &self.executor,
-                            &mut encoder,
+                    self.kernel_submission
+                        .submit(
+                            BrowserKernelDispatch {
+                                executor: &self.executor,
+                                device: &self.device,
+                                queue: &self.queue,
+                                plane: &plane,
+                                screen_to_plane: &screen_to_plane,
+                                params,
+                                mode: BrowserKernelMode::Perturbation {
+                                    centre_from_reference_px,
+                                    scale,
+                                    reference: ReferenceOrbitInput {
+                                        span: &orbit.span,
+                                        generation: handle.generation,
+                                        length: orbit.length,
+                                        precision_bits: orbit.precision_bits,
+                                        precision_mode: orbit.precision_mode,
+                                    },
+                                },
+                            },
                             &mut self.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            &screen_to_plane,
-                            centre_from_reference_px,
-                            scale,
-                            params,
-                            ReferenceOrbitInput {
-                                span: &orbit.span,
-                                generation: handle.generation,
-                                length: orbit.length,
-                                precision_bits: orbit.precision_bits,
-                                precision_mode: orbit.precision_mode,
+                            KernelJob {
+                                target: KernelGridTarget::Main,
+                                owner_epoch,
+                                precision_mode: viewer.requested().precision_mode,
+                                mode,
+                                level,
+                                requested_extent: self.plan.requested_extent,
+                                requested_max_iter: viewer.requested().iteration_cap,
+                                orbit_generation: Some(handle.generation),
                             },
                         )
                         .map_err(kernel_error)?
                 }
             };
-            self.queue.submit([encoder.finish()]);
-            Some(facts)
+            Some(publication.into_facts())
         } else {
             None
         };
