@@ -5,13 +5,13 @@ use std::{
 };
 
 use ember_julibrot_kernels::{
-    EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
-    perturb_scaled_pixel, plan_refinement,
+    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan,
+    SampleStatus, perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
-    BigCentre, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep,
-    Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale,
-    precision_for, scale_split, screen_to_plane,
+    BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
+    OrbitStep, Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ScaledPixelScale,
+    ViewControls, pixel_scale, precision_for, scale_split, screen_to_plane,
 };
 
 use super::super::schedule::{
@@ -20,10 +20,13 @@ use super::super::schedule::{
 };
 use super::{
     BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
-    FencesObserved, FrameLoop, HotWritten, LEVELS, OrderedRefresh, PresenterPoll,
-    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
-    RefinementSchedule, RefusalClass, SceneConsidered, SceneMode, SubmissionKind, WorkerAcceptance,
-    WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission,
+    FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity, KernelGridTarget,
+    KernelJob, KernelPlan, KernelPlanning, KernelPublication, KernelReferenceIdentity,
+    KernelRetirement, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, LEVELS,
+    OrderedRefresh, PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES,
+    ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule, RefusalClass, SceneConsidered,
+    SceneMode, SubmissionKind, WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication,
+    WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
     coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
     expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
@@ -809,6 +812,187 @@ enum WorkerServiceEvent {
     Facts(WorkerFacts),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+enum KernelSubmissionEvent {
+    Planned(KernelPlanning),
+    Allocated(KernelAllocation),
+    Retired(KernelRetirement),
+    Published(Box<KernelPublication>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayKernelPreparation {
+    RetireMain,
+    RetireSpare,
+    RetireBackdrop,
+    Plan(KernelPlan),
+    AllocateMainPair,
+    AllocateBackdrop,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct KernelTurnInput {
+    name: &'static str,
+    plans: Vec<RefinementPlan>,
+    allocated_grids: Vec<ReplayKernelGrid>,
+    main: ReplayKernelGrid,
+    spare: ReplayKernelGrid,
+    backdrop: ReplayKernelGrid,
+    preparations: Vec<ReplayKernelPreparation>,
+    job: KernelJob,
+    dispatch_facts: DispatchFacts,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct KernelTurn {
+    input: KernelTurnInput,
+    events: Vec<KernelSubmissionEvent>,
+    scene_id: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReplayKernelGrid {
+    span: KernelSpanGeneration,
+}
+
+impl Default for ReplayKernelGrid {
+    fn default() -> Self {
+        Self {
+            span: KernelSpanGeneration {
+                directory_index: 0,
+                page_count: 1,
+                first_generation: 1,
+                handle_fingerprint: 1,
+            },
+        }
+    }
+}
+
+impl KernelGridIdentity for ReplayKernelGrid {
+    fn span_generation(&self) -> KernelSpanGeneration {
+        self.span
+    }
+}
+
+#[derive(Debug, Default)]
+struct ReplayKernelSubmission {
+    plans: std::collections::VecDeque<RefinementPlan>,
+    grids: std::collections::VecDeque<ReplayKernelGrid>,
+    dispatch_facts: std::collections::VecDeque<DispatchFacts>,
+}
+
+impl KernelSubmissionPort for ReplayKernelSubmission {
+    type Grid = ReplayKernelGrid;
+    type Error = std::convert::Infallible;
+    type PlanContext<'a>
+        = ()
+    where
+        Self: 'a;
+    type AllocationContext<'a>
+        = ()
+    where
+        Self: 'a;
+    type SubmissionContext<'a>
+        = ()
+    where
+        Self: 'a;
+
+    fn plan(
+        &mut self,
+        (): Self::PlanContext<'_>,
+        request: KernelPlan,
+    ) -> Result<RefinementPlan, Self::Error> {
+        let plan = self
+            .plans
+            .pop_front()
+            .unwrap_or_else(|| unreachable!("replay kernel plan input is present"));
+        debug_assert_eq!(plan.requested_extent, request.requested_extent);
+        debug_assert_eq!(plan.requested_max_iter, request.requested_max_iter);
+        Ok(plan)
+    }
+
+    fn allocate_grid(
+        &mut self,
+        (): Self::AllocationContext<'_>,
+        _plan: &RefinementPlan,
+    ) -> Result<Self::Grid, Self::Error> {
+        Ok(self
+            .grids
+            .pop_front()
+            .unwrap_or_else(|| unreachable!("replay grid input is present")))
+    }
+
+    fn allocate_grid_pair(
+        &mut self,
+        (): Self::AllocationContext<'_>,
+        _plan: &RefinementPlan,
+    ) -> Result<[Self::Grid; 2], Self::Error> {
+        let first = self
+            .grids
+            .pop_front()
+            .unwrap_or_else(|| unreachable!("first replay grid input is present"));
+        let second = self
+            .grids
+            .pop_front()
+            .unwrap_or_else(|| unreachable!("second replay grid input is present"));
+        Ok([first, second])
+    }
+
+    fn retire(
+        &mut self,
+        (): Self::AllocationContext<'_>,
+        _target: KernelGridTarget,
+        expected_span: KernelSpanGeneration,
+        grid: Self::Grid,
+    ) -> Result<(), Self::Error> {
+        debug_assert_eq!(expected_span, grid.span_generation());
+        Ok(())
+    }
+
+    fn submit(
+        &mut self,
+        (): Self::SubmissionContext<'_>,
+        _grid: &mut Self::Grid,
+        job: &KernelJob,
+    ) -> Result<DispatchFacts, Self::Error> {
+        Ok(self
+            .dispatch_facts
+            .pop_front()
+            .unwrap_or_else(|| replay_dispatch_facts(job)))
+    }
+}
+
+fn replay_dispatch_facts(job: &KernelJob) -> DispatchFacts {
+    let job = job.whole_grid();
+    let active_pixels = job
+        .requested_extent
+        .width
+        .saturating_mul(job.requested_extent.height);
+    DispatchFacts {
+        owner_epoch: job.owner_epoch,
+        precision_mode: job.precision_mode.as_str(),
+        mode: job.mode.kernel_mode(),
+        level: job.level,
+        requested_extent: job.requested_extent,
+        delivered_extent: job.requested_extent,
+        requested_max_iter: job.params.max_iter,
+        delivered_max_iter: job.params.max_iter,
+        active_pixels,
+        worst_case_pixel_iterations: u64::from(active_pixels)
+            .saturating_mul(u64::from(job.params.max_iter)),
+        page_passes: 1,
+        copy_commands: 1,
+        gpu_copy_bytes: u64::from(active_pixels).saturating_mul(16),
+        logical_heap_bytes: u64::from(active_pixels).saturating_mul(16),
+        reserved_heap_bytes: u64::from(active_pixels).saturating_mul(16),
+        scratch_bytes: u64::from(active_pixels).saturating_mul(16),
+        orbit_generation: job.mode.orbit_generation(),
+        orbit_length: job.mode.orbit_length(),
+        draft_pixels_discarded: 0,
+        draft_iterations_discarded: 0,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorkerTurnInput {
     arrivals: Vec<WorkerArrival>,
@@ -1046,6 +1230,14 @@ struct FakePresenter {
     presented_clear_only: u64,
     hot_epoch: u64,
     main_epoch: u64,
+    kernel_submission: KernelSubmissionOwner<ReplayKernelSubmission>,
+    kernel_main: Option<ReplayKernelGrid>,
+    kernel_spare: Option<ReplayKernelGrid>,
+    kernel_backdrop: Option<ReplayKernelGrid>,
+    kernel_plan: Option<RefinementPlan>,
+    kernel_preparations: Vec<ReplayKernelPreparation>,
+    kernel_job: Option<KernelJob>,
+    kernel_events: Vec<KernelSubmissionEvent>,
     worker_service: WorkerServiceOwner<ReplayWorkerService>,
     worker_submission: Option<OrbitRequest>,
     worker_submitted_generations: Vec<u32>,
@@ -1059,6 +1251,118 @@ struct FakePresenter {
 }
 
 impl FakePresenter {
+    fn run_kernel_preparations(&mut self) {
+        for preparation in std::mem::take(&mut self.kernel_preparations) {
+            match preparation {
+                ReplayKernelPreparation::RetireMain => {
+                    if let Some(grid) = self.kernel_main.take() {
+                        let retirement =
+                            match self
+                                .kernel_submission
+                                .retire((), KernelGridTarget::Main, grid)
+                            {
+                                Ok(retirement) => retirement,
+                                Err(error) => match error {},
+                            };
+                        self.kernel_events
+                            .push(KernelSubmissionEvent::Retired(retirement));
+                    }
+                }
+                ReplayKernelPreparation::RetireSpare => {
+                    if let Some(grid) = self.kernel_spare.take() {
+                        let retirement =
+                            match self
+                                .kernel_submission
+                                .retire((), KernelGridTarget::Main, grid)
+                            {
+                                Ok(retirement) => retirement,
+                                Err(error) => match error {},
+                            };
+                        self.kernel_events
+                            .push(KernelSubmissionEvent::Retired(retirement));
+                    }
+                }
+                ReplayKernelPreparation::RetireBackdrop => {
+                    if let Some(grid) = self.kernel_backdrop.take() {
+                        let retirement = match self.kernel_submission.retire(
+                            (),
+                            KernelGridTarget::Backdrop,
+                            grid,
+                        ) {
+                            Ok(retirement) => retirement,
+                            Err(error) => match error {},
+                        };
+                        self.kernel_events
+                            .push(KernelSubmissionEvent::Retired(retirement));
+                    }
+                }
+                ReplayKernelPreparation::Plan(request) => {
+                    let planning = match self.kernel_submission.plan((), request) {
+                        Ok(planning) => planning,
+                        Err(error) => match error {},
+                    };
+                    self.kernel_plan = Some(planning.into_plan());
+                    self.kernel_events
+                        .push(KernelSubmissionEvent::Planned(planning));
+                }
+                ReplayKernelPreparation::AllocateMainPair => {
+                    let plan = self
+                        .kernel_plan
+                        .unwrap_or_else(|| unreachable!("replay main allocation has a plan"));
+                    let allocation = match self.kernel_submission.allocate_grid_pair(
+                        (),
+                        KernelGridTarget::Main,
+                        &plan,
+                    ) {
+                        Ok(allocation) => allocation,
+                        Err(error) => match error {},
+                    };
+                    let transaction = allocation.transaction;
+                    let [grid, spare] = allocation.into_grids();
+                    self.kernel_main = Some(grid);
+                    self.kernel_spare = Some(spare);
+                    self.kernel_events
+                        .push(KernelSubmissionEvent::Allocated(transaction));
+                }
+                ReplayKernelPreparation::AllocateBackdrop => {
+                    let plan = self
+                        .kernel_plan
+                        .unwrap_or_else(|| unreachable!("replay backdrop allocation has a plan"));
+                    let allocation = match self.kernel_submission.allocate_grid(
+                        (),
+                        KernelGridTarget::Backdrop,
+                        &plan,
+                    ) {
+                        Ok(allocation) => allocation,
+                        Err(error) => match error {},
+                    };
+                    let transaction = allocation.transaction;
+                    self.kernel_backdrop = Some(allocation.into_grid());
+                    self.kernel_events
+                        .push(KernelSubmissionEvent::Allocated(transaction));
+                }
+            }
+        }
+    }
+
+    fn publish_kernel(&mut self, job: &KernelJob) {
+        let grid = match job.whole_grid().target {
+            KernelGridTarget::Main => self
+                .kernel_main
+                .get_or_insert_with(ReplayKernelGrid::default),
+            KernelGridTarget::Backdrop => self
+                .kernel_backdrop
+                .get_or_insert_with(ReplayKernelGrid::default),
+        };
+        let publication = match self.kernel_submission.submit((), grid, job) {
+            Ok(publication) => publication,
+            Err(error) => match error {},
+        };
+        let _facts = publication.into_facts();
+        self.kernel_events
+            .push(KernelSubmissionEvent::Published(Box::new(publication)));
+    }
+
     fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
         self.next_id += 1;
         let scene = PendingFakeScene {
@@ -1531,6 +1835,7 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
 
     fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error> {
         let FencesObserved = stage;
+        self.presenter.run_kernel_preparations();
         let has_retained_scene = self.presenter.retained_scene.is_some();
         self.presenter.write_hot_for_slot(has_retained_scene, 0);
         let input = WorkerTurnInput {
@@ -1599,8 +1904,18 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
         if !self.outcome.refused
             && let Some(level) = self.frame_loop.due()
         {
+            let owner_epoch = self.presenter.hot_epoch;
+            let job = self
+                .presenter
+                .kernel_job
+                .take()
+                .unwrap_or_else(|| default_replay_kernel_job(owner_epoch, level));
+            let target = job.whole_grid().target;
+            self.presenter.publish_kernel(&job);
             let id = self.presenter.submit(self.frame_loop.generation(), level);
-            self.frame_loop.submitted(id, level);
+            if target == KernelGridTarget::Main {
+                self.frame_loop.submitted(id, level);
+            }
             self.outcome.scene_id = Some(id);
         }
         self.presenter
@@ -1661,6 +1976,523 @@ fn drive_refresh(
         false,
     )
     .scene_id
+}
+
+fn replay_span(
+    directory_index: u32,
+    first_generation: u16,
+    handle_fingerprint: u64,
+) -> ReplayKernelGrid {
+    ReplayKernelGrid {
+        span: KernelSpanGeneration {
+            directory_index,
+            page_count: 4,
+            first_generation,
+            handle_fingerprint,
+        },
+    }
+}
+
+const fn default_replay_kernel_job(owner_epoch: u64, level: RefinementLevel) -> KernelJob {
+    KernelJob::WholeGrid(WholeGridJob {
+        target: KernelGridTarget::Main,
+        owner_epoch,
+        precision_mode: PrecisionMode::Deterministic,
+        level,
+        requested_extent: GridExtent {
+            width: 1,
+            height: 1,
+        },
+        plane: Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        },
+        screen_to_plane: Homography::IDENTITY,
+        params: EscapeParams::new(1),
+        mode: WholeGridMode::Shallow {
+            centre: CentreSplit {
+                hi: [0.0; 4],
+                lo: [0.0; 4],
+            },
+            pixel_scale: 1.0,
+        },
+    })
+}
+
+const fn main_shallow_replay_job() -> KernelJob {
+    KernelJob::WholeGrid(WholeGridJob {
+        target: KernelGridTarget::Main,
+        owner_epoch: 40,
+        precision_mode: PrecisionMode::PictureFast,
+        level: RefinementLevel::Preview,
+        requested_extent: GridExtent {
+            width: 64,
+            height: 32,
+        },
+        plane: Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        },
+        screen_to_plane: Homography::IDENTITY,
+        params: EscapeParams::new(512),
+        mode: WholeGridMode::Shallow {
+            centre: CentreSplit {
+                hi: [0.25, -0.5, 0.0, 1.0],
+                lo: [0.0; 4],
+            },
+            pixel_scale: 0.125,
+        },
+    })
+}
+
+const fn backdrop_perturbation_replay_job() -> KernelJob {
+    KernelJob::WholeGrid(WholeGridJob {
+        target: KernelGridTarget::Backdrop,
+        owner_epoch: 41,
+        precision_mode: PrecisionMode::PictureFast,
+        level: RefinementLevel::Final,
+        requested_extent: GridExtent {
+            width: 32,
+            height: 16,
+        },
+        plane: Plane {
+            basis_u: [0.0, 0.0, 1.0, 0.0],
+            basis_v: [0.0, 0.0, 0.0, 1.0],
+        },
+        screen_to_plane: Homography::IDENTITY,
+        params: EscapeParams::new(512),
+        mode: WholeGridMode::Perturbation {
+            centre_from_reference_px: [1.25, -2.5],
+            scale: ScaledPixelScale {
+                mantissa: 0.5,
+                exponent: -12,
+            },
+            reference: KernelReferenceIdentity {
+                span: KernelSpanGeneration {
+                    directory_index: 7,
+                    page_count: 3,
+                    first_generation: 17,
+                    handle_fingerprint: 117,
+                },
+                generation: 17,
+                length: 9,
+                precision_bits: 192,
+                precision_mode: "PictureFast",
+            },
+        },
+    })
+}
+
+fn kernel_turn_inputs() -> [KernelTurnInput; 2] {
+    let extent = GridExtent {
+        width: 64,
+        height: 32,
+    };
+    let plan = plan_refinement(extent, EscapeParams::new(512), |_| true)
+        .unwrap_or_else(|error| unreachable!("replay refinement plan failed: {error}"));
+    let backdrop_extent = GridExtent {
+        width: 32,
+        height: 16,
+    };
+    let backdrop_plan = plan_refinement(backdrop_extent, EscapeParams::new(512), |_| true)
+        .unwrap_or_else(|error| unreachable!("replay backdrop plan failed: {error}"));
+    let request = KernelPlan {
+        target: KernelGridTarget::Main,
+        requested_extent: extent,
+        requested_max_iter: 512,
+        precision_mode: Some(PrecisionMode::PictureFast),
+    };
+    let backdrop_request = KernelPlan {
+        target: KernelGridTarget::Backdrop,
+        requested_extent: backdrop_extent,
+        requested_max_iter: 512,
+        precision_mode: Some(PrecisionMode::PictureFast),
+    };
+    let shallow_job = main_shallow_replay_job();
+    let perturbation_job = backdrop_perturbation_replay_job();
+    [
+        KernelTurnInput {
+            name: "main-shallow",
+            plans: Vec::new(),
+            allocated_grids: Vec::new(),
+            main: replay_span(4, 8, 104),
+            spare: replay_span(5, 8, 105),
+            backdrop: replay_span(6, 8, 106),
+            preparations: Vec::new(),
+            job: shallow_job,
+            dispatch_facts: replay_dispatch_facts(&shallow_job),
+        },
+        KernelTurnInput {
+            name: "backdrop-perturbation",
+            plans: vec![plan, backdrop_plan],
+            allocated_grids: vec![
+                replay_span(4, 8, 104),
+                replay_span(5, 8, 105),
+                replay_span(6, 8, 106),
+            ],
+            main: replay_span(4, 7, 94),
+            spare: replay_span(5, 7, 95),
+            backdrop: replay_span(6, 7, 96),
+            preparations: vec![
+                ReplayKernelPreparation::RetireBackdrop,
+                ReplayKernelPreparation::RetireSpare,
+                ReplayKernelPreparation::RetireMain,
+                ReplayKernelPreparation::Plan(request),
+                ReplayKernelPreparation::AllocateMainPair,
+                ReplayKernelPreparation::Plan(backdrop_request),
+                ReplayKernelPreparation::AllocateBackdrop,
+            ],
+            job: perturbation_job,
+            dispatch_facts: replay_dispatch_facts(&perturbation_job),
+        },
+    ]
+}
+
+fn record_kernel_submission_turn(input: KernelTurnInput) -> KernelTurn {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.restart(9);
+    let mut presenter = FakePresenter {
+        kernel_submission: KernelSubmissionOwner::new(ReplayKernelSubmission {
+            plans: input.plans.iter().copied().collect(),
+            grids: input.allocated_grids.iter().copied().collect(),
+            dispatch_facts: std::collections::VecDeque::from([input.dispatch_facts]),
+        }),
+        kernel_main: Some(input.main),
+        kernel_spare: Some(input.spare),
+        kernel_backdrop: Some(input.backdrop),
+        kernel_preparations: input.preparations.clone(),
+        kernel_job: Some(input.job),
+        ..FakePresenter::default()
+    };
+    let outcome = drive_turn(
+        &mut frame_loop,
+        &mut presenter,
+        FakeClock::default(),
+        FramePolicy::SingleFrameOnDemand,
+        false,
+    );
+    KernelTurn {
+        input,
+        events: presenter.kernel_events,
+        scene_id: outcome.scene_id,
+    }
+}
+
+const KERNEL_SUBMISSION_REPLAY_FIXTURE: &str = "\
+turn=main-shallow
+published target=Main directory=4 pages=4 first_generation=8 fingerprint=104
+job owner_epoch=40 precision=PictureFast level=Preview requested=64x32 max_iter=512 bailout_bits=43800000
+plane basis_u_bits=[3f800000,00000000,00000000,00000000] basis_v_bits=[00000000,3f800000,00000000,00000000]
+map rows_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] inverse_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] condition_bits=3ff0000000000000 apron_bits=3ff0000000000000
+mode=Shallow centre_hi_bits=[3e800000,bf000000,00000000,3f800000] centre_lo_bits=[00000000,00000000,00000000,00000000] pixel_scale_bits=3e000000
+facts delivered=64x32 delivered_max_iter=512 active_pixels=2048 worst_iterations=1048576 page_passes=1 copy_commands=1 gpu_copy_bytes=32768 logical_heap_bytes=32768 reserved_heap_bytes=32768 scratch_bytes=32768 orbit_generation=None orbit_length=0 draft_pixels=0 draft_iterations=0
+scene_id=Some(1)
+turn=backdrop-perturbation
+retired target=Backdrop directory=6 pages=4 first_generation=7 fingerprint=96
+retired target=Main directory=5 pages=4 first_generation=7 fingerprint=95
+retired target=Main directory=4 pages=4 first_generation=7 fingerprint=94
+planned target=Main requested=64x32 max_iter=512 precision=Some(PictureFast) delivered=64x32 delivered_max_iter=512
+allocated target=Main first=4/4/8/104 second=5/4/8/105
+planned target=Backdrop requested=32x16 max_iter=512 precision=Some(PictureFast) delivered=32x16 delivered_max_iter=512
+allocated target=Backdrop first=6/4/8/106 second=None
+published target=Backdrop directory=6 pages=4 first_generation=8 fingerprint=106
+job owner_epoch=41 precision=PictureFast level=Final requested=32x16 max_iter=512 bailout_bits=43800000
+plane basis_u_bits=[00000000,00000000,3f800000,00000000] basis_v_bits=[00000000,00000000,00000000,3f800000]
+map rows_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] inverse_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] condition_bits=3ff0000000000000 apron_bits=3ff0000000000000
+mode=Perturbation centre_from_reference_bits=[3ff4000000000000,c004000000000000] scale_mantissa_bits=3f000000 scale_exponent=-12 reference_span=7/3/17/117 reference_generation=17 reference_length=9 reference_precision_bits=192 reference_precision_mode=PictureFast
+facts delivered=32x16 delivered_max_iter=512 active_pixels=512 worst_iterations=262144 page_passes=1 copy_commands=1 gpu_copy_bytes=8192 logical_heap_bytes=8192 reserved_heap_bytes=8192 scratch_bytes=8192 orbit_generation=Some(17) orbit_length=9 draft_pixels=0 draft_iterations=0
+scene_id=Some(1)
+";
+
+fn append_kernel_span(output: &mut String, span: KernelSpanGeneration) {
+    let _written = write!(
+        output,
+        "{}/{}/{}/{}",
+        span.directory_index, span.page_count, span.first_generation, span.handle_fingerprint,
+    );
+}
+
+fn append_f32_bits(output: &mut String, values: &[f32]) {
+    let _written = write!(output, "[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, ",");
+        }
+        let _written = write!(output, "{:08x}", value.to_bits());
+    }
+    let _written = write!(output, "]");
+}
+
+fn append_f64_bits(output: &mut String, values: &[f64]) {
+    let _written = write!(output, "[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, ",");
+        }
+        let _written = write!(output, "{:016x}", value.to_bits());
+    }
+    let _written = write!(output, "]");
+}
+
+fn append_whole_grid_mode(output: &mut String, mode: &WholeGridMode) {
+    match mode {
+        WholeGridMode::Shallow {
+            centre,
+            pixel_scale,
+        } => {
+            let _written = write!(output, "mode=Shallow centre_hi_bits=");
+            append_f32_bits(output, &centre.hi);
+            let _written = write!(output, " centre_lo_bits=");
+            append_f32_bits(output, &centre.lo);
+            let _written = writeln!(output, " pixel_scale_bits={:08x}", pixel_scale.to_bits());
+        }
+        WholeGridMode::Perturbation {
+            centre_from_reference_px,
+            scale,
+            reference,
+        } => {
+            let _written = write!(output, "mode=Perturbation centre_from_reference_bits=");
+            append_f64_bits(output, centre_from_reference_px);
+            let _written = write!(
+                output,
+                " scale_mantissa_bits={:08x} scale_exponent={} reference_span=",
+                scale.mantissa.to_bits(),
+                scale.exponent,
+            );
+            append_kernel_span(output, reference.span);
+            let _written = writeln!(
+                output,
+                " reference_generation={} reference_length={} reference_precision_bits={} reference_precision_mode={}",
+                reference.generation,
+                reference.length,
+                reference.precision_bits,
+                reference.precision_mode,
+            );
+        }
+    }
+}
+
+fn append_whole_grid_job(output: &mut String, job: &WholeGridJob) {
+    let _written = writeln!(
+        output,
+        "job owner_epoch={} precision={} level={:?} requested={}x{} max_iter={} bailout_bits={:08x}",
+        job.owner_epoch,
+        job.precision_mode.as_str(),
+        job.level,
+        job.requested_extent.width,
+        job.requested_extent.height,
+        job.params.max_iter,
+        job.params.bailout.to_bits(),
+    );
+    let _written = write!(output, "plane basis_u_bits=");
+    append_f32_bits(output, &job.plane.basis_u);
+    let _written = write!(output, " basis_v_bits=");
+    append_f32_bits(output, &job.plane.basis_v);
+    let _written = writeln!(output);
+    let _written = write!(output, "map rows_bits=");
+    append_f64_bits(output, &job.screen_to_plane.rows);
+    let _written = write!(output, " inverse_bits=");
+    append_f64_bits(output, &job.screen_to_plane.inverse);
+    let _written = writeln!(
+        output,
+        " condition_bits={:016x} apron_bits={:016x}",
+        job.screen_to_plane.condition_number.to_bits(),
+        job.screen_to_plane.apron_scale.to_bits(),
+    );
+    append_whole_grid_mode(output, &job.mode);
+}
+
+fn append_dispatch_facts(output: &mut String, facts: &DispatchFacts) {
+    let _written = writeln!(
+        output,
+        "facts delivered={}x{} delivered_max_iter={} active_pixels={} worst_iterations={} page_passes={} copy_commands={} gpu_copy_bytes={} logical_heap_bytes={} reserved_heap_bytes={} scratch_bytes={} orbit_generation={:?} orbit_length={} draft_pixels={} draft_iterations={}",
+        facts.delivered_extent.width,
+        facts.delivered_extent.height,
+        facts.delivered_max_iter,
+        facts.active_pixels,
+        facts.worst_case_pixel_iterations,
+        facts.page_passes,
+        facts.copy_commands,
+        facts.gpu_copy_bytes,
+        facts.logical_heap_bytes,
+        facts.reserved_heap_bytes,
+        facts.scratch_bytes,
+        facts.orbit_generation,
+        facts.orbit_length,
+        facts.draft_pixels_discarded,
+        facts.draft_iterations_discarded,
+    );
+}
+
+fn append_kernel_publication(output: &mut String, publication: &KernelPublication) {
+    let job = publication.job.whole_grid();
+    let span = publication.span;
+    let _written = writeln!(
+        output,
+        "published target={:?} directory={} pages={} first_generation={} fingerprint={}",
+        job.target,
+        span.directory_index,
+        span.page_count,
+        span.first_generation,
+        span.handle_fingerprint,
+    );
+    append_whole_grid_job(output, job);
+    append_dispatch_facts(output, &publication.facts);
+}
+
+fn append_kernel_turn(output: &mut String, turn: &KernelTurn) {
+    let _written = writeln!(output, "turn={}", turn.input.name);
+    for event in &turn.events {
+        match event {
+            KernelSubmissionEvent::Retired(retirement) => {
+                let span = retirement.span;
+                let _written = writeln!(
+                    output,
+                    "retired target={:?} directory={} pages={} first_generation={} fingerprint={}",
+                    retirement.target,
+                    span.directory_index,
+                    span.page_count,
+                    span.first_generation,
+                    span.handle_fingerprint,
+                );
+            }
+            KernelSubmissionEvent::Planned(planning) => {
+                let request = planning.request;
+                let _written = writeln!(
+                    output,
+                    "planned target={:?} requested={}x{} max_iter={} precision={:?} delivered={}x{} delivered_max_iter={}",
+                    request.target,
+                    request.requested_extent.width,
+                    request.requested_extent.height,
+                    request.requested_max_iter,
+                    request.precision_mode,
+                    planning.plan.delivered_extent.width,
+                    planning.plan.delivered_extent.height,
+                    planning.plan.delivered_max_iter,
+                );
+            }
+            KernelSubmissionEvent::Allocated(allocation) => {
+                let _written = write!(output, "allocated target={:?} first=", allocation.target);
+                append_kernel_span(
+                    output,
+                    allocation.spans[0]
+                        .unwrap_or_else(|| unreachable!("kernel allocation has a first span")),
+                );
+                let _written = write!(output, " second=");
+                if let Some(span) = allocation.spans[1] {
+                    append_kernel_span(output, span);
+                } else {
+                    let _written = write!(output, "None");
+                }
+                let _written = writeln!(output);
+            }
+            KernelSubmissionEvent::Published(publication) => {
+                append_kernel_publication(output, publication);
+            }
+        }
+    }
+    let _written = writeln!(output, "scene_id={:?}", turn.scene_id);
+}
+
+#[test]
+fn native_refresh_replays_plain_kernel_submission_transactions() {
+    let recorded = kernel_turn_inputs().map(record_kernel_submission_turn);
+    let replayed = recorded
+        .clone()
+        .map(|turn| record_kernel_submission_turn(turn.input));
+    assert_eq!(replayed, recorded);
+    assert_eq!(recorded[0].scene_id, Some(1));
+    assert_eq!(recorded[1].scene_id, Some(1));
+    let mut fixture = String::new();
+    for turn in &recorded {
+        append_kernel_turn(&mut fixture, turn);
+    }
+    assert_eq!(fixture, KERNEL_SUBMISSION_REPLAY_FIXTURE);
+    assert!(matches!(
+        recorded[0].events.as_slice(),
+        [KernelSubmissionEvent::Published(publication)]
+            if matches!(
+                publication.as_ref(),
+                KernelPublication {
+                    job: KernelJob::WholeGrid(WholeGridJob {
+                        target: KernelGridTarget::Main,
+                        mode: WholeGridMode::Shallow { .. },
+                        ..
+                    }),
+                    facts: DispatchFacts {
+                        owner_epoch: 40,
+                        mode: KernelMode::Shallow,
+                        orbit_generation: None,
+                        ..
+                    },
+                    ..
+                }
+            )
+    ));
+    assert!(matches!(
+        recorded[1].events.as_slice(),
+        [
+            KernelSubmissionEvent::Retired(KernelRetirement {
+                target: KernelGridTarget::Backdrop,
+                ..
+            }),
+            KernelSubmissionEvent::Retired(KernelRetirement {
+                target: KernelGridTarget::Main,
+                ..
+            }),
+            KernelSubmissionEvent::Retired(KernelRetirement {
+                target: KernelGridTarget::Main,
+                ..
+            }),
+            KernelSubmissionEvent::Planned(KernelPlanning {
+                request: KernelPlan {
+                    target: KernelGridTarget::Main,
+                    ..
+                },
+                ..
+            }),
+            KernelSubmissionEvent::Allocated(KernelAllocation {
+                target: KernelGridTarget::Main,
+                ..
+            }),
+            KernelSubmissionEvent::Planned(KernelPlanning {
+                request: KernelPlan {
+                    target: KernelGridTarget::Backdrop,
+                    ..
+                },
+                ..
+            }),
+            KernelSubmissionEvent::Allocated(KernelAllocation {
+                target: KernelGridTarget::Backdrop,
+                ..
+            }),
+            KernelSubmissionEvent::Published(publication),
+        ] if matches!(
+            publication.as_ref(),
+            KernelPublication {
+                job: KernelJob::WholeGrid(WholeGridJob {
+                    target: KernelGridTarget::Backdrop,
+                    mode: WholeGridMode::Perturbation {
+                        reference: KernelReferenceIdentity {
+                            generation: 17,
+                            length: 9,
+                            precision_bits: 192,
+                            ..
+                        },
+                        ..
+                    },
+                    ..
+                }),
+                facts: DispatchFacts {
+                    owner_epoch: 41,
+                    orbit_generation: Some(17),
+                    orbit_length: 9,
+                    ..
+                },
+                ..
+            }
+        )
+    ));
 }
 
 const WORKER_SERVICE_REPLAY_FIXTURE: &str = "\
@@ -4831,7 +5663,7 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     assert!(source.contains("spare_grid: Option<EscapeGrid>,"));
     assert!(source.contains("grid_round: u64,"));
     assert!(source.contains("JulibrotKernels::plan_grid_pair"));
-    assert!(source.contains("allocate_grid_pair(&mut executor, &plan)"));
+    assert!(source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)"));
     assert!(submit.contains("std::mem::swap(&mut self.grid, spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
 }
@@ -4859,7 +5691,7 @@ fn no_backdrop_and_main_only_fallbacks_release_retained_backdrop_records() {
         .find("optional_backdrop_plan(")
         .expect("heap exhaustion can select the main-only fallback");
     let allocation = ensure_body
-        .find("allocate_grid(&mut self.executor, &plan)")
+        .find("self.kernel_submission.allocate_grid(")
         .expect("allocation can select the main-only fallback");
     assert!(release < optional && optional < allocation);
 
@@ -4867,12 +5699,13 @@ fn no_backdrop_and_main_only_fallbacks_release_retained_backdrop_records() {
         .find("pub(super) fn release_backdrop(")
         .expect("the backdrop release hook exists");
     let release_body = &ensure_body[release_backdrop..];
-    assert!(release_body.contains("self.free_grid(&backdrop.grid)"));
+    assert!(release_body.contains("self.free_grid(KernelGridTarget::Backdrop, &backdrop.grid)"));
 
     let submit = include_str!("browser/submit.rs");
     let free = submit
         .find("pub(super) fn free_grid(")
         .expect("the shared grid-free hook exists");
+    assert!(submit[free..].contains(".retire(&mut self.executor, target, grid.clone())"));
     assert!(submit[free..].contains("self.presenter.forget_retained_grid(grid);"));
 }
 
@@ -4884,7 +5717,7 @@ fn precision_replacement_installs_the_plan_that_sized_the_new_pair() {
         .expect("the precision synchronizer exists");
     let body = &source[synchronize..];
     let allocation = body
-        .find("allocate_grid_pair(&mut self.executor, &next_plan)")
+        .find("self.kernel_submission.allocate_grid_pair(")
         .expect("the replacement pair uses the new plan");
     let install = body
         .find("self.plan = next_plan;")
@@ -4893,6 +5726,130 @@ fn precision_replacement_installs_the_plan_that_sized_the_new_pair() {
         .find("self.grid = next_grid;")
         .expect("the new grid is installed");
     assert!(allocation < install && install < grid);
+}
+
+#[test]
+fn main_pair_retirement_keeps_spare_before_current() {
+    let submit = include_str!("browser/submit.rs");
+    let retire_pair = submit
+        .split_once("fn retire_main_grid_pair")
+        .unwrap_or_else(|| unreachable!("retirement helper exists"))
+        .1
+        .split_once("fn restore_main_grid_pair")
+        .unwrap_or_else(|| unreachable!("retirement helper ends"))
+        .0;
+    let spare = retire_pair
+        .find("KernelGridTarget::Main, &spare")
+        .unwrap_or_else(|| unreachable!("spare retirement exists"));
+    let current = retire_pair
+        .find("KernelGridTarget::Main, &current")
+        .unwrap_or_else(|| unreachable!("current retirement exists"));
+    assert!(spare < current);
+}
+
+#[test]
+fn browser_kernel_transactions_own_the_lowering_and_precede_scene_submission() {
+    let owner = include_str!("../loop.rs");
+    let submit = include_str!("browser/submit.rs");
+    let backdrop = include_str!("browser/backdrop.rs");
+    assert!(owner.contains("struct BrowserKernelSubmission {\n        kernels: JulibrotKernels,"));
+    assert!(owner.contains("enum KernelJob {\n    WholeGrid(WholeGridJob),\n}"));
+    let whole_grid_job = owner
+        .split_once("struct WholeGridJob")
+        .unwrap_or_else(|| unreachable!("whole-grid job exists"))
+        .1
+        .split_once("enum KernelJob")
+        .unwrap_or_else(|| unreachable!("whole-grid job ends"))
+        .0;
+    for semantic_field in [
+        "target: KernelGridTarget,",
+        "owner_epoch: u64,",
+        "precision_mode: PrecisionMode,",
+        "level: RefinementLevel,",
+        "plane: Plane,",
+        "screen_to_plane: Homography,",
+        "params: EscapeParams,",
+        "mode: WholeGridMode,",
+    ] {
+        assert!(whole_grid_job.contains(semantic_field));
+    }
+    let dispatch = owner
+        .split_once("struct BrowserKernelDispatch")
+        .unwrap_or_else(|| unreachable!("browser kernel dispatch context exists"))
+        .1
+        .split_once("impl KernelSubmissionPort for BrowserKernelSubmission")
+        .unwrap_or_else(|| unreachable!("browser kernel dispatch context ends"))
+        .0;
+    assert!(dispatch.contains("executor: &'a GpuKernelExecutor,"));
+    assert!(dispatch.contains("device: &'a wgpu::Device,"));
+    assert!(dispatch.contains("queue: &'a wgpu::Queue,"));
+    assert!(dispatch.contains("reference_span: Option<&'a DataSpan>,"));
+    assert!(!dispatch.contains("plane:"));
+    assert!(!dispatch.contains("screen_to_plane:"));
+    assert!(!dispatch.contains("params:"));
+    let frame_loop = owner
+        .split_once("pub struct BrowserFrameLoop {")
+        .unwrap_or_else(|| unreachable!("browser frame loop exists"))
+        .1
+        .split_once("struct BrowserRefreshTurn")
+        .unwrap_or_else(|| unreachable!("browser refresh turn follows frame state"))
+        .0;
+    assert!(
+        frame_loop.contains("kernel_submission: KernelSubmissionOwner<BrowserKernelSubmission>,")
+    );
+    assert!(!frame_loop.contains("kernels: JulibrotKernels,"));
+    assert!(!submit.contains("self.kernels"));
+    assert!(!backdrop.contains("self.kernels"));
+
+    let lowering = owner
+        .split_once("impl KernelSubmissionPort for BrowserKernelSubmission")
+        .unwrap_or_else(|| unreachable!("browser kernel lowering exists"))
+        .1
+        .split_once("struct ChannelWorkerService")
+        .unwrap_or_else(|| unreachable!("kernel lowering ends before worker lowering"))
+        .0;
+    let encode = lowering
+        .find("self.kernels.encode_shallow(")
+        .unwrap_or_else(|| unreachable!("shallow encoding is owned"));
+    assert!(lowering.contains("self.kernels.encode_perturbation("));
+    assert!(lowering.contains("if reference.span != KernelSpanGeneration::from_span(span)"));
+    let queue = lowering
+        .find("dispatch.queue.submit([encoder.finish()]);")
+        .unwrap_or_else(|| unreachable!("kernel publication submits its encoder"));
+    assert!(encode < queue);
+
+    let main = submit
+        .split_once("pub(super) fn submit_due_scene(")
+        .unwrap_or_else(|| unreachable!("main submission exists"))
+        .1;
+    let main_kernel = main
+        .find("self.kernel_submission")
+        .unwrap_or_else(|| unreachable!("main calls the kernel owner"));
+    let main_scene = main
+        .find("self.presenter.submit_scene(slot, now_ms)")
+        .unwrap_or_else(|| unreachable!("main calls the presenter"));
+    assert!(main_kernel < main_scene);
+
+    let backdrop_kernel = backdrop
+        .find("self.kernel_submission")
+        .unwrap_or_else(|| unreachable!("backdrop calls the kernel owner"));
+    let backdrop_scene = backdrop
+        .find("self.presenter.submit_scene(slot, now_ms)")
+        .unwrap_or_else(|| unreachable!("backdrop calls the presenter"));
+    assert!(backdrop_kernel < backdrop_scene);
+
+    let native = include_str!("tests.rs");
+    let native_scene = native
+        .split_once("impl OrderedRefresh for NativeRefreshTurn")
+        .unwrap_or_else(|| unreachable!("native refresh lowering exists"))
+        .1
+        .split_once("fn consider_scene(&mut self, stage: HotWritten)")
+        .unwrap_or_else(|| unreachable!("native scene stage exists"))
+        .1;
+    assert!(
+        native_scene.find("self.presenter.publish_kernel(&job);")
+            < native_scene.find("self.presenter.submit(self.frame_loop.generation(), level)")
+    );
 }
 
 /// The browser loop asks the shared policy rather than preferring a stale backdrop outright,

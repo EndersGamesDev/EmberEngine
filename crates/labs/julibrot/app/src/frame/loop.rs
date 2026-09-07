@@ -13,11 +13,17 @@ use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene, war
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::{KernelError, RefinementLevel, RefinementPlan};
+use ember_julibrot_kernels::{
+    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, RefinementLevel, RefinementPlan,
+};
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_math::{Plane, PoseMap};
+use ember_julibrot_math::{
+    CentreSplit, EscapeParams, Homography, Plane, PoseMap, PrecisionMode, ScaleSplit,
+};
 #[cfg(test)]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_lab_heap::DataSpan;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::AppError;
@@ -573,6 +579,404 @@ fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Outpu
     refresh.consider_warp(SceneConsidered)
 }
 
+/// Which app-selected whole-grid target one kernel transaction serves.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KernelGridTarget {
+    Main,
+    Backdrop,
+}
+
+/// Plain request for one kernels-owned refinement plan.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelPlan {
+    target: KernelGridTarget,
+    requested_extent: GridExtent,
+    requested_max_iter: u32,
+    precision_mode: Option<PrecisionMode>,
+}
+
+/// Plain result of one refinement-planning transaction.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelPlanning {
+    #[cfg(test)]
+    request: KernelPlan,
+    plan: RefinementPlan,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelPlanning {
+    const fn into_plan(self) -> RefinementPlan {
+        self.plan
+    }
+}
+
+/// Stable, allocation-free identity for one generation-tagged heap span.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelSpanGeneration {
+    directory_index: u32,
+    page_count: u32,
+    first_generation: u16,
+    handle_fingerprint: u64,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelSpanGeneration {
+    fn from_span(span: &DataSpan) -> Self {
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut handle_fingerprint = OFFSET_BASIS;
+        for handle in span.handles() {
+            handle_fingerprint ^= u64::from(handle.raw());
+            handle_fingerprint = handle_fingerprint.wrapping_mul(PRIME);
+        }
+        Self {
+            directory_index: span.directory_index,
+            page_count: span.page_count,
+            first_generation: span
+                .handles()
+                .first()
+                .map_or(0, |handle| handle.generation()),
+            handle_fingerprint,
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+trait KernelGridIdentity {
+    fn span_generation(&self) -> KernelSpanGeneration;
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelGridIdentity for EscapeGrid {
+    fn span_generation(&self) -> KernelSpanGeneration {
+        KernelSpanGeneration::from_span(&self.span)
+    }
+}
+
+/// Plain result of allocating one or two grid spans.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelAllocation {
+    target: KernelGridTarget,
+    spans: [Option<KernelSpanGeneration>; 2],
+}
+
+/// One allocated grid together with its replayable span identity.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug)]
+struct AllocatedKernelGrid<G> {
+    grid: G,
+    #[cfg(test)]
+    transaction: KernelAllocation,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<G> AllocatedKernelGrid<G> {
+    fn into_grid(self) -> G {
+        self.grid
+    }
+}
+
+/// One allocated main-grid pair together with both replayable span identities.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug)]
+struct AllocatedKernelGridPair<G> {
+    grids: [G; 2],
+    #[cfg(test)]
+    transaction: KernelAllocation,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<G> AllocatedKernelGridPair<G> {
+    fn into_grids(self) -> [G; 2] {
+        self.grids
+    }
+}
+
+/// Plain result of retiring one grid span.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelRetirement {
+    target: KernelGridTarget,
+    span: KernelSpanGeneration,
+}
+
+/// Plain identity bound to one borrowed reference span during a deep dispatch.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct KernelReferenceIdentity {
+    span: KernelSpanGeneration,
+    generation: u32,
+    length: u32,
+    precision_bits: u32,
+    precision_mode: &'static str,
+}
+
+/// Plain whole-grid kernel variant carrying every semantic encoding argument by value.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WholeGridMode {
+    Shallow {
+        centre: CentreSplit,
+        pixel_scale: f32,
+    },
+    Perturbation {
+        centre_from_reference_px: [f64; 2],
+        scale: ScaleSplit,
+        reference: KernelReferenceIdentity,
+    },
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl WholeGridMode {
+    const fn kernel_mode(&self) -> KernelMode {
+        match self {
+            Self::Shallow { .. } => KernelMode::Shallow,
+            Self::Perturbation { .. } => KernelMode::Perturbation,
+        }
+    }
+
+    const fn orbit_generation(&self) -> Option<u32> {
+        match self {
+            Self::Shallow { .. } => None,
+            Self::Perturbation { reference, .. } => Some(reference.generation),
+        }
+    }
+
+    #[cfg(test)]
+    const fn orbit_length(&self) -> u32 {
+        match self {
+            Self::Shallow { .. } => 0,
+            Self::Perturbation { reference, .. } => reference.length,
+        }
+    }
+}
+
+/// Every value argument to one mapped whole-grid kernel publication.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WholeGridJob {
+    target: KernelGridTarget,
+    owner_epoch: u64,
+    precision_mode: PrecisionMode,
+    level: RefinementLevel,
+    requested_extent: GridExtent,
+    plane: Plane,
+    screen_to_plane: Homography,
+    params: EscapeParams,
+    mode: WholeGridMode,
+}
+
+/// Plain input to one kernel publication.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum KernelJob {
+    WholeGrid(WholeGridJob),
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelJob {
+    const fn whole_grid(&self) -> &WholeGridJob {
+        match self {
+            Self::WholeGrid(job) => job,
+        }
+    }
+}
+
+/// Plain result after encoded kernel work has been submitted to its queue.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct KernelPublication {
+    #[cfg(test)]
+    job: KernelJob,
+    #[cfg(test)]
+    span: KernelSpanGeneration,
+    facts: DispatchFacts,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelPublication {
+    const fn into_facts(self) -> DispatchFacts {
+        self.facts
+    }
+}
+
+/// App-local lowering used by the replayable kernel-submission transaction owner.
+#[cfg(any(target_arch = "wasm32", test))]
+trait KernelSubmissionPort {
+    type Grid: KernelGridIdentity;
+    type Error;
+    type PlanContext<'a>
+    where
+        Self: 'a;
+    type AllocationContext<'a>
+    where
+        Self: 'a;
+    type SubmissionContext<'a>
+    where
+        Self: 'a;
+
+    fn plan(
+        &mut self,
+        context: Self::PlanContext<'_>,
+        request: KernelPlan,
+    ) -> Result<RefinementPlan, Self::Error>;
+    fn allocate_grid(
+        &mut self,
+        context: Self::AllocationContext<'_>,
+        plan: &RefinementPlan,
+    ) -> Result<Self::Grid, Self::Error>;
+    fn allocate_grid_pair(
+        &mut self,
+        context: Self::AllocationContext<'_>,
+        plan: &RefinementPlan,
+    ) -> Result<[Self::Grid; 2], Self::Error>;
+    fn retire(
+        &mut self,
+        context: Self::AllocationContext<'_>,
+        target: KernelGridTarget,
+        expected_span: KernelSpanGeneration,
+        grid: Self::Grid,
+    ) -> Result<(), Self::Error>;
+    #[cfg(target_arch = "wasm32")]
+    fn reference_span_generation(&self, span: &DataSpan) -> KernelSpanGeneration;
+    fn submit(
+        &mut self,
+        context: Self::SubmissionContext<'_>,
+        grid: &mut Self::Grid,
+        job: &KernelJob,
+    ) -> Result<DispatchFacts, Self::Error>;
+}
+
+/// Owns planning, span lifetime, and queue publication across browser and replay lowerings.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default)]
+struct KernelSubmissionOwner<P> {
+    port: P,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
+    const fn new(port: P) -> Self {
+        Self { port }
+    }
+
+    fn plan(
+        &mut self,
+        context: P::PlanContext<'_>,
+        request: KernelPlan,
+    ) -> Result<KernelPlanning, P::Error> {
+        let mut plan = self.port.plan(context, request)?;
+        if let Some(precision_mode) = request.precision_mode {
+            plan = plan.with_precision_mode(precision_mode);
+        }
+        Ok(KernelPlanning {
+            #[cfg(test)]
+            request,
+            plan,
+        })
+    }
+
+    fn allocate_grid(
+        &mut self,
+        context: P::AllocationContext<'_>,
+        #[cfg(test)] target: KernelGridTarget,
+        #[cfg(target_arch = "wasm32")] _target: KernelGridTarget,
+        plan: &RefinementPlan,
+    ) -> Result<AllocatedKernelGrid<P::Grid>, P::Error> {
+        let grid = self.port.allocate_grid(context, plan)?;
+        #[cfg(test)]
+        let transaction = KernelAllocation {
+            target,
+            spans: [Some(grid.span_generation()), None],
+        };
+        Ok(AllocatedKernelGrid {
+            grid,
+            #[cfg(test)]
+            transaction,
+        })
+    }
+
+    fn allocate_grid_pair(
+        &mut self,
+        context: P::AllocationContext<'_>,
+        #[cfg(test)] target: KernelGridTarget,
+        #[cfg(target_arch = "wasm32")] _target: KernelGridTarget,
+        plan: &RefinementPlan,
+    ) -> Result<AllocatedKernelGridPair<P::Grid>, P::Error> {
+        let grids = self.port.allocate_grid_pair(context, plan)?;
+        #[cfg(test)]
+        let transaction = KernelAllocation {
+            target,
+            spans: [
+                Some(grids[0].span_generation()),
+                Some(grids[1].span_generation()),
+            ],
+        };
+        Ok(AllocatedKernelGridPair {
+            grids,
+            #[cfg(test)]
+            transaction,
+        })
+    }
+
+    fn retire(
+        &mut self,
+        context: P::AllocationContext<'_>,
+        target: KernelGridTarget,
+        grid: P::Grid,
+    ) -> Result<KernelRetirement, P::Error> {
+        let transaction = KernelRetirement {
+            target,
+            span: grid.span_generation(),
+        };
+        self.port
+            .retire(context, transaction.target, transaction.span, grid)?;
+        Ok(transaction)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn reference_identity(
+        &self,
+        span: &DataSpan,
+        generation: u32,
+        length: u32,
+        precision_bits: u32,
+        precision_mode: &'static str,
+    ) -> KernelReferenceIdentity {
+        KernelReferenceIdentity {
+            span: self.port.reference_span_generation(span),
+            generation,
+            length,
+            precision_bits,
+            precision_mode,
+        }
+    }
+
+    fn submit(
+        &mut self,
+        context: P::SubmissionContext<'_>,
+        grid: &mut P::Grid,
+        job: &KernelJob,
+    ) -> Result<KernelPublication, P::Error> {
+        #[cfg(test)]
+        let span = grid.span_generation();
+        let facts = self.port.submit(context, grid, job)?;
+        Ok(KernelPublication {
+            #[cfg(test)]
+            job: *job,
+            #[cfg(test)]
+            span,
+            facts,
+        })
+    }
+}
+
 /// Plain result of handing one orbit request to the worker service.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -747,11 +1151,13 @@ mod browser {
 
     use super::{
         BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
-        FrameLoop, HotWritten, OrderedRefresh, PAGE_MAX_ITERATION_CAP, RefusalClass,
-        SceneConsidered, SceneMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
-        WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
-        coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
-        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
+        FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob, KernelPlan,
+        KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh,
+        PAGE_MAX_ITERATION_CAP, RefusalClass, SceneConsidered, SceneMode, WholeGridJob,
+        WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner,
+        WorkerServicePort, WorkerSubmission, backdrop_extent, coverage_pre_empts,
+        execute_ordered_refresh, horizon_facts, main_for_grid, published_iteration_cap,
+        sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{
@@ -801,6 +1207,153 @@ mod browser {
         verification: ember_julibrot_worker::ReferenceVerification,
         max_consumed_word_error_ulps: Option<u32>,
         precision_escalations: u32,
+    }
+
+    struct BrowserKernelSubmission {
+        kernels: JulibrotKernels,
+    }
+
+    struct BrowserKernelDispatch<'a> {
+        executor: &'a GpuKernelExecutor,
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        reference_span: Option<&'a DataSpan>,
+    }
+
+    impl KernelSubmissionPort for BrowserKernelSubmission {
+        type Grid = EscapeGrid;
+        type Error = KernelError;
+        type PlanContext<'a>
+            = &'a GpuKernelExecutor
+        where
+            Self: 'a;
+        type AllocationContext<'a>
+            = &'a mut GpuKernelExecutor
+        where
+            Self: 'a;
+        type SubmissionContext<'a>
+            = BrowserKernelDispatch<'a>
+        where
+            Self: 'a;
+
+        fn plan(
+            &mut self,
+            executor: Self::PlanContext<'_>,
+            request: KernelPlan,
+        ) -> Result<RefinementPlan, Self::Error> {
+            let params = EscapeParams::new(request.requested_max_iter);
+            match request.target {
+                KernelGridTarget::Main => {
+                    JulibrotKernels::plan_grid_pair(executor, request.requested_extent, params)
+                }
+                KernelGridTarget::Backdrop => {
+                    JulibrotKernels::plan(executor, request.requested_extent, params)
+                }
+            }
+        }
+
+        fn allocate_grid(
+            &mut self,
+            executor: Self::AllocationContext<'_>,
+            plan: &RefinementPlan,
+        ) -> Result<Self::Grid, Self::Error> {
+            self.kernels.allocate_grid(executor, plan)
+        }
+
+        fn allocate_grid_pair(
+            &mut self,
+            executor: Self::AllocationContext<'_>,
+            plan: &RefinementPlan,
+        ) -> Result<[Self::Grid; 2], Self::Error> {
+            self.kernels.allocate_grid_pair(executor, plan)
+        }
+
+        fn retire(
+            &mut self,
+            executor: Self::AllocationContext<'_>,
+            _target: KernelGridTarget,
+            expected_span: KernelSpanGeneration,
+            grid: Self::Grid,
+        ) -> Result<(), Self::Error> {
+            debug_assert_eq!(expected_span, grid.span_generation());
+            self.kernels.free_grid(executor, grid)
+        }
+
+        fn reference_span_generation(&self, span: &DataSpan) -> KernelSpanGeneration {
+            KernelSpanGeneration::from_span(span)
+        }
+
+        fn submit(
+            &mut self,
+            dispatch: Self::SubmissionContext<'_>,
+            grid: &mut Self::Grid,
+            job: &KernelJob,
+        ) -> Result<DispatchFacts, Self::Error> {
+            let job = job.whole_grid();
+            let label = match job.target {
+                KernelGridTarget::Main => "Julibrot kernels SCRATCH and DATA copy",
+                KernelGridTarget::Backdrop => "Julibrot backdrop kernels SCRATCH and DATA copy",
+            };
+            let mut encoder = dispatch
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+            let facts = match job.mode {
+                WholeGridMode::Shallow {
+                    centre,
+                    pixel_scale,
+                } => self.kernels.encode_shallow(
+                    dispatch.executor,
+                    &mut encoder,
+                    grid,
+                    job.owner_epoch,
+                    job.precision_mode,
+                    job.level,
+                    &job.plane,
+                    &job.screen_to_plane,
+                    &centre,
+                    pixel_scale,
+                    job.params,
+                )?,
+                WholeGridMode::Perturbation {
+                    centre_from_reference_px,
+                    scale,
+                    reference,
+                } => {
+                    let span = dispatch
+                        .reference_span
+                        .ok_or(KernelError::MissingReference)?;
+                    if reference.span != KernelSpanGeneration::from_span(span) {
+                        return Err(KernelError::StaleReference);
+                    }
+                    self.kernels.encode_perturbation(
+                        dispatch.executor,
+                        &mut encoder,
+                        grid,
+                        job.owner_epoch,
+                        job.precision_mode,
+                        job.level,
+                        &job.plane,
+                        &job.screen_to_plane,
+                        centre_from_reference_px,
+                        scale,
+                        job.params,
+                        ReferenceOrbitInput {
+                            span,
+                            generation: reference.generation,
+                            length: reference.length,
+                            precision_bits: reference.precision_bits,
+                            precision_mode: reference.precision_mode,
+                        },
+                    )?
+                }
+            };
+            debug_assert_eq!(facts.mode, job.mode.kernel_mode());
+            debug_assert_eq!(facts.requested_extent, job.requested_extent);
+            debug_assert_eq!(facts.requested_max_iter, job.params.max_iter);
+            debug_assert_eq!(facts.orbit_generation, job.mode.orbit_generation());
+            dispatch.queue.submit([encoder.finish()]);
+            Ok(facts)
+        }
     }
 
     struct ChannelWorkerService {
@@ -1020,7 +1573,7 @@ mod browser {
         device: std::sync::Arc<wgpu::Device>,
         queue: std::sync::Arc<wgpu::Queue>,
         executor: GpuKernelExecutor,
-        kernels: JulibrotKernels,
+        kernel_submission: KernelSubmissionOwner<BrowserKernelSubmission>,
         presenter: Presenter,
         worker_service: Option<WorkerServiceOwner<ChannelWorkerService>>,
         orbits: OrbitRegistry<RegisteredOrbit>,
@@ -1499,14 +2052,25 @@ mod browser {
             )
             .map_err(heap_error)?;
             let kernels = JulibrotKernels::new(&mut executor).map_err(kernel_error)?;
+            let mut kernel_submission =
+                KernelSubmissionOwner::new(BrowserKernelSubmission { kernels });
             let requested = viewer.requested();
             let extent = GridExtent {
                 width: runtime.facts().width,
                 height: runtime.facts().height,
             };
-            let params = EscapeParams::new(requested.iteration_cap);
-            let mut plan =
-                JulibrotKernels::plan_grid_pair(&executor, extent, params).map_err(kernel_error)?;
+            let mut plan = kernel_submission
+                .plan(
+                    &executor,
+                    KernelPlan {
+                        target: KernelGridTarget::Main,
+                        requested_extent: extent,
+                        requested_max_iter: requested.iteration_cap,
+                        precision_mode: None,
+                    },
+                )
+                .map_err(kernel_error)?
+                .into_plan();
             let mut reference_upload = Vec::new();
             reference_upload
                 .try_reserve_exact(super::reference_texel_bytes(requested.iteration_cap)?)
@@ -1525,10 +2089,10 @@ mod browser {
             let accepted_reference = viewer
                 .reference_centre()
                 .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
-            let mut kernels = kernels;
-            let [grid, spare_grid] = kernels
-                .allocate_grid_pair(&mut executor, &plan)
-                .map_err(kernel_error)?;
+            let [grid, spare_grid] = kernel_submission
+                .allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)
+                .map_err(kernel_error)?
+                .into_grids();
             let config = PresentConfig {
                 surface_format: runtime.surface_format(),
                 min_uniform_buffer_offset_alignment: device
@@ -1572,7 +2136,7 @@ mod browser {
                 device,
                 queue,
                 executor,
-                kernels,
+                kernel_submission,
                 presenter,
                 worker_service: Some(WorkerServiceOwner::new(ChannelWorkerService {
                     owner_endpoint,

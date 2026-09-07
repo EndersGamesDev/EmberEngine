@@ -78,17 +78,28 @@ impl BrowserFrameLoop {
             return Ok(true);
         }
         self.release_backdrop()?;
-        let Some(plan) = super::super::optional_backdrop_plan(JulibrotKernels::plan(
-            &self.executor,
-            requested_extent,
-            EscapeParams::new(requested_iter_cap),
-        ))?
+        let Some(plan) = super::super::optional_backdrop_plan(
+            self.kernel_submission
+                .plan(
+                    &self.executor,
+                    KernelPlan {
+                        target: KernelGridTarget::Backdrop,
+                        requested_extent,
+                        requested_max_iter: requested_iter_cap,
+                        precision_mode: Some(self.precision_mode),
+                    },
+                )
+                .map(|planning| planning.into_plan()),
+        )?
         else {
             return Ok(false);
         };
-        let plan = plan.with_precision_mode(self.precision_mode);
-        let grid = match self.kernels.allocate_grid(&mut self.executor, &plan) {
-            Ok(grid) => grid,
+        let grid = match self.kernel_submission.allocate_grid(
+            &mut self.executor,
+            KernelGridTarget::Backdrop,
+            &plan,
+        ) {
+            Ok(allocation) => allocation.into_grid(),
             Err(KernelError::Heap) => return Ok(false),
             Err(error) => return Err(kernel_error(error)),
         };
@@ -105,7 +116,7 @@ impl BrowserFrameLoop {
         self.active_backdrop_map = None;
         self.coverage_turn = super::CoverageTurn::Backdrop;
         if let Some(backdrop) = self.backdrop.take() {
-            if let Err(error) = self.free_grid(&backdrop.grid) {
+            if let Err(error) = self.free_grid(KernelGridTarget::Backdrop, &backdrop.grid) {
                 self.backdrop = Some(backdrop);
                 return Err(error);
             }
@@ -145,13 +156,8 @@ impl BrowserFrameLoop {
             .grid
             .clone();
         self.presenter.forget_retained_records(&record_grid);
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Julibrot backdrop kernels SCRATCH and DATA copy"),
-            });
         let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
-        let facts = {
+        let publication = {
             let backdrop = self
                 .backdrop
                 .as_mut()
@@ -167,19 +173,30 @@ impl BrowserFrameLoop {
                     let scale =
                         shallow_pixel_scale(sampling_zoom, backdrop.plan.level(level).extent.width)
                             .map_err(math_error)?;
-                    self.kernels
-                        .encode_shallow(
-                            &self.executor,
-                            &mut encoder,
+                    let job = KernelJob::WholeGrid(WholeGridJob {
+                        target: KernelGridTarget::Backdrop,
+                        owner_epoch,
+                        precision_mode: viewer.requested().precision_mode,
+                        level,
+                        requested_extent: backdrop.plan.requested_extent,
+                        plane,
+                        screen_to_plane,
+                        params,
+                        mode: WholeGridMode::Shallow {
+                            centre: split,
+                            pixel_scale: scale,
+                        },
+                    });
+                    self.kernel_submission
+                        .submit(
+                            BrowserKernelDispatch {
+                                executor: &self.executor,
+                                device: &self.device,
+                                queue: &self.queue,
+                                reference_span: None,
+                            },
                             &mut backdrop.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            &screen_to_plane,
-                            &split,
-                            scale,
-                            params,
+                            &job,
                         )
                         .map_err(kernel_error)?
                 }
@@ -204,32 +221,43 @@ impl BrowserFrameLoop {
                     let ratio = requested_pixel / backdrop_pixel;
                     let centre_from_reference =
                         self.centre_from_reference_px.map(|value| value * ratio);
-                    self.kernels
-                        .encode_perturbation(
-                            &self.executor,
-                            &mut encoder,
-                            &mut backdrop.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            &screen_to_plane,
-                            centre_from_reference,
+                    let reference = self.kernel_submission.reference_identity(
+                        &orbit.span,
+                        handle.generation,
+                        orbit.length,
+                        orbit.precision_bits,
+                        orbit.precision_mode,
+                    );
+                    let job = KernelJob::WholeGrid(WholeGridJob {
+                        target: KernelGridTarget::Backdrop,
+                        owner_epoch,
+                        precision_mode: viewer.requested().precision_mode,
+                        level,
+                        requested_extent: backdrop.plan.requested_extent,
+                        plane,
+                        screen_to_plane,
+                        params,
+                        mode: WholeGridMode::Perturbation {
+                            centre_from_reference_px: centre_from_reference,
                             scale,
-                            params,
-                            ReferenceOrbitInput {
-                                span: &orbit.span,
-                                generation: handle.generation,
-                                length: orbit.length,
-                                precision_bits: orbit.precision_bits,
-                                precision_mode: orbit.precision_mode,
+                            reference,
+                        },
+                    });
+                    self.kernel_submission
+                        .submit(
+                            BrowserKernelDispatch {
+                                executor: &self.executor,
+                                device: &self.device,
+                                queue: &self.queue,
+                                reference_span: Some(&orbit.span),
                             },
+                            &mut backdrop.grid,
+                            &job,
                         )
                         .map_err(kernel_error)?
                 }
             }
         };
-        self.queue.submit([encoder.finish()]);
         match self.presenter.submit_scene(slot, now_ms) {
             Ok(scene_id) => {
                 let backdrop = self.backdrop.as_mut().ok_or_else(|| {
@@ -240,7 +268,7 @@ impl BrowserFrameLoop {
                     stamp,
                     map: PoseMap::Mapped(screen_to_plane),
                 });
-                self.last_dispatch = Some(facts);
+                self.last_dispatch = Some(publication.into_facts());
                 self.level_timings.begin_scene(
                     self.main.centre_revision,
                     scene_id,
