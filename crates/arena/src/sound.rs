@@ -12,8 +12,6 @@
 //! The DSP is written as the textbook formulas on purpose: a `mul_add`
 //! rewrite would hide the filter shape from the next reader, and the cues
 //! are short enough that the rounding does not reach the ear.
-#![allow(clippy::imprecise_flops)]
-
 use std::borrow::Cow;
 use std::f32::consts::{FRAC_1_SQRT_2, FRAC_PI_4, TAU};
 
@@ -22,7 +20,6 @@ const SAMPLE_RATE_F32: f32 = 44_100.0;
 
 /// Metres per second: a remote cue is played `distance / SPEED_OF_SOUND`
 /// late, and a round above it cracks as it passes.
-#[allow(dead_code)] // Read by the v20 client's spatial routing (plan section 5).
 pub const SPEED_OF_SOUND: f32 = 343.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -568,7 +565,6 @@ pub fn highpass(buf: &[f32], cutoff: f32) -> Vec<f32> {
 /// recomputed each sample, which is cheap at these lengths and is what the
 /// rocket's rising whoosh needs.
 #[must_use]
-#[allow(clippy::many_single_char_names, clippy::similar_names)]
 pub fn bandpass_sweep(buf: &[f32], f0: f32, f1: f32, q: f32) -> Vec<f32> {
     let n = buf.len();
     let ratio = if f0 > 0.0 { f1 / f0 } else { 1.0 };
@@ -1321,7 +1317,6 @@ impl V18 {
 }
 
 /// Mono f32 samples at 44.1 kHz for a cue.
-#[allow(clippy::too_many_lines)]
 fn synth(sfx: Sfx) -> Vec<f32> {
     let seed = seed_of(sfx);
     let mut v = V18::new();
@@ -1595,7 +1590,6 @@ mod platform {
         /// `delay_secs` late: a two-channel buffer built by the pan law,
         /// through rodio's `delay`. The delay is clamped to five seconds
         /// so a bad distance cannot park a cue for a minute.
-        #[allow(dead_code)] // Wired by the v20 client (plan section 5).
         pub fn play_spatial(&self, sfx: Sfx, vol: f32, pan: f32, delay_secs: f32) {
             use rodio::Source;
             let Some(data) = self.samples.get(&sfx) else {
@@ -1708,7 +1702,6 @@ mod platform {
         /// `StereoPannerNode` (the same constant-power law as native) and
         /// started `delay_secs` after the context's clock, clamped to
         /// five seconds.
-        #[allow(dead_code)] // Wired by the v20 client (plan section 5).
         pub fn play_spatial(&self, sfx: Sfx, vol: f32, pan: f32, delay_secs: f32) {
             let ctx_slot = self.inner.ctx.borrow();
             let Some(ctx) = ctx_slot.as_ref() else { return };

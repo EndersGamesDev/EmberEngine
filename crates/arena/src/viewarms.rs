@@ -130,7 +130,6 @@ fn push_segment(
 /// rotation maps +X forward, +Y up and +Z right, as the weapon does. Pass white
 /// for `color` to retain the operator's authored sleeve picture. A missing
 /// left socket means the off hand is occupied (shield/melee) and is omitted.
-#[allow(clippy::too_many_arguments)]
 pub fn push(
     frame: &mut Frame,
     character: &RigCharacter,
