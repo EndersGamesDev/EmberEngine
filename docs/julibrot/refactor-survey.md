@@ -338,7 +338,7 @@ python3 -m http.server 8000 --directory web
 
 **Verified.** Round two is limited to debt in the round-one files and must preserve worker events and accepted epochs, whole-grid descriptor bytes and scene identities, planner results, fence order, facts, and existing pixel tolerances (`docs/engine-design.md:298-302`).
 
-**Proposed.** R2-04 extracts worker service, kernel submission, present-event handling, and surface resolution as four separately reviewed sweeps, each passing the complete app trace before the next begins.
+**Proposed.** Extract worker service, kernel submission, present-event handling, and surface resolution as four separately reviewed sweeps, each passing the complete app trace before the next begins.
 
 |Status|Order and bounded bite|Files|Required oracle|Estimate|
 |------|----------------------|-----|---------------|-------:|
