@@ -113,7 +113,7 @@ impl BrowserFrameLoop {
         };
         if self.scene_ready(viewer.requested().zoom_log2)
             && self.submitted_references.is_empty()
-            && viewer.owner().navigation_pending_depth() == 0
+            && viewer.navigation_pending_depth() == 0
             && self
                 .scene_selection
                 .is_some_and(|previous| previous != selection)
@@ -310,7 +310,7 @@ impl BrowserFrameLoop {
     ) -> Result<Option<u64>, AppError> {
         if matches!(map, PoseMap::Mapped(_))
             && (!self.submitted_references.is_empty()
-                || viewer.owner().navigation_pending_depth() != 0)
+                || viewer.navigation_pending_depth() != 0)
         {
             return Ok(None);
         }
