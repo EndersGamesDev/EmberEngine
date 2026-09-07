@@ -139,8 +139,12 @@ fn zoom_pose(height_scale: f64) -> Pose {
 /// Panics only if the measured relief zoom row loses its finite screen-centre map, which the saved
 /// browser pose cannot arrange.
 fn screen_centred_zoom_destination(from: &Pose, zoom_delta: f64) -> Pose {
-    let anchor = map_plane_offset(from, [0.0; 2])
-        .expect("the measured relief zoom row contains the screen centre");
+    anchored_zoom_destination(from, zoom_delta, [0.0; 2])
+}
+
+fn anchored_zoom_destination(from: &Pose, zoom_delta: f64, anchor_screen: [f64; 2]) -> Pose {
+    let anchor = map_plane_offset(from, anchor_screen)
+        .expect("the measured relief zoom row contains the requested zoom anchor");
     let displacement_scale = zoom_delta.exp2() - 1.0;
     let mut to = *from;
     to.zoom_log2 += zoom_delta;
@@ -148,8 +152,8 @@ fn screen_centred_zoom_destination(from: &Pose, zoom_delta: f64) -> Pose {
     to
 }
 
-/// Carries the saved row's absolute sampling centre through the same screen-centred zoom.
-fn screen_centred_sampling_pose(from: &Pose, destination: &Pose, zoom_delta: f64) -> Pose {
+/// Carries the saved row's absolute sampling centre through the requested anchored zoom.
+fn zoomed_sampling_pose(from: &Pose, destination: &Pose, zoom_delta: f64) -> Pose {
     let zoom_scale = zoom_delta.exp2();
     let mut to = *from;
     to.zoom_log2 += zoom_delta;
@@ -400,6 +404,7 @@ struct Vertex {
     grid: [f64; 2],
     chart: [f64; 2],
     world: [f64; 3],
+    expected_stretch: f64,
     valid: bool,
     clamped: bool,
     reason: Reason,
@@ -409,13 +414,13 @@ struct Vertex {
 enum Rule {
     Base,
     Fixed,
-    Guarded { maximum_stretch: f64 },
+    Guarded { excess_px: f64 },
 }
 
 impl Rule {
-    const fn maximum_stretch(self) -> Option<f64> {
+    const fn excess_px(self) -> Option<f64> {
         match self {
-            Self::Guarded { maximum_stretch } => Some(maximum_stretch),
+            Self::Guarded { excess_px } => Some(excess_px),
             Self::Base | Self::Fixed => None,
         }
     }
@@ -446,14 +451,33 @@ fn scene_vertex(
     mapping: Mapping,
 ) -> Vertex {
     let screen = draw_screen(column, row);
+    scene_vertex_at_screen(
+        pose,
+        screen,
+        [f64::from(column), f64::from(row)],
+        record,
+        rule,
+        mapping,
+    )
+}
+
+fn scene_vertex_at_screen(
+    pose: &Pose,
+    screen: [f64; 2],
+    grid: [f64; 2],
+    record: [f32; 4],
+    rule: Rule,
+    mapping: Mapping,
+) -> Vertex {
     let flat = Vertex {
         x: screen[0],
         y: screen[1],
         depth: 0.0,
         reciprocal_w: 1.0,
-        grid: [f64::from(column), f64::from(row)],
+        grid,
         chart: [f64::NAN; 2],
         world: [0.0; 3],
+        expected_stretch: 0.0,
         valid: true,
         clamped: false,
         reason: Reason::Flat,
@@ -466,6 +490,27 @@ fn scene_vertex(
         return flat;
     };
     if pose.view.height_scale == 0.0 {
+        let mut flat = flat;
+        if rule.excess_px().is_some() {
+            let column = grid[0] as u32;
+            let row = grid[1] as u32;
+            let neighbour_column = if column + 1 < EXTENT[0] {
+                column + 1
+            } else {
+                column - 1
+            };
+            let neighbour_row = if row + 1 < EXTENT[1] {
+                row + 1
+            } else {
+                row - 1
+            };
+            let right = draw_screen(neighbour_column, row);
+            let above = draw_screen(column, neighbour_row);
+            flat.expected_stretch = maximum_singular_stretch(
+                [right[0] - screen[0], 0.0],
+                [0.0, above[1] - screen[1]],
+            );
+        }
         return flat;
     }
     if record[3] == 2.0 {
@@ -570,18 +615,60 @@ fn scene_vertex(
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
     let perspective_scale = aspect * d4 * 0.5;
     let clip_w = -view_point[2];
-    Vertex {
+    let mut vertex = Vertex {
         x: perspective_scale * view_point[0] / aspect / clip_w * 0.5 * f64::from(pose.grid_width),
         y: perspective_scale * view_point[1] / clip_w * 0.5 * f64::from(pose.grid_height),
         depth: clip_depth / clip_w,
         reciprocal_w: clip_w.recip(),
-        grid: [f64::from(column), f64::from(row)],
+        grid,
         chart: offset,
         world,
+        expected_stretch: 0.0,
         valid: true,
         clamped,
         reason: Reason::Drawn,
+    };
+    if rule.excess_px().is_some() {
+        let column = grid[0] as u32;
+        let row = grid[1] as u32;
+        let neighbour_column = if column + 1 < EXTENT[0] {
+            column + 1
+        } else {
+            column - 1
+        };
+        let neighbour_row = if row + 1 < EXTENT[1] {
+            row + 1
+        } else {
+            row - 1
+        };
+        let right_screen = [draw_screen(neighbour_column, row)[0], screen[1]];
+        let above_screen = [screen[0], draw_screen(column, neighbour_row)[1]];
+        let right = scene_vertex_at_screen(
+            pose,
+            right_screen,
+            grid,
+            record,
+            Rule::Fixed,
+            mapping,
+        );
+        let above = scene_vertex_at_screen(
+            pose,
+            above_screen,
+            grid,
+            record,
+            Rule::Fixed,
+            mapping,
+        );
+        vertex.expected_stretch = if right.valid && above.valid {
+            maximum_singular_stretch(
+                [right.x - vertex.x, right.y - vertex.y],
+                [above.x - vertex.x, above.y - vertex.y],
+            )
+        } else {
+            f64::NAN
+        };
     }
+    vertex
 }
 
 fn srgb(value: f64) -> u8 {
@@ -805,12 +892,24 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
                             }) / reciprocal
                         });
-                        if rule.maximum_stretch().is_some_and(|maximum| {
-                            fragment_maximum_stretch(tri, weights, area)
-                                .is_none_or(|stretch| stretch > maximum + 1.0e-9)
-                        }) {
-                            stretch_discarded[index] = true;
-                            continue;
+                        if let Some(excess_px) = rule.excess_px() {
+                            let expected_stretch = weights.iter().zip(tri).fold(
+                                0.0,
+                                |sum, (weight, vertex)| {
+                                    (weight * vertex.reciprocal_w)
+                                        .mul_add(vertex.expected_stretch, sum)
+                                },
+                            ) / reciprocal;
+                            let stretched = fragment_maximum_stretch(tri, weights, area)
+                                .is_none_or(|actual| {
+                                    !expected_stretch.is_finite()
+                                        || expected_stretch <= 0.0
+                                        || actual > expected_stretch + excess_px + 1.0e-9
+                                });
+                            if stretched {
+                                stretch_discarded[index] = true;
+                                continue;
+                            }
                         }
                         let chart: [f64; 2] = core::array::from_fn(|axis| {
                             weights.iter().zip(tri).fold(0.0, |sum, (weight, vertex)| {
@@ -855,6 +954,15 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
         stretch_discarded,
         foreign,
     }
+}
+
+fn maximum_singular_stretch(dx: [f64; 2], dy: [f64; 2]) -> f64 {
+    let trace = dx[0] * dx[0] + dx[1] * dx[1] + dy[0] * dy[0] + dy[1] * dy[1];
+    let determinant = dx[0].mul_add(dy[1], -dx[1] * dy[0]);
+    let discriminant = trace
+        .mul_add(trace, -4.0 * determinant * determinant)
+        .max(0.0);
+    (0.5 * (trace + discriminant.sqrt())).max(0.0).sqrt()
 }
 
 fn fragment_maximum_stretch(tri: [Vertex; 3], weights: [f64; 3], area: f64) -> Option<f64> {
@@ -991,21 +1099,14 @@ fn render_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
     )
 }
 
-fn relief_redraw_stretch_limit(from: &Pose, to: &Pose) -> f64 {
-    let zoom_scale = (to.zoom_log2 - from.zoom_log2).exp2();
-    let source_step = zoom_scale
-        * (f64::from(to.grid_width) / f64::from(from.grid_width))
-            .max(f64::from(to.grid_height) / f64::from(from.grid_height));
-    let source_texel_reach = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
-    core::f64::consts::SQRT_2 * source_texel_reach
-}
+const REDRAW_STRETCH_EXCESS_PX: f64 = 1.0;
 
 fn render_guarded_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
     render_frame(
         &relief_redraw_pose(from, to),
         records,
         Rule::Guarded {
-            maximum_stretch: relief_redraw_stretch_limit(from, to),
+            excess_px: REDRAW_STRETCH_EXCESS_PX,
         },
         Mapping::InteriorAtFloor,
     )
@@ -1057,6 +1158,7 @@ struct ReliefRedrawMeasurement {
     zoom_delta: f64,
     agree: u64,
     hole: u64,
+    clear_over_truth_surface: u64,
     occluded_wrong: u64,
     resolution_only: u64,
     agree_record_changed: u64,
@@ -1067,6 +1169,7 @@ struct ReliefRedrawMeasurement {
     source_texel_reach_px: f64,
     agree_fraction: f64,
     hole_fraction: f64,
+    clear_over_truth_surface_fraction: f64,
     occluded_wrong_fraction: f64,
     resolution_only_fraction: f64,
     exposed_fraction: f64,
@@ -1087,6 +1190,10 @@ impl ReliefRedrawMeasurement {
         assert_eq!(self.zoom_delta, expected.zoom_delta);
         assert_eq!(self.agree, expected.agree);
         assert_eq!(self.hole, expected.hole);
+        assert_eq!(
+            self.clear_over_truth_surface,
+            expected.clear_over_truth_surface
+        );
         assert_eq!(self.occluded_wrong, expected.occluded_wrong);
         assert_eq!(self.resolution_only, expected.resolution_only);
         assert_eq!(self.agree_record_changed, expected.agree_record_changed);
@@ -1112,6 +1219,10 @@ impl ReliefRedrawMeasurement {
         for (actual, expected) in [
             (self.agree_fraction, expected.agree_fraction),
             (self.hole_fraction, expected.hole_fraction),
+            (
+                self.clear_over_truth_surface_fraction,
+                expected.clear_over_truth_surface_fraction,
+            ),
             (
                 self.occluded_wrong_fraction,
                 expected.occluded_wrong_fraction,
@@ -1165,9 +1276,17 @@ fn largest_connected_region(mask: &[bool]) -> u64 {
             let column = index % width;
             let row = index / width;
             let neighbours = [
-                (column > 0).then_some(index - 1),
+                if column > 0 {
+                    Some(index - 1)
+                } else {
+                    None
+                },
                 (column + 1 < width).then_some(index + 1),
-                (row > 0).then_some(index - width),
+                if row > 0 {
+                    Some(index - width)
+                } else {
+                    None
+                },
                 (row + 1 < height).then_some(index + width),
             ];
             for neighbour in neighbours.into_iter().flatten() {
@@ -1229,6 +1348,7 @@ fn measure_relief_redraw(
     let source_texel_reach_px = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
     let mut agree = 0_u64;
     let mut hole = 0_u64;
+    let mut clear_over_truth_surface = 0_u64;
     let mut occluded_wrong = 0_u64;
     let mut resolution_only = 0_u64;
     let mut agree_record_changed = 0_u64;
@@ -1245,6 +1365,7 @@ fn measure_relief_redraw(
             (false, false) => agree = agree.saturating_add(1),
             (false, true) => {
                 hole = hole.saturating_add(1);
+                clear_over_truth_surface = clear_over_truth_surface.saturating_add(1);
                 hole_mask[index] = true;
             }
             (true, false) => occluded_wrong = occluded_wrong.saturating_add(1),
@@ -1303,6 +1424,7 @@ fn measure_relief_redraw(
         zoom_delta,
         agree,
         hole,
+        clear_over_truth_surface,
         occluded_wrong,
         resolution_only,
         agree_record_changed,
@@ -1313,6 +1435,7 @@ fn measure_relief_redraw(
         source_texel_reach_px,
         agree_fraction: agree as f64 / total as f64,
         hole_fraction: hole as f64 / total as f64,
+        clear_over_truth_surface_fraction: clear_over_truth_surface as f64 / total as f64,
         occluded_wrong_fraction: occluded_wrong as f64 / total as f64,
         resolution_only_fraction: resolution_only as f64 / total as f64,
         exposed_fraction: (hole + occluded_wrong) as f64 / total as f64,
@@ -1333,7 +1456,6 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
     from.centre_from_reference_px = [0.0; 2];
     let mut reports = Vec::new();
     let mut guarded_reports = Vec::new();
-    let mut stretch_limits = Vec::new();
     for zoom_delta in [0.1, 0.5] {
         let to = screen_centred_zoom_destination(&from, zoom_delta);
         if zoom_delta == 0.1 {
@@ -1354,7 +1476,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
                 );
             }
         }
-        let sampling_to = screen_centred_sampling_pose(&sampling_from, &to, zoom_delta);
+        let sampling_to = zoomed_sampling_pose(&sampling_from, &to, zoom_delta);
         assert_eq!(
             sample_pose(&sampling_from, [0.0; 2]),
             sample_pose(&sampling_to, [0.0; 2]),
@@ -1363,8 +1485,6 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         let true_records = steep_records(&sampling_to);
         let redraw = render_relief_redraw(&from, &to, &source_records);
         let guarded = render_guarded_relief_redraw(&from, &to, &source_records);
-        let stretch_limit = relief_redraw_stretch_limit(&from, &to);
-        stretch_limits.push(stretch_limit);
         let device_pose = relief_redraw_source_pose(&from, EXTENT, &to)
             .expect("the device path composes the measured source and destination poses");
         let device_redraw = render_frame(
@@ -1385,7 +1505,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             &device_pose,
             &source_records,
             Rule::Guarded {
-                maximum_stretch: stretch_limit,
+                excess_px: REDRAW_STRETCH_EXCESS_PX,
             },
             Mapping::InteriorAtFloor,
         );
@@ -1414,6 +1534,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             zoom_delta: 0.1,
             agree: 476_107,
             hole: 438,
+            clear_over_truth_surface: 438,
             occluded_wrong: 36_862,
             resolution_only: 4_993,
             agree_record_changed: 274_214,
@@ -1424,6 +1545,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             source_texel_reach_px: 1.464_965_064_442,
             agree_fraction: 0.918_416_280_864,
             hole_fraction: 0.000_844_907_407,
+            clear_over_truth_surface_fraction: 0.000_844_907_407,
             occluded_wrong_fraction: 0.071_107_253_086,
             resolution_only_fraction: 0.009_631_558_642,
             exposed_fraction: 0.071_952_160_494,
@@ -1438,6 +1560,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             zoom_delta: 0.5,
             agree: 486_977,
             hole: 173,
+            clear_over_truth_surface: 173,
             occluded_wrong: 27_611,
             resolution_only: 3_639,
             agree_record_changed: 363_622,
@@ -1448,6 +1571,7 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             source_texel_reach_px: 1.707_106_781_187,
             agree_fraction: 0.939_384_645_062,
             hole_fraction: 0.000_333_719_136,
+            clear_over_truth_surface_fraction: 0.000_333_719_136,
             occluded_wrong_fraction: 0.053_261_959_877,
             resolution_only_fraction: 0.007_019_675_926,
             exposed_fraction: 0.053_595_679_012,
@@ -1472,8 +1596,45 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             .iter()
             .all(|report| report.exposed_fraction < RELIEF_REDRAW_MAX_EXPOSED_FRACTION)
     );
+
+    // The browser's `(300,150)-(600,350)` box on 960 by 540 is 300 by 200, centred at
+    // `(-30,+20)` in render-grid coordinates. Height is limiting, so it magnifies by 540/200.
+    let box_anchor = [-30.0, 20.0];
+    let box_zoom_delta = 2.7_f64.log2();
+    let box_to = anchored_zoom_destination(&from, box_zoom_delta, box_anchor);
+    let box_sampling_to = zoomed_sampling_pose(&sampling_from, &box_to, box_zoom_delta);
+    for (before, after) in sample_pose(&sampling_from, box_anchor)
+        .into_iter()
+        .zip(sample_pose(&box_sampling_to, box_anchor))
+    {
+        assert!(
+            (before - after).abs() < 1.0e-9,
+            "the 300 by 200 selection moved its off-centre anchor"
+        );
+    }
+    let box_true_records = steep_records(&box_sampling_to);
+    let box_truth = render_frame(
+        &box_to,
+        &box_true_records,
+        Rule::Fixed,
+        Mapping::InteriorAtFloor,
+    );
+    let box_before = measure_relief_redraw(
+        &from,
+        &box_to,
+        &render_relief_redraw(&from, &box_to, &source_records),
+        &box_truth,
+        box_zoom_delta,
+    );
+    let box_after = measure_relief_redraw(
+        &from,
+        &box_to,
+        &render_guarded_relief_redraw(&from, &box_to, &source_records),
+        &box_truth,
+        box_zoom_delta,
+    );
     panic!(
-        "guarded relief redraw measurement\nstretch_limits={stretch_limits:#?}\nbefore={reports:#?}\nafter={guarded_reports:#?}"
+        "guarded relief redraw measurement\nexcess_px={REDRAW_STRETCH_EXCESS_PX}\nbefore={reports:#?}\nafter={guarded_reports:#?}\nbox_before={box_before:#?}\nbox_after={box_after:#?}"
     );
 }
 
