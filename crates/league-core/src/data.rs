@@ -120,7 +120,7 @@ pub const CHAMPS: [ChampDef; 5] = [
         ),
         w: ab(
             "Scan Beam",
-            "Fire a piercing laser beam that burns and slows everything in the line.",
+            "Fire a piercing laser that damages and slows enemy champions and minions in its path.",
             [60.0, 65.0, 70.0],
             [12.0, 10.5, 9.0],
         ),
@@ -162,7 +162,7 @@ pub const CHAMPS: [ChampDef; 5] = [
         ),
         w: ab(
             "Immolate Guard",
-            "Become immune to damage for 2 seconds, then carry a burning shield.",
+            "Gain a shield for 4 seconds and become immune to damage for the first 2 seconds.",
             [50.0, 50.0, 50.0],
             [20.0, 18.0, 16.0],
         ),
@@ -240,7 +240,7 @@ pub const CHAMPS: [ChampDef; 5] = [
         colour: [0.42, 0.7, 0.3],
         q: ab(
             "Bog Hook",
-            "Cast a hook that drags the first enemy caught to your feet and roots it.",
+            "Damage the first enemy hit. Champions are pulled toward you and rooted; minions are slowed.",
             [55.0, 55.0, 55.0],
             [13.0, 11.5, 10.0],
         ),
@@ -282,7 +282,7 @@ pub const CHAMPS: [ChampDef; 5] = [
         colour: [0.75, 0.6, 1.0],
         q: ab(
             "Gear Shot",
-            "Fire a piercing bolt of clockwork that punches through one enemy.",
+            "Fire a clockwork bolt that damages the first enemy struck.",
             [45.0, 45.0, 45.0],
             [7.0, 7.0, 7.0],
         ),
@@ -474,10 +474,10 @@ pub struct ItemDef {
     pub tier: u8,
     pub desc: &'static str,
     pub flat: Stats,
-    /// On-hit burn applied by the wielder's attacks (flat + ratio x AP).
+    /// Per-second burn applied to champions for 2 s by attacks (flat + ratio x AP).
     pub burn: f32,
     pub burn_ap: f32,
-    /// Damage dealt by the wielder's abilities slows the target 20% for 1 s.
+    /// Ability damage reaching a champion's health slows it 20% for 1 s.
     pub spell_slow: bool,
     /// Charges for consumables (0 = not a consumable).
     pub charges: u8,
@@ -679,7 +679,7 @@ pub const ITEMS: [ItemDef; 18] = [
         name: "Emberbrand",
         cost: 2200,
         tier: 3,
-        desc: "+42 damage. Your attacks burn for 14 (+0.25 AP) over 2 seconds.",
+        desc: "+42 damage. Your attacks burn enemy champions for 14 (+0.25 AP) damage per second for 2 seconds.",
         flat: Stats {
             ad: 42.0,
             ..Stats::ZERO
@@ -716,7 +716,7 @@ pub const ITEMS: [ItemDef; 18] = [
         name: "Duskveil",
         cost: 2350,
         tier: 3,
-        desc: "+45 ability power, +160 health. Your abilities slow by 20% for 1 second.",
+        desc: "+45 ability power, +160 health. Abilities that damage an enemy champion's health slow them by 20% for 1 second.",
         flat: Stats {
             ap: 45.0,
             hp: 160.0,
@@ -755,7 +755,7 @@ pub const ITEMS: [ItemDef; 18] = [
         name: "Aegis Plate",
         cost: 2400,
         tier: 3,
-        desc: "+350 health. You take 8% less damage.",
+        desc: "+350 health. Take 8% less attack and ability damage; burn and true damage bypass this reduction.",
         flat: Stats {
             hp: 350.0,
             dr: 8.0,

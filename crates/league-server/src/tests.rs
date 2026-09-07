@@ -114,6 +114,42 @@ fn protocol_gate_allows_listing_but_requires_one_compatible_hello_to_join() {
     hub.connect(3, Some(proto::PROTO_VERSION));
     assert!(!rejected(&hub.create(3, "duel", 1)));
     assert!(rejected(&hub.join(2, "duel")));
+    // Frozen v1/v2 clients may list, but cannot join the attack-move protocol.
+    hub.connect(4, Some(1));
+    assert!(matches!(
+        hub.msg(4, C2S::ListLobbies).as_slice(),
+        [S2C::Lobbies { .. }]
+    ));
+    assert!(rejected(&hub.join(4, "duel")));
+}
+
+#[test]
+fn attack_move_wire_command_controls_only_the_senders_live_champion() {
+    let mut hub = Hub::default();
+    for id in 1..=3 {
+        hub.connect(id, Some(proto::PROTO_VERSION));
+    }
+    hub.create(1, "duel", 1);
+    hub.join(2, "duel");
+    hub.pick(1, 0);
+    hub.pick(2, 0);
+    hub.msg(1, C2S::StartMatch);
+    let game = &mut hub.lobbies.get_mut("duel").unwrap().m;
+    game.wave_left = 1e9;
+    game.units[0].x = 0.0;
+    game.units[0].z = 0.0;
+    game.units[1].x = 4.0;
+    game.units[1].z = 0.0;
+    let raw = r#"{"t":"cmd","a":"attack_move","x":-20.0,"z":0.0}"#;
+    hub.msg(3, serde_json::from_str(raw).unwrap());
+    hub.msg(2, serde_json::from_str(raw).unwrap());
+    let game = &mut hub.lobbies.get_mut("duel").unwrap().m;
+    game.step();
+    assert_eq!(game.units[0].order, league_core::sim::Order::Hold);
+    assert_eq!(game.units[1].order, league_core::sim::Order::AttackMove);
+    assert_eq!(game.units[1].target, game.units[0].id);
+    assert_eq!(game.projs.len(), 1);
+    assert_eq!(game.projs[0].owner, game.units[1].id);
 }
 
 #[test]
@@ -510,6 +546,16 @@ fn real_websockets_fill_both_modes_and_apply_live_player_commands() {
         wire_until(
             &mut clients[0],
             |m| matches!(m, S2C::State { tick, units, champs, .. } if *tick > 0 && units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > start_x + 0.5) && champs[0].ranks[0] == 1 && champs[0].items[0] == 1),
+        );
+        // Travel beyond the previous Move destination, so a silently ignored
+        // new command cannot pass this actual socket regression.
+        wire_send(
+            &mut clients[0],
+            &C2S::Cmd(Cmd::AttackMove { x: -30.0, z: 0.0 }),
+        );
+        wire_until(
+            &mut clients[0],
+            |m| matches!(m, S2C::State { units, .. } if units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > -38.0)),
         );
         wire_send(&mut clients[0], &C2S::LeaveLobby);
         wire_until(&mut clients[1], |m| {

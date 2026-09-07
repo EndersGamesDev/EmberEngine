@@ -1,15 +1,14 @@
 //! The wire: tagged JSON enums, the house style of every ember game.
 //!
 //! `PROTO_VERSION` is league's own number, exactly like fire's and kings' —
-//! a bump must never gate another game's join. `#[serde(default)]` on every
-//! field added after v1 so an old peer decodes; whether an old peer would
-//! *play the same game* is the question a bump answers, and so far it always
-//! has been "no", so anything but an addition bumps.
+//! a bump must never gate another game's join. `#[serde(default)]` lets old
+//! snapshots decode, but every addition still needs a behavior check. V3's
+//! attack-move command cannot run on a protocol-1 server, so it requires 2.
 
 use serde::{Deserialize, Serialize};
 
 /// The protocol this build speaks. The join gate is exact equality.
-pub const PROTO_VERSION: u16 = 1;
+pub const PROTO_VERSION: u16 = 2;
 
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
@@ -120,6 +119,9 @@ pub enum Cmd {
     Move { x: f32, z: f32 },
     /// Right-click an enemy unit: chase and auto-attack it.
     Attack { target: u32 },
+    /// Walk toward a destination, engaging nearby enemy units along the way.
+    /// Neutral courts still require an explicit `Attack` order.
+    AttackMove { x: f32, z: f32 },
     /// Q/W/E/R at the cursor. `slot` is 0..=3.
     Cast { slot: u8, x: f32, z: f32 },
     /// D/F summoner spell. `slot` is 0 or 1, aim as above.
@@ -146,6 +148,10 @@ impl Cmd {
         };
         match self {
             Self::Move { x, z } => Self::Move {
+                x: coord(x),
+                z: coord(z),
+            },
+            Self::AttackMove { x, z } => Self::AttackMove {
                 x: coord(x),
                 z: coord(z),
             },

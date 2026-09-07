@@ -25,6 +25,8 @@ use crate::rng;
 pub const MS_SCALE: f32 = 1.0 / 30.0;
 /// The playable strip; projectiles and dashes stop at the walls.
 pub const FIELD_X: f32 = 68.0;
+/// Attack-move acquires and keeps opponents within this center-to-center radius.
+pub const ATTACK_MOVE_RANGE: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -164,6 +166,7 @@ pub enum Order {
     Hold,
     Move,
     Attack,
+    AttackMove,
 }
 
 #[derive(Clone, Debug)]
@@ -297,7 +300,7 @@ pub struct Proj {
     pub burn: f32,
     pub slow_pct: f32,
     pub slow_ttl: f32,
-    /// Hits left after the first; gear shot pierces one.
+    /// Remaining bolt hits; zero also stops at the first hit.
     pub pierce: u8,
     pub hook_rank: u8,
     pub homing: u32,
@@ -770,6 +773,13 @@ impl Match {
                 u.ox = x;
                 u.oz = z;
             }
+            Cmd::AttackMove { x, z } => {
+                let u = &mut self.units[ui];
+                u.order = Order::AttackMove;
+                u.ox = x.clamp(-FIELD_X, FIELD_X);
+                u.oz = z.clamp(-data::FIELD_Z, data::FIELD_Z);
+                u.target = 0;
+            }
             Cmd::Attack { target } => {
                 if self.alive_enemy_of(ui, target) {
                     let (x, z) = (self.units[ui].x, self.units[ui].z);
@@ -1202,17 +1212,57 @@ impl Match {
                     self.units[ui].order = Order::Hold;
                     return;
                 };
-                let (ux, uz) = (self.units[ui].x, self.units[ui].z);
-                let reach = self.range_of(ui) + self.units[ti].kind.hit_r();
-                if dist(ux, uz, self.units[ti].x, self.units[ti].z) > reach {
-                    let (tx, tz) = (self.units[ti].x, self.units[ti].z);
-                    self.walk_toward(ui, tx, tz);
+                self.step_attack_target(ui, ti);
+            }
+            Order::AttackMove => {
+                if let Some(ti) = self.attack_move_target(ui) {
+                    self.units[ui].target = self.units[ti].id;
+                    self.step_attack_target(ui, ti);
                 } else {
-                    self.face_to(ui, self.units[ti].x, self.units[ti].z);
-                    if self.units[ui].atk_cd <= 0.0 {
-                        self.do_attack(ui, ti);
-                    }
+                    self.units[ui].target = 0;
+                    self.walk_toward(ui, self.units[ui].ox, self.units[ui].oz);
                 }
+            }
+        }
+    }
+
+    /// Keep a valid engagement; otherwise acquire the nearest opponent, using
+    /// unit id to resolve ties. Attack-move never initiates a neutral court fight.
+    fn attack_move_target(&self, ui: usize) -> Option<usize> {
+        let u = &self.units[ui];
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| {
+                !target.dead
+                    && target.team != u.team
+                    && matches!(
+                        target.kind,
+                        Kind::Champ | Kind::Melee | Kind::Caster | Kind::CoreBlue | Kind::CoreRed
+                    )
+                    && dist(u.x, u.z, target.x, target.z) <= ATTACK_MOVE_RANGE
+            })
+            .min_by(|(_, a), (_, b)| {
+                (a.id != u.target)
+                    .cmp(&(b.id != u.target))
+                    .then_with(|| dist(u.x, u.z, a.x, a.z).total_cmp(&dist(u.x, u.z, b.x, b.z)))
+                    .then_with(|| a.id.cmp(&b.id))
+            })
+            .map(|(i, _)| i)
+    }
+
+    /// An attack releases immediately and pays its existing cooldown. Cast
+    /// animation takeover never resets this timer or recalls released shots.
+    fn step_attack_target(&mut self, ui: usize, ti: usize) {
+        let (ux, uz) = (self.units[ui].x, self.units[ui].z);
+        let (tx, tz) = (self.units[ti].x, self.units[ti].z);
+        let reach = self.range_of(ui) + self.units[ti].kind.hit_r();
+        if dist(ux, uz, tx, tz) > reach {
+            self.walk_toward(ui, tx, tz);
+        } else {
+            self.face_to(ui, tx, tz);
+            if self.units[ui].atk_cd <= 0.0 {
+                self.do_attack(ui, ti);
             }
         }
     }
