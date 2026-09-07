@@ -3,6 +3,21 @@
 /// Canonical JSON/WebSocket bootstrap and lobby protocol.
 pub mod outer;
 
+/// Windows `ERROR_IO_PENDING`, returned by timed overlapped socket reads.
+const WINDOWS_IO_PENDING: i32 = 997;
+
+/// True when a read error means that no data is ready yet rather than that the
+/// connection has ended.
+#[must_use]
+pub fn is_transient_read(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
+    ) || error.raw_os_error() == Some(WINDOWS_IO_PENDING)
+}
+
 /// Strip control characters and cap the number of Unicode scalar values.
 ///
 /// Whitespace-only input becomes empty so protocol-specific wrappers can
@@ -30,7 +45,18 @@ pub fn sanitize_handle(s: &str, max: usize, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitize, sanitize_handle};
+    use std::io::{Error, ErrorKind};
+
+    use super::{WINDOWS_IO_PENDING, is_transient_read, sanitize, sanitize_handle};
+
+    #[test]
+    fn windows_io_pending_is_a_transient_read() {
+        let pending = Error::from_raw_os_error(WINDOWS_IO_PENDING);
+        assert_eq!(pending.raw_os_error(), Some(WINDOWS_IO_PENDING));
+        assert!(is_transient_read(&pending));
+        assert!(is_transient_read(&Error::from(ErrorKind::Interrupted)));
+        assert!(!is_transient_read(&Error::from(ErrorKind::ConnectionReset)));
+    }
 
     #[test]
     fn sanitization_preserves_existing_protocol_semantics() {
