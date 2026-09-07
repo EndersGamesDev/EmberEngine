@@ -131,7 +131,6 @@
     "reference_verification": null,
     "consumed_word_error_ulps": null,
     "reference_precision_escalations": null,
-    "owner_epoch": 18,
     "centre_revision": 2,
     "centre_from_reference_px": [
       0,
@@ -273,74 +272,6 @@
     "warp_exposed_fraction": 0,
     "warp_kind": "AnchorHomography",
     "warp_refusal_reason": null,
-    "presentation_ledger": [
-      {
-        "scene_id": null,
-        "level": null,
-        "warp_kind": "ClearOnly",
-        "requested_centre_px": null,
-        "anchor_px": null
-      },
-      {
-        "scene_id": null,
-        "level": null,
-        "warp_kind": "ClearOnly",
-        "requested_centre_px": null,
-        "anchor_px": null
-      },
-      {
-        "scene_id": 1,
-        "level": "Preview",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      }
-    ],
     "scene_polls": 2,
     "warp_polls": 2,
     "warmup_label": "Measured",
@@ -381,13 +312,15 @@
   },
   "determinism": {
     "warmup_label": "Measured",
-    "capture_count": 2,
     "completed_scene_id": 2,
     "copied_scene_id": 2,
-    "owner_epoch": 18,
     "scene_polls": 2,
     "warp_polls": 2,
-    "texture_reallocations": 2,
+    "texture_reallocations": 2
+  },
+  "load_dependent": {
+    "reason": "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger and capture_count until R2-04d adds a poll-only production boundary",
+    "owner_epoch": 15,
     "presentation_ledger": [
       {
         "scene_id": null,
@@ -441,21 +374,9 @@
           0,
           0
         ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
       }
-    ]
+    ],
+    "capture_count": 1
   },
   "rgba": {
     "byte_length": 2073600,
@@ -1008,7 +929,11 @@
     "lossless": {
       "file": "whole-grid-v1.rgba.deflate.bin",
       "encoding": "zlib-rfc1950",
-      "byte_length": 107336
+      "byte_length": 107336,
+      "digest": {
+        "algorithm": "sha256",
+        "hex": "6da84b3dd18c9b76b732ae91faebfcdaf01ce14c2c365128172fb38c0efc6b74"
+      }
     }
   }
 }

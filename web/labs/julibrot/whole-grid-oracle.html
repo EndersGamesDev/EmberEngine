@@ -27,7 +27,9 @@
     const LOSSLESS_ENCODING = "zlib-rfc1950";
     const MAX_INLINE_BINARY_BYTES = 600_000;
     const FRAME_TIMEOUT_MS = 30_000;
-    const MAXIMUM_CAPTURES = 12;
+    // No-paint served runs reached Measured in 1, 10, 4 and 2 captures. Comparing duration as
+    // recency makes label convergence load-dependent; each individual attempt remains bounded.
+    const MAXIMUM_CAPTURES = 40;
     const LOAD_DEPENDENT_REASON =
       "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger and capture_count until R2-04d adds a poll-only production boundary";
     const LOAD_DEPENDENT_FIELDS = ["owner_epoch", "presentation_ledger", "capture_count"];
