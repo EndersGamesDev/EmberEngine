@@ -304,7 +304,7 @@ addEventListener('keydown', (e) => {
   if (keysOpen) return;
   const modal = visible('help') ? $('help') : visible('pause') ? $('pause') : null;
   if (e.code === 'Tab' && modal) {
-    const controls = [...modal.querySelectorAll('button, a[href], summary')].filter(el => el.getClientRects().length);
+    const controls = [...modal.querySelectorAll('button, a[href], summary, input, [tabindex]:not([tabindex="-1"])')].filter(el => el.getClientRects().length);
     const index = controls.indexOf(document.activeElement);
     if (e.shiftKey && index <= 0) { e.preventDefault(); controls.at(-1)?.focus(); }
     else if (!e.shiftKey && (index < 0 || index === controls.length - 1)) { e.preventDefault(); controls[0]?.focus(); }
