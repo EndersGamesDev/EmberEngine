@@ -148,6 +148,7 @@ impl OnlineGame {
                     self.world.feed.clear();
                     self.world.shop_open = false;
                     self.world.winner = 0;
+                    self.world.feedback.reset();
                     self.prev = Prev::default();
                 }
                 self.world.phase = phase;
@@ -243,8 +244,9 @@ impl OnlineGame {
         }
     }
 
-    fn send_cmd(&self, cmd: Cmd) {
+    fn send_cmd(&mut self, cmd: Cmd) {
         if self.world.connected && self.world.phase == Phase::Live {
+            self.world.note_command(&cmd);
             self.net.send(&C2S::Cmd(cmd));
         }
     }
@@ -253,6 +255,7 @@ impl OnlineGame {
 impl EmberGame for OnlineGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         let dt = dt.clamp(0.0, 0.1);
+        self.world.view_aspect = input.aspect();
         let status = self.net.status();
         if let Status::Closed(why) = &status
             && self.lost.is_none()
@@ -301,15 +304,16 @@ impl EmberGame for OnlineGame {
         crate::hud::set(&self.world.state_json());
 
         let camera = crate::scene::camera_for(self.world.cam);
-        crate::scene::scene_with(&crate::scene::SceneInput {
-            units: &self.world.units,
-            zones: &self.world.zones,
-            fx: &self.world.fx,
-            buffs: &self.world.buffs,
-            projs: &self.world.projs,
-            time: self.world.secs,
-            camera,
-            my_slot: Some(self.world.my_slot),
-        })
+        self.world
+            .decorate_frame(crate::scene::scene_with(&crate::scene::SceneInput {
+                units: &self.world.units,
+                zones: &self.world.zones,
+                fx: &self.world.fx,
+                buffs: &self.world.buffs,
+                projs: &self.world.projs,
+                time: self.world.secs,
+                camera,
+                my_slot: Some(self.world.my_slot),
+            }))
     }
 }

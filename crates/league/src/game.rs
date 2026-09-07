@@ -16,6 +16,9 @@ use crate::bindings::{self, Controls};
 use crate::scene::{self, camera_for, ground_point, project};
 use crate::world::{World, feed_line};
 
+#[path = "feedback.rs"]
+pub mod feedback;
+
 /// Commands queued by the page (`cmd_json`); both game modes drain this.
 pub mod uiq {
     use std::sync::Mutex;
@@ -374,6 +377,7 @@ impl LocalGame {
             if queued.gameplay_allowed()
                 && let Some(b) = ui_command(&v, &self.world)
             {
+                self.world.note_command(&b);
                 self.m.command(self.human, b);
             }
             if let Some(open) = v.get("shop").and_then(serde_json::Value::as_bool) {
@@ -403,6 +407,7 @@ impl LocalGame {
             let handle = self.m.roster[usize::from(self.human)].handle.clone();
             self.m = Match::new(mode, self.m.seed.wrapping_add(1));
             self.m.join(&handle);
+            self.world.feedback.reset();
         }
         if before != self.m.phase {
             self.world.left = self.m.left;
@@ -462,12 +467,14 @@ impl LocalGame {
 impl EmberGame for LocalGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         let dt = dt.clamp(0.0, 0.1);
+        self.world.view_aspect = input.aspect();
         self.drain_ui();
         let my_alive = self
             .m
             .champ_by_slot(self.human)
             .is_some_and(|i| !self.m.units[i].dead);
         for cmd in read_input(input, &mut self.prev, &self.world, input.aspect(), my_alive) {
+            self.world.note_command(&cmd);
             self.m.command(self.human, cmd);
         }
         // rebuild the view from the sim before stepping, so the click you
@@ -484,16 +491,17 @@ impl EmberGame for LocalGame {
         self.world.tick_clocks(dt);
         self.world.follow(dt);
         crate::hud::set(&self.world.state_json());
-        scene::scene_with(&scene::SceneInput {
-            units: &self.world.units,
-            zones: &self.world.zones,
-            fx: &self.world.fx,
-            buffs: &self.world.buffs,
-            projs: &self.world.projs,
-            time: self.world.secs,
-            camera: camera_for(self.world.cam),
-            my_slot: Some(self.world.my_slot),
-        })
+        self.world
+            .decorate_frame(scene::scene_with(&scene::SceneInput {
+                units: &self.world.units,
+                zones: &self.world.zones,
+                fx: &self.world.fx,
+                buffs: &self.world.buffs,
+                projs: &self.world.projs,
+                time: self.world.secs,
+                camera: camera_for(self.world.cam),
+                my_slot: Some(self.world.my_slot),
+            }))
     }
 }
 

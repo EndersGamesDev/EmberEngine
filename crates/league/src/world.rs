@@ -6,6 +6,7 @@
 //! downstream knows whether the match runs in-process or on a host across
 //! a tunnel.
 
+use crate::game::feedback::{self, Presentation};
 use league_core::data;
 use league_core::proto::{
     self, BuffSnap, ChampView, Phase, ProjSnap, SlotInfo, UnitSnap, ZoneSnap,
@@ -100,6 +101,12 @@ pub struct World {
     pub winner: u8,
     pub connected: bool,
     pub notice: Option<String>,
+    /// Presentation feedback; never used to decide simulation outcomes.
+    pub feedback: Presentation,
+    /// Last actual canvas/window aspect for the page's floating labels.
+    pub view_aspect: f32,
+    /// Remaining Knight R recasts from the authoritative unit snapshot.
+    pub my_blinks: u8,
     /// Camera focus, smoothed toward your champion.
     pub cam: (f32, f32),
     /// The page asked for the shop panel (B); the page reads this and
@@ -114,12 +121,18 @@ impl World {
             mode,
             phase: Phase::Select,
             cam: (-40.0, 0.0),
+            view_aspect: 16.0 / 9.0,
             ..Self::default()
         }
     }
 
     /// Drain the transient lists' clocks.
     pub fn tick_clocks(&mut self, dt: f32) {
+        self.feedback.tick(dt);
+        if self.phase != Phase::Live || self.my_unit().is_none_or(|unit| unit.dead) {
+            self.feedback.target = None;
+            self.feedback.order = None;
+        }
         for f in &mut self.fx {
             f.left -= dt;
         }
@@ -131,6 +144,8 @@ impl World {
     }
 
     pub fn push_fx(&mut self, mut f: FxLite) {
+        let my_id = self.my_unit().map_or(0, |unit| unit.id);
+        self.feedback.effect(&f, &self.units, my_id, self.tick);
         f.life = match f.k {
             13 => 0.45,
             1 | 8 | 10 => 0.35,
@@ -146,14 +161,19 @@ impl World {
 
     /// Replace the unit list from a snapshot's flat rows.
     pub fn set_units(&mut self, rows: &[UnitSnap]) {
-        self.units.clear();
+        self.feedback.snapshot_tick(self.tick);
+        self.my_blinks = rows
+            .iter()
+            .find(|r| r.k == 0 && r.slot == self.my_slot)
+            .map_or(0, |r| r.tp);
+        let previous = std::mem::take(&mut self.units);
         for r in rows {
             let colour = if r.k == 0 || r.k == 3 {
                 data::CHAMPS[usize::from(r.def.min(4))].colour
             } else {
                 [0.0, 0.0, 0.0] // the renderer tints the rest by team
             };
-            self.units.push(UnitLite {
+            let unit = UnitLite {
                 id: r.id,
                 k: r.k,
                 t: r.t,
@@ -168,8 +188,56 @@ impl World {
                 mm: f32::from(r.mm),
                 dead: r.dead,
                 colour,
-            });
+            };
+            if let Some(old) = previous.iter().find(|old| old.id == unit.id)
+                && !old.dead
+                && old.k == unit.k
+                && old.mh.to_bits() == unit.mh.to_bits()
+                && old.hp.is_finite()
+                && unit.hp.is_finite()
+            {
+                let loss = old.hp.max(0.0) - unit.hp.max(0.0);
+                self.feedback.damage(
+                    &unit,
+                    loss,
+                    self.tick,
+                    unit.k == 0 && unit.slot == self.my_slot,
+                );
+            }
+            self.units.push(unit);
         }
+    }
+
+    /// Show submitted intent and snapshot-based hints without accepting,
+    /// rejecting, changing or replaying the gameplay command.
+    pub fn note_command(&mut self, cmd: &proto::Cmd) {
+        if self.phase != Phase::Live || !self.connected || !crate::bindings::snapshot().enabled {
+            return;
+        }
+        if matches!(
+            cmd,
+            proto::Cmd::Move { .. } | proto::Cmd::Attack { .. } | proto::Cmd::AttackMove { .. }
+        ) && (self.shop_open || self.my_unit().is_none_or(|unit| unit.dead))
+        {
+            return;
+        }
+        let hint = feedback::unavailable(self, cmd);
+        let position = if let proto::Cmd::Attack { target } = cmd {
+            self.units
+                .iter()
+                .find(|u| u.id == *target && !u.dead && u.t != self.my_team())
+                .map(|u| (u.x, u.z))
+        } else {
+            None
+        };
+        self.feedback.command(cmd, position, hint);
+    }
+
+    /// Draw feedback after the environment and combat scene, using the same camera.
+    #[must_use]
+    pub fn decorate_frame(&self, mut frame: ember_engine::Frame) -> ember_engine::Frame {
+        feedback::draw(&mut frame, self);
+        frame
     }
 
     /// Persistent effects arrive in snapshots, so late joiners see fields
@@ -277,7 +345,7 @@ impl World {
             "roster": self.roster, "champs": self.champs, "units": units,
             "feed": self.feed.iter().map(|l| &l.text).collect::<Vec<_>>(),
             "buffs": self.buffs.iter().map(|b| json!([b.u, b.k, b.ttl])).collect::<Vec<_>>(),
-            "cores": cores
+            "cores": cores, "feedback": feedback::json(self)
         })
         .to_string()
     }
