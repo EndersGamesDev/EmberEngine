@@ -37,13 +37,24 @@ fn start_named_server(host_name: String) -> u16 {
             },
         ));
     });
-    // Give the accept loop a moment to come up.
-    thread::sleep(Duration::from_millis(150));
     port
 }
 
+fn connect_with_retry(port: u16) -> Client {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match connect(format!("ws://127.0.0.1:{port}")) {
+            Ok((ws, _)) => return ws,
+            Err(error) => {
+                assert!(Instant::now() < deadline, "connect: {error}");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 fn client(port: u16, handle: &str) -> Client {
-    let (mut ws, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
+    let mut ws = connect_with_retry(port);
     set_read_timeout(&ws, Duration::from_millis(50));
     send(
         &mut ws,
@@ -305,7 +316,7 @@ fn a_wrong_password_is_refused_and_the_right_one_is_not() {
 #[test]
 fn a_version_mismatch_is_refused_with_both_versions() {
     let port = start_server();
-    let (mut ws, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
+    let mut ws = connect_with_retry(port);
     set_read_timeout(&ws, Duration::from_millis(50));
     send(
         &mut ws,
@@ -367,7 +378,7 @@ fn listing_is_ungated() {
         S2C::Joined { .. }
     )));
 
-    let (mut browser, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
+    let mut browser = connect_with_retry(port);
     set_read_timeout(&browser, Duration::from_millis(50));
     send(
         &mut browser,
@@ -483,8 +494,6 @@ fn a_disconnect_frees_the_slot_for_the_next_player() {
     }));
 
     drop(first);
-    // Let the hub notice the drop.
-    thread::sleep(Duration::from_millis(400));
     assert!(
         pump(&mut host, Duration::from_secs(2), |m| matches!(
             m,
@@ -600,7 +609,6 @@ fn a_default_server_is_unnamed_and_its_welcome_still_decodes() {
             fire_server::ServerConfig::default(),
         ));
     });
-    thread::sleep(Duration::from_millis(150));
 
     let mut ghost = client(port, "ghost");
     let raw = raw_welcome(&mut ghost);
