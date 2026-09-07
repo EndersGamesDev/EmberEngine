@@ -769,21 +769,21 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("sampled_reference_discards: loop_facts.sampled_reference_discards()"));
     assert!(FACTS.contains("sampled_reference_refusal: loop_facts.sampled_reference_refusal()"));
     assert!(FACTS.contains("scene_refusal_reason: loop_facts.scene_refusal_reason()"));
-    assert!(FRAME.contains("self.retain_reference_across_discard("));
+    assert!(FRAME.contains("frame_loop.retain_reference_across_discard("));
     // The arrival must be processed while the owner still holds its submission in flight: the
     // owner answers a navigation only through the submission it named, so a discard that runs
     // after the submission is finished has nothing it can hand the accepted orbit to.
     let arrivals = FRAME
-        .split_once("fn service_arrivals(")
-        .expect("the browser loop services arrivals")
+        .split_once("impl<P: WorkerServicePort> WorkerServiceOwner<P>")
+        .expect("the browser loop has a worker service owner")
         .1;
     let arrivals = arrivals
-        .split_once("fn process_arrival(")
-        .expect("service_arrivals precedes process_arrival in this source")
+        .split_once("fn facts(&self)")
+        .expect("apply precedes facts in the worker service owner")
         .0;
     assert!(
-        arrivals.find("self.process_arrival(")
-            < arrivals.find("viewer.finish_reference_submission("),
+        arrivals.find("acceptance.accept(")
+            < arrivals.find("acceptance.finish_reference_submission("),
         "the arrival is processed before its submission is finished"
     );
     assert!(FRAME.contains(

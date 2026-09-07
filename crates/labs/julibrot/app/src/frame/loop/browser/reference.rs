@@ -1,28 +1,29 @@
 use super::*;
 
-fn expand_reference_texels_from_array(
+pub(super) fn expand_reference_texels_from_array(
     records: &js_sys::Uint8Array,
     length: u32,
     texels: &mut Vec<u8>,
-) -> Result<(), AppError> {
-    let count = usize::try_from(length)
-        .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
+) -> Result<(), String> {
+    let count =
+        usize::try_from(length).map_err(|_| "reference length does not fit usize".to_string())?;
     let expected = count
         .checked_mul(super::super::REFERENCE_RECORD_BYTES)
-        .ok_or_else(|| AppError::Worker("reference record byte length overflow".to_string()))?;
+        .ok_or_else(|| "reference record byte length overflow".to_string())?;
     if usize::try_from(records.length()).ok() != Some(expected) {
-        return Err(AppError::Worker(format!(
+        return Err(format!(
             "reference payload has {} bytes; expected {expected}",
             records.length()
-        )));
+        ));
     }
-    let texel_bytes = super::super::reference_texel_bytes(length)?;
+    let texel_bytes = super::super::reference_texel_bytes(length).map_err(|error| match error {
+        AppError::Worker(message) => message,
+        error => error.to_string(),
+    })?;
     if texels.capacity() < texel_bytes {
         texels
             .try_reserve_exact(texel_bytes.saturating_sub(texels.len()))
-            .map_err(|error| {
-                AppError::Worker(format!("reference upload reserve failed: {error}"))
-            })?;
+            .map_err(|error| format!("reference upload reserve failed: {error}"))?;
     }
     texels.resize(texel_bytes, 0);
     records.copy_to(&mut texels[..expected]);
@@ -42,6 +43,206 @@ fn expand_reference_texels_from_array(
 
 pub(super) fn viewer_precision_mode(value: u32) -> &'static str {
     PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
+}
+
+struct BrowserWorkerAcceptance<'a> {
+    frame_loop: &'a mut BrowserFrameLoop,
+    viewer: &'a mut ViewerController,
+}
+
+impl WorkerAcceptance<ember_julibrot_worker::OrbitResponseView> for BrowserWorkerAcceptance<'_> {
+    type Submission = SubmittedReference;
+
+    fn accept(
+        &mut self,
+        arrival: &WorkerArrival,
+        response: &ember_julibrot_worker::OrbitResponseView,
+        submitted: Option<Self::Submission>,
+        latest_generation: u32,
+    ) -> Result<WorkerApplication, AppError> {
+        debug_assert_eq!(arrival.generation, response.generation());
+        debug_assert_eq!(arrival.centre_revision, response.centre_revision());
+        debug_assert_eq!(arrival.length, response.length());
+        debug_assert_eq!(arrival.compute_us, response.compute_us());
+        debug_assert_eq!(arrival.precision_bits, response.precision_bits());
+        debug_assert_eq!(arrival.admission_credit_us, response.admission_credit_us());
+        debug_assert_eq!(
+            arrival.reference_verification,
+            response.reference_verification()
+        );
+        debug_assert_eq!(
+            arrival.max_consumed_word_error_ulps,
+            response.max_consumed_word_error_ulps()
+        );
+        debug_assert_eq!(
+            arrival.precision_escalations,
+            response.precision_escalations()
+        );
+        debug_assert_eq!(arrival.cancelled, response.cancelled());
+
+        let frame_loop = &mut *self.frame_loop;
+        let viewer = &mut *self.viewer;
+        let stale = WorkerApplication {
+            generation: arrival.generation,
+            centre_revision: arrival.centre_revision,
+            disposition: OrbitDisposition::Stale,
+            reference_applied: false,
+        };
+        let Some(submitted) = submitted.filter(|submitted| {
+            submitted.precision_mode == viewer.requested().precision_mode as u32
+                && super::super::arrival_is_current(
+                    arrival.cancelled,
+                    arrival.generation,
+                    latest_generation,
+                    viewer.navigation_pending_depth(),
+                )
+        }) else {
+            return Ok(stale);
+        };
+        if submitted.sampled && arrival.length <= frame_loop.main.orbit_length {
+            frame_loop.sampled_reference_discards =
+                frame_loop.sampled_reference_discards.saturating_add(1);
+            frame_loop.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
+            let level = frame_loop.sampled_resume_level.take();
+            frame_loop.retain_reference_across_discard(
+                viewer,
+                arrival.generation,
+                arrival.centre_revision,
+                level,
+            )?;
+            return Ok(stale);
+        }
+        let records = arrival
+            .records
+            .as_ref()
+            .map_err(|error| AppError::Worker(error.clone()))?;
+        let span = frame_loop
+            .executor
+            .allocate_span(arrival.length, OUTPUT_PAGE_SIDE)
+            .map_err(heap_error)?;
+        if let Err(error) = frame_loop.executor.write_span(&span, records) {
+            let _freed = frame_loop.executor.free_span(span);
+            return Err(heap_error(error));
+        }
+        let upload_finished_us = monotonic_now_us();
+        let registered = RegisteredOrbit {
+            span: span.clone(),
+            length: arrival.length,
+            precision_bits: arrival.precision_bits,
+            precision_mode: viewer_precision_mode(submitted.precision_mode),
+        };
+        let handle = match frame_loop.orbits.insert(arrival.generation, registered) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _freed = frame_loop.executor.free_span(span);
+                return Err(registry_error(error));
+            }
+        };
+        let shift = match frame_loop
+            .accepted_reference
+            .as_ref()
+            .map_or(Ok([0.0; 2]), |old| {
+                let old = old.with_precision(submitted.reference_centre.precision_bits)?;
+                reference_shift_px(
+                    &old,
+                    &submitted.reference_centre,
+                    &submitted.plane,
+                    submitted.zoom_log2,
+                    frame_loop.plan.requested_extent.width,
+                )
+            }) {
+            Ok(shift) => shift,
+            Err(error) => {
+                frame_loop.remove_orbit(handle)?;
+                return Err(math_error(error));
+            }
+        };
+        let accepted_view_centre = submitted.view_centre.clone();
+        if let Err(error) = viewer.configure_navigation_context(
+            submitted.view_centre,
+            submitted.reference_centre.clone(),
+            submitted.plane,
+        ) {
+            frame_loop.remove_orbit(handle)?;
+            return Err(error);
+        }
+        let disposition = viewer.accept_reference_orbit(response, handle, shift);
+        if disposition == OrbitDisposition::Stale {
+            frame_loop.remove_orbit(handle)?;
+            return Ok(stale);
+        }
+        frame_loop.replace_current_orbit(handle)?;
+        frame_loop.accepted_reference = Some(submitted.reference_centre);
+        frame_loop.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
+        frame_loop.accepted_reference_receipt = Some(AcceptedReferenceReceipt {
+            lease: super::super::ReferenceLeaseIdentity {
+                main_generation: arrival.generation,
+                source_generation: arrival.generation,
+                centre_revision: arrival.centre_revision,
+                plane: submitted.plane,
+                precision_mode: submitted.precision_mode,
+                precision_bits: arrival.precision_bits,
+                orbit_length: arrival.length,
+            },
+            view_centre: accepted_view_centre,
+            verification: arrival.reference_verification,
+            max_consumed_word_error_ulps: arrival.max_consumed_word_error_ulps,
+            precision_escalations: arrival.precision_escalations,
+        });
+        frame_loop.sampled_request_at_length = None;
+        if submitted.sampled {
+            frame_loop.sampled_reference_rounds =
+                frame_loop.sampled_reference_rounds.saturating_add(1);
+        } else {
+            frame_loop.sampled_references = 0;
+            frame_loop.sampled_reference_rounds = 0;
+            frame_loop.sampled_reference_discards = 0;
+            frame_loop.sampled_reference_refusal = None;
+            frame_loop.sampled_resume_level = None;
+        }
+        frame_loop.main = viewer.drain_main()?.main;
+        frame_loop.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
+        match frame_loop
+            .sampled_resume_level
+            .take()
+            .filter(|_| submitted.sampled)
+        {
+            Some(level) => frame_loop
+                .loop_state
+                .scene_input_resumed(arrival.generation, level),
+            None => frame_loop.loop_state.scene_input_ready(arrival.generation),
+        }
+        frame_loop.prepared_level = None;
+        let requested = viewer.requested();
+        let map = viewer.screen_map(frame_loop.prepared_extent())?;
+        let plane = viewer.checked_plane();
+        frame_loop.install_main(viewer, requested.object_angles, plane, map);
+        let accepted_us = monotonic_now_us();
+        frame_loop.level_timings.record_reference(
+            arrival.centre_revision,
+            ReferenceTimingSample {
+                worker_generation: Some(u64::from(arrival.compute_us)),
+                credit_wait: None,
+                request_transfer: submitted.request_transfer_us,
+                worker_round_trip_callback_observation: elapsed_us(
+                    submitted.transferred_at_us,
+                    arrival.response_observed_us,
+                ),
+                acceptance: elapsed_us(arrival.response_observed_us, accepted_us),
+                reference_upload: elapsed_us(arrival.upload_started_us, upload_finished_us),
+            },
+        );
+        Ok(WorkerApplication {
+            generation: arrival.generation,
+            centre_revision: arrival.centre_revision,
+            disposition,
+            reference_applied: true,
+        })
+    }
+
+    fn finish_reference_submission(&mut self, generation: u32) {
+        let _finished = self.viewer.finish_reference_submission(generation);
+    }
 }
 
 impl BrowserFrameLoop {
@@ -123,43 +324,38 @@ impl BrowserFrameLoop {
         viewer: &mut ViewerController,
         now_ms: f64,
     ) -> Result<bool, AppError> {
-        let mut applied = false;
-        for _ in 0..2 {
-            let Some(mut drained) = self.worker_service.drain() else {
-                break;
-            };
-            debug_assert!(drained.facts.matches(&drained.lease));
-            let generation = drained.facts.generation;
-            let submitted = self
-                .submitted_references
-                .iter()
-                .position(|item| item.generation == generation)
-                .map(|index| self.submitted_references.swap_remove(index));
-            // The arrival is processed while the owner still holds this submission in flight.
-            // Returning the accepted orbit to a navigation goes through the same owner entry the
-            // ordinary acceptance uses, and that entry only answers the submission it named: a
-            // submission finished first is a navigation nothing can be handed to. The successor a
-            // finished submission releases is taken later in the same turn, so nothing waits.
-            let processed = self.process_arrival(viewer, &drained.lease, submitted);
-            let _finished = viewer.finish_reference_submission(generation);
-            let disposition = processed
-                .as_ref()
-                .map_or(OrbitDisposition::Stale, |result| result.0);
-            let application = WorkerApplication {
-                generation,
-                disposition,
-                reference_applied: processed.as_ref().is_ok_and(|result| result.1),
-            };
-            let credited = self
-                .worker_service
-                .apply(&mut drained.lease, application, now_us(now_ms))
-                .map_err(worker_error);
-            let (_, arrival_applied) = processed?;
-            let applied_facts = credited?;
-            debug_assert_eq!(applied_facts, application);
-            applied |= arrival_applied;
-        }
-        Ok(applied)
+        let Some(mut worker_service) = self.worker_service.take() else {
+            return Err(AppError::Worker(
+                "worker service is unavailable during arrival drain".to_string(),
+            ));
+        };
+        let result = (|| {
+            let mut applied = false;
+            for _ in 0..2 {
+                let Some(arrival) = worker_service.drain() else {
+                    break;
+                };
+                let generation = arrival.generation;
+                let submitted = self
+                    .submitted_references
+                    .iter()
+                    .position(|item| item.generation == generation)
+                    .map(|index| self.submitted_references.swap_remove(index));
+                // The owner processes the arrival before it finishes the submission and returns
+                // credit. A successor released by finishing is therefore still taken later in
+                // this turn, matching the channel transaction order.
+                let mut acceptance = BrowserWorkerAcceptance {
+                    frame_loop: self,
+                    viewer,
+                };
+                let application =
+                    worker_service.apply(&mut acceptance, arrival, submitted, now_us(now_ms))?;
+                applied |= application.reference_applied;
+            }
+            Ok(applied)
+        })();
+        self.worker_service = Some(worker_service);
+        result
     }
 
     /// Returns the accepted orbit to the navigation a discarded census correction created.
@@ -248,164 +444,6 @@ impl BrowserFrameLoop {
             centre_revision,
         );
         Ok(true)
-    }
-
-    fn process_arrival(
-        &mut self,
-        viewer: &mut ViewerController,
-        response: &ember_julibrot_worker::OrbitResponseView,
-        submitted: Option<SubmittedReference>,
-    ) -> Result<(OrbitDisposition, bool), AppError> {
-        let response_observed_us = monotonic_now_us();
-        let Some(submitted) = submitted.filter(|submitted| {
-            submitted.precision_mode == viewer.requested().precision_mode as u32
-                && super::super::arrival_is_current(
-                    response.cancelled(),
-                    response.generation(),
-                    self.worker_service.latest_generation(),
-                    viewer.navigation_pending_depth(),
-                )
-        }) else {
-            return Ok((OrbitDisposition::Stale, false));
-        };
-        if submitted.sampled && response.length() <= self.main.orbit_length {
-            self.sampled_reference_discards = self.sampled_reference_discards.saturating_add(1);
-            self.sampled_reference_refusal = Some(super::super::DISCARDED_CORRECTION_REASON);
-            let level = self.sampled_resume_level.take();
-            self.retain_reference_across_discard(
-                viewer,
-                response.generation(),
-                response.centre_revision(),
-                level,
-            )?;
-            return Ok((OrbitDisposition::Stale, false));
-        }
-        let upload_started_us = monotonic_now_us();
-        let records = response
-            .records
-            .transfer_record_bytes()
-            .map_err(worker_error)?;
-        expand_reference_texels_from_array(
-            &records,
-            response.length(),
-            &mut self.reference_upload,
-        )?;
-        let span = self
-            .executor
-            .allocate_span(response.length(), OUTPUT_PAGE_SIDE)
-            .map_err(heap_error)?;
-        if let Err(error) = self.executor.write_span(&span, &self.reference_upload) {
-            let _freed = self.executor.free_span(span);
-            return Err(heap_error(error));
-        }
-        let upload_finished_us = monotonic_now_us();
-        let registered = RegisteredOrbit {
-            span: span.clone(),
-            length: response.length(),
-            precision_bits: response.precision_bits(),
-            precision_mode: viewer_precision_mode(submitted.precision_mode),
-        };
-        let handle = match self.orbits.insert(response.generation(), registered) {
-            Ok(handle) => handle,
-            Err(error) => {
-                let _freed = self.executor.free_span(span);
-                return Err(registry_error(error));
-            }
-        };
-        let shift = match self
-            .accepted_reference
-            .as_ref()
-            .map_or(Ok([0.0; 2]), |old| {
-                let old = old.with_precision(submitted.reference_centre.precision_bits)?;
-                reference_shift_px(
-                    &old,
-                    &submitted.reference_centre,
-                    &submitted.plane,
-                    submitted.zoom_log2,
-                    self.plan.requested_extent.width,
-                )
-            }) {
-            Ok(shift) => shift,
-            Err(error) => {
-                self.remove_orbit(handle)?;
-                return Err(math_error(error));
-            }
-        };
-        let accepted_view_centre = submitted.view_centre.clone();
-        if let Err(error) = viewer.configure_navigation_context(
-            submitted.view_centre,
-            submitted.reference_centre.clone(),
-            submitted.plane,
-        ) {
-            self.remove_orbit(handle)?;
-            return Err(error);
-        }
-        let disposition = viewer.accept_reference_orbit(response, handle, shift);
-        if disposition == OrbitDisposition::Stale {
-            self.remove_orbit(handle)?;
-            return Ok((disposition, false));
-        }
-        self.replace_current_orbit(handle)?;
-        self.accepted_reference = Some(submitted.reference_centre);
-        self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
-        self.accepted_reference_receipt = Some(AcceptedReferenceReceipt {
-            lease: super::super::ReferenceLeaseIdentity {
-                main_generation: response.generation(),
-                source_generation: response.generation(),
-                centre_revision: response.centre_revision(),
-                plane: submitted.plane,
-                precision_mode: submitted.precision_mode,
-                precision_bits: response.precision_bits(),
-                orbit_length: response.length(),
-            },
-            view_centre: accepted_view_centre,
-            verification: response.reference_verification(),
-            max_consumed_word_error_ulps: response.max_consumed_word_error_ulps(),
-            precision_escalations: response.precision_escalations(),
-        });
-        self.sampled_request_at_length = None;
-        if submitted.sampled {
-            self.sampled_reference_rounds = self.sampled_reference_rounds.saturating_add(1);
-        } else {
-            self.sampled_references = 0;
-            self.sampled_reference_rounds = 0;
-            self.sampled_reference_discards = 0;
-            self.sampled_reference_refusal = None;
-            self.sampled_resume_level = None;
-        }
-        self.main = viewer.drain_main()?.main;
-        self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-        match self
-            .sampled_resume_level
-            .take()
-            .filter(|_| submitted.sampled)
-        {
-            Some(level) => self
-                .loop_state
-                .scene_input_resumed(response.generation(), level),
-            None => self.loop_state.scene_input_ready(response.generation()),
-        }
-        self.prepared_level = None;
-        let requested = viewer.requested();
-        let map = viewer.screen_map(self.prepared_extent())?;
-        let plane = viewer.checked_plane();
-        self.install_main(viewer, requested.object_angles, plane, map);
-        let accepted_us = monotonic_now_us();
-        self.level_timings.record_reference(
-            response.centre_revision(),
-            ReferenceTimingSample {
-                worker_generation: Some(u64::from(response.compute_us())),
-                credit_wait: None,
-                request_transfer: submitted.request_transfer_us,
-                worker_round_trip_callback_observation: elapsed_us(
-                    submitted.transferred_at_us,
-                    response_observed_us,
-                ),
-                acceptance: elapsed_us(response_observed_us, accepted_us),
-                reference_upload: elapsed_us(upload_started_us, upload_finished_us),
-            },
-        );
-        Ok((disposition, true))
     }
 
     /// Releases every reference whose typed worker refusal means no arrival can land.
@@ -517,15 +555,10 @@ impl BrowserFrameLoop {
         )
         .map_err(worker_error)?;
         let required_upload = super::super::reference_texel_bytes(requested.iteration_cap)?;
-        if self.reference_upload.capacity() < required_upload {
-            self.reference_upload
-                .try_reserve_exact(required_upload.saturating_sub(self.reference_upload.len()))
-                .map_err(|error| {
-                    AppError::Worker(format!("reference upload reserve failed: {error}"))
-                })?;
-        }
+        self.worker_service_mut()
+            .reserve_reference_upload(required_upload)?;
         let transfer_started_us = monotonic_now_us();
-        let submitted_request = self.worker_service.submit(request);
+        let submitted_request = self.worker_service_mut().submit(request);
         let transfer_finished_us = monotonic_now_us();
         debug_assert_eq!(submitted_request.generation, navigation.generation);
         let submit_outcome = submitted_request.outcome;
@@ -626,7 +659,7 @@ impl BrowserFrameLoop {
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn monotonic_now_us() -> Option<u64> {
+pub(super) fn monotonic_now_us() -> Option<u64> {
     let milliseconds = web_sys::window()?.performance()?.now();
     (milliseconds.is_finite() && milliseconds >= 0.0)
         .then(|| (milliseconds * 1_000.0).floor().min(u64::MAX as f64) as u64)
