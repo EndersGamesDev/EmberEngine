@@ -276,6 +276,20 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.orbit_leases = self.orbit_leases.saturating_add(1);
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        {
+            let (pool, slot_id) = slot
+                .identity()
+                .expect("the validated arrival retains its pool identity");
+            self.trace_transition(
+                OwnershipPhase::ResponseLeased,
+                OwnershipResult::Leased,
+                pool,
+                slot_id,
+                LogicalOwner::Main,
+                header.generation,
+            );
+        }
         Some((slot, centre_revision))
     }
 
@@ -291,6 +305,8 @@ impl<P: OwnerPort> OwnerCore<P> {
         owner_now_us: u64,
     ) -> Result<(), ChannelError> {
         let old = slot.header()?;
+        #[cfg(test)]
+        let (pool, slot_id) = slot.identity()?;
         let kind = match disposition {
             OrbitDisposition::Applied => MessageKind::CreditApplied,
             OrbitDisposition::Stale => MessageKind::CreditStale,
@@ -311,6 +327,15 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.advance();
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        self.trace_transition(
+            OwnershipPhase::CreditReturned,
+            OwnershipResult::Credited(disposition),
+            pool,
+            slot_id,
+            LogicalOwner::Producer,
+            old.generation,
+        );
         Ok(())
     }
 
@@ -318,9 +343,23 @@ impl<P: OwnerPort> OwnerCore<P> {
     pub(crate) fn receive_slot(&mut self, slot: P::Slot) -> Result<(), ChannelError> {
         let kind = slot.validate_message()?;
         let (pool, _) = slot.identity()?;
+        #[cfg(test)]
+        let slot_id = slot.identity()?.1;
+        #[cfg(test)]
+        let generation = slot.header()?.generation;
+        #[cfg(test)]
+        let mut transition = None;
         match (pool, kind) {
             (Pool::Request, MessageKind::RequestReturn) => {
                 push_unique(&mut self.request_owned, slot)?;
+                #[cfg(test)]
+                {
+                    transition = Some((
+                        OwnershipPhase::RequestReturned,
+                        OwnershipResult::Transferred,
+                        LogicalOwner::Main,
+                    ));
+                }
             }
             (Pool::Orbit, MessageKind::OrbitResponse | MessageKind::OrbitCancelled) => {
                 if self.closed {
@@ -331,6 +370,14 @@ impl<P: OwnerPort> OwnerCore<P> {
                     self.arrivals
                         .push_back(slot)
                         .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0))?;
+                    #[cfg(test)]
+                    {
+                        transition = Some((
+                            OwnershipPhase::ResponseQueued,
+                            OwnershipResult::Transferred,
+                            LogicalOwner::Main,
+                        ));
+                    }
                 }
             }
             (Pool::Orbit, MessageKind::CreditStale) => {
@@ -360,6 +407,10 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.pump_request();
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        if let Some((phase, result, logical_owner)) = transition {
+            self.trace_transition(phase, result, pool, slot_id, logical_owner, generation);
+        }
         Ok(())
     }
 
@@ -638,11 +689,26 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.request_owned.push(slot);
             return false;
         }
+        #[cfg(test)]
+        let (pool, slot_id) = slot
+            .identity()
+            .expect("the encoded request retains its pool identity");
+        #[cfg(test)]
+        let generation = request.generation();
         if let Err(error) = self.port.post(slot) {
             self.last_error = Some(error);
             self.pending_request = Some(request);
             return false;
         }
+        #[cfg(test)]
+        self.trace_transition(
+            OwnershipPhase::RequestDispatched,
+            OwnershipResult::Transferred,
+            pool,
+            slot_id,
+            LogicalOwner::Producer,
+            generation,
+        );
         true
     }
 
@@ -709,6 +775,37 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.last_error = Some(ChannelError::new(ErrorCode::EpochExhausted, 0, 0, 0));
         }
     }
+
+    #[cfg(test)]
+    fn trace_transition(
+        &self,
+        phase: OwnershipPhase,
+        result: OwnershipResult,
+        pool: Pool,
+        slot: u32,
+        logical_owner: LogicalOwner,
+        generation: u32,
+    ) {
+        record_ownership_event(OwnershipEvent {
+            phase,
+            result,
+            pool,
+            slot,
+            logical_owner,
+            generation,
+            pool_epoch: self.pool_epoch,
+            fact_epoch: self.facts.epoch,
+            credit_us: self.credit.credit_us(),
+            orbit_queue_depth: u32::try_from(self.arrivals.len()).unwrap_or(u32::MAX),
+            shutdown_queue_depth: u32::from(self.drain.is_some()),
+            allocation_events: self.facts.allocation_events,
+            request_buffers_owned_main: u32::try_from(self.request_owned.len()).unwrap_or(u32::MAX),
+            orbit_buffers_owned_main: u32::try_from(self.orbit_owned.len())
+                .unwrap_or(u32::MAX)
+                .saturating_add(u32::try_from(self.arrivals.len()).unwrap_or(u32::MAX))
+                .saturating_add(self.orbit_leases),
+        });
+    }
 }
 
 fn push_unique<S: OwnerSlot>(owned: &mut Vec<S>, slot: S) -> Result<(), ChannelError> {
@@ -728,8 +825,177 @@ fn push_unique<S: OwnerSlot>(owned: &mut Vec<S>, slot: S) -> Result<(), ChannelE
     Ok(())
 }
 
+/// Transport-independent phase observed at an ownership mutation site.
 #[cfg(test)]
-mod tests {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnershipPhase {
+    /// A request slot moved to the producer.
+    RequestDispatched,
+    /// A completed request slot returned to main.
+    RequestReturned,
+    /// A response slot entered main's arrival queue.
+    ResponseQueued,
+    /// Main acquired the response-buffer lease.
+    ResponseLeased,
+    /// A credited response slot returned to the producer.
+    CreditReturned,
+}
+
+/// Typed result of one ownership mutation.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnershipResult {
+    /// The buffer crossed between logical sides.
+    Transferred,
+    /// Main acquired an exclusive response lease.
+    Leased,
+    /// Main returned the response buffer with this disposition.
+    Credited(OrbitDisposition),
+}
+
+/// Logical holder immediately after an ownership mutation.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LogicalOwner {
+    /// Main or its bounded arrival queue.
+    Main,
+    /// Producer or its bounded work queue.
+    Producer,
+}
+
+/// Complete deterministic state observed at one ownership mutation site.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OwnershipEvent {
+    /// Mutation phase.
+    pub(crate) phase: OwnershipPhase,
+    /// Typed transition result.
+    pub(crate) result: OwnershipResult,
+    /// Buffer pool.
+    pub(crate) pool: Pool,
+    /// Stable slot identity inside the pool.
+    pub(crate) slot: u32,
+    /// Logical holder after the mutation.
+    pub(crate) logical_owner: LogicalOwner,
+    /// Request generation carried by the buffer.
+    pub(crate) generation: u32,
+    /// Pool generation carried by leases.
+    pub(crate) pool_epoch: u32,
+    /// Fact revision at the mutation site.
+    pub(crate) fact_epoch: u64,
+    /// Remaining orbit credit.
+    pub(crate) credit_us: u32,
+    /// Completed responses waiting on main.
+    pub(crate) orbit_queue_depth: u32,
+    /// Pending shutdown or resize handshake depth.
+    pub(crate) shutdown_queue_depth: u32,
+    /// Initial allocation plus reconciled resizes.
+    pub(crate) allocation_events: u32,
+    /// Request-pool buffers held by main.
+    pub(crate) request_buffers_owned_main: u32,
+    /// Orbit-pool buffers queued, leased, or held by main.
+    pub(crate) orbit_buffers_owned_main: u32,
+}
+
+/// Stable worker facts after transport-specific fields and wall measurements are removed.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NormalizedWorkerFacts {
+    /// Transport-normalized facts revision.
+    pub(crate) epoch: u64,
+    /// Latest generation installed by main.
+    pub(crate) last_applied_generation: u32,
+    /// Latest generation whose orbit buffer was credited.
+    pub(crate) last_ack_generation: u32,
+    /// Completed or cancelled orbit buffers waiting on main.
+    pub(crate) orbit_queue_depth: u32,
+    /// Pending shutdown acknowledgements.
+    pub(crate) shutdown_queue_depth: u32,
+    /// Remaining main-side orbit budget.
+    pub(crate) credit_us: u32,
+    /// Applied response count.
+    pub(crate) applied_count: u32,
+    /// Stale response count.
+    pub(crate) stale_count: u32,
+    /// Credited cancellation count.
+    pub(crate) cancelled_count: u32,
+    /// Initial allocation plus reconciled resizes.
+    pub(crate) allocation_events: u32,
+    /// Request-pool buffers currently owned by main.
+    pub(crate) request_buffers_owned_main: u32,
+    /// Orbit-pool buffers queued or leased on main.
+    pub(crate) orbit_buffers_owned_main: u32,
+}
+
+/// Ordered ownership events and their settled accounting snapshot.
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OwnershipTrace {
+    /// Ordered transport-independent ownership transitions.
+    pub(crate) events: Vec<OwnershipEvent>,
+    /// Settled deterministic worker accounting.
+    pub(crate) facts: NormalizedWorkerFacts,
+}
+
+/// Removes only wall measurements and transport identity.
+#[cfg(test)]
+pub(crate) const fn normalized_facts(facts: WorkerFacts) -> NormalizedWorkerFacts {
+    NormalizedWorkerFacts {
+        epoch: facts.epoch,
+        last_applied_generation: facts.last_applied_generation,
+        last_ack_generation: facts.last_ack_generation,
+        orbit_queue_depth: facts.orbit_queue_depth,
+        shutdown_queue_depth: facts.shutdown_queue_depth,
+        credit_us: facts.credit_us,
+        applied_count: facts.applied_count,
+        stale_count: facts.stale_count,
+        cancelled_count: facts.cancelled_count,
+        allocation_events: facts.allocation_events,
+        request_buffers_owned_main: facts.request_buffers_owned_main,
+        orbit_buffers_owned_main: facts.orbit_buffers_owned_main,
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static OWNERSHIP_EVENTS: std::cell::RefCell<Option<Vec<OwnershipEvent>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Starts one thread-local ownership trace.
+#[cfg(test)]
+pub(crate) fn begin_ownership_trace() {
+    OWNERSHIP_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
+}
+
+/// Records one event when the current test armed a trace sink.
+#[cfg(test)]
+pub(crate) fn record_ownership_event(event: OwnershipEvent) {
+    OWNERSHIP_EVENTS.with(|events| {
+        if let Some(trace) = events.borrow_mut().as_mut() {
+            trace.push(event);
+        }
+    });
+}
+
+/// Finishes the armed trace with its settled facts.
+#[cfg(test)]
+pub(crate) fn finish_ownership_trace(facts: WorkerFacts) -> OwnershipTrace {
+    let events = OWNERSHIP_EVENTS.with(|events| {
+        events
+            .borrow_mut()
+            .take()
+            .expect("the ownership trace was armed")
+    });
+    OwnershipTrace {
+        events,
+        facts: normalized_facts(facts),
+    }
+}
+
+/// Browser-shaped test harnesses shared with the same-thread oracle.
+#[cfg(test)]
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
@@ -737,7 +1003,10 @@ mod tests {
 
     use ember_julibrot_math::PrecisionMode;
 
-    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, TwoSlotQueue};
+    use super::{
+        ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnershipTrace, TwoSlotQueue,
+        begin_ownership_trace, finish_ownership_trace,
+    };
     use crate::wire::WireBuffer;
     use crate::{
         ChannelError, CoordinateDescriptor, EncodedCentre, ErrorCode, JULIBROT_ABI_VERSION,
@@ -745,6 +1014,15 @@ mod tests {
         ReferenceOrbitRecord, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerFacts, WorkerMode,
         buffer_capacity,
     };
+
+    /// Generation shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_GENERATION: u32 = 11;
+    /// Stable capacity shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_MAX_ITER: u32 = 64;
+    /// Completed records shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_RECORDS: usize = 1;
+    /// Credit-return time shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_OWNER_NOW_US: u64 = 0;
 
     /// One in-process transfer slot with the browser slot's shared-mutation shape.
     struct FakeSlot {
@@ -1102,6 +1380,32 @@ mod tests {
 
     fn orbit_records(count: usize) -> Vec<ReferenceOrbitRecord> {
         vec![zero_record(); count]
+    }
+
+    /// Runs the production browser core through its transition-site ownership oracle.
+    pub(crate) fn browser_ownership_trace() -> OwnershipTrace {
+        let mut harness = Harness::boot(OWNERSHIP_SCENARIO_MAX_ITER);
+        begin_ownership_trace();
+        assert_eq!(
+            harness.submit(OWNERSHIP_SCENARIO_GENERATION, OWNERSHIP_SCENARIO_MAX_ITER),
+            SubmitOutcome::Transferred
+        );
+
+        harness.produce(OWNERSHIP_SCENARIO_RECORDS);
+        let epoch = harness.core.pool_epoch();
+        let (slot, _) = harness.core.take_arrival().expect("one queued response");
+        let header = slot.header().expect("a validated response header");
+        let disposition = OrbitDisposition::Applied;
+        let now_us = harness.wire.borrow().now_us;
+        assert_eq!(now_us, OWNERSHIP_SCENARIO_OWNER_NOW_US);
+        harness
+            .core
+            .return_slot(slot, epoch, disposition, now_us)
+            .expect("credit return remains valid");
+        harness.pump();
+        assert_eq!(header.generation, OWNERSHIP_SCENARIO_GENERATION);
+        let facts = harness.core.facts();
+        finish_ownership_trace(facts)
     }
 
     #[test]
