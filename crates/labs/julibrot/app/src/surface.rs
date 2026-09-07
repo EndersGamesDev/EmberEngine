@@ -4,6 +4,18 @@ use ember_lab_heap::SurfaceOwnership;
 
 use crate::AppError;
 
+/// Terminal event offered to the app-owned surface transaction.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceEvent {
+    /// The matching warp fence completed and may present its image.
+    WarpCompleted { warp_id: u64 },
+    /// The matching warp fence was refused and must drop its image.
+    WarpRefused { warp_id: u64 },
+    /// The device failed and any pending image must be dropped.
+    DeviceFailed,
+}
+
 /// One acquired image retained until its matching warp reaches a terminal event.
 #[derive(Debug)]
 pub struct PendingSurface<T> {
@@ -101,6 +113,17 @@ impl<T> SurfaceState<T> {
             return SurfaceAction::Ignore;
         }
         self.take_pending(false)
+    }
+
+    /// Resolves one terminal event against the sole pending image.
+    #[cfg(any(target_arch = "wasm32", test))]
+    #[must_use]
+    pub(crate) fn resolve_event(&mut self, event: SurfaceEvent) -> SurfaceAction<T> {
+        match event {
+            SurfaceEvent::WarpCompleted { warp_id } => self.complete(warp_id),
+            SurfaceEvent::WarpRefused { warp_id } => self.refuse(warp_id),
+            SurfaceEvent::DeviceFailed => self.take_pending(false),
+        }
     }
 
     /// Returns the live warp identifier, if any.
