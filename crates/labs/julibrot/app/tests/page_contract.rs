@@ -891,7 +891,7 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
         .expect("ordered refresh boundary exists")
         .0;
     let poll = refresh
-        .find("FrameLoop::refresh(&mut self.frame_loop.presenter, self.now_ms)")
+        .find("observe(&mut port, self.now_ms)")
         .expect("opening poll");
     let drain = refresh.find("viewer.drain_hot").expect("HOT drain");
     let write = refresh
@@ -909,10 +909,14 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
         .expect("warp submit");
     assert!(poll < drain && drain < write && write < arrivals);
     assert!(arrivals < kernels && kernels < surface && surface < warp);
-    assert_eq!(refresh.matches("FrameLoop::refresh").count(), 1);
+    assert_eq!(
+        refresh.matches("observe(&mut port, self.now_ms)").count(),
+        1
+    );
+    assert!(!FRAME.contains("FrameLoop::refresh"));
     assert!(!refresh.contains("presenter.poll"));
     assert!(FRAME.contains("KernelMode::for_zoom"));
-    assert!(FRAME.contains("presenter.poll_once(now_ms)"));
+    assert!(FRAME.contains("self.frame_loop.presenter.poll(now_ms)"));
     assert!(LAB.contains("requestAnimationFrame"));
     assert!(LAB.contains("return this.#api.app_needs_refresh();"));
     assert_eq!(
@@ -929,7 +933,8 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
         1,
         "the page guards its automatic scene re-entry on a loop that is still turning"
     );
-    assert!(FRAME.contains("runtime.complete_warp"));
+    assert!(refresh.contains("PresentEventOwner::observe(&mut port, self.now_ms)"));
+    assert!(FRAME.contains("let presented = self.complete_warp(event.measurement)?;"));
 }
 
 #[test]
@@ -1124,11 +1129,21 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
     }
     // The copy happens where the frame texture exists and nowhere else: between the acquisition of
     // the surface image and its presentation.
-    let capture = FRAME
-        .find("runtime.complete_warp_capturing(measurement.id, |texture| {")
+    let present_lowering = FRAME
+        .split_once("impl BrowserPresentEvents<'_>")
+        .expect("the browser present-event lowering exists")
+        .1;
+    let capture = present_lowering
+        .find(".complete_warp_capturing(measurement.id, |texture| {")
         .expect("the copy is offered at present time");
-    let present = FRAME.find("observed.presented = true;").expect("present");
-    assert!(capture < present);
+    let completion = present_lowering
+        .find("let presented = self.complete_warp(event.measurement)?;")
+        .expect("warp completion runs the capture-bearing helper");
+    let present = present_lowering
+        .find("let effect = Self::event_effect(presented, false, false);")
+        .expect("presentation is recorded after the copy is offered");
+    assert!(capture < completion && completion < present);
+    assert!(FRAME.contains("self.presented |= effect.presented;"));
     assert!(RUNTIME.contains("capture(&frame.texture);"));
     assert!(RUNTIME.contains("frame_copy_supported"));
     // Two routes, chosen from what the surface answered and from nothing else. The direct one is
@@ -1298,7 +1313,7 @@ fn a_finished_picture_is_finished_at_the_current_view_and_not_merely_at_a_delive
     // The two new readings come from what was PRESENTED, not from what was last submitted: the
     // submitted source says what is being drawn and only the presented one says what is being
     // looked at.
-    assert!(FRAME.contains("self.presented_scene_id = measurement.source_scene_id;"));
+    assert!(FRAME.contains("self.frame_loop.presented_scene_id = measurement.source_scene_id;"));
     assert!(FACTS.contains("presented_scene_is_completed: present.completed_scene_id.is_some()"));
     assert!(FACTS.contains("loop_facts.presented_scene_id() == present.completed_scene_id,"));
     assert!(FACTS.contains("ember_julibrot_present::WarpKind::HoldStale"));

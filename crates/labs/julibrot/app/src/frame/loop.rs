@@ -6,7 +6,7 @@ use super::schedule::{
     stamp_scene_level, stamped_screen_map, view_projection_changed,
 };
 #[cfg(test)]
-use super::schedule::{PresenterPoll, RefinementSchedule, classify_refusal, stamped_extent};
+use super::schedule::{RefinementSchedule, classify_refusal, stamped_extent};
 #[cfg(any(target_arch = "wasm32", test))]
 use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene, warp_submission_due};
 
@@ -20,8 +20,8 @@ use ember_julibrot_kernels::{
 use ember_julibrot_math::{
     CentreSplit, EscapeParams, Homography, Plane, PoseMap, PrecisionMode, ScaleSplit,
 };
-#[cfg(test)]
-use ember_julibrot_present::{FenceRefusal, SubmissionKind};
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_julibrot_present::{FenceRefusal, PresentEvent, SubmissionKind};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_lab_heap::DataSpan;
 
@@ -577,6 +577,423 @@ fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Outpu
     refresh.write_hot(FencesObserved)?;
     refresh.consider_scene(HotWritten)?;
     refresh.consider_warp(SceneConsidered)
+}
+
+/// Variant tag for one app-owned presenter transaction.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PresentEventKind {
+    SceneCompleted,
+    SceneDropped,
+    WarpCompleted,
+    FenceRefused,
+}
+
+/// Every semantic argument of one completed scene receipt.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq)]
+struct PresentSceneCompletion {
+    frame: ember_julibrot_present::SceneFrame,
+    reference_sample: Option<u32>,
+}
+
+/// Every semantic argument of one dropped scene receipt.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PresentSceneDrop {
+    scene_id: u64,
+    orbit_generation: u32,
+    reason: ember_julibrot_present::DropReason,
+    measurement: ember_julibrot_present::SubmissionMeasurement,
+}
+
+/// Every semantic argument of one completed warp receipt.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PresentWarpCompletion {
+    measurement: ember_julibrot_present::SubmissionMeasurement,
+}
+
+/// Every semantic argument of one refused fence receipt.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PresentFenceRefusal {
+    kind: SubmissionKind,
+    id: u64,
+    reason: FenceRefusal,
+    polls: u32,
+    wall_ms: f64,
+    precision_mode: &'static str,
+}
+
+/// One presenter event with every semantic argument owned by the app transaction.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, PartialEq)]
+struct PresentEventTransaction {
+    kind: PresentEventKind,
+    scene_completion: Option<PresentSceneCompletion>,
+    scene_drop: Option<PresentSceneDrop>,
+    warp_completion: Option<PresentWarpCompletion>,
+    fence_refusal: Option<PresentFenceRefusal>,
+}
+
+/// Validated borrowed view of exactly one transaction variant.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy)]
+enum PresentEventView<'a> {
+    SceneCompleted(&'a PresentSceneCompletion),
+    SceneDropped(&'a PresentSceneDrop),
+    WarpCompleted(&'a PresentWarpCompletion),
+    FenceRefused(&'a PresentFenceRefusal),
+}
+
+/// Identity certified by a completed or refused presenter receipt.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PresentEventReceipt {
+    kind: SubmissionKind,
+    id: u64,
+    completion_sequence: Option<u64>,
+    orbit_generation: Option<u32>,
+    drop_reason: Option<ember_julibrot_present::DropReason>,
+    precision_mode: &'static str,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PresentEventTransaction {
+    fn from_presenter(event: &PresentEvent) -> Self {
+        match event {
+            PresentEvent::SceneCompleted {
+                frame,
+                reference_sample,
+            } => Self {
+                kind: PresentEventKind::SceneCompleted,
+                scene_completion: Some(PresentSceneCompletion {
+                    frame: frame.clone(),
+                    reference_sample: *reference_sample,
+                }),
+                scene_drop: None,
+                warp_completion: None,
+                fence_refusal: None,
+            },
+            PresentEvent::SceneDropped {
+                scene_id,
+                orbit_generation,
+                reason,
+                measurement,
+            } => Self {
+                kind: PresentEventKind::SceneDropped,
+                scene_completion: None,
+                scene_drop: Some(PresentSceneDrop {
+                    scene_id: *scene_id,
+                    orbit_generation: *orbit_generation,
+                    reason: *reason,
+                    measurement: *measurement,
+                }),
+                warp_completion: None,
+                fence_refusal: None,
+            },
+            PresentEvent::WarpCompleted { measurement } => Self {
+                kind: PresentEventKind::WarpCompleted,
+                scene_completion: None,
+                scene_drop: None,
+                warp_completion: Some(PresentWarpCompletion {
+                    measurement: *measurement,
+                }),
+                fence_refusal: None,
+            },
+            PresentEvent::FenceRefused {
+                kind,
+                id,
+                reason,
+                polls,
+                wall_ms,
+                precision_mode,
+            } => Self {
+                kind: PresentEventKind::FenceRefused,
+                scene_completion: None,
+                scene_drop: None,
+                warp_completion: None,
+                fence_refusal: Some(PresentFenceRefusal {
+                    kind: *kind,
+                    id: *id,
+                    reason: *reason,
+                    polls: *polls,
+                    wall_ms: *wall_ms,
+                    precision_mode,
+                }),
+            },
+        }
+    }
+
+    const fn view(&self) -> Result<PresentEventView<'_>, &'static str> {
+        match (
+            self.kind,
+            &self.scene_completion,
+            &self.scene_drop,
+            &self.warp_completion,
+            &self.fence_refusal,
+        ) {
+            (PresentEventKind::SceneCompleted, Some(event), None, None, None) => {
+                Ok(PresentEventView::SceneCompleted(event))
+            }
+            (PresentEventKind::SceneDropped, None, Some(event), None, None) => {
+                Ok(PresentEventView::SceneDropped(event))
+            }
+            (PresentEventKind::WarpCompleted, None, None, Some(event), None) => {
+                Ok(PresentEventView::WarpCompleted(event))
+            }
+            (PresentEventKind::FenceRefused, None, None, None, Some(event)) => {
+                Ok(PresentEventView::FenceRefused(event))
+            }
+            _ => Err("present transaction does not contain exactly its tagged event"),
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PresentEventView<'_> {
+    fn receipt(self) -> Result<PresentEventReceipt, &'static str> {
+        match self {
+            Self::SceneCompleted(event) => {
+                if event.frame.measurement.kind != SubmissionKind::Scene {
+                    return Err("completed scene receipt has a non-scene kind");
+                }
+                if event.frame.measurement.id != event.frame.scene_id {
+                    return Err("completed scene receipt has a different scene id");
+                }
+                Ok(PresentEventReceipt {
+                    kind: SubmissionKind::Scene,
+                    id: event.frame.scene_id,
+                    completion_sequence: Some(event.frame.measurement.completion_sequence),
+                    orbit_generation: Some(event.frame.pose.orbit_generation),
+                    drop_reason: None,
+                    precision_mode: event.frame.precision_mode,
+                })
+            }
+            Self::SceneDropped(event) => {
+                if event.measurement.kind != SubmissionKind::Scene {
+                    return Err("dropped scene receipt has a non-scene kind");
+                }
+                if event.measurement.id != event.scene_id {
+                    return Err("dropped scene receipt has a different scene id");
+                }
+                Ok(PresentEventReceipt {
+                    kind: SubmissionKind::Scene,
+                    id: event.scene_id,
+                    completion_sequence: Some(event.measurement.completion_sequence),
+                    orbit_generation: Some(event.orbit_generation),
+                    drop_reason: Some(event.reason),
+                    precision_mode: event.measurement.precision_mode,
+                })
+            }
+            Self::WarpCompleted(event) => {
+                if event.measurement.kind != SubmissionKind::Warp {
+                    return Err("completed warp receipt has a non-warp kind");
+                }
+                Ok(PresentEventReceipt {
+                    kind: SubmissionKind::Warp,
+                    id: event.measurement.id,
+                    completion_sequence: Some(event.measurement.completion_sequence),
+                    orbit_generation: None,
+                    drop_reason: None,
+                    precision_mode: event.measurement.precision_mode,
+                })
+            }
+            Self::FenceRefused(event) => Ok(PresentEventReceipt {
+                kind: event.kind,
+                id: event.id,
+                completion_sequence: None,
+                orbit_generation: None,
+                drop_reason: None,
+                precision_mode: event.precision_mode,
+            }),
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PresentEventReceipt {
+    fn matches(self, event: PresentEventView<'_>) -> bool {
+        match event {
+            PresentEventView::SceneCompleted(event) => {
+                self.kind == SubmissionKind::Scene
+                    && self.id == event.frame.scene_id
+                    && self.completion_sequence == Some(event.frame.measurement.completion_sequence)
+                    && self.orbit_generation == Some(event.frame.pose.orbit_generation)
+                    && self.drop_reason.is_none()
+                    && self.precision_mode == event.frame.measurement.precision_mode
+            }
+            PresentEventView::SceneDropped(event) => {
+                self.kind == SubmissionKind::Scene
+                    && self.id == event.scene_id
+                    && self.completion_sequence == Some(event.measurement.completion_sequence)
+                    && self.orbit_generation == Some(event.orbit_generation)
+                    && self.drop_reason == Some(event.reason)
+                    && self.precision_mode == event.measurement.precision_mode
+            }
+            PresentEventView::WarpCompleted(event) => {
+                self.kind == SubmissionKind::Warp
+                    && self.id == event.measurement.id
+                    && self.completion_sequence == Some(event.measurement.completion_sequence)
+                    && self.orbit_generation.is_none()
+                    && self.drop_reason.is_none()
+                    && self.precision_mode == event.measurement.precision_mode
+            }
+            PresentEventView::FenceRefused(event) => {
+                self.kind == event.kind
+                    && self.id == event.id
+                    && self.completion_sequence.is_none()
+                    && self.orbit_generation.is_none()
+                    && self.drop_reason.is_none()
+                    && self.precision_mode == event.precision_mode
+            }
+        }
+    }
+}
+
+/// Stable app facts produced while one presenter event is applied.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PresentEventEffect {
+    presented: bool,
+    refused: bool,
+    cancelled: bool,
+    #[cfg(test)]
+    retained_scene_id: Option<u64>,
+    #[cfg(test)]
+    presented_scene_id: Option<u64>,
+}
+
+/// Stable result of the present-event transaction for one refresh turn.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PresentEventFacts {
+    presented: bool,
+    refused: bool,
+    cancelled: bool,
+    #[cfg(test)]
+    retained_scene_id: Option<u64>,
+    #[cfg(test)]
+    presented_scene_id: Option<u64>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PresentEventFacts {
+    const fn absorb(&mut self, effect: PresentEventEffect) {
+        self.presented |= effect.presented;
+        self.refused |= effect.refused;
+        self.cancelled |= effect.cancelled;
+        #[cfg(test)]
+        {
+            self.retained_scene_id = effect.retained_scene_id;
+            self.presented_scene_id = effect.presented_scene_id;
+        }
+    }
+}
+
+/// One applied receipt in its exact observation order.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+struct PresentEventRecord {
+    transaction: PresentEventTransaction,
+    receipt: PresentEventReceipt,
+    effect: PresentEventEffect,
+}
+
+/// Chronological present-event record and stable result for one refresh turn.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Default, PartialEq)]
+struct PresentEventTurn {
+    facts: PresentEventFacts,
+    #[cfg(test)]
+    events: Vec<PresentEventRecord>,
+}
+
+/// Browser or native lowering used by the replayable present-event transaction owner.
+#[cfg(any(target_arch = "wasm32", test))]
+trait PresentEventPort {
+    type Error;
+
+    fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent>;
+    fn scene_completed(
+        &mut self,
+        event: &PresentSceneCompletion,
+    ) -> Result<PresentEventEffect, Self::Error>;
+    fn scene_dropped(
+        &mut self,
+        event: &PresentSceneDrop,
+    ) -> Result<PresentEventEffect, Self::Error>;
+    fn warp_completed(
+        &mut self,
+        event: &PresentWarpCompletion,
+    ) -> Result<PresentEventEffect, Self::Error>;
+    fn fence_refused(
+        &mut self,
+        event: &PresentFenceRefusal,
+    ) -> Result<PresentEventEffect, Self::Error>;
+    fn finish(&mut self) -> Result<(), Self::Error>;
+    fn invalid_receipt(&self, detail: &'static str) -> Self::Error;
+}
+
+/// Owns presenter receipt validation and chronological application for one refresh stage.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default)]
+struct PresentEventOwner;
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PresentEventOwner {
+    fn observe<P: PresentEventPort>(
+        port: &mut P,
+        now_ms: f64,
+    ) -> Result<PresentEventTurn, P::Error> {
+        let transactions = port.poll(now_ms);
+        let mut facts = PresentEventFacts::default();
+        let mut last_completion_sequence = None;
+        #[cfg(test)]
+        let mut events = Vec::with_capacity(transactions.len());
+        for event in transactions {
+            let transaction = PresentEventTransaction::from_presenter(&event);
+            let view = transaction
+                .view()
+                .map_err(|detail| port.invalid_receipt(detail))?;
+            let receipt = view
+                .receipt()
+                .map_err(|detail| port.invalid_receipt(detail))?;
+            if !receipt.matches(view) {
+                return Err(port.invalid_receipt(
+                    "present receipt does not preserve its transaction metadata",
+                ));
+            }
+            if let Some(sequence) = receipt.completion_sequence {
+                if last_completion_sequence.is_some_and(|last| sequence < last) {
+                    return Err(port.invalid_receipt(
+                        "present receipts are not in chronological completion order",
+                    ));
+                }
+                last_completion_sequence = Some(sequence);
+            }
+            let effect = match view {
+                PresentEventView::SceneCompleted(event) => port.scene_completed(event)?,
+                PresentEventView::SceneDropped(event) => port.scene_dropped(event)?,
+                PresentEventView::WarpCompleted(event) => port.warp_completed(event)?,
+                PresentEventView::FenceRefused(event) => port.fence_refused(event)?,
+            };
+            facts.absorb(effect);
+            #[cfg(test)]
+            events.push(PresentEventRecord {
+                transaction,
+                receipt,
+                effect,
+            });
+        }
+        port.finish()?;
+        Ok(PresentEventTurn {
+            facts,
+            #[cfg(test)]
+            events,
+        })
+    }
 }
 
 /// Which app-selected whole-grid target one kernel transaction serves.
@@ -1139,8 +1556,8 @@ mod browser {
         precision_for, reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
-        FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent, PresentHot, PresentMain,
-        Presenter, SubmissionKind, WarpValidation, hot_stride,
+        FenceRefusal, FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent,
+        PresentHot, PresentMain, Presenter, SubmissionKind, WarpValidation, hot_stride,
     };
     use ember_julibrot_worker::{
         EncodedCentre, OrbitDisposition, OrbitHandle, OrbitRegistry, OrbitRequest, OwnerEndpoint,
@@ -1153,7 +1570,9 @@ mod browser {
         BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
         FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob, KernelPlan,
         KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh,
-        PAGE_MAX_ITERATION_CAP, RefusalClass, SceneConsidered, SceneMode, WholeGridJob,
+        PAGE_MAX_ITERATION_CAP, PresentEventEffect, PresentEventFacts, PresentEventOwner,
+        PresentEventPort, PresentFenceRefusal, PresentSceneCompletion, PresentSceneDrop,
+        PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode, WholeGridJob,
         WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner,
         WorkerServicePort, WorkerSubmission, backdrop_extent, coverage_pre_empts,
         execute_ordered_refresh, horizon_facts, main_for_grid, published_iteration_cap,
@@ -1544,14 +1963,6 @@ mod browser {
         }
     }
 
-    /// What one poll of present's event queue said about this turn.
-    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-    struct ObservedEvents {
-        presented: bool,
-        refused: bool,
-        cancelled: bool,
-    }
-
     /// One requested copy of the presented frame, and what happened to the request.
     ///
     /// The copy is on request only and never per frame: it costs a full surface-sized transfer,
@@ -1635,12 +2046,20 @@ mod browser {
         viewer: &'a mut ViewerController,
         requests: &'a mut RunRequests,
         now_ms: f64,
-        observed: ObservedEvents,
+        observed: PresentEventFacts,
         hot: Option<crate::HotFrame>,
         slot: Option<HotSlot>,
         relief_redraw: bool,
         defer_scene_for_redraw: bool,
         scene_id: Option<u64>,
+    }
+
+    /// Production lowering from the presenter's event source into app-owned state.
+    struct BrowserPresentEvents<'a> {
+        frame_loop: &'a mut BrowserFrameLoop,
+        runtime: &'a mut BrowserRuntime,
+        viewer: &'a mut ViewerController,
+        refusal: Option<AppError>,
     }
 
     impl OrderedRefresh for BrowserRefreshTurn<'_> {
@@ -1675,10 +2094,13 @@ mod browser {
 
         fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error> {
             let CaptureStaged = stage;
-            let events = FrameLoop::refresh(&mut self.frame_loop.presenter, self.now_ms);
-            self.observed = self
-                .frame_loop
-                .handle_events(self.runtime, self.viewer, events)?;
+            let mut port = BrowserPresentEvents {
+                frame_loop: self.frame_loop,
+                runtime: self.runtime,
+                viewer: self.viewer,
+                refusal: None,
+            };
+            self.observed = PresentEventOwner::observe(&mut port, self.now_ms)?.facts;
             Ok(())
         }
 
@@ -2371,7 +2793,7 @@ mod browser {
                 viewer,
                 requests,
                 now_ms,
-                observed: ObservedEvents::default(),
+                observed: PresentEventFacts::default(),
                 hot: None,
                 slot: None,
                 relief_redraw: false,
@@ -2397,168 +2819,277 @@ mod browser {
                 precision_mode: reference::viewer_precision_mode(self.main.precision_mode),
             }
         }
+    }
 
-        fn handle_events(
+    impl BrowserPresentEvents<'_> {
+        #[cfg(test)]
+        fn event_effect(
+            &self,
+            presented: bool,
+            refused: bool,
+            cancelled: bool,
+        ) -> PresentEventEffect {
+            PresentEventEffect {
+                presented,
+                refused,
+                cancelled,
+                #[cfg(test)]
+                retained_scene_id: self.frame_loop.presenter.facts_ref().completed_scene_id,
+                #[cfg(test)]
+                presented_scene_id: self.frame_loop.presented_scene_id,
+            }
+        }
+
+        #[cfg(not(test))]
+        const fn event_effect(
+            presented: bool,
+            refused: bool,
+            cancelled: bool,
+        ) -> PresentEventEffect {
+            PresentEventEffect {
+                presented,
+                refused,
+                cancelled,
+            }
+        }
+
+        fn complete_scene(
             &mut self,
-            runtime: &mut BrowserRuntime,
-            viewer: &mut ViewerController,
-            events: Vec<PresentEvent>,
-        ) -> Result<ObservedEvents, AppError> {
-            let mut observed = ObservedEvents::default();
-            let mut refusal = None;
-            for event in events {
-                match event {
-                    PresentEvent::SceneCompleted {
-                        frame,
-                        reference_sample,
-                    } => {
-                        self.level_timings
-                            .complete_scene(frame.scene_id, frame.measurement);
-                        let backdrop_completed = self.backdrop.as_mut().is_some_and(|backdrop| {
-                            let Some(flight) = backdrop
-                                .in_flight
-                                .filter(|flight| flight.scene_id == frame.scene_id)
-                            else {
-                                return false;
-                            };
-                            backdrop.in_flight = None;
-                            backdrop.ready = Some(BackdropReady {
-                                stamp: flight.stamp,
-                                map: flight.map,
-                            });
-                            true
-                        });
-                        if backdrop_completed {
-                            self.active_backdrop_map = None;
-                        } else if self.loop_state.completed(
-                            frame.scene_id,
-                            frame.pose.orbit_generation,
-                            frame.level,
-                        ) {
-                            self.prepared_level = None;
-                            self.maybe_request_sampled_reference(viewer, &frame, reference_sample);
-                        }
+            frame: &ember_julibrot_present::SceneFrame,
+            reference_sample: Option<u32>,
+        ) {
+            self.frame_loop
+                .level_timings
+                .complete_scene(frame.scene_id, frame.measurement);
+            let backdrop_completed = self.frame_loop.backdrop.as_mut().is_some_and(|backdrop| {
+                let Some(flight) = backdrop
+                    .in_flight
+                    .filter(|flight| flight.scene_id == frame.scene_id)
+                else {
+                    return false;
+                };
+                backdrop.in_flight = None;
+                backdrop.ready = Some(BackdropReady {
+                    stamp: flight.stamp,
+                    map: flight.map,
+                });
+                true
+            });
+            if backdrop_completed {
+                self.frame_loop.active_backdrop_map = None;
+            } else if self.frame_loop.loop_state.completed(
+                frame.scene_id,
+                frame.pose.orbit_generation,
+                frame.level,
+            ) {
+                self.frame_loop.prepared_level = None;
+                self.frame_loop.maybe_request_sampled_reference(
+                    self.viewer,
+                    frame,
+                    reference_sample,
+                );
+            }
+        }
+
+        fn drop_scene(
+            &mut self,
+            scene_id: u64,
+            measurement: ember_julibrot_present::SubmissionMeasurement,
+        ) {
+            self.frame_loop
+                .level_timings
+                .drop_scene(scene_id, Some(measurement));
+            let backdrop_retired = self.frame_loop.backdrop.as_mut().is_some_and(|backdrop| {
+                if backdrop
+                    .in_flight
+                    .is_some_and(|flight| flight.scene_id == scene_id)
+                {
+                    backdrop.in_flight = None;
+                    true
+                } else {
+                    false
+                }
+            });
+            if backdrop_retired {
+                self.frame_loop.active_backdrop_map = None;
+            } else if self.frame_loop.loop_state.retired(scene_id) {
+                self.frame_loop.prepared_level = None;
+            }
+        }
+
+        fn complete_warp(
+            &mut self,
+            measurement: ember_julibrot_present::SubmissionMeasurement,
+        ) -> Result<bool, AppError> {
+            self.frame_loop.level_timings.complete_warp(measurement);
+            if measurement.sample_class == ember_julibrot_present::SampleClass::ColdWarmUp {
+                self.frame_loop.frame_policy.reset();
+            }
+            self.frame_loop
+                .frame_policy
+                .record(measurement.wall_ms)
+                .map_err(|error| AppError::Present(error.to_string()))?;
+            // The copy is taken here or nowhere: this is the one moment the frame the page is
+            // about to show exists as a texture the renderer can read.
+            let armed = crate::CaptureArming {
+                armed: self.frame_loop.frame_capture.armed,
+                route_matches: self.frame_loop.frame_capture.route
+                    == ember_julibrot_present::FrameReadbackRoute::Surface,
+                readback_in_flight: self.frame_loop.presenter.frame_readback_pending(),
+                renderer_already_armed: false,
+            }
+            .surface_due();
+            let presenter = &mut self.frame_loop.presenter;
+            let capture = &mut self.frame_loop.frame_capture;
+            let presented = self
+                .runtime
+                .complete_warp_capturing(measurement.id, |texture| {
+                    if !armed {
+                        return;
                     }
-                    PresentEvent::SceneDropped {
-                        scene_id,
-                        measurement,
-                        ..
-                    } => {
-                        self.level_timings.drop_scene(scene_id, Some(measurement));
-                        let backdrop_retired = self.backdrop.as_mut().is_some_and(|backdrop| {
-                            if backdrop
-                                .in_flight
-                                .is_some_and(|flight| flight.scene_id == scene_id)
-                            {
-                                backdrop.in_flight = None;
-                                true
-                            } else {
-                                false
-                            }
-                        });
-                        if backdrop_retired {
-                            self.active_backdrop_map = None;
-                        } else if self.loop_state.retired(scene_id) {
-                            self.prepared_level = None;
-                        }
+                    capture.armed = false;
+                    match presenter.request_frame_readback(texture) {
+                        Ok(()) => capture.refusal = None,
+                        Err(error) => capture.refusal = Some(error.to_string()),
                     }
-                    PresentEvent::WarpCompleted { measurement } => {
-                        self.level_timings.complete_warp(measurement);
-                        if measurement.sample_class
-                            == ember_julibrot_present::SampleClass::ColdWarmUp
-                        {
-                            self.frame_policy.reset();
-                        }
-                        self.frame_policy
-                            .record(measurement.wall_ms)
-                            .map_err(|error| AppError::Present(error.to_string()))?;
-                        // The copy is taken here or nowhere: this is the one moment the frame the
-                        // page is about to show exists as a texture the renderer can read.
-                        let armed = crate::CaptureArming {
-                            armed: self.frame_capture.armed,
-                            route_matches: self.frame_capture.route
-                                == ember_julibrot_present::FrameReadbackRoute::Surface,
-                            readback_in_flight: self.presenter.frame_readback_pending(),
-                            renderer_already_armed: false,
-                        }
-                        .surface_due();
-                        let presenter = &mut self.presenter;
-                        let capture = &mut self.frame_capture;
-                        if runtime.complete_warp_capturing(measurement.id, |texture| {
-                            if !armed {
-                                return;
-                            }
-                            capture.armed = false;
-                            match presenter.request_frame_readback(texture) {
-                                Ok(()) => capture.refusal = None,
-                                Err(error) => capture.refusal = Some(error.to_string()),
-                            }
-                        }) {
-                            observed.presented = true;
-                            presenter.record_presented(measurement.id);
-                            // What is now on the canvas, as opposed to what was last submitted.
-                            self.presented_scene_id = measurement.source_scene_id;
-                            if let Some((warp_id, stamp)) = self.pending_warp_view
-                                && warp_id == measurement.id
-                            {
-                                self.pending_warp_view = None;
-                                self.presented_view = Some(stamp);
-                            }
-                        }
-                    }
-                    PresentEvent::FenceRefused {
-                        kind,
-                        id,
-                        reason,
-                        polls,
-                        wall_ms,
-                        precision_mode: _,
-                    } => {
-                        if matches!(kind, SubmissionKind::Scene) {
-                            self.level_timings.drop_scene(id, None);
-                        }
-                        let backdrop_retired = matches!(kind, SubmissionKind::Scene)
-                            && self.backdrop.as_mut().is_some_and(|backdrop| {
-                                if backdrop
-                                    .in_flight
-                                    .is_some_and(|flight| flight.scene_id == id)
-                                {
-                                    backdrop.in_flight = None;
-                                    true
-                                } else {
-                                    false
-                                }
-                            });
-                        if backdrop_retired {
-                            self.active_backdrop_map = None;
-                        }
-                        let outcome = self.loop_state.refused(kind, reason, id, polls, wall_ms);
-                        if outcome.retired_scene {
-                            self.prepared_level = None;
-                        }
-                        if matches!(kind, SubmissionKind::Warp) {
-                            let _dropped = runtime.refuse_warp(id);
-                            if self
-                                .pending_warp_view
-                                .is_some_and(|pending| pending.0 == id)
-                            {
-                                self.pending_warp_view = None;
-                            }
-                        }
-                        match outcome.class {
-                            RefusalClass::Device => {
-                                if refusal.is_none() {
-                                    refusal =
-                                        Some(super::fence_error(kind, reason, polls, wall_ms));
-                                }
-                            }
-                            RefusalClass::Cancelled => observed.cancelled = true,
-                            RefusalClass::Transient => observed.refused = true,
-                        }
-                    }
+                });
+            if presented {
+                presenter.record_presented(measurement.id);
+                // What is now on the canvas, as opposed to what was last submitted.
+                self.frame_loop.presented_scene_id = measurement.source_scene_id;
+                if let Some((warp_id, stamp)) = self.frame_loop.pending_warp_view
+                    && warp_id == measurement.id
+                {
+                    self.frame_loop.pending_warp_view = None;
+                    self.frame_loop.presented_view = Some(stamp);
                 }
             }
-            refusal.map_or(Ok(observed), Err)
+            Ok(presented)
+        }
+
+        fn refuse_fence(
+            &mut self,
+            kind: SubmissionKind,
+            id: u64,
+            reason: FenceRefusal,
+            polls: u32,
+            wall_ms: f64,
+        ) -> (bool, bool) {
+            if matches!(kind, SubmissionKind::Scene) {
+                self.frame_loop.level_timings.drop_scene(id, None);
+            }
+            let backdrop_retired = matches!(kind, SubmissionKind::Scene)
+                && self.frame_loop.backdrop.as_mut().is_some_and(|backdrop| {
+                    if backdrop
+                        .in_flight
+                        .is_some_and(|flight| flight.scene_id == id)
+                    {
+                        backdrop.in_flight = None;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            if backdrop_retired {
+                self.frame_loop.active_backdrop_map = None;
+            }
+            let outcome = self
+                .frame_loop
+                .loop_state
+                .refused(kind, reason, id, polls, wall_ms);
+            if outcome.retired_scene {
+                self.frame_loop.prepared_level = None;
+            }
+            if matches!(kind, SubmissionKind::Warp) {
+                let _dropped = self.runtime.refuse_warp(id);
+                if self
+                    .frame_loop
+                    .pending_warp_view
+                    .is_some_and(|pending| pending.0 == id)
+                {
+                    self.frame_loop.pending_warp_view = None;
+                }
+            }
+            match outcome.class {
+                RefusalClass::Device => {
+                    if self.refusal.is_none() {
+                        self.refusal = Some(super::fence_error(kind, reason, polls, wall_ms));
+                    }
+                    (false, false)
+                }
+                RefusalClass::Cancelled => (false, true),
+                RefusalClass::Transient => (true, false),
+            }
+        }
+    }
+
+    impl PresentEventPort for BrowserPresentEvents<'_> {
+        type Error = AppError;
+
+        fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
+            self.frame_loop.presenter.poll(now_ms)
+        }
+
+        fn scene_completed(
+            &mut self,
+            event: &PresentSceneCompletion,
+        ) -> Result<PresentEventEffect, Self::Error> {
+            self.complete_scene(&event.frame, event.reference_sample);
+            #[cfg(test)]
+            let effect = self.event_effect(false, false, false);
+            #[cfg(not(test))]
+            let effect = Self::event_effect(false, false, false);
+            Ok(effect)
+        }
+
+        fn scene_dropped(
+            &mut self,
+            event: &PresentSceneDrop,
+        ) -> Result<PresentEventEffect, Self::Error> {
+            self.drop_scene(event.scene_id, event.measurement);
+            #[cfg(test)]
+            let effect = self.event_effect(false, false, false);
+            #[cfg(not(test))]
+            let effect = Self::event_effect(false, false, false);
+            Ok(effect)
+        }
+
+        fn warp_completed(
+            &mut self,
+            event: &PresentWarpCompletion,
+        ) -> Result<PresentEventEffect, Self::Error> {
+            let presented = self.complete_warp(event.measurement)?;
+            #[cfg(test)]
+            let effect = self.event_effect(presented, false, false);
+            #[cfg(not(test))]
+            let effect = Self::event_effect(presented, false, false);
+            Ok(effect)
+        }
+
+        fn fence_refused(
+            &mut self,
+            event: &PresentFenceRefusal,
+        ) -> Result<PresentEventEffect, Self::Error> {
+            let (refused, cancelled) = self.refuse_fence(
+                event.kind,
+                event.id,
+                event.reason,
+                event.polls,
+                event.wall_ms,
+            );
+            #[cfg(test)]
+            let effect = self.event_effect(false, refused, cancelled);
+            #[cfg(not(test))]
+            let effect = Self::event_effect(false, refused, cancelled);
+            Ok(effect)
+        }
+
+        fn finish(&mut self) -> Result<(), Self::Error> {
+            self.refusal.take().map_or(Ok(()), Err)
+        }
+
+        fn invalid_receipt(&self, detail: &'static str) -> Self::Error {
+            AppError::Present(detail.to_string())
         }
     }
 

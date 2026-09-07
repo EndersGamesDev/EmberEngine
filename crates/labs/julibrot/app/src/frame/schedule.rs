@@ -273,13 +273,6 @@ impl Default for RefinementSchedule {
     }
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
-pub(super) trait PresenterPoll {
-    type Event;
-
-    fn poll_once(&mut self, now_ms: f64) -> Vec<Self::Event>;
-}
-
 /// What one present fence refusal means for the life of the refresh loop.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -452,10 +445,6 @@ const fn level_rank(level: RefinementLevel) -> u32 {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl FrameLoop {
-    pub(super) fn refresh<P: PresenterPoll>(presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
-        presenter.poll_once(now_ms)
-    }
-
     pub(super) const fn accept_request(&mut self, generation: u32, restart_scene: bool) {
         self.requested_run = true;
         self.completed_run = false;
@@ -842,15 +831,6 @@ pub(super) fn apply_precision_mode(
     loop_state.apply_precision_mode(next, generation);
     *plan = (*plan).with_precision_mode(next);
     Ok(())
-}
-
-#[cfg(target_arch = "wasm32")]
-impl PresenterPoll for ember_julibrot_present::Presenter {
-    type Event = ember_julibrot_present::PresentEvent;
-
-    fn poll_once(&mut self, now_ms: f64) -> Vec<Self::Event> {
-        self.poll(now_ms)
-    }
 }
 
 impl RefinementSchedule {
