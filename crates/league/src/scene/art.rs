@@ -79,9 +79,9 @@ const SOURCES: &[Source] = &[
 /// champions, in this order, so their ids are fixed (`scene::MESH_GARDEN`,
 /// `MESH_LANE`, `MESH_COURT`).
 const SURFACES: &[(&str, &[u8])] = &[
-    ("garden", include_bytes!("../../../../assets/models/league/v2/surface-garden.glb")),
-    ("lane", include_bytes!("../../../../assets/models/league/v2/surface-lane.glb")),
-    ("court", include_bytes!("../../../../assets/models/league/v2/surface-court.glb")),
+    ("garden", include_bytes!("../../../../assets/models/league/v4/surface-garden.glb")),
+    ("lane", include_bytes!("../../../../assets/models/league/v4/surface-lane.glb")),
+    ("court", include_bytes!("../../../../assets/models/league/v4/surface-court.glb")),
 ];
 
 /// How many meshes [`surfaces`] returns, always, so the ids that follow

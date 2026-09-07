@@ -1,0 +1,9 @@
+{
+  "prompt": "Hand painted seamless grass ground texture for a beautiful fantasy video game. Dense fine short grass blades and soft flat moss cover the entire image. Deep forest green, muted jade green and olive green. Quiet broad irregular patches of color. Small delicate blades, no large objects. Top down orthographic albedo map with flat even diffuse lighting. Stylized painterly botanical surface. A continuous carpet of healthy short grass with subtle brush strokes. Entire square covered by fine grass. No stones and no bare soil.",
+  "negative": "rocks, stones, pebbles, boulders, cobblestones, paving, flowers, leaves, fern, objects, text, logo, watermark, border, frame, perspective, horizon, landscape, circles, symmetrical pattern, kaleidoscope, gray, brown, neon, strong shadows, harsh highlights, photograph, blurry",
+  "seed": 6090744,
+  "width": 1024,
+  "height": 1024,
+  "steps": 32,
+  "cfg": 7
+}

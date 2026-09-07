@@ -1,0 +1,9 @@
+{
+  "prompt": "(flat moss carpet texture viewed directly from above:1.4), orthographic top down albedo map for a hand painted fantasy game, a continuous soft carpet of tiny dense forest moss, dark muted emerald and jade green with small olive patches, irregular quiet organic mottling, tiny clustered moss dots and very short fine grass, flat ground surface, evenly lit texture without shadows, subtle painterly detail, calm low contrast green ground material filling the entire square, seamless tileable material",
+  "negative": "(stones:1.6), (rocks:1.6), (long grass blades:1.5), boulders, pebbles, soil, brown, gray, vertical grass, side view, macro perspective, tall plants, ferns, large leaves, flowers, neon green, bright lime, vibrant, oversaturated, sun, highlights, shadows, text, logo, watermark, border, center object, symmetrical pattern, blur",
+  "seed": 6090745,
+  "width": 1024,
+  "height": 1024,
+  "steps": 32,
+  "cfg": 6.5
+}

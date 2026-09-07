@@ -1,0 +1,9 @@
+{
+  "prompt": "Seamless tileable top down albedo material for a premium hand painted fantasy strategy game, muted deep jade and olive moss growing across dark soft earth, quiet irregular patches of velvety moss and subtle small grass blades, soft broad organic color variation, a few tiny warm gray pebbles, low contrast calm surface that supports readable characters above it, flat orthographic overhead material scan, soft even diffuse illumination with no directional shadows, sophisticated painterly brushwork and tactile botanical detail, entire square filled edge to edge with ground material, no central motif, no large leaves, no flowers, no objects, no perspective",
+  "negative": "text, logo, watermark, border, frame, scene, landscape, horizon, strong shadows, harsh highlights, neon, oversaturated, tiled grid, symmetrical pattern, kaleidoscope, giant fern leaves, flowers, stones in circles, characters, buildings, blurry",
+  "seed": 6090741,
+  "width": 1024,
+  "height": 1024,
+  "steps": 32,
+  "cfg": 6.5
+}

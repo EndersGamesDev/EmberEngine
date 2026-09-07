@@ -1,0 +1,9 @@
+{
+  "prompt": "One single centered circular ancient stone plaza medallion seen exactly from directly overhead, game albedo material, a restrained eight-spoke geometric compass mosaic of weathered warm ivory limestone and charcoal slate, very thin tarnished bronze inlay, broad quiet stone center with a small turquoise crystal shaped engraving, two narrow concentric engraved rings close to the outer rim, the medallion occupies almost the whole square with a plain warm gray stone margin, sophisticated ancient fantasy craftsmanship, broad readable shapes, elegant hand painted game material, orthographic flat surface, soft uniform diffuse illumination, no raised objects, no directional shadows, no text, complete uncut circle, no perspective",
+  "negative": "text, letters, numbers, symbols resembling writing, logo, watermark, multiple medallions, tiled repeating pattern, collage, clock hands, gears, perspective, isometric, 3d objects, harsh shadows, neon, huge glowing aura, oversaturated, filigree, overly intricate, blurry",
+  "seed": 6090743,
+  "width": 1024,
+  "height": 1024,
+  "steps": 32,
+  "cfg": 6.5
+}

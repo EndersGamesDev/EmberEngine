@@ -1,0 +1,9 @@
+{
+  "prompt": "Seamless tileable top down albedo material for a premium hand painted fantasy strategy game, broad irregular ancient limestone flagstones, large softly worn polygonal slabs of warm gray and muted ivory stone fitted together with thin dark seams, small sparse jade moss in a few cracks, restrained mineral color variation, subtle chisel marks and weathered edges, quiet readable surface not busy, no little cobbles, flat orthographic overhead material scan, soft even diffuse illumination without painted shadows, beautiful stylized painterly stone craftsmanship, entire square filled edge to edge with paving material, no central motif, no border, no perspective",
+  "negative": "text, logo, watermark, border, frame, scene, horizon, perspective, harsh shadows, shiny, gold, neon, oversaturated, tiny bricks, small cobblestones, huge cracks, checkerboard, ornamental pattern, symmetrical kaleidoscope, characters, plants covering stones, blurry",
+  "seed": 6090742,
+  "width": 1024,
+  "height": 1024,
+  "steps": 32,
+  "cfg": 6.5
+}
