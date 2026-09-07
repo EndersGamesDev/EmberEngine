@@ -30,8 +30,10 @@
 
 use std::f32::consts::{PI, TAU};
 
-use ember_engine::glam::{Quat, Vec3};
-use ember_engine::{Camera, Environment, Fog, Frame, Instance, MeshData, MeshVertex, Weather};
+use ember_engine::glam::{Quat, Vec2, Vec3};
+use ember_engine::{
+    Camera, Environment, Fog, Frame, Instance, MeshData, MeshVertex, Particle, Weather,
+};
 use league_core::data;
 use league_core::proto::{BuffSnap, ProjSnap};
 
@@ -48,7 +50,7 @@ pub const MESH_OCTA: u32 = 3;
 pub const MESH_DISC: u32 = 4;
 /// A cone, base radius 1 at y=-1, apex at y=1.
 pub const MESH_CONE: u32 = 5;
-/// A flat annulus, outer radius 1, inner 0.78, at y=0.
+/// A fine inset annulus, outer radius 1, inner 0.96, at y=0.
 pub const MESH_RING: u32 = 6;
 /// A tapered blade from x=0 to x=1, thin in y, narrow in z.
 pub const MESH_BLADE: u32 = 7;
@@ -56,9 +58,9 @@ pub const MESH_BLADE: u32 = 7;
 pub const MESH_GEAR: u32 = 8;
 /// A low-poly sphere, radius 1.
 pub const MESH_SPHERE: u32 = 9;
-/// Textured ground quads from `art::surfaces`, 1x1 in x/z at y=0, UVs
-/// already tiled for the field they cover: the garden floor (160 x 92),
-/// the lane paving (140 x 14) and a court yard (11 x 11).
+/// Textured ground from `art::surfaces`, unit-sized in x/z at y=0.
+/// Garden/lane UVs tile over their field; the court is converted to a
+/// unit-diameter disc with one complete emblem, shared by both plazas.
 pub const MESH_GARDEN: u32 = 10;
 pub const MESH_LANE: u32 = 11;
 pub const MESH_COURT: u32 = 12;
@@ -122,17 +124,19 @@ pub fn bar_tilt() -> Quat {
     Quat::from_rotation_x(-CAM_HEIGHT.atan2(CAM_BACK))
 }
 
-/// The arena's light: a clear afternoon over an elevated garden, sun from
-/// the south-east so a standing body throws a short shadow toward the
-/// camera's far side, a little cloud, a shadow volume just wider than the
-/// play view. Time drives the clouds only; nothing here touches the sim.
+/// Warm late-day sun against a subdued jade sky. Fog must not lift the
+/// nearby dark garden into gray. Time drives clouds and decorative motes
+/// only; this per-game palette never changes the shared renderer or sim.
 #[must_use]
 pub fn garden_light(time: f32) -> Environment {
     let mut env = Environment::outdoor(Weather::Clear, time);
-    env.sun_direction = Vec3::new(0.45, 0.85, -0.3).normalize();
-    env.sun_color = Vec3::new(1.0, 0.94, 0.82);
-    env.sun_intensity = 1.05;
-    env.cloud_coverage = 0.15;
+    env.sun_direction = Vec3::new(-0.48, 0.76, -0.42).normalize();
+    env.sun_color = Vec3::new(1.0, 0.84, 0.62);
+    env.sun_intensity = 0.92;
+    env.sky_zenith = Vec3::new(0.065, 0.14, 0.16);
+    env.sky_horizon = Vec3::new(0.36, 0.46, 0.40);
+    env.cloud_coverage = 0.20;
+    env.wetness = 0.08;
     env.shadow_extent = 34.0;
     env
 }
@@ -200,10 +204,17 @@ pub fn build_meshes() -> Vec<MeshData> {
         gear_mesh(),
         sphere_mesh(),
     ];
-    meshes.extend(art::surfaces());
+    let mut surfaces = art::surfaces();
+    // A unique radial image must never become four mirrored motifs or a
+    // square decal. Keep its texture and registration id; only clip the quad.
+    surfaces[(MESH_COURT - MESH_GARDEN) as usize].vertices = medallion_vertices();
+    meshes.extend(surfaces);
     meshes.extend(art::props());
     // the fixed ids above must agree with what the two tables return
-    assert_eq!(meshes.len() as u32, MESH_SPHERE + art::SURFACE_COUNT + art::PROP_COUNT);
+    assert_eq!(
+        meshes.len() as u32,
+        MESH_SPHERE + art::SURFACE_COUNT + art::PROP_COUNT
+    );
     assert_eq!(meshes.len() as u32, MESH_TREE);
     meshes.extend(art::meshes(MESH_TREE + 1));
     meshes
@@ -220,6 +231,28 @@ fn plane_mesh() -> MeshData {
     push_tri(&mut vertices, a, c, b, n);
     push_tri(&mut vertices, a, d, c, n);
     MeshData { vertices, texture: None }
+}
+
+fn medallion_vertices() -> Vec<MeshVertex> {
+    const SIDES: usize = 48;
+    let vertex = |x: f32, z: f32| MeshVertex {
+        pos: [x, 0.0, z],
+        normal: [0.0, 1.0, 0.0],
+        // The authored circle occupies 94% of the square; exclude its gray
+        // corner margin without repeating or mirroring the compass motif.
+        uv: [0.5 + x * 0.94, 0.5 - z * 0.94],
+    };
+    let mut vertices = Vec::with_capacity(SIDES * 3);
+    for i in 0..SIDES {
+        let a = TAU * i as f32 / SIDES as f32;
+        let b = TAU * (i + 1) as f32 / SIDES as f32;
+        vertices.extend([
+            vertex(0.0, 0.0),
+            vertex(b.cos() * 0.5, b.sin() * 0.5),
+            vertex(a.cos() * 0.5, a.sin() * 0.5),
+        ]);
+    }
+    vertices
 }
 
 /// A capped cylinder centred on the origin, radius 1, height 2.
@@ -260,20 +293,24 @@ fn octa_mesh() -> MeshData {
 
 /// A flat disc: a thin cylinder at y=0 for team rings, pads and zones.
 fn disc_mesh() -> MeshData {
-    let mut vertices = Vec::with_capacity(SEG * 12);
+    const SIDES: usize = 48;
+    let mut vertices = Vec::with_capacity(SIDES * 12);
     let h = 0.04;
-    for i in 0..SEG {
-        let a0 = around(0.0, 0.0, 1.0, -h, i, SEG);
-        let a1 = around(0.0, 0.0, 1.0, -h, i + 1, SEG);
-        let b0 = around(0.0, 0.0, 1.0, h, i, SEG);
-        let b1 = around(0.0, 0.0, 1.0, h, i + 1, SEG);
+    for i in 0..SIDES {
+        let a0 = around(0.0, 0.0, 1.0, -h, i, SIDES);
+        let a1 = around(0.0, 0.0, 1.0, -h, i + 1, SIDES);
+        let b0 = around(0.0, 0.0, 1.0, h, i, SIDES);
+        let b1 = around(0.0, 0.0, 1.0, h, i + 1, SIDES);
         let n = rim_normal(a0, a1);
         push_tri(&mut vertices, a0, a1, b1, n);
         push_tri(&mut vertices, a0, b1, b0, n);
         push_tri(&mut vertices, [0.0, h, 0.0], b0, b1, [0.0, 1.0, 0.0]);
         push_tri(&mut vertices, [0.0, -h, 0.0], a1, a0, [0.0, -1.0, 0.0]);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A cone: base radius 1 at y=-1, apex at y=1.
@@ -289,19 +326,20 @@ fn cone_mesh() -> MeshData {
     MeshData { vertices, texture: None }
 }
 
-/// A flat annulus with a little thickness, outer radius 1, inner 0.78.
+/// Fine inlaid linework, never a broad opaque team-coloured plate.
 fn ring_mesh() -> MeshData {
-    let mut vertices = Vec::with_capacity(SEG * 24);
-    let (ro, ri, h) = (1.0, 0.78, 0.05);
-    for i in 0..SEG {
-        let o0 = around(0.0, 0.0, ro, h, i, SEG);
-        let o1 = around(0.0, 0.0, ro, h, i + 1, SEG);
-        let i0 = around(0.0, 0.0, ri, h, i, SEG);
-        let i1 = around(0.0, 0.0, ri, h, i + 1, SEG);
-        let ob0 = around(0.0, 0.0, ro, -h, i, SEG);
-        let ob1 = around(0.0, 0.0, ro, -h, i + 1, SEG);
-        let ib0 = around(0.0, 0.0, ri, -h, i, SEG);
-        let ib1 = around(0.0, 0.0, ri, -h, i + 1, SEG);
+    const SIDES: usize = 48;
+    let mut vertices = Vec::with_capacity(SIDES * 24);
+    let (ro, ri, h) = (1.0, 0.96, 0.012);
+    for i in 0..SIDES {
+        let o0 = around(0.0, 0.0, ro, h, i, SIDES);
+        let o1 = around(0.0, 0.0, ro, h, i + 1, SIDES);
+        let i0 = around(0.0, 0.0, ri, h, i, SIDES);
+        let i1 = around(0.0, 0.0, ri, h, i + 1, SIDES);
+        let ob0 = around(0.0, 0.0, ro, -h, i, SIDES);
+        let ob1 = around(0.0, 0.0, ro, -h, i + 1, SIDES);
+        let ib0 = around(0.0, 0.0, ri, -h, i, SIDES);
+        let ib1 = around(0.0, 0.0, ri, -h, i + 1, SIDES);
         // top and bottom faces
         push_tri(&mut vertices, i0, o0, o1, [0.0, 1.0, 0.0]);
         push_tri(&mut vertices, i0, o1, i1, [0.0, 1.0, 0.0]);
@@ -315,7 +353,10 @@ fn ring_mesh() -> MeshData {
         push_tri(&mut vertices, ib0, i1, ib1, m);
         push_tri(&mut vertices, ib0, i0, i1, m);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A blade along +X: a flat lozenge from the hilt at x=0 to the point at
@@ -449,165 +490,333 @@ fn ahead(x: f32, z: f32, yaw: f32, fwd: f32, side: f32) -> (f32, f32) {
 // the field
 // ---------------------------------------------------------------------------
 
-/// Static ground geometry: the dark field, the lit lane, its edge lines and
-/// distance marks, the two base plazas, the court yards and the walls.
-fn push_ground(frame: &mut Frame) {
-    // dark ground on purpose: the scene pass lifts every colour with its
-    // ambient term, and the bodies have to be the brightest thing here
-    let field = [0.04, 0.07, 0.04];
-    let lane = [0.11, 0.11, 0.07];
-    let paint = [0.4, 0.38, 0.26];
-    let stone = [0.085, 0.085, 0.105];
-    // the garden floor and the lane paving are the fleet's pictures on tiled
-    // quads, drawn white so the picture is not tinted twice (the bake already
-    // darkened them for the pass); the flat colours stay as the fallback
-    // tint under a surface that failed to load
-    let _ = (field, lane);
+/// Static scenery is vertically culled with a generous shadow margin. The
+/// camera has no aspect here, so horizontal culling would break wide screens.
+/// This never removes ground, gameplay units or their target markers.
+fn scenery_visible(frame: &Frame, x: f32, z: f32, radius: f32) -> bool {
+    let forward = (frame.camera.target - frame.camera.eye).normalize_or_zero();
+    let right = forward.cross(Vec3::Y).normalize_or_zero();
+    let up = right.cross(forward);
+    let relative = v3(x, 2.0, z) - frame.camera.eye;
+    let depth = relative.dot(forward);
+    let margin = radius + 8.0;
+    depth + margin > 0.0
+        && relative.dot(up).abs()
+            < depth.max(0.0) * (frame.camera.fov_y_deg.to_radians() * 0.5).tan() + margin
+}
+
+fn stone_box(frame: &mut Frame, position: Vec3, scale: Vec3, color: [f32; 3], yaw: f32) {
     frame.instances.push(
-        ins(v3(0.0, -0.05, 0.0), v3(160.0, 1.0, 92.0), [1.0, 1.0, 1.0])
-            .with_mesh(MESH_GARDEN)
-            .with_surface(0.95, 0.0),
+        ins(position, scale, color)
+            .with_yaw(yaw)
+            .with_surface(0.88, 0.0),
     );
-    // the lane corridor and its edges
+}
+
+fn inset_ring(frame: &mut Frame, x: f32, y: f32, z: f32, radius: f32, color: [f32; 3]) {
     frame.instances.push(
-        ins(v3(0.0, -0.02, 0.0), v3(2.0 * data::CORE_X + 16.0, 1.0, 2.0 * data::LANE_Z), [1.0, 1.0, 1.0])
-            .with_mesh(MESH_LANE)
-            .with_surface(0.85, 0.0),
+        ins(v3(x, y, z), v3(radius, 1.0, radius), color)
+            .with_mesh(MESH_RING)
+            .with_surface(0.7, 0.12)
+            .without_shadow(),
     );
-    for z in [-data::LANE_Z, data::LANE_Z] {
-        frame.instances.push(
-            ins(v3(0.0, 0.02, z), v3(2.0 * data::CORE_X - 14.0, 0.05, 0.16), paint).with_mesh(0),
-        );
-    }
-    // distance marks every ten units and the halfway line
-    for i in -5i8..=5 {
-        if i != 0 {
-            let x = f32::from(i) * 10.0;
-            frame.instances.push(
-                ins(v3(x, 0.01, 0.0), v3(0.45, 1.0, 0.45), scale3(paint, 0.8)).with_mesh(MESH_DISC),
-            );
-        }
-    }
+}
+
+/// The stone rim is shallow enough to walk across; the emblem stays at the
+/// shared y=0 walking surface. Only the objective itself rises above it.
+fn push_plaza(frame: &mut Frame, x: f32, z: f32, diameter: f32) {
+    let radius = diameter * 0.5;
     frame.instances.push(
-        ins(v3(0.0, 0.02, 0.0), v3(0.18, 0.05, 2.0 * data::LANE_Z), paint).with_mesh(0),
+        ins(
+            v3(x, -0.045, z),
+            v3(radius + 0.22, 1.6, radius + 0.22),
+            [0.11, 0.145, 0.13],
+        )
+        .with_mesh(MESH_DISC)
+        .with_surface(0.94, 0.0),
     );
-    // base plazas: a paved disc and a ring in the owner's colour
-    for team in 0..2u8 {
-        let cx = if team == 0 { -data::CORE_X } else { data::CORE_X };
-        let tint = mix(scale3(stone, 0.7), team_colour(team), 0.1);
-        frame.instances.push(
-            ins(v3(cx, 0.0, 0.0), v3(data::FOUNTAIN_R + 0.5, 1.0, data::FOUNTAIN_R + 0.5), tint)
-                .with_mesh(MESH_DISC),
-        );
-        frame.instances.push(
-            ins(v3(cx, 0.03, 0.0), v3(data::FOUNTAIN_R + 0.5, 1.0, data::FOUNTAIN_R + 0.5), team_colour(team))
-                .with_mesh(MESH_RING),
-        );
-        // the gate pillars where the lane leaves the base
-        let gx = cx - cx.signum() * 10.0;
-        for z in [-data::LANE_Z - 0.9, data::LANE_Z + 0.9] {
-            frame.instances.push(
-                ins(v3(gx, 1.5, z), v3(0.5, 1.5, 0.5), stone).with_mesh(MESH_FRUSTUM),
-            );
-            frame.instances.push(
-                ins(v3(gx, 3.2, z), v3(0.45, 0.45, 0.45), team_colour(team)).with_mesh(MESH_OCTA),
-            );
-        }
-    }
-    // court yards: a paved square, a path from the lane and four posts
-    for c in data::COURT_POS {
-        let [cx, cz] = c;
-        frame.instances.push(
-            ins(v3(cx, -0.01, cz), v3(11.0, 1.0, 11.0), [1.0, 1.0, 1.0])
-                .with_mesh(MESH_COURT)
-                .with_surface(0.8, 0.0),
-        );
-        let path_len = cz.abs() - data::LANE_Z - 5.5;
-        frame.instances.push(
-            ins(v3(cx, -0.015, cz.signum() * (data::LANE_Z + path_len / 2.0)), v3(3.0, 1.0, path_len), mix(lane, stone, 0.5))
-                .with_mesh(MESH_PLANE),
-        );
-        for (dx, dz) in [(-4.6, -4.6), (4.6, -4.6), (-4.6, 4.6), (4.6, 4.6)] {
-            frame.instances.push(
-                ins(v3(cx + dx, 1.1, cz + dz), v3(0.32, 1.1, 0.32), stone).with_mesh(MESH_FRUSTUM),
-            );
-        }
-    }
-    // walls at the field edge, so the dark field ends somewhere
-    let wall = [0.05, 0.05, 0.08];
-    for z in [-data::FIELD_Z, data::FIELD_Z] {
-        frame.instances.push(ins(v3(0.0, 0.6, z), v3(160.0, 1.2, 1.6), wall).with_mesh(0));
-    }
-    for x in [-70.0, 70.0] {
-        frame.instances.push(ins(v3(x, 0.6, 0.0), v3(1.6, 1.2, 2.0 * data::FIELD_Z), wall).with_mesh(0));
-    }
-    // the perimeter: arches at each plaza's back wall and at the court-yard
-    // mouths (off the lane, never in a corridor), and sparse mirrored tree
-    // clusters outside the corridors so the garden has depth
-    push_perimeter(frame);
-    // scattered rocks off the lane, fixed positions, for a sense of scale
-    let rock = [0.14, 0.15, 0.14];
-    for (i, (x, z, s)) in [
-        (-38.0, 24.0, 1.4),
-        (-22.0, -27.0, 1.1),
-        (-9.0, 30.0, 1.8),
-        (14.0, -31.0, 1.3),
-        (27.0, 25.0, 1.0),
-        (41.0, -22.0, 1.6),
-        (-47.0, -30.0, 1.2),
-        (49.0, 31.0, 1.5),
-        (-30.0, -14.0, 0.8),
-        (33.0, 12.0, 0.9),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let yaw = i as f32 * 0.7;
-        frame.instances.push(
-            ins(v3(x, s * 0.5, z), v3(s, s * 0.6, s * 0.8), rock).with_yaw(yaw).with_mesh(MESH_OCTA),
+    frame.instances.push(
+        ins(
+            v3(x, 0.025, z),
+            v3(diameter, 1.0, diameter),
+            [1.0, 1.0, 1.0],
+        )
+        .with_mesh(MESH_COURT)
+        .with_surface(0.86, 0.0),
+    );
+    inset_ring(frame, x, 0.043, z, radius + 0.08, [0.22, 0.15, 0.065]);
+    for i in 0..12 {
+        let angle = TAU * i as f32 / 12.0;
+        let r = radius - 0.33;
+        stone_box(
+            frame,
+            v3(x + angle.cos() * r, 0.046, z + angle.sin() * r),
+            v3(0.30, 0.025, 0.08),
+            [0.34, 0.28, 0.14],
+            -angle,
         );
     }
 }
 
-/// A prop instance: origin on the ground, `yaw` in the sim's convention.
+/// Ground keeps the full authoritative walking rectangle. Depth comes from
+/// the island below it, edge masonry and low inlaid detail, not fake holes
+/// or tall decorative obstacles that champions can walk through.
+fn push_ground(frame: &mut Frame) {
+    // Water and the island's weathered cut faces are below all walkable land.
+    frame.instances.push(
+        ins(
+            v3(0.0, -4.25, 0.0),
+            v3(232.0, 1.0, 160.0),
+            [0.018, 0.080, 0.073],
+        )
+        .with_mesh(MESH_PLANE)
+        .with_surface(0.20, 0.0)
+        .with_wetness(),
+    );
+    stone_box(
+        frame,
+        v3(0.0, -2.1, 0.0),
+        v3(160.0, 4.05, 92.0),
+        [0.065, 0.085, 0.072],
+        0.0,
+    );
+    frame.instances.push(
+        ins(v3(0.0, -0.05, 0.0), v3(160.0, 1.0, 92.0), [1.0, 1.0, 1.0])
+            .with_mesh(MESH_GARDEN)
+            .with_surface(0.96, 0.0),
+    );
+    frame.instances.push(
+        ins(
+            v3(0.0, -0.02, 0.0),
+            v3(2.0 * data::CORE_X + 16.0, 1.0, 2.0 * data::LANE_Z),
+            [1.0, 1.0, 1.0],
+        )
+        .with_mesh(MESH_LANE)
+        .with_surface(0.90, 0.0),
+    );
+    // Recessed-looking gutters and broad limestone coping replace ruler-thin
+    // yellow lane paint. Their tops remain within 4 cm of the walking plane.
+    for side in [-1.0, 1.0] {
+        stone_box(
+            frame,
+            v3(0.0, -0.008, side * (data::LANE_Z + 0.13)),
+            v3(138.0, 0.035, 0.24),
+            [0.045, 0.067, 0.054],
+            0.0,
+        );
+        stone_box(
+            frame,
+            v3(0.0, -0.005, side * (data::LANE_Z + 0.46)),
+            v3(138.0, 0.060, 0.42),
+            [0.24, 0.255, 0.20],
+            0.0,
+        );
+        for i in -8i8..=8 {
+            let x = f32::from(i) * 8.0;
+            if x.abs() < 4.0 {
+                continue;
+            } // the Court approaches stay open
+            stone_box(
+                frame,
+                v3(x, 0.027, side * (data::LANE_Z + 0.48)),
+                v3(0.13, 0.025, 0.51),
+                [0.13, 0.115, 0.07],
+                0.0,
+            );
+            stone_box(
+                frame,
+                v3(x + 0.25, 0.015, side * 8.2),
+                v3(1.5, 0.040, 0.68),
+                [0.18, 0.205, 0.15],
+                0.04 * side,
+            );
+        }
+    }
+    // An understated central crossing connects the two Courts. Individual
+    // slabs give it human scale instead of one dark rectangular corridor.
+    for side in [-1.0, 1.0] {
+        for row in 0..4 {
+            let z = side * (data::LANE_Z + 0.45 + row as f32 * 0.86);
+            stone_box(
+                frame,
+                v3(0.0, 0.015, z),
+                v3(2.8, 0.04, 0.74),
+                [0.25, 0.255, 0.20],
+                0.0,
+            );
+        }
+        for x in [-1.7, 1.7] {
+            stone_box(
+                frame,
+                v3(x, 0.017, side * 8.8),
+                v3(0.14, 0.045, 3.6),
+                [0.15, 0.17, 0.13],
+                0.0,
+            );
+        }
+    }
+    for team in 0..2u8 {
+        let cx = if team == 0 {
+            -data::CORE_X
+        } else {
+            data::CORE_X
+        };
+        push_plaza(frame, cx, 0.0, 13.6);
+        // The outer line describes the actual healing/shop radius, not the
+        // decorative plaza radius. No second broad filled team plate.
+        inset_ring(
+            frame,
+            cx,
+            0.050,
+            0.0,
+            data::FOUNTAIN_R,
+            scale3(team_colour(team), 0.34),
+        );
+    }
+    for [x, z] in data::COURT_POS {
+        push_plaza(frame, x, z, 11.0);
+    }
+    push_low_garden(frame);
+    push_perimeter(frame);
+}
+
+/// Leaf fans, broken pavers and tiny flowers decorate the lane shoulders.
+/// Everything is at most 15 cm tall and remains visually walkable.
+fn push_low_garden(frame: &mut Frame) {
+    for i in -7i8..=7 {
+        let x = f32::from(i) * 8.0;
+        for side in [-1.0, 1.0] {
+            if x.abs() < 5.0 {
+                continue;
+            }
+            let z = side * (9.8 + (x * 0.31).sin() * 0.7);
+            if !scenery_visible(frame, x, z, 1.8) {
+                continue;
+            }
+            for leaf in 0..5 {
+                let angle = leaf as f32 * 1.29 + x * 0.43;
+                let length = 0.55 + leaf as f32 * 0.10;
+                frame.instances.push(
+                    ins(
+                        v3(x, 0.03, z),
+                        v3(length, 0.12, 0.28),
+                        [0.055, 0.15 + leaf as f32 * 0.012, 0.085],
+                    )
+                    .with_mesh(MESH_BLADE)
+                    .with_yaw(angle)
+                    .with_surface(0.95, 0.0),
+                );
+            }
+            for stone in 0..2 {
+                let dx = stone as f32 * 0.57 - 0.6;
+                frame.instances.push(
+                    ins(
+                        v3(x + dx, 0.045, z + side * 0.9),
+                        v3(0.32, 0.075, 0.23),
+                        [0.17, 0.19, 0.14],
+                    )
+                    .with_mesh(MESH_OCTA)
+                    .with_yaw(x * 0.19)
+                    .with_surface(0.94, 0.0),
+                );
+            }
+            // A warm point of colour, small enough never to be a false unit.
+            frame.instances.push(
+                ins(
+                    v3(x + 0.36, 0.08, z - 0.18),
+                    v3(0.10, 0.045, 0.10),
+                    [0.40, 0.28, 0.07],
+                )
+                .with_mesh(MESH_OCTA)
+                .without_shadow(),
+            );
+        }
+    }
+}
+
+/// A prop instance: origin on the ground, yaw in the sim's convention.
 fn prop(frame: &mut Frame, mesh: u32, x: f32, z: f32, yaw: f32, scale: f32, rough: f32) {
     frame.instances.push(
         Instance::new(v3(x, 0.0, z), Vec3::splat(scale), Vec3::ONE)
             .with_rot(face(yaw))
             .with_mesh(mesh)
-            .with_surface(rough, 0.05),
+            .with_surface(rough, 0.0),
     );
 }
 
-/// Arches and trees. Every position is outside the lane corridor and the
-/// court yards: the perimeter dresses the arena, it never stands in a
-/// path the sim lets a unit walk. Mirrored across x=0 and z=0 so both
-/// sides read the same.
+/// Substantial scenery stays outside the entire x=+-68/z=+-40 walking
+/// rectangle, including each mesh's footprint. There are no invisible tree
+/// collisions and no arch standing over an unmodelled navigational obstacle.
 fn push_perimeter(frame: &mut Frame) {
-    // a portal at the back of each plaza, facing the lane
-    for (x, yaw) in [(-data::CORE_X - 6.0, 0.0), (data::CORE_X + 6.0, PI)] {
-        prop(frame, MESH_ARCH, x, 0.0, yaw, 1.0, 0.85);
-    }
-    // a smaller arch at each court-yard mouth, facing the lane
-    for c in data::COURT_POS {
-        let [cx, cz] = c;
-        let yaw = if cz > 0.0 { -PI / 2.0 } else { PI / 2.0 };
-        prop(frame, MESH_ARCH, cx, cz.signum() * (data::LANE_Z + 2.4), yaw, 0.55, 0.85);
-    }
-    // tree clusters: three per quadrant, mirrored, well off the corridors
-    for (x, z, s) in [
-        (18.0, 26.0, 1.0),
-        (24.0, 33.0, 0.8),
-        (44.0, 24.0, 0.9),
-        (52.0, 33.0, 0.75),
-        (8.0, 36.0, 0.7),
-        (34.0, 37.0, 0.85),
-    ] {
-        for sx in [-1.0, 1.0] {
-            for sz in [-1.0, 1.0] {
-                let yaw = (x * 0.37 + z * 0.61) * sx * sz;
-                prop(frame, MESH_TREE, x * sx, z * sz, yaw, s, 0.95);
+    let edge = [0.13, 0.17, 0.145];
+    for side in [-1.0, 1.0] {
+        stone_box(
+            frame,
+            v3(0.0, 0.16, side * 40.8),
+            v3(138.0, 0.32, 0.65),
+            edge,
+            0.0,
+        );
+        stone_box(
+            frame,
+            v3(side * 68.8, 0.16, 0.0),
+            v3(0.65, 0.32, 80.0),
+            edge,
+            0.0,
+        );
+        for i in -5i8..=5 {
+            let x = f32::from(i) * 12.5;
+            let z = side * 42.0;
+            if !scenery_visible(frame, x, z, 4.0) {
+                continue;
             }
+            stone_box(
+                frame,
+                v3(x, 0.55, z),
+                v3(1.1, 1.1, 1.2),
+                [0.16, 0.195, 0.16],
+                0.0,
+            );
+            stone_box(
+                frame,
+                v3(x, 1.13, z),
+                v3(1.4, 0.16, 1.5),
+                [0.28, 0.28, 0.20],
+                0.0,
+            );
+            stone_box(
+                frame,
+                v3(x, -1.8, side * 46.3),
+                v3(2.1, 3.3, 1.5),
+                [0.10, 0.125, 0.10],
+                0.0,
+            );
+            if i % 2 == 0 {
+                prop(frame, MESH_TREE, x + 3.5, side * 44.1, x * 0.31, 0.72, 0.96);
+            }
+        }
+        for z in [-27.0, -12.0, 12.0, 27.0] {
+            if scenery_visible(frame, side * 73.0, z, 5.0) {
+                prop(frame, MESH_TREE, side * 73.0, z, z * 0.11, 0.76, 0.96);
+                stone_box(
+                    frame,
+                    v3(side * 70.2, 0.6, z + 2.0),
+                    v3(1.1, 1.2, 1.1),
+                    edge,
+                    0.0,
+                );
+            }
+        }
+        if scenery_visible(frame, side * 73.0, 0.0, 6.0) {
+            prop(
+                frame,
+                MESH_ARCH,
+                side * 73.0,
+                0.0,
+                if side < 0.0 { 0.0 } else { PI },
+                0.82,
+                0.88,
+            );
         }
     }
 }
@@ -616,55 +825,157 @@ fn push_perimeter(frame: &mut Frame) {
 // objectives
 // ---------------------------------------------------------------------------
 
-fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
-    let col = if u.dead { [0.18, 0.16, 0.16] } else { team_colour(u.t) };
-    let stone = [0.13, 0.13, 0.19];
-    let bob = if u.dead { -1.2 } else { (t * 1.4).sin() * 0.25 };
-    let spin = if u.dead { 0.0 } else { t * 0.6 };
-    // the core: the obelisk trio behind the crystal (its tall spire toward
-    // the enemy), the crystal itself floating in front in the team colour
-    let toward = if u.t == 0 { 0.0 } else { PI };
-    let back = if u.t == 0 { -3.6 } else { 3.6 };
-    prop(frame, MESH_OBELISK, u.x + back, u.z, toward, 1.1, 0.8);
-    frame.instances.push(ins(v3(u.x + back * 0.2, 0.4, u.z), v3(2.4, 0.4, 2.4), stone).with_mesh(MESH_FRUSTUM).with_surface(0.85, 0.0));
-    frame.instances.push(
-        ins(v3(u.x + back * 0.2, 2.9 + bob, u.z), v3(1.6, 2.4, 1.6), col)
-            .with_rot(Quat::from_rotation_y(spin))
-            .with_mesh(MESH_OCTA)
-            .with_surface(0.15, 0.0),
-    );
-    // two marker pillars on the lane side, so the crystal has a gate
-    for side in [-1.0, 1.0] {
-        let (px, pz) = (u.x - back * 0.9, u.z + side * 3.4);
-        frame.instances.push(ins(v3(px, 1.4, pz), v3(0.55, 2.8, 0.55), stone).with_mesh(0).with_surface(0.85, 0.0));
-        frame.instances.push(ins(v3(px, 3.1, pz), v3(0.4, 0.4, 0.4), col).with_mesh(MESH_OCTA));
-    }
-    if !u.dead {
-        frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(5.5, 1.0, 5.5), col).with_mesh(MESH_RING));
+fn objective_motes(frame: &mut Frame, x: f32, z: f32, time: f32, color: [f32; 3], height: f32) {
+    for i in 0..5 {
+        let angle = time * 0.42 + i as f32 * TAU / 5.0;
+        let rise = (time * 0.16 + i as f32 * 0.2).fract();
+        frame.particles.push(Particle {
+            position: v3(
+                x + angle.cos() * 0.90,
+                height + rise * 0.75,
+                z + angle.sin() * 0.90,
+            ),
+            color: Vec3::from(color),
+            size: Vec2::splat(0.09),
+            opacity: (1.0 - rise) * 0.42,
+        });
     }
 }
 
-fn push_court(frame: &mut Frame, u: &UnitLite, t: f32) {
-    let stone = [0.17, 0.165, 0.15];
+fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
+    let col = if u.dead {
+        [0.07, 0.085, 0.075]
+    } else {
+        team_colour(u.t)
+    };
+    // The complete silhouette stays within the core's 2.4m pick/hit radius.
+    // Layered weathered stone supports a compact living crystal.
+    for (radius, y, height, stone) in [
+        (2.35, 0.13, 0.16, [0.11, 0.145, 0.12]),
+        (2.05, 0.34, 0.09, [0.22, 0.24, 0.18]),
+        (1.78, 0.48, 0.09, [0.09, 0.12, 0.10]),
+    ] {
+        frame.instances.push(
+            ins(v3(u.x, y, u.z), v3(radius, height, radius), stone)
+                .with_mesh(MESH_FRUSTUM)
+                .with_surface(0.9, 0.0),
+        );
+    }
+    inset_ring(frame, u.x, 0.58, u.z, 1.74, [0.26, 0.19, 0.08]);
     if u.dead {
-        // a taken court: a broken stump and a dark ring, waiting to respawn
-        frame.instances.push(ins(v3(u.x, 0.5, u.z), v3(1.15, 0.5, 1.15), [0.22, 0.20, 0.20]).with_mesh(MESH_FRUSTUM));
-        frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(3.2, 1.0, 3.2), [0.28, 0.26, 0.2]).with_mesh(MESH_RING));
+        for i in 0..5 {
+            let angle = i as f32 * TAU / 5.0;
+            frame.instances.push(
+                ins(
+                    v3(u.x + angle.cos() * 0.8, 0.74, u.z + angle.sin() * 0.8),
+                    v3(0.3, 0.25, 0.3),
+                    col,
+                )
+                .with_mesh(MESH_OCTA)
+                .with_yaw(angle),
+            );
+        }
         return;
     }
-    let pulse = 0.85 + 0.15 * (t * 2.0).sin();
-    let gem = [0.95 * pulse, 0.88 * pulse, 0.55];
-    // the court is the fleet's three-spire obelisk, the tall spire toward
-    // the lane; the pulsing gem floats over it as the "alive" cue
-    let _ = stone;
-    prop(frame, MESH_OBELISK, u.x, u.z, if u.z > 0.0 { -PI / 2.0 } else { PI / 2.0 }, 1.0, 0.8);
-    frame.instances.push(
-        ins(v3(u.x, 6.0 + 0.2 * (t * 1.3).sin(), u.z), v3(0.7, 0.7, 0.7), gem)
-            .with_rot(Quat::from_rotation_y(t * 0.9))
-            .with_mesh(MESH_OCTA)
-            .without_shadow(),
+    prop(
+        frame,
+        MESH_OBELISK,
+        u.x,
+        u.z,
+        if u.t == 0 { 0.0 } else { PI },
+        0.60,
+        0.88,
     );
-    frame.instances.push(ins(v3(u.x, 0.06, u.z), v3(3.4, 1.0, 3.4), team_colour(2)).with_mesh(MESH_RING).without_shadow());
+    let bob = (t * 1.35).sin() * 0.11;
+    frame.instances.push(
+        ins(v3(u.x, 3.55 + bob, u.z), v3(0.60, 0.82, 0.60), col)
+            .with_mesh(MESH_OCTA)
+            .with_yaw(t * 0.22)
+            .with_surface(0.28, 0.0),
+    );
+    let health = (u.hp / u.mh.max(1.0)).clamp(0.0, 1.0);
+    for i in 0..8 {
+        let angle = i as f32 * TAU / 8.0;
+        let tint = if (i as f32 + 0.5) / 8.0 <= health {
+            scale3(col, 0.35)
+        } else {
+            [0.045, 0.055, 0.045]
+        };
+        stone_box(
+            frame,
+            v3(u.x + angle.cos() * 2.1, 0.445, u.z + angle.sin() * 2.1),
+            v3(0.26, 0.035, 0.10),
+            tint,
+            -angle,
+        );
+    }
+    objective_motes(frame, u.x, u.z, t, scale3(col, 0.85), 2.7);
+}
+
+fn push_court(frame: &mut Frame, u: &UnitLite, t: f32) {
+    let color = if u.k == 4 {
+        [0.74, 0.40, 0.12]
+    } else {
+        [0.12, 0.57, 0.42]
+    };
+    for (radius, y, height, stone) in [
+        (1.55, 0.13, 0.16, [0.12, 0.15, 0.12]),
+        (1.31, 0.35, 0.08, [0.25, 0.25, 0.18]),
+    ] {
+        frame.instances.push(
+            ins(v3(u.x, y, u.z), v3(radius, height, radius), stone)
+                .with_mesh(MESH_FRUSTUM)
+                .with_surface(0.9, 0.0),
+        );
+    }
+    inset_ring(
+        frame,
+        u.x,
+        0.445,
+        u.z,
+        1.28,
+        if u.dead {
+            [0.10, 0.12, 0.10]
+        } else {
+            scale3(color, 0.42)
+        },
+    );
+    if u.dead {
+        for i in 0..3 {
+            let angle = i as f32 * TAU / 3.0;
+            frame.instances.push(
+                ins(
+                    v3(u.x + angle.cos() * 0.5, 0.56, u.z + angle.sin() * 0.5),
+                    v3(0.28, 0.18, 0.25),
+                    [0.12, 0.16, 0.13],
+                )
+                .with_mesh(MESH_OCTA)
+                .with_yaw(angle),
+            );
+        }
+        return;
+    }
+    // 0.4 * the baked prop's bounding diagonal fits the Court's 1.6m body.
+    prop(
+        frame,
+        MESH_OBELISK,
+        u.x,
+        u.z,
+        if u.z > 0.0 { -PI / 2.0 } else { PI / 2.0 },
+        0.40,
+        0.9,
+    );
+    frame.instances.push(
+        ins(
+            v3(u.x, 2.55 + 0.09 * (t * 1.3).sin(), u.z),
+            v3(0.42, 0.58, 0.42),
+            color,
+        )
+        .with_mesh(MESH_OCTA)
+        .with_yaw(t * 0.3)
+        .with_surface(0.33, 0.0),
+    );
+    objective_motes(frame, u.x, u.z, t, color, 1.9);
 }
 
 // ---------------------------------------------------------------------------
@@ -764,7 +1075,14 @@ fn wear_of(id: u32, buffs: &[BuffSnap]) -> Wear {
 }
 
 /// One champion or hologram, with its kit's silhouette and its buffs.
-fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool, pose: crate::combat::AttackPose) {
+fn push_champion(
+    frame: &mut Frame,
+    u: &UnitLite,
+    t: f32,
+    wear: Wear,
+    mine: bool,
+    pose: crate::combat::AttackPose,
+) {
     let def = u.def;
     let team = team_colour(u.t);
     let bob = (t * 5.0 + u.id as f32).sin() * 0.04;
@@ -792,22 +1110,32 @@ fn push_champion(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, mine: bool
 
     // the ground ring says the team even when colours run together; mine
     // is doubled so the eye finds it in a brawl. A baked body is bigger
-    // than the procedural ones, so its ring and cue grow with it, and a
-    // disc in the champion's own colour sits inside the ring: from above
-    // that disc is the one cue that never hides behind the body.
+    // than the procedural ones, so its fine outline grows with it. The
+    // actual body and its ground shadow stay visible inside the outline.
     let baked = art::champion(def);
     let ring = baked.map_or(1.15, |c| 0.62 + c.height * 0.36);
-    frame.instances.push(ins(v3(x, 0.05, z), v3(ring * wob, 1.0, ring * wob), team).with_mesh(MESH_RING).without_shadow());
-    if baked.is_some() {
-        // smaller and darker than the team ring on purpose: the ring says
-        // whose side, the disc says who, and the ring must win from far
-        frame.instances.push(ins(v3(x, 0.03, z), v3(ring * 0.6, 1.0, ring * 0.6), scale3(u.colour, 0.38)).with_mesh(MESH_DISC).without_shadow());
-    }
+    frame.instances.push(
+        ins(v3(x, 0.05, z), v3(ring * wob, 1.0, ring * wob), team)
+            .with_mesh(MESH_RING)
+            .without_shadow(),
+    );
     if mine {
-        frame.instances.push(ins(v3(x, 0.04, z), v3(ring * 1.26, 1.0, ring * 1.26), [0.95, 0.95, 0.9]).with_mesh(MESH_RING).without_shadow());
+        frame.instances.push(
+            ins(
+                v3(x, 0.04, z),
+                v3(ring * 1.26, 1.0, ring * 1.26),
+                [0.95, 0.95, 0.9],
+            )
+            .with_mesh(MESH_RING)
+            .without_shadow(),
+        );
     }
     if wear.slow {
-        frame.instances.push(ins(v3(x, 0.07, z), v3(0.85, 1.0, 0.85), [0.55, 0.8, 1.0]).with_mesh(MESH_DISC));
+        frame.instances.push(
+            ins(v3(x, 0.07, z), v3(0.85, 1.0, 0.85), [0.25, 0.5, 0.7])
+                .with_mesh(MESH_RING)
+                .without_shadow(),
+        );
     }
 
     let y = bob;
@@ -1089,8 +1417,8 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
         // a hand above it and widens with it, the procedural bodies keep
         // their tuned constants
         0 | 3 => art::champion(u.def).map_or((1.4, 2.55), |c| (1.2 + c.height * 0.3, c.height + 1.1)),
-        4 | 5 => (2.4, 7.2),
-        6 | 7 => (3.0, 5.9),
+        4 | 5 => (2.4, 3.8),
+        6 | 7 => (3.0, 4.9),
         _ => (0.7, 1.8),
     };
     let tilt = bar_tilt();
@@ -1171,6 +1499,9 @@ fn push_proj(frame: &mut Frame, p: &ProjSnap, t: f32) {
 }
 
 fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
+    if crate::combat::draw_zone(frame, zone, t) {
+        return;
+    }
     let (zk, x, z, r, spin) = *zone;
     match zk {
         0 => {
@@ -1448,8 +1779,8 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
         camera,
         instances: Vec::with_capacity(input.units.len() * 8 + input.fx.len() * 3 + 96),
         fog: Fog {
-            color: [0.55, 0.62, 0.7],
-            density: 0.0018,
+            color: [0.045, 0.075, 0.070],
+            density: 0.0005,
         },
         environment: garden_light(t),
         ..Frame::default()
@@ -1701,14 +2032,40 @@ mod tests {
             meshes.len() as u32 >= MESH_SPHERE + art::SURFACE_COUNT,
             "the nine procedural meshes come first, then the ground surfaces, then baked art"
         );
-        // the surfaces are textured quads on the floor (ids are 1-based:
+        // Surfaces keep their ids and sit on the floor (ids are 1-based:
         // id 1 is meshes[0], the engine cube being id 0)
         for i in MESH_GARDEN..=MESH_COURT {
             let m = &meshes[(i - 1) as usize];
             assert!(m.texture.is_some(), "surface {i} has no 8-bit texture");
-            assert_eq!(m.vertices.len(), 6, "surface {i} is not one quad");
-            assert!(m.vertices.iter().all(|v| v.pos[1].abs() < 1e-6), "surface {i} is not on y=0");
-            assert!(m.vertices.iter().any(|v| v.uv[0] > 1.5), "surface {i} has no tiled UVs");
+            assert!(
+                m.vertices.iter().all(|v| v.pos[1].abs() < 1e-6),
+                "surface {i} is not on y=0"
+            );
+            if i == MESH_COURT {
+                assert_eq!(
+                    m.vertices.len(),
+                    48 * 3,
+                    "the plaza is one circular medallion"
+                );
+                assert!(
+                    m.vertices
+                        .iter()
+                        .all(|v| v.uv.iter().all(|uv| (0.0..=1.0).contains(uv))),
+                    "a unique plaza must not tile"
+                );
+                assert!(
+                    m.vertices
+                        .iter()
+                        .all(|v| v.pos[0].hypot(v.pos[2]) <= 0.50001),
+                    "the plaza must have unit diameter"
+                );
+            } else {
+                assert_eq!(m.vertices.len(), 6, "surface {i} is not one quad");
+                assert!(
+                    m.vertices.iter().any(|v| v.uv[0] > 1.5),
+                    "surface {i} has no tiled UVs"
+                );
+            }
         }
         // the props are textured and stand on the ground at prop height
         for i in MESH_OBELISK..=MESH_TREE {
@@ -1720,18 +2077,32 @@ mod tests {
         // every baked part is textured (the loader's silent 16-bit failure
         // would show up here as `None`) and sized like a champion
         for (i, m) in meshes.iter().enumerate().skip(MESH_TREE as usize) {
-            assert!(m.texture.is_some(), "baked mesh {i} has no 8-bit base-colour texture");
+            assert!(
+                m.texture.is_some(),
+                "baked mesh {i} has no 8-bit base-colour texture"
+            );
             let top = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MIN, f32::max);
             let bottom = m.vertices.iter().map(|v| v.pos[1]).fold(f32::MAX, f32::min);
-            assert!(bottom > -0.05 && (1.0..=2.4).contains(&top), "baked mesh {i} stands {bottom}..{top}, not on the floor at champion height");
+            assert!(
+                bottom > -0.05 && (1.0..=2.4).contains(&top),
+                "baked mesh {i} stands {bottom}..{top}, not on the floor at champion height"
+            );
         }
         for (i, m) in meshes.iter().enumerate() {
             assert!(!m.vertices.is_empty(), "mesh {i} is empty");
             assert_eq!(m.vertices.len() % 3, 0, "mesh {i} is not a triangle list");
             for v in &m.vertices {
-                let d = v.normal[0] * v.normal[0] + v.normal[1] * v.normal[1] + v.normal[2] * v.normal[2];
-                assert!((d - 1.0).abs() < 0.01, "mesh {i} has an unnormalized or zero normal");
-                assert!(v.pos.iter().all(|c| c.is_finite()), "mesh {i} has a non-finite vertex");
+                let d = v.normal[0] * v.normal[0]
+                    + v.normal[1] * v.normal[1]
+                    + v.normal[2] * v.normal[2];
+                assert!(
+                    (d - 1.0).abs() < 0.01,
+                    "mesh {i} has an unnormalized or zero normal"
+                );
+                assert!(
+                    v.pos.iter().all(|c| c.is_finite()),
+                    "mesh {i} has a non-finite vertex"
+                );
             }
         }
     }
@@ -1742,6 +2113,99 @@ mod tests {
             let f = face(yaw) * Vec3::X;
             assert!((f.x - yaw.cos()).abs() < 1e-5 && (f.z - yaw.sin()).abs() < 1e-5, "yaw {yaw}: {f}");
             assert!(f.y.abs() < 1e-5);
+        }
+    }
+
+    fn points(instance: &Instance, meshes: &[MeshData]) -> Vec<Vec3> {
+        let local = if instance.mesh == 0 {
+            [-0.5, 0.5]
+                .into_iter()
+                .flat_map(|x| {
+                    [-0.5, 0.5]
+                        .into_iter()
+                        .flat_map(move |y| [-0.5, 0.5].into_iter().map(move |z| v3(x, y, z)))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            meshes[(instance.mesh - 1) as usize]
+                .vertices
+                .iter()
+                .map(|v| Vec3::from(v.pos))
+                .collect()
+        };
+        local
+            .into_iter()
+            .map(|p| instance.position + instance.rot * (p * instance.scale))
+            .collect()
+    }
+
+    #[test]
+    fn scenery_preserves_the_walkable_rectangle_and_has_a_bounded_cost() {
+        let meshes = build_meshes();
+        let mut frame = Frame {
+            camera: camera_zoomed((0.0, 0.0), 4.0),
+            ..Frame::default()
+        };
+        push_ground(&mut frame);
+        assert!(
+            frame.instances.len() <= 500,
+            "{} ground instances",
+            frame.instances.len()
+        );
+        let triangles: usize = frame
+            .instances
+            .iter()
+            .map(|i| {
+                if i.mesh == 0 {
+                    12
+                } else {
+                    meshes[(i.mesh - 1) as usize].vertices.len() / 3
+                }
+            })
+            .sum();
+        assert!(
+            triangles <= 100_000,
+            "{triangles} static triangles before shadows"
+        );
+        for instance in &frame.instances {
+            for p in points(instance, &meshes) {
+                assert!(
+                    p.y <= 0.16
+                        || p.x.abs() >= league_core::sim::FIELD_X
+                        || p.z.abs() >= data::FIELD_Z,
+                    "tall decoration enters the walkable rectangle: mesh {} at {p:?}",
+                    instance.mesh
+                );
+            }
+        }
+        let fountains = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == MESH_RING && (i.scale.x - data::FOUNTAIN_R).abs() < 1e-5)
+            .count();
+        assert_eq!(fountains, 2, "both fountains retain their real radius");
+    }
+
+    #[test]
+    fn objective_silhouettes_stay_inside_their_authoritative_pick_radii() {
+        let meshes = build_meshes();
+        for (kind, team, radius) in [(6, 0, 2.4), (7, 1, 2.4), (4, 2, 1.6), (5, 2, 1.6)] {
+            let u = unit(1, kind, team, u8::MAX, 0.0, 0.0, 0);
+            let mut frame = Frame::default();
+            if kind >= 6 {
+                push_core(&mut frame, &u, 1.2);
+            } else {
+                push_court(&mut frame, &u, 1.2);
+            }
+            assert!(frame.particles.len() <= 5);
+            for instance in &frame.instances {
+                for p in points(instance, &meshes) {
+                    assert!(
+                        p.x.hypot(p.z) <= radius + 0.001,
+                        "kind {kind} exceeds its {radius}m pick radius at {p:?}"
+                    );
+                }
+            }
         }
     }
 
