@@ -47,7 +47,7 @@ pub use palette::{
 pub use planner::{
     RELIEF_REDRAW_MAX_EXPOSED_FRACTION, WARP_MAX_ERROR_PX, Warp, project_scene_point,
     project_scene_record_vertex, project_scene_vertex, project_scene_vertex_exact,
-    relief_redraw_source_pose, renders_same_picture,
+    relief_redraw_source_covers_destination, relief_redraw_source_pose, renders_same_picture,
 };
 pub use shade_shader::shade_shader;
 pub use shader::{glitch_count_shader, scene_shader};

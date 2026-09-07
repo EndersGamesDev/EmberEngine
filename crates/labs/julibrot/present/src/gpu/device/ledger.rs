@@ -272,10 +272,11 @@ pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::Warp
 
 /// Proves that a redraw fallback may keep the retained picture over the whole destination.
 ///
-/// An admitted redraw still carries its exact flat inverse-sampling rows, so its lattice answers
-/// coverage directly. A planner-level redraw refusal has already erased those rows; only the
-/// refusal classes reached from the relief error corpus may reconstruct them. Slice, chart,
-/// matrix, and edge-on refusals deliberately remain ineligible for a hold.
+/// Coverage is a relation between the requested and retained record-chart rectangles. The plan's
+/// image rows and texture lattice answer a different question — where an image warp samples — and
+/// a reduced delivery extent must not shrink the chart its records cover. Only refusal classes
+/// reached from the relief error corpus are eligible; slice, chart, matrix, and edge-on refusals
+/// deliberately remain ineligible for a hold.
 pub(super) fn redraw_source_covers_destination(
     plan: &crate::WarpPlan,
     source: &SceneFrame,
@@ -283,9 +284,7 @@ pub(super) fn redraw_source_covers_destination(
 ) -> bool {
     if plan.kind == WarpKind::ReliefRedraw {
         return plan.source_valid
-            && plan
-                .lattice
-                .is_some_and(|lattice| lattice.covers_destination(plan.rows));
+            && crate::relief_redraw_source_covers_destination(source, requested);
     }
     if !matches!(
         plan.refusal_reason,
@@ -297,26 +296,7 @@ pub(super) fn redraw_source_covers_destination(
     ) {
         return false;
     }
-    let Ok(flat) = warp_matrix(&source.pose, requested) else {
-        return false;
-    };
-    let Some(delivery) = LatticePair::new(
-        source.extent,
-        [source.pose.grid_width, source.pose.grid_height],
-    ) else {
-        return false;
-    };
-    let Some(lattice) =
-        LatticePair::new(source.extent, [requested.grid_width, requested.grid_height])
-    else {
-        return false;
-    };
-    let Some(rows) =
-        pack_homography_rows(compose_homography(delivery.covering_map(), flat.inverse))
-    else {
-        return false;
-    };
-    lattice.covers_destination(rows)
+    crate::relief_redraw_source_covers_destination(source, requested)
 }
 
 pub(super) fn apply_hold_policy(

@@ -323,7 +323,52 @@ pub fn relief_redraw_source_pose(
     Some(redraw)
 }
 
-fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<[f64; 9]> {
+/// Whether the requested chart rectangle lies inside the retained record chart rectangle.
+///
+/// This test deliberately precedes presentation-lattice scaling. The source pose's grid names the
+/// record-chart coordinate rectangle, while `SceneFrame::extent` names the texture-delivery
+/// lattice. A reduced Preview represents the same plane footprint on a coarser chart lattice. The
+/// half-texel reach is therefore converted from delivered texels into source-chart pixels.
+#[must_use]
+pub fn relief_redraw_source_covers_destination(
+    source: &SceneFrame,
+    destination: &Pose,
+) -> bool {
+    if source.extent.contains(&0) {
+        return false;
+    }
+    let Some(chart) = source_to_destination_chart(&source.pose, destination) else {
+        return false;
+    };
+    let determinant = chart[0].mul_add(chart[4], -chart[1] * chart[3]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return false;
+    }
+    let source_half = [
+        f64::from(source.pose.grid_width) * 0.5
+            + RETAINED_TEXEL_REACH_PX * f64::from(source.pose.grid_width)
+                / f64::from(source.extent[0]),
+        f64::from(source.pose.grid_height) * 0.5
+            + RETAINED_TEXEL_REACH_PX * f64::from(source.pose.grid_height)
+                / f64::from(source.extent[1]),
+    ];
+    screen_corners(destination).into_iter().all(|destination| {
+        let translated = [destination[0] - chart[2], destination[1] - chart[5]];
+        let retained = [
+            chart[4].mul_add(translated[0], -chart[1] * translated[1]) / determinant,
+            (-chart[3]).mul_add(translated[0], chart[0] * translated[1]) / determinant,
+        ];
+        retained.iter().zip(source_half).all(|(value, half)| {
+            value.is_finite() && (-half..=half).contains(value)
+        })
+    })
+}
+
+/// Builds the affine map from retained source-chart pixels to requested chart pixels.
+pub(crate) fn source_to_destination_chart(
+    source: &Pose,
+    destination: &Pose,
+) -> Option<[f64; 9]> {
     plane_chart_relation(source.plane, destination.plane)?;
     let source_scale = pixel_scale(source.zoom_log2, source.grid_width).ok()?;
     let destination_scale = pixel_scale(destination.zoom_log2, destination.grid_width).ok()?;
