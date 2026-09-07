@@ -422,10 +422,8 @@ impl BrowserFrameLoop {
         let sampled = submission.reference_centre != navigation.centre;
         let requested = viewer.requested();
         if KernelMode::for_zoom(navigation.zoom_log2) == KernelMode::Shallow {
-            if !viewer.accept_navigation_without_orbit(
-                navigation.generation,
-                navigation.centre_revision,
-            )
+            if !viewer
+                .accept_navigation_without_orbit(navigation.generation, navigation.centre_revision)
             {
                 return Ok(false);
             }

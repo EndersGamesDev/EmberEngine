@@ -12,8 +12,8 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
-    HotState, MIN_MAX_ITER, MainState, NavigationConfig, NavigationSubmission, OrbitReason,
-    OrbitDisposition, OrbitHandle, OrbitResponseView, ViewerOwner, ViewerState,
+    HotState, MIN_MAX_ITER, MainState, NavigationConfig, NavigationSubmission, OrbitDisposition,
+    OrbitHandle, OrbitReason, OrbitResponseView, ViewerOwner, ViewerState,
 };
 
 use crate::{AppError, SavedView};
@@ -1946,12 +1946,8 @@ mod tests {
         viewer
             .set_object_angles(object)
             .expect("valid in-plane object turn");
-        let centre = viewer
-            .navigation_centre()
-            .expect("navigation has a centre");
-        let plane = viewer
-            .navigation_plane()
-            .expect("navigation has a plane");
+        let centre = viewer.navigation_centre().expect("navigation has a centre");
+        let plane = viewer.navigation_plane().expect("navigation has a plane");
         let scale = pixel_scale(viewer.requested().zoom_log2, 960).expect("valid scale");
         let rotated_chart = viewer
             .crosshair

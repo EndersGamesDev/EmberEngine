@@ -309,8 +309,7 @@ impl BrowserFrameLoop {
         now_ms: f64,
     ) -> Result<Option<u64>, AppError> {
         if matches!(map, PoseMap::Mapped(_))
-            && (!self.submitted_references.is_empty()
-                || viewer.navigation_pending_depth() != 0)
+            && (!self.submitted_references.is_empty() || viewer.navigation_pending_depth() != 0)
         {
             return Ok(None);
         }
