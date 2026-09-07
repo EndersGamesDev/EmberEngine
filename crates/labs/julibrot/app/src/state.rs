@@ -543,16 +543,11 @@ impl ViewerController {
         self.checked_plane
     }
 
-    /// Returns the worker owner for response acceptance and generation notes.
+    /// Returns the worker record adapter for the deferred facts-reader migration.
+    #[cfg(target_arch = "wasm32")]
     #[must_use]
-    pub const fn owner(&self) -> &ViewerOwner {
+    pub(crate) const fn owner(&self) -> &ViewerOwner {
         &self.owner
-    }
-
-    /// Returns the worker owner for response acceptance and navigation release.
-    #[must_use]
-    pub const fn owner_mut(&mut self) -> &mut ViewerOwner {
-        &mut self.owner
     }
 
     /// Applies the centre-width policy and returns the generation already naming the view.
