@@ -1165,7 +1165,8 @@ mod browser {
                 self.presented_view_is_stale(viewer),
                 completed_requested_final,
             ) {
-                self.loop_state.request_missing_final(self.main.generation_applied);
+                self.loop_state
+                    .request_missing_final(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
                 // Re-selecting the level changes the prepared extent, and the drained pose is

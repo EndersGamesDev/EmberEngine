@@ -3894,7 +3894,9 @@ fn automatic_recovery_stops_only_when_the_requested_final_exists() {
         super::stale_view_needs_a_new_scene(Auto, false, false, false),
         "an accepted retained warp cannot conceal a missing requested Final"
     );
-    assert!(!super::stale_view_needs_a_new_scene(Auto, true, true, false));
+    assert!(!super::stale_view_needs_a_new_scene(
+        Auto, true, true, false
+    ));
 
     let mut recovering = FrameLoop::default();
     recovering.request_missing_final(7);
@@ -3919,12 +3921,16 @@ fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
         super::stale_view_needs_a_new_scene(Manual, false, true, false),
         "a manual page records the moved pose in the very gap auto refinement waits through"
     );
-    assert!(super::stale_view_needs_a_new_scene(Manual, false, true, true));
+    assert!(super::stale_view_needs_a_new_scene(
+        Manual, false, true, true
+    ));
     assert!(
         !super::stale_view_needs_a_new_scene(Manual, true, true, false),
         "a pending ladder is already the record that work is due"
     );
-    assert!(!super::stale_view_needs_a_new_scene(Manual, false, false, false));
+    assert!(!super::stale_view_needs_a_new_scene(
+        Manual, false, false, false
+    ));
 
     // What the observation does in each mode: manual marks the update and stays paused.
     let mut manual = FrameLoop::default();

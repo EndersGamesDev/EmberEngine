@@ -1,3 +1,5 @@
+use ember_julibrot_math::PrecisionMode;
+
 use super::ledger::{LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination};
 use super::shade::{encode_shade, ensure_value_target, write_palette};
 use super::{
@@ -36,7 +38,7 @@ impl Presenter {
         &self,
         requested: &Pose,
         iteration_cap: u32,
-        precision_mode: crate::PrecisionMode,
+        precision_mode: PrecisionMode,
     ) -> bool {
         self.ledger.retained().is_some_and(|frame| {
             frame.level == RefinementLevel::Final
