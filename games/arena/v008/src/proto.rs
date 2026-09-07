@@ -58,7 +58,10 @@ pub struct PlayerMeta {
 
 /// Per-player state inside a State broadcast.
 // The wire-format booleans are independent protocol fields and cannot be consolidated compatibly.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent booleans are frozen wire-format fields"
+)]
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct PState {
     /// In-lobby player identifier.

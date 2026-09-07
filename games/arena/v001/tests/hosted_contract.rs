@@ -1,5 +1,8 @@
 // Frozen checkpoint values are intentionally compared bit-for-bit.
-#![allow(clippy::float_cmp)]
+#![allow(
+    clippy::float_cmp,
+    reason = "Hosted checkpoints preserve exact frozen floating-point state"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

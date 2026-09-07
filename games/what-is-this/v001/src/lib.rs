@@ -6,7 +6,10 @@
 
 #![deny(missing_docs)]
 // Protocol-qualified names remain useful at call sites.
-#![allow(clippy::module_name_repetitions)]
+#![allow(
+    clippy::module_name_repetitions,
+    reason = "Protocol-qualified names keep frozen call sites explicit"
+)]
 
 use std::collections::BTreeSet;
 
