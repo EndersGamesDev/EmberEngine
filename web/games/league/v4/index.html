@@ -29,7 +29,7 @@
   </section>
   <p class="note">Destroy the enemy core to win. The North Court grants damage; the South Court grants haste. Return to your fountain to recover health and mana.
   Right-click enemies to attack them, right-click the ground to walk, cast at the cursor with your ability keys, use your spells, drink potions with your item keys, and open the shop with <b data-key-label="shop">B</b>.
-  Rank up with the <b>+</b> on an ability, or hold <b>Shift</b>/<b>Ctrl</b> and press its key. Press <b data-key-label="attackMove">A</b> toward the cursor to attack-move. Open <b>Esc</b> for fullscreen, keybindings, and the new-player guide.</p>
+  Rank up with the <b>+</b> on an ability, or hold <b>Shift</b>/<b>Ctrl</b> and press its key. Press <b data-key-label="attackMove">A</b> toward the cursor to attack-move. Open <b>Esc</b> for fullscreen, keybindings, combat sound, and the new-player guide.</p>
   <section class="panel">
     <label>handle <input id="handle" maxlength="20"></label>
     <div class="btnrow">
@@ -85,6 +85,8 @@
 <div id="stage" class="col hidden">
   <div id="ember-root"><span id="loading">loading engine&hellip;</span></div>
   <div id="hud">
+    <div id="impact-frame" aria-hidden="true"></div>
+    <div id="combat-text" aria-hidden="true"></div>
     <div id="topstrip" class="p">
       <div class="team blue"><span class="tag">BLUE</span><span class="corebar"><i id="corehp0"></i></span><span class="coretxt" id="coretxt0"></span></div>
       <div id="tcenter"><span id="timer">0:00</span><span id="kills">0 : 0</span></div>
@@ -93,6 +95,12 @@
     </div>
     <div id="feed" class="p hidden"></div>
     <div id="score" class="p"><table><tbody id="score-body"></tbody></table></div>
+    <div id="target-panel" class="p hidden" aria-label="Selected target">
+      <span class="target-caption">SELECTED TARGET</span><strong id="target-name"></strong>
+      <div class="target-vital"><i id="target-fill"></i></div><span id="target-hp"></span>
+    </div>
+    <div id="order-status" class="hidden" aria-hidden="true"></div>
+    <div id="action-feedback" class="hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="bar" class="p">
       <div id="me">
         <div id="portrait-wrap"><span id="portrait-emb" aria-hidden="true"></span><img id="portrait" alt=""></div>
@@ -137,6 +145,11 @@
       <button id="btn-leave2">Leave match</button>
     </div>
     <p id="fullscreen-note" class="note" role="status"></p>
+    <section class="sound-settings" aria-labelledby="sound-title">
+      <div class="sound-heading"><h4 id="sound-title">Combat sound</h4><label><input id="sound-muted" type="checkbox"> Muted</label></div>
+      <label class="sound-volume" for="sound-volume">Volume <input id="sound-volume" type="range" min="0" max="100" step="5"><output id="sound-volume-value" for="sound-volume">35%</output></label>
+      <p id="sound-state" class="note" role="status">Sound starts after you interact. Your preference saves here.</p>
+    </section>
   </div></div>
   <div id="result" class="overlay hidden"><div class="box">
     <h2 id="result-who"></h2>

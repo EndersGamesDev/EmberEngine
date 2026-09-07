@@ -372,6 +372,221 @@ $('btn-help-close').onclick = () => closeOverlay('help');
 function syncFullscreen() {
   $('btn-fullscreen').textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen';
 }
+
+// ---- V4 confirmed feedback and gesture-gated sound --------------------------
+
+const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+const soundSaved = readSaved('ember-league-v4-sound', {});
+const sound = {
+  muted: soundSaved?.muted === true,
+  volume: Number.isFinite(soundSaved?.volume) ? Math.max(0, Math.min(1, soundSaved.volume)) : .35,
+  context: null, master: null, limiter: null, voices: new Set(),
+  last: -Infinity, kinds: new Map(), tokens: 6, refill: 0,
+};
+let feedbackSession = null, feedbackCursor = 0, discardFeedback = true, lastOwnLevel = null;
+const floatNodes = new Map(), readyStates = new Map(), readyUntil = new Map();
+const feedbackKinds = new Set(['damage', 'crit', 'heal', 'level']);
+const clamp01 = value => Math.max(0, Math.min(1, Number(value) || 0));
+
+function paintSoundSettings() {
+  $('sound-muted').checked = sound.muted;
+  $('sound-volume').value = Math.round(sound.volume * 100);
+  $('sound-volume-value').value = `${Math.round(sound.volume * 100)}%`;
+  $('sound-state').textContent = sound.muted || sound.volume === 0 ? 'Combat sounds are muted. Visual feedback stays on.'
+    : document.hidden ? 'Sound is paused while this tab is hidden.'
+    : sound.context?.state === 'running' ? 'Combat sound is on. Volume and mute save to this browser.'
+    : 'Sound starts with your next click or key press. No sound plays on page load.';
+  if (sound.master && sound.context) {
+    sound.master.gain.setTargetAtTime(sound.muted ? 0 : sound.volume * .2, sound.context.currentTime, .02);
+  }
+}
+function stopVoices() {
+  for (const voice of sound.voices) {
+    for (const oscillator of voice.oscillators) { try { oscillator.stop(); } catch {} }
+    for (const node of voice.nodes) { try { node.disconnect(); } catch {} }
+  }
+  sound.voices.clear();
+}
+async function unlockSound(event) {
+  if (!event?.isTrusted || !navigator.userActivation?.isActive || document.hidden || sound.muted || sound.volume === 0) return;
+  try {
+    if (!sound.context) {
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      if (!Audio) { $('sound-state').textContent = 'Sound is unavailable in this browser. Visual feedback stays on.'; return; }
+      sound.context = new Audio({ latencyHint: 'interactive' });
+      sound.master = sound.context.createGain();
+      sound.master.gain.value = sound.volume * .2;
+      sound.limiter = sound.context.createDynamicsCompressor();
+      sound.limiter.threshold.value = -12;
+      sound.limiter.knee.value = 6; sound.limiter.ratio.value = 12;
+      sound.limiter.attack.value = .003; sound.limiter.release.value = .08;
+      sound.master.connect(sound.limiter).connect(sound.context.destination);
+      sound.context.onstatechange = paintSoundSettings;
+    }
+    if (sound.context.state === 'suspended') await sound.context.resume();
+    paintSoundSettings();
+  } catch { $('sound-state').textContent = 'Your browser paused sound. Click or press a key to try again.'; }
+}
+document.addEventListener('pointerdown', unlockSound, { capture: true, passive: true });
+document.addEventListener('keydown', event => { if (!event.repeat) unlockSound(event); }, { capture: true });
+function saveSound(event) {
+  sound.muted = $('sound-muted').checked;
+  sound.volume = clamp01(Number($('sound-volume').value) / 100);
+  save('ember-league-v4-sound', { muted: sound.muted, volume: sound.volume });
+  if (sound.muted || sound.volume === 0) stopVoices();
+  paintSoundSettings();
+  unlockSound(event);
+}
+$('sound-muted').addEventListener('change', saveSound);
+$('sound-volume').addEventListener('input', saveSound);
+paintSoundSettings();
+
+function playCue(kind, sx = .5, champ = 0) {
+  const context = sound.context;
+  if (!context || context.state !== 'running' || document.hidden || sound.muted || sound.volume <= 0) return;
+  const now = context.currentTime;
+  sound.tokens = Math.min(6, sound.tokens + Math.max(0, now - sound.refill) * 8); sound.refill = now;
+  const perKind = { attack: .1, hit: .1, crit: .18, cast: .15, hurt: .22, heal: .3, level: .8 };
+  if (!Object.hasOwn(perKind, kind) || sound.voices.size >= 6 || sound.tokens < 1 || now - sound.last < .04 || now - (sound.kinds.get(kind) ?? -Infinity) < perKind[kind]) return;
+  sound.tokens -= 1; sound.last = now; sound.kinds.set(kind, now);
+  const castPitch = [440, 220, 660, 160, 520][champ] || 440;
+  const [wave, start, end, duration, overtone] = {
+    attack: ['triangle', 150, 80, .075, 2], hit: ['triangle', 310, 105, .09, 2.3],
+    crit: ['triangle', 520, 150, .14, 1.5], cast: ['sine', castPitch, castPitch * 1.4, .17, 1.5],
+    hurt: ['triangle', 95, 48, .12, 1.4], heal: ['sine', 660, 880, .2, 1.5],
+    level: ['sine', 523, 1046, .28, 1.25],
+  }[kind];
+  const voice = { nodes: [], oscillators: [] };
+  let destination = sound.master;
+  if (typeof context.createStereoPanner === 'function') {
+    const pan = context.createStereoPanner();
+    pan.pan.value = motionPreference.matches ? 0 : (clamp01(sx) - .5) * .35;
+    pan.connect(destination); destination = pan; voice.nodes.push(pan);
+  }
+  for (const [ratio, strength] of [[1, .12], [overtone, .045]]) {
+    const oscillator = context.createOscillator(), envelope = context.createGain();
+    oscillator.type = wave;
+    oscillator.frequency.setValueAtTime(start * ratio, now);
+    oscillator.frequency.exponentialRampToValueAtTime(end * ratio, now + duration);
+    envelope.gain.setValueAtTime(.0001, now);
+    envelope.gain.linearRampToValueAtTime(strength, now + .006);
+    envelope.gain.exponentialRampToValueAtTime(.0001, now + duration);
+    oscillator.connect(envelope).connect(destination);
+    oscillator.start(now); oscillator.stop(now + duration + .015);
+    voice.nodes.push(oscillator, envelope); voice.oscillators.push(oscillator);
+  }
+  sound.voices.add(voice);
+  voice.oscillators[0].onended = () => { for (const node of voice.nodes) node.disconnect(); sound.voices.delete(voice); };
+}
+
+function clearFeedbackVisuals() {
+  for (const node of floatNodes.values()) node.remove();
+  floatNodes.clear();
+  $('action-feedback').classList.add('hidden');
+  $('target-panel').classList.add('hidden');
+  $('order-status').classList.add('hidden');
+  $('impact-frame').style.opacity = '0';
+  document.querySelectorAll('.ready-cue, .action-blocked').forEach(node => node.classList.remove('ready-cue', 'action-blocked'));
+  document.querySelectorAll('.ready-word').forEach(node => node.remove());
+  readyStates.clear(); readyUntil.clear();
+}
+document.addEventListener('visibilitychange', () => {
+  discardFeedback = true; lastOwnLevel = null; clearFeedbackVisuals(); stopVoices();
+  if (document.hidden && sound.context?.state === 'running') sound.context.suspend().catch(() => {});
+  paintSoundSettings();
+});
+motionPreference.addEventListener('change', () => { discardFeedback = true; clearFeedbackVisuals(); });
+window.addEventListener('pagehide', () => { stopVoices(); sound.context?.suspend().catch(() => {}); });
+
+function paintReadyCues(me, now) {
+  document.querySelectorAll('#abils .slot, #spells .slot').forEach(el => {
+    const ability = el.dataset.abil !== undefined;
+    const index = Number(ability ? el.dataset.abil : el.dataset.spell), key = `${ability ? 'a' : 's'}${index}`;
+    const cooldown = Number((ability ? me.cd : me.scd)?.[index]);
+    const rank = ability ? me.rk?.[index] : 1;
+    const before = readyStates.get(key);
+    // A crossing creates one deadline. Subsequent HUD polls never restart it.
+    if (before > .05 && cooldown <= .05 && rank && me.alive) readyUntil.set(key, now + 850);
+    readyStates.set(key, cooldown);
+    const ready = (readyUntil.get(key) || 0) > now && cooldown <= .05 && rank && me.alive;
+    el.classList.toggle('ready-cue', !!ready);
+    let word = el.querySelector('.ready-word');
+    if (ready && !word) { word = document.createElement('span'); word.className = 'ready-word'; word.textContent = 'READY'; el.append(word); }
+    else if (!ready) { word?.remove(); readyUntil.delete(key); }
+  });
+}
+
+function renderFeedback(h) {
+  const feedback = h.feedback, me = h.me, now = performance.now();
+  if (!feedback || h.phase !== 'live' || !me || document.hidden) { clearFeedbackVisuals(); return; }
+  const newSession = feedback.session !== feedbackSession;
+  if (newSession) { clearFeedbackVisuals(); feedbackSession = feedback.session; feedbackCursor = 0; lastOwnLevel = null; }
+  const skip = discardFeedback || newSession;
+  discardFeedback = false;
+  const priorCursor = feedbackCursor, active = new Set(), cues = [];
+  const events = Array.isArray(feedback.events) ? feedback.events.slice(-48) : [];
+  const textPriority = event => ({ level: 5, crit: 4, heal: 2, damage: event.unit === me.uid ? 3 : 1 }[event.kind] || 0);
+  const shown = new Set(events.filter(event => feedbackKinds.has(event.kind) && event.left > 0)
+    .sort((a, b) => textPriority(b) - textPriority(a) || b.id - a.id).slice(0, 14).map(event => `${feedback.session}:${event.id}`));
+  for (const [id, node] of floatNodes) if (!shown.has(id)) { node.remove(); floatNodes.delete(id); }
+  for (const event of events) {
+    if (!Number.isSafeInteger(event.id) || event.id < 1) continue;
+    feedbackCursor = Math.max(feedbackCursor, event.id);
+    if (event.confirmed !== true || !Number.isFinite(event.left) || !(event.left > 0) || !Number.isFinite(event.age) || event.age < 0 || !Number.isFinite(event.sx) || !Number.isFinite(event.sy) || event.sx < 0 || event.sx > 1 || event.sy < 0 || event.sy > 1) continue;
+    const fresh = !skip && event.id > priorCursor && event.age >= 0 && event.age < .3;
+    const ownSource = me.uid > 0 && event.source === me.uid;
+    const ownVictim = me.uid > 0 && event.unit === me.uid;
+    if (fresh) {
+      if (event.kind === 'damage' && ownVictim && Number.isFinite(event.amount) && event.amount > 0) cues.push(['hurt', event.sx]);
+      else if (ownSource && ['attack', 'hit', 'crit', 'cast', 'heal'].includes(event.kind)) cues.push([event.kind, event.sx]);
+      else if (event.kind === 'heal' && ownVictim) cues.push(['heal', event.sx]);
+    }
+    if (!feedbackKinds.has(event.kind) || skip) continue;
+    const id = `${feedback.session}:${event.id}`;
+    if (!shown.has(id)) continue;
+    let node = floatNodes.get(id);
+    if (!node && event.id <= priorCursor) continue; // Do not replay old/offscreen events.
+    if (!node && floatNodes.size >= 14) continue;
+    if (!node) {
+      node = document.createElement('span'); node.className = 'combat-float';
+      node.dataset.event = id; node.dataset.kind = event.kind;
+      node.classList.toggle('own', ownVictim); $('combat-text').append(node); floatNodes.set(id, node);
+    }
+    active.add(id);
+    // Same-id damage can grow during the short authoritative grouping window.
+    const text = event.kind === 'damage' && Number.isFinite(event.amount) && event.amount > 0 ? `−${Math.round(event.amount)}` : String(event.text || '');
+    if (node.textContent !== text) node.textContent = text;
+    const extra = { damage: 0, crit: 22, heal: 17, level: 36 }[event.kind];
+    if (!motionPreference.matches || !node.style.left) {
+      node.style.left = `${event.sx * 100}%`; node.style.top = `${event.sy * 100}%`;
+    }
+    node.style.setProperty('--rise', `${extra + (motionPreference.matches ? 0 : Math.min(1.1, event.age) * 28)}px`);
+    node.style.opacity = String(Math.min(1, event.left / .24));
+  }
+  for (const [id, node] of floatNodes) if (!active.has(id)) { node.remove(); floatNodes.delete(id); }
+  if (!skip && me.uid > 0 && lastOwnLevel?.uid === me.uid && me.lv > lastOwnLevel.level) cues.push(['level', .5]);
+  lastOwnLevel = { uid: me.uid, level: me.lv };
+  const cuePriority = { hurt: 7, level: 6, crit: 5, cast: 4, heal: 3, hit: 2, attack: 1 };
+  cues.sort((a, b) => cuePriority[b[0]] - cuePriority[a[0]]);
+  if (cues.length) playCue(cues[0][0], cues[0][1], me.champ);
+  const hint = feedback.unavailable, toast = $('action-feedback');
+  const hasHint = hint?.left > 0 && typeof hint.text === 'string';
+  toast.classList.toggle('hidden', !hasHint);
+  if (hasHint && toast.textContent !== hint.text) toast.textContent = hint.text;
+  document.querySelectorAll('#abils .slot').forEach(el => el.classList.toggle('action-blocked', hasHint && Number(el.dataset.abil) === hint.slot));
+  const target = feedback.target, hasTarget = target && target.hp > 0 && Number.isFinite(target.mh) && target.mh > 0;
+  $('target-panel').classList.toggle('hidden', !hasTarget);
+  if (hasTarget) {
+    $('target-name').textContent = target.name || 'Target';
+    $('target-hp').textContent = `${Math.ceil(target.hp)} / ${Math.ceil(target.mh)} HP`;
+    $('target-fill').style.width = `${clamp01(target.hp / target.mh) * 100}%`;
+  }
+  const order = feedback.order, orderText = { move: 'Moving', attack_move: 'Attack move', attack: 'Attack target' }[order?.kind];
+  $('order-status').classList.toggle('hidden', !(order?.left > 0 && orderText));
+  if (orderText) { $('order-status').textContent = orderText; $('order-status').dataset.order = order.kind; }
+  $('impact-frame').style.opacity = motionPreference.matches ? '0' : String(clamp01(feedback.impact));
+  paintReadyCues(me, now);
+}
 // Exit promises can settle before fullscreenchange. Preserve intent until
 // that event arrives, even if a following request to enter is refused.
 let requestedFullscreenExit = false;
@@ -693,6 +908,7 @@ const mini = $('mini'), mctx = mini.getContext('2d');
 
 function render(h) {
   latest = h;
+  renderFeedback(h);
   mySlot = h.slot ?? 0;
   showStatus(h.notice || (!local && !h.connected ? 'Connecting to the server…' : ''));
   $('stage-tools').classList.toggle('hidden', h.phase === 'select');
