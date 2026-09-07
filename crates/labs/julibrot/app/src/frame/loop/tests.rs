@@ -17,10 +17,11 @@ use super::super::schedule::{
     PresentedTier, PromotionAction, SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
     STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
+use crate::frame::BrowserRefreshOrder;
 use super::{
-    BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FenceRefusal, FrameLoop, LEVELS,
-    PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity,
-    RefinementLevel, RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
+    BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
+    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
+    RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
     coverage_pre_empts, defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
     hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,

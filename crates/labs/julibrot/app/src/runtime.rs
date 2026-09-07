@@ -7,7 +7,7 @@ use ember_julibrot_present::{CLASSIC_PALETTE, FrameReadbackRoute, frame_readback
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::frame::r#loop::BrowserRefreshOrder;
+use crate::frame::BrowserRefreshOrder;
 use crate::{AppError, PendingSurface, SurfaceAction, SurfaceState};
 
 const STATUS_ID: &str = "status";
