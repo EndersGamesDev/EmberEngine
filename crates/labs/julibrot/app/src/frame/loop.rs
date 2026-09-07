@@ -2,13 +2,12 @@
 
 #[cfg(any(target_arch = "wasm32", test))]
 use super::schedule::{
-    FrameLoop, RefusalClass, SceneMode, apply_precision_mode, fence_error, schedule_exposure_fill,
-    stamp_scene_level, stamped_screen_map, view_projection_changed,
+    FrameLoop, RefusalClass, SceneMode, apply_precision_mode, defer_scene_until_relief_redraw,
+    fence_error, hold_redraw_during_scene, schedule_exposure_fill, stamp_scene_level,
+    stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 #[cfg(test)]
 use super::schedule::{RefinementSchedule, classify_refusal, stamped_extent};
-#[cfg(any(target_arch = "wasm32", test))]
-use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene, warp_submission_due};
 
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
