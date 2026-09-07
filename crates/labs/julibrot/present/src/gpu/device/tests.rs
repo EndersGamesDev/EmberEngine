@@ -3,7 +3,9 @@ use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_p
 use ember_julibrot_worker::{HotState, MainState};
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
-use super::ledger::{LatticeRefusal, presentation_ledger_entry};
+use super::ledger::{
+    LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination,
+};
 use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
@@ -1428,6 +1430,158 @@ fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan 
         PrecisionMode::PictureFast,
         crate::WarpValidation::Ordinary,
     )
+}
+
+/// Mirrors the app reproduction's retained-source coverage calculation.
+fn reproduced_source_covers_destination(
+    plan: &crate::WarpPlan,
+    source: &crate::SceneFrame,
+    requested: &Pose,
+) -> bool {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return plan.source_valid
+            && plan
+                .lattice
+                .is_some_and(|lattice| lattice.covers_destination(plan.rows));
+    }
+    if !matches!(
+        plan.refusal_reason,
+        Some(
+            crate::WarpRefusalReason::ErrorCeiling { .. }
+                | crate::WarpRefusalReason::ErrorCorpus { .. }
+                | crate::WarpRefusalReason::ReliefExposure { .. }
+        )
+    ) {
+        return false;
+    }
+    let Ok(flat) = ember_julibrot_math::warp_matrix(&source.pose, requested) else {
+        return false;
+    };
+    let Some(delivery) = crate::LatticePair::new(
+        source.extent,
+        [source.pose.grid_width, source.pose.grid_height],
+    ) else {
+        return false;
+    };
+    let Some(lattice) = crate::LatticePair::new(
+        source.extent,
+        [requested.grid_width, requested.grid_height],
+    ) else {
+        return false;
+    };
+    let Some(rows) = crate::pack_homography_rows(crate::compose_homography(
+        delivery.covering_map(),
+        flat.inverse,
+    )) else {
+        return false;
+    };
+    lattice.covers_destination(rows)
+}
+
+fn assert_coverage_decision(
+    name: &str,
+    plan: &crate::WarpPlan,
+    source: &crate::SceneFrame,
+    requested: &Pose,
+    expected: bool,
+) {
+    let reproduced = reproduced_source_covers_destination(plan, source, requested);
+    assert_eq!(reproduced, expected, "the reproduced {name} decision moved");
+    assert_eq!(
+        redraw_source_covers_destination(plan, source, requested),
+        reproduced,
+        "production coverage drifted from the app reproduction for {name}"
+    );
+}
+
+#[test]
+fn production_redraw_coverage_matches_the_reproduction_oracle() {
+    let extent = [960, 540];
+    let final_source = frame_on(93, extent, extent);
+    let mut preview_source = frame_on(94, [120, 68], extent);
+    preview_source.level = RefinementLevel::Preview;
+
+    let mut covered = pose_on(extent);
+    covered.zoom_log2 = 1.0;
+    let mut outside = covered;
+    outside.centre_from_reference_px = [480.0, -270.0];
+
+    let admitted_final_covered = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(covered),
+        ..reproject_onto(&final_source, &covered)
+    };
+    let admitted_final_outside = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(outside),
+        ..reproject_onto(&final_source, &outside)
+    };
+    let admitted_preview_covered = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(covered),
+        ..reproject_onto(&preview_source, &covered)
+    };
+    let refused_covered = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::ErrorCeiling {
+            max_px: 2.0,
+            p95_px: 1.5,
+        }),
+        ..clear_warp_plan(false, true)
+    };
+    let refused_outside = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::ReliefExposure {
+            predicted_fraction: 0.09,
+            limit: 0.08,
+        }),
+        ..clear_warp_plan(false, true)
+    };
+    let hard_refusal = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::Matrix),
+        ..clear_warp_plan(false, true)
+    };
+
+    assert_coverage_decision(
+        "Final admitted covered zoom",
+        &admitted_final_covered,
+        &final_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Final admitted exposed translation",
+        &admitted_final_outside,
+        &final_source,
+        &outside,
+        false,
+    );
+    assert_coverage_decision(
+        "Preview admitted covered zoom",
+        &admitted_preview_covered,
+        &preview_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Final corpus refusal covered zoom",
+        &refused_covered,
+        &final_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Preview exposure refusal exposed translation",
+        &refused_outside,
+        &preview_source,
+        &outside,
+        false,
+    );
+    assert_coverage_decision(
+        "hard matrix refusal",
+        &hard_refusal,
+        &final_source,
+        &covered,
+        false,
+    );
 }
 
 #[test]
