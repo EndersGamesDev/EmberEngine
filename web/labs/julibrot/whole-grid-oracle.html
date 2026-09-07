@@ -20,10 +20,12 @@
     import { openLab } from "./lab.js?v=1";
 
     const FIXTURE_URL = "./whole-grid-v1.json";
+    const LOSSLESS_FILE = "whole-grid-v1.rgba.deflate.bin";
+    const MAX_INLINE_BINARY_BYTES = 600_000;
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
     const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
-    const ENVIRONMENT_FIELDS = ["adapter_name", "backend", "warmup_label"];
+    const ENVIRONMENT_FIELDS = ["adapter_name", "backend"];
     const PAGE_WALL_FIELDS = [
       "worker_compute_us",
       "worker_overfeed_us",
@@ -77,8 +79,36 @@
       return hash.toString(16).padStart(16, "0");
     }
 
-    // The whole-frame digest is the equality oracle. Ordered row digests localize a mismatch
-    // without storing a second spelling of two million raw bytes in the repository.
+    async function sha256(bytes) {
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function deflate(bytes) {
+      const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    async function inflate(bytes) {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    function base64(bytes) {
+      let binary = "";
+      const chunkBytes = 32_768;
+      for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkBytes));
+      }
+      return btoa(binary);
+    }
+
+    function equalBytes(actual, expected) {
+      return actual.length === expected.length && actual.every((byte, index) => byte === expected[index]);
+    }
+
+    // SHA-256 authenticates the complete raw frame. Ordered row digests remain only as compact
+    // mismatch localizers; the deflate fixture is the lossless source of expected pixel bytes.
     function rgbaRowDigests(bytes, width, height) {
       const bytesPerRow = width * 4;
       assert(bytes.length === bytesPerRow * height, "RGBA rows need the declared extent");
@@ -100,6 +130,27 @@
       return response.json();
     }
 
+    async function loadLossless(expected) {
+      const descriptor = expected.rgba.lossless;
+      assert(descriptor.file === LOSSLESS_FILE, "fixture names an unexpected lossless file");
+      assert(descriptor.encoding === "deflate", "fixture names an unexpected lossless encoding");
+      const response = await fetch(`./${descriptor.file}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`lossless fixture request returned ${response.status}`);
+      const compressed = new Uint8Array(await response.arrayBuffer());
+      assert(compressed.length === descriptor.byte_length, "lossless fixture byte length differs");
+      return compressed;
+    }
+
+    async function measuredFrame(lab) {
+      const maximumCaptures = 12;
+      for (let capture = 1; capture <= maximumCaptures; capture += 1) {
+        const frame = await lab.frame();
+        const facts = lab.facts();
+        if (facts.warmup_label === "Measured") return { frame, facts, captureCount: capture };
+      }
+      throw new Error(`warm-up did not reach Measured in ${maximumCaptures} captured frames`);
+    }
+
     async function run() {
       const expected = GENERATING ? null : await loadExpected();
       const lab = await openLab({ canvas: CANVAS });
@@ -107,10 +158,17 @@
         const row = expected ? expected.row.value : JSON.parse(lab.api.app_preset(0));
         lab.applyRow(row);
         await lab.settle({ level: "Final" });
-        const frame = await lab.frame();
-        const facts = lab.facts();
+        const measured = await measuredFrame(lab);
+        const { frame, facts } = measured;
+        assert(facts.warmup_label === "Measured", "captured frame is not in the deliberate sample class");
         assert(frame.scene_id === (facts.completed_scene_id ?? null), "copied and completed scene ids differ");
         assert(frame.rgba.length === frame.width * frame.height * 4, "RGBA byte count does not match the extent");
+        const stable = stableFacts(facts);
+        const compressed = GENERATING ? await deflate(frame.rgba) : await loadLossless(expected);
+        if (expected) {
+          const fixtureRgba = await inflate(compressed);
+          assert(equalBytes(frame.rgba, fixtureRgba), "served RGBA differs from the lossless fixture");
+        }
         const actual = {
           schema: 2,
           row: { id: "preset:0", value: row },
@@ -118,11 +176,27 @@
           extent: [frame.width, frame.height],
           copied_scene_id: frame.scene_id,
           completed_scene_id: facts.completed_scene_id ?? null,
-          stable_facts: stableFacts(facts),
+          stable_facts: stable,
+          determinism: {
+            warmup_label: facts.warmup_label,
+            capture_count: measured.captureCount,
+            completed_scene_id: facts.completed_scene_id ?? null,
+            copied_scene_id: frame.scene_id,
+            owner_epoch: facts.owner_epoch,
+            scene_polls: facts.scene_polls,
+            warp_polls: facts.warp_polls,
+            texture_reallocations: facts.texture_reallocations,
+            presentation_ledger: stable.presentation_ledger,
+          },
           rgba: {
             byte_length: frame.rgba.length,
-            digest: { algorithm: "fnv1a64", hex: fnv1a64(frame.rgba) },
+            digest: { algorithm: "sha256", hex: await sha256(frame.rgba) },
             rows: rgbaRowDigests(frame.rgba, frame.width, frame.height),
+            lossless: {
+              file: LOSSLESS_FILE,
+              encoding: "deflate",
+              byte_length: compressed.length,
+            },
           },
         };
         const text = JSON.stringify(actual, null, 2);
@@ -130,7 +204,12 @@
           assert(JSON.stringify(actual) === JSON.stringify(expected), "served whole-grid fixture differs");
           REPORT.textContent = `PASS ${FIXTURE_URL}\n\n${text}`;
         } else {
-          REPORT.textContent = text;
+          const size = compressed.length;
+          if (size <= MAX_INLINE_BINARY_BYTES) {
+            REPORT.textContent = `${text}\n\nBEGIN ${LOSSLESS_FILE} BASE64 (${size} bytes)\n${base64(compressed)}\nEND ${LOSSLESS_FILE} BASE64`;
+          } else {
+            REPORT.textContent = `LOSSLESS FIXTURE TOO LARGE: ${size} bytes exceeds ${MAX_INLINE_BINARY_BYTES}; no base64 emitted\n\n${text}`;
+          }
         }
       } finally {
         lab.stop();
