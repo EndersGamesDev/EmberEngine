@@ -131,7 +131,7 @@
     "reference_verification": null,
     "consumed_word_error_ulps": null,
     "reference_precision_escalations": null,
-    "owner_epoch": 15,
+    "owner_epoch": 18,
     "centre_revision": 2,
     "centre_from_reference_px": [
       0,
@@ -326,10 +326,24 @@
           0,
           0
         ]
+      },
+      {
+        "scene_id": 2,
+        "level": "Final",
+        "warp_kind": "AnchorHomography",
+        "requested_centre_px": [
+          480,
+          270
+        ],
+        "anchor_px": [
+          0,
+          0
+        ]
       }
     ],
     "scene_polls": 2,
     "warp_polls": 2,
+    "warmup_label": "Measured",
     "second_frame_policy": "SingleFrameOnDemand",
     "device_walls": [
       "WebGL2",
@@ -365,11 +379,89 @@
     "draft_pixels_discarded": 0,
     "draft_iterations_discarded": 0
   },
+  "determinism": {
+    "warmup_label": "Measured",
+    "capture_count": 2,
+    "completed_scene_id": 2,
+    "copied_scene_id": 2,
+    "owner_epoch": 18,
+    "scene_polls": 2,
+    "warp_polls": 2,
+    "texture_reallocations": 2,
+    "presentation_ledger": [
+      {
+        "scene_id": null,
+        "level": null,
+        "warp_kind": "ClearOnly",
+        "requested_centre_px": null,
+        "anchor_px": null
+      },
+      {
+        "scene_id": null,
+        "level": null,
+        "warp_kind": "ClearOnly",
+        "requested_centre_px": null,
+        "anchor_px": null
+      },
+      {
+        "scene_id": 1,
+        "level": "Preview",
+        "warp_kind": "AnchorHomography",
+        "requested_centre_px": [
+          480,
+          270
+        ],
+        "anchor_px": [
+          0,
+          0
+        ]
+      },
+      {
+        "scene_id": 2,
+        "level": "Final",
+        "warp_kind": "AnchorHomography",
+        "requested_centre_px": [
+          480,
+          270
+        ],
+        "anchor_px": [
+          0,
+          0
+        ]
+      },
+      {
+        "scene_id": 2,
+        "level": "Final",
+        "warp_kind": "AnchorHomography",
+        "requested_centre_px": [
+          480,
+          270
+        ],
+        "anchor_px": [
+          0,
+          0
+        ]
+      },
+      {
+        "scene_id": 2,
+        "level": "Final",
+        "warp_kind": "AnchorHomography",
+        "requested_centre_px": [
+          480,
+          270
+        ],
+        "anchor_px": [
+          0,
+          0
+        ]
+      }
+    ]
+  },
   "rgba": {
     "byte_length": 2073600,
     "digest": {
-      "algorithm": "fnv1a64",
-      "hex": "19dbbd133a1dc71d"
+      "algorithm": "sha256",
+      "hex": "c4540548f772bd0d691e374afaf5fb598782fee8801fa0f6ed607d35299d2876"
     },
     "rows": [
       "fe2b75f1f9990d73",
@@ -912,6 +1004,11 @@
       "f1dc06d8bc260df1",
       "c49efe182c269e8b",
       "fe2b75f1f9990d73"
-    ]
+    ],
+    "lossless": {
+      "file": "whole-grid-v1.rgba.deflate.bin",
+      "encoding": "zlib-rfc1950",
+      "byte_length": 107336
+    }
   }
 }

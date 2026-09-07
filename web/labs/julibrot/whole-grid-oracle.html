@@ -21,6 +21,7 @@
 
     const FIXTURE_URL = "./whole-grid-v1.json";
     const LOSSLESS_FILE = "whole-grid-v1.rgba.deflate.bin";
+    const LOSSLESS_ENCODING = "zlib-rfc1950";
     const MAX_INLINE_BINARY_BYTES = 600_000;
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
@@ -85,6 +86,7 @@
     }
 
     async function deflate(bytes) {
+      // WHATWG's `deflate` format is an RFC 1950 zlib wrapper around the deflate payload.
       const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
       return new Uint8Array(await new Response(stream).arrayBuffer());
     }
@@ -133,7 +135,7 @@
     async function loadLossless(expected) {
       const descriptor = expected.rgba.lossless;
       assert(descriptor.file === LOSSLESS_FILE, "fixture names an unexpected lossless file");
-      assert(descriptor.encoding === "deflate", "fixture names an unexpected lossless encoding");
+      assert(descriptor.encoding === LOSSLESS_ENCODING, "fixture names an unexpected lossless encoding");
       const response = await fetch(`./${descriptor.file}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`lossless fixture request returned ${response.status}`);
       const compressed = new Uint8Array(await response.arrayBuffer());
@@ -194,7 +196,7 @@
             rows: rgbaRowDigests(frame.rgba, frame.width, frame.height),
             lossless: {
               file: LOSSLESS_FILE,
-              encoding: "deflate",
+              encoding: LOSSLESS_ENCODING,
               byte_length: compressed.length,
             },
           },

@@ -476,13 +476,7 @@ fn capture_native_palette(
     palette_id: PaletteId,
     refresh_id: u64,
 ) -> (FrameReceipt, FrameReadback) {
-    capture_native_palette_on(
-        presenter,
-        device,
-        palette_id,
-        refresh_id,
-        BINDING_EXTENT,
-    )
+    capture_native_palette_on(presenter, device, palette_id, refresh_id, BINDING_EXTENT)
 }
 
 fn capture_native_palette_on(
@@ -619,13 +613,8 @@ fn native_whole_grid_capture_on(
     pattern: NativeValuePattern,
 ) -> NativeWholeGridCapture {
     let (mut presenter, device) = native_palette_presenter_on(extent, pattern);
-    let (receipt, readback) = capture_native_palette_on(
-        &mut presenter,
-        &device,
-        PaletteId::Classic,
-        101,
-        extent,
-    );
+    let (receipt, readback) =
+        capture_native_palette_on(&mut presenter, &device, PaletteId::Classic, 101, extent);
     let stable_facts = stable_present_facts(presenter.facts_ref());
     let extent = [readback.width, readback.height];
     let copied_scene_id = readback.scene_id;
@@ -795,12 +784,8 @@ struct HoldPolicyCorpusResult {
     plan: crate::WarpPlan,
 }
 
-type HoldPolicyEntry = fn(
-    &crate::WarpPlan,
-    Option<&crate::SceneFrame>,
-    bool,
-    [u32; 2],
-) -> crate::WarpPlan;
+type HoldPolicyEntry =
+    fn(&crate::WarpPlan, Option<&crate::SceneFrame>, bool, [u32; 2]) -> crate::WarpPlan;
 
 fn current_hold_policy_entry(
     plan: &crate::WarpPlan,
@@ -839,7 +824,7 @@ fn named_hold_policy_corpus() -> Vec<HoldPolicyCorpusCase> {
         HoldPolicyCorpusCase {
             name: "disabled-refusal",
             plan: refused,
-            retained: Some(retained),
+            retained: Some(retained.clone()),
             enabled: false,
             extent: BINDING_EXTENT,
         },
@@ -853,14 +838,14 @@ fn named_hold_policy_corpus() -> Vec<HoldPolicyCorpusCase> {
         HoldPolicyCorpusCase {
             name: "accepted-geometric-plan",
             plan: accepted,
-            retained: Some(retained),
+            retained: Some(retained.clone()),
             enabled: true,
             extent: BINDING_EXTENT,
         },
         HoldPolicyCorpusCase {
             name: "eligible-refusal-held",
             plan: refused,
-            retained: Some(retained),
+            retained: Some(retained.clone()),
             enabled: true,
             extent: BINDING_EXTENT,
         },

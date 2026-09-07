@@ -1519,10 +1519,7 @@ mod tests {
     #[test]
     fn ownership_modes_match_their_frozen_transition_sequences() {
         let same_thread = format!("{:#?}", same_thread_ownership_trace());
-        let browser = format!(
-            "{:#?}",
-            crate::endpoint::tests::browser_ownership_trace()
-        );
+        let browser = format!("{:#?}", crate::endpoint::tests::browser_ownership_trace());
         assert_eq!(same_thread, SAME_THREAD_OWNERSHIP_FIXTURE);
         assert_eq!(browser, BROWSER_OWNERSHIP_FIXTURE);
     }
