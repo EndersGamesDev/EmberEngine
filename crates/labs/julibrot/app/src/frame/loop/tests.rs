@@ -2416,6 +2416,104 @@ struct HeightDragRow {
     distance_five: f64,
 }
 
+fn measured_relief_zoom_viewer() -> ViewerController {
+    let object = ObjectAngles {
+        rho_13: -0.163_226_878_883_618_53,
+        rho_24: -0.163_226_878_883_618_53,
+        ..ObjectAngles::IDENTITY
+    };
+    let view = ViewControls {
+        camera: [
+            0.387_171_329_215_743,
+            0.945_997_639_356_507,
+            -1.185_339_915_598_97,
+            -0.756_473_212_467_682,
+            -0.236_634_784_429_762,
+            -1.770_158_147_141_63,
+            2.011_666_416_834_24,
+            0.504_134_975_524_275,
+            -0.665_501_487_561_046,
+            0.374_175_368_514_795,
+        ],
+        camera_translation: [-0.04, 0.258, 0.0, 0.0, 0.0],
+        height_scale: 3.565,
+        distance_five: 8.0,
+        distance_four: 8.0,
+        ..ViewControls::NEUTRAL
+    };
+    let origin = [-0.629, 0.0, -0.083, 0.016];
+    let mut viewer = ViewerController::new([960, 540]).expect("measured relief viewer");
+    viewer
+        .set_object_angles(object)
+        .expect("measured relief object");
+    viewer
+        .set_plane_origin(origin)
+        .expect("measured relief origin");
+    viewer
+        .set_view_controls(view)
+        .expect("measured relief view");
+    viewer
+        .set_zoom_log2(1.259_194_831_013_92)
+        .expect("measured relief scale");
+    viewer
+        .set_centre(BigCentre::from_f64(origin, 1_024).expect("finite measured centre"))
+        .expect("measured relief centre");
+    viewer
+}
+
+fn measured_relief_scene(scene_id: u64, level: RefinementLevel, pose: Pose) -> SceneFrame {
+    SceneFrame {
+        scene_id,
+        pose,
+        iteration_cap: 128,
+        level,
+        extent: [pose.grid_width, pose.grid_height],
+        texture_index: 0,
+        centre_revision: 1,
+        plane_origin_f64: pose.plane_origin,
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        measurement: SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id: scene_id,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::PictureFast.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        },
+    }
+}
+
+#[test]
+fn off_centre_box_zoom_never_clears_a_covering_retained_relief_scene() {
+    let extent = [960, 540];
+    let mut viewer = measured_relief_zoom_viewer();
+    let retained_pose = viewer.drain_hot(extent).expect("retained pose").pose;
+    let retained = measured_relief_scene(37, RefinementLevel::Final, retained_pose);
+
+    viewer
+        .set_crosshair([180.0, -90.0])
+        .expect("off-centre crosshair");
+    viewer
+        .zoom_about_crosshair(1.43)
+        .expect("box zoom about crosshair");
+    let requested = viewer.drain_hot(extent).expect("requested pose").pose;
+    let plan = Warp::reproject(
+        &retained,
+        &retained.pose,
+        &requested,
+        PrecisionMode::PictureFast,
+        WarpValidation::Ordinary,
+    );
+
+    assert_ne!(plan.kind, WarpKind::ClearOnly, "covering box zoom: {plan:?}");
+    assert!(
+        plan.predicted_exposed_fraction.unwrap_or(0.0) <= f64::EPSILON,
+        "a zoom-in has no outside-source fraction: {plan:?}"
+    );
+}
+
 fn measured_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     let object = ObjectAngles {
         rho_13: -1.316_653_720_171_549_4,
