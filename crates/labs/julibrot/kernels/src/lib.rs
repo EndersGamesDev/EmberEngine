@@ -35,11 +35,16 @@ pub use refinement::{
 };
 pub use shallow::{KernelSample, escape_shallow_pixel, escape_shallow_point};
 pub use tile_job::{
-    ContentIdentity, CoverageClass, DEFAULT_TILE_APRON, DEFAULT_TILE_CORE_SIDE,
-    DEFAULT_TILE_LOGICAL_BYTES, DEFAULT_TILE_SAMPLE_BYTES, DEFAULT_TILE_SIDE, DemandKey,
-    MainIdentity, PairedOutputCompletion, PairedOutputSpanPlan, PublishedTileOutputs,
-    ReferenceIdentity, ReferenceLease, ReferenceLeaseSet, ResidentTileCost, ResidentTileProfile,
-    SourceScreenRect, StableJobId, TILE_HEADER_BYTES, TILE_SAMPLE_RECORD_BYTES, TileDemandQueue,
-    TileGeometry, TileJob, TileJobError, TileOutput, TileQuality, TileResidency,
-    resident_tile_cost, tile_cost,
+    CanonicalChartCellKey, ContentIdentity, CoverageClass, DEFAULT_TILE_APRON,
+    DEFAULT_TILE_CORE_SIDE, DEFAULT_TILE_LOGICAL_BYTES, DEFAULT_TILE_SAMPLE_BYTES,
+    DEFAULT_TILE_SIDE, DESCRIPTOR_ABI_LAYOUT, DemandKey, DescriptorAbiError, DescriptorAbiField,
+    DescriptorCostLedger, DescriptorSamplePair, DescriptorTexel, ExactF32, ExactF64, MainIdentity,
+    PairedOutputCompletion, PairedOutputSpanPlan, PairedTileSpanIdentities, PoseMapKey,
+    PublishedTileOutputs, ReferenceIdentity, ReferenceLease, ReferenceLeaseSet,
+    RenderControlChange, ResidentTileCost, ResidentTileProfile, SliceIdentity, SourceIdentity,
+    SourceScreenRect, StableJobId, TILE_HEADER_BYTES, TILE_SAMPLE_RECORD_BYTES, TileContentKey,
+    TileDemandQueue, TileGeometry, TileInvalidation, TileJob, TileJobError, TileMeshHandle,
+    TileOutput, TilePoseHeader, TileQuality, TileRenderKey, TileResidency, TileRung,
+    TileSpanIdentity, TransitionPresentation, resident_tile_cost, select_same_surface_owner,
+    tile_cost, tile_invalidation, transition_presentation, validate_pose_header,
 };
