@@ -45,9 +45,9 @@ use crate::{
     SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
-    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentStatus, SampleClass,
-    SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason, WarpValidation,
-    relief_redraw_source_covers_destination, renders_same_picture,
+    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentEvents, PresentStatus,
+    SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
+    WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
@@ -1980,27 +1980,35 @@ impl ReplayPresentEvents<'_> {
 impl PresentEventPort for ReplayPresentEvents<'_> {
     type Error = TurnOutcome;
 
-    fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
+    fn poll(&mut self, now_ms: f64) -> PresentEvents {
         if let Some(replay) = self.presenter.replay_present_poll.take() {
             self.presenter.retained_scene = replay.retained_scene_id;
             self.presenter.presented_scene = replay.presented_scene_id;
-            return replay.events;
+            let mut events = replay.events.into_iter();
+            let result = PresentEvents::new(events.next(), events.next());
+            assert!(
+                events.next().is_none(),
+                "present replay exceeds the presenter's two-event poll capacity"
+            );
+            return result;
         }
         let events = self.presenter.poll_once(now_ms);
         let mut completion_sequence = self.presenter.next_completion_sequence;
-        let events = events
-            .into_iter()
-            .map(|event| {
-                let completes_fence = event.completes_fence();
-                let event = event.into_present_event(completion_sequence);
-                if completes_fence {
-                    completion_sequence = completion_sequence.saturating_add(1);
-                }
-                event
-            })
-            .collect();
+        let mut events = events.into_iter().map(|event| {
+            let completes_fence = event.completes_fence();
+            let event = event.into_present_event(completion_sequence);
+            if completes_fence {
+                completion_sequence = completion_sequence.saturating_add(1);
+            }
+            event
+        });
+        let result = PresentEvents::new(events.next(), events.next());
+        assert!(
+            events.next().is_none(),
+            "native presenter exceeds its two-event poll capacity"
+        );
         self.presenter.next_completion_sequence = completion_sequence;
-        events
+        result
     }
 
     fn scene_completed(

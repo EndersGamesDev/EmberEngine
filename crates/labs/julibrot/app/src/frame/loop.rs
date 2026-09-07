@@ -20,7 +20,7 @@ use ember_julibrot_math::{
     CentreSplit, EscapeParams, Homography, Plane, PoseMap, PrecisionMode, ScaleSplit,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_present::{FenceRefusal, PresentEvent, SubmissionKind};
+use ember_julibrot_present::{FenceRefusal, PresentEvent, PresentEvents, SubmissionKind};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_lab_heap::DataSpan;
 
@@ -1271,7 +1271,7 @@ struct PresentEventObservation<E> {
 trait PresentEventPort {
     type Error;
 
-    fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent>;
+    fn poll(&mut self, now_ms: f64) -> PresentEvents;
     fn scene_completed(
         &mut self,
         event: &PresentSceneCompletion,
@@ -1916,7 +1916,7 @@ mod browser {
         precision_for, reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
-        FenceRefusal, FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent,
+        FenceRefusal, FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvents,
         PresentHot, PresentMain, Presenter, SubmissionKind, WarpValidation, hot_stride,
     };
     use ember_julibrot_worker::{
@@ -3487,8 +3487,8 @@ mod browser {
     impl PresentEventPort for BrowserPresentEvents<'_> {
         type Error = AppError;
 
-        fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
-            self.frame_loop.presenter.poll(now_ms)
+        fn poll(&mut self, now_ms: f64) -> PresentEvents {
+            self.frame_loop.presenter.poll_fixed(now_ms)
         }
 
         fn scene_completed(
