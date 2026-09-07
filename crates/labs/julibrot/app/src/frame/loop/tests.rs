@@ -18,16 +18,17 @@ use super::super::schedule::{
     STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
 use super::{
-    BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FenceRefusal, FrameLoop, LEVELS,
-    PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity,
-    RefinementLevel, RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
+    BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
+    FencesObserved, FrameLoop, HotWritten, LEVELS, OrderedRefresh, PresenterPoll,
+    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
+    RefinementSchedule, RefusalClass, SceneConsidered, SceneMode, SubmissionKind,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
-    coverage_pre_empts, defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
-    hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
-    perturbation_reference_is_current, published_iteration_cap,
-    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed, warp_submission_due,
+    coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
+    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
+    sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
+    stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
@@ -441,7 +442,7 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
         source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
     );
     assert!(source.contains(
-        "let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
+        "let scene_id = if defer_scene_for_redraw && frame_loop.active_backdrop_map.is_none() {"
     ));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
     assert!(source.contains(
@@ -767,6 +768,90 @@ enum TraceCaptureState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrowserAction {
+    CaptureDrained,
+    CaptureStaged,
+    FenceObserved {
+        kind: TraceFenceKind,
+        id: u64,
+    },
+    HotWritten {
+        slot_order: u32,
+    },
+    Submitted {
+        kind: SubmissionKind,
+        id: u64,
+    },
+    SceneConsidered,
+    SurfaceAcquired {
+        generation: u32,
+    },
+    SurfaceRetained {
+        warp_id: u64,
+    },
+    SurfaceReleased {
+        warp_id: u64,
+        action: TraceSurfaceAction,
+    },
+    WarpConsidered,
+}
+
+#[derive(Debug, Default)]
+struct FakeRuntime {
+    surface: SurfaceState<u64>,
+    actions: Vec<BrowserAction>,
+}
+
+impl FakeRuntime {
+    fn acquire_for_warp(&mut self, generation: u32) {
+        self.actions
+            .push(BrowserAction::SurfaceAcquired { generation });
+        self.surface
+            .claim(generation)
+            .expect("the fake surface has one owner");
+    }
+
+    fn record_submission(&mut self, kind: SubmissionKind, id: u64) {
+        self.actions.push(BrowserAction::Submitted { kind, id });
+    }
+
+    fn retain_for_warp(&mut self, warp_id: u64, generation: u32) {
+        self.surface
+            .retain(PendingSurface {
+                warp_id,
+                generation,
+                precision_mode: PrecisionMode::Deterministic.as_str(),
+                frame: warp_id,
+            })
+            .expect("the fake warp owns its surface");
+        self.actions
+            .push(BrowserAction::SurfaceRetained { warp_id });
+    }
+
+    fn complete_warp(&mut self, warp_id: u64) -> TraceSurfaceAction {
+        let action = match self.surface.complete(warp_id) {
+            SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
+            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+            SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id },
+        };
+        self.actions
+            .push(BrowserAction::SurfaceReleased { warp_id, action });
+        action
+    }
+
+    fn refuse_warp(&mut self, warp_id: u64) -> TraceSurfaceAction {
+        let action = match self.surface.refuse(warp_id) {
+            SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
+            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+            SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id },
+        };
+        self.actions
+            .push(BrowserAction::SurfaceReleased { warp_id, action });
+        action
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TracePendingState {
     Idle,
     Pending,
@@ -804,7 +889,7 @@ struct FakePresenter {
     presented_clear_only: u64,
     hot_epoch: u64,
     main_epoch: u64,
-    surface: SurfaceState<u64>,
+    runtime: FakeRuntime,
     capture: TraceCaptureState,
     capture_scene: Option<u64>,
     fence_log: Vec<TraceFenceObservation>,
@@ -821,6 +906,8 @@ impl FakePresenter {
         };
         self.pending = Some(scene);
         self.submissions.push(level);
+        self.runtime
+            .record_submission(SubmissionKind::Scene, scene.id);
         scene.id
     }
 
@@ -833,6 +920,9 @@ impl FakePresenter {
             drained_hot_epoch: self.hot_epoch,
             drained_main_epoch: self.main_epoch,
         });
+        self.runtime
+            .actions
+            .push(BrowserAction::HotWritten { slot_order });
         let planned = self.forced_warp_kind.unwrap_or_else(|| {
             if self.relief_redraw && self.retained_scene.is_some() {
                 WarpKind::ReliefRedraw
@@ -856,6 +946,7 @@ impl FakePresenter {
     }
 
     fn submit_warp(&mut self, generation: u32) -> u64 {
+        self.runtime.acquire_for_warp(generation);
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
         self.pending_warp_kind = self.warp_kind;
@@ -866,17 +957,9 @@ impl FakePresenter {
         if self.warp_kind == Some(WarpKind::HoldStale) {
             self.warp_hold_count = self.warp_hold_count.saturating_add(1);
         }
-        self.surface
-            .claim(generation)
-            .expect("the fake surface has one owner");
-        self.surface
-            .retain(PendingSurface {
-                warp_id: self.next_id,
-                generation,
-                precision_mode: PrecisionMode::Deterministic.as_str(),
-                frame: self.next_id,
-            })
-            .expect("the fake warp owns its surface");
+        self.runtime
+            .record_submission(SubmissionKind::Warp, self.next_id);
+        self.runtime.retain_for_warp(self.next_id, generation);
         let capture = CaptureArming {
             armed: self.capture == TraceCaptureState::Armed,
             route_matches: true,
@@ -894,9 +977,13 @@ impl FakePresenter {
         self.capture = TraceCaptureState::Armed;
     }
 
-    const fn drain_frame_capture() {}
+    fn drain_frame_capture(&mut self) {
+        self.runtime.actions.push(BrowserAction::CaptureDrained);
+    }
 
-    const fn stage_frame_capture() {}
+    fn stage_frame_capture(&mut self) {
+        self.runtime.actions.push(BrowserAction::CaptureStaged);
+    }
 
     fn fire_completed_callback(&mut self) {
         self.callback = self.pending.map(FakeEvent::Completed);
@@ -919,6 +1006,113 @@ impl FakePresenter {
             wall_ms,
         });
     }
+
+    fn poll_scene(&mut self, events: &mut Vec<FakeEvent>) {
+        let Some(pending) = self.pending else {
+            return;
+        };
+        self.fence_observations += 1;
+        let result = match self.callback {
+            Some(FakeEvent::Completed(scene)) => TraceFenceResult::SceneCompleted {
+                generation: scene.generation,
+                level: scene.level,
+            },
+            Some(FakeEvent::Deadline(_)) => TraceFenceResult::Refused {
+                reason: FenceRefusal::Deadline,
+                polls: SCENE_POLLS,
+                wall_ms: SCENE_DEADLINE_MS,
+            },
+            Some(FakeEvent::Refused {
+                reason,
+                polls,
+                wall_ms,
+                ..
+            }) => TraceFenceResult::Refused {
+                reason,
+                polls,
+                wall_ms,
+            },
+            Some(FakeEvent::WarpCompleted(_)) | None => TraceFenceResult::Pending,
+        };
+        self.fence_log.push(TraceFenceObservation {
+            order: u32::try_from(self.fence_log.len()).unwrap_or(u32::MAX),
+            kind: TraceFenceKind::Scene,
+            id: pending.id,
+            result,
+        });
+        self.runtime.actions.push(BrowserAction::FenceObserved {
+            kind: TraceFenceKind::Scene,
+            id: pending.id,
+        });
+        if let Some(event) = self.callback.take() {
+            if let FakeEvent::Completed(scene) = event
+                && (self.retained_scene.is_none() || scene.level == RefinementLevel::Final)
+            {
+                self.retained_scene = Some(scene.id);
+                self.refuse_warp = false;
+            }
+            self.pending = None;
+            events.push(event);
+        }
+    }
+
+    fn poll_warp(&mut self, events: &mut Vec<FakeEvent>) {
+        let Some(pending_warp) = self.pending_warp else {
+            return;
+        };
+        self.warp_fence_observations += 1;
+        let result = match self.warp_callback {
+            Some(FakeEvent::WarpCompleted(_)) => TraceFenceResult::WarpCompleted {
+                kind: self.pending_warp_kind,
+                source_scene_id: self.pending_warp_source,
+            },
+            Some(FakeEvent::Refused {
+                reason,
+                polls,
+                wall_ms,
+                ..
+            }) => TraceFenceResult::Refused {
+                reason,
+                polls,
+                wall_ms,
+            },
+            Some(FakeEvent::Deadline(_)) => TraceFenceResult::Refused {
+                reason: FenceRefusal::Deadline,
+                polls: SCENE_POLLS,
+                wall_ms: SCENE_DEADLINE_MS,
+            },
+            Some(FakeEvent::Completed(_)) | None => TraceFenceResult::Pending,
+        };
+        self.fence_log.push(TraceFenceObservation {
+            order: u32::try_from(self.fence_log.len()).unwrap_or(u32::MAX),
+            kind: TraceFenceKind::Warp,
+            id: pending_warp,
+            result,
+        });
+        self.runtime.actions.push(BrowserAction::FenceObserved {
+            kind: TraceFenceKind::Warp,
+            id: pending_warp,
+        });
+        if let Some(event) = self.warp_callback.take() {
+            if matches!(event, FakeEvent::WarpCompleted(_)) {
+                if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
+                    self.presented_clear_only = self.presented_clear_only.saturating_add(1);
+                }
+                if self.pending_warp_kind == Some(WarpKind::ReliefRedraw) {
+                    self.warp_relief_redraw_count = self.warp_relief_redraw_count.saturating_add(1);
+                }
+                let presented_scene = self.pending_warp_source.take();
+                self.presented_scene = presented_scene;
+                if self.capture == TraceCaptureState::InFlight {
+                    self.capture = TraceCaptureState::Ready;
+                    self.capture_scene = presented_scene;
+                }
+            }
+            self.pending_warp_kind = None;
+            self.pending_warp = None;
+            events.push(event);
+        }
+    }
 }
 
 impl PresenterPoll for FakePresenter {
@@ -926,98 +1120,8 @@ impl PresenterPoll for FakePresenter {
 
     fn poll_once(&mut self, _now_ms: f64) -> Vec<Self::Event> {
         let mut events = Vec::new();
-        if let Some(pending) = self.pending {
-            self.fence_observations += 1;
-            let result = match self.callback {
-                Some(FakeEvent::Completed(scene)) => TraceFenceResult::SceneCompleted {
-                    generation: scene.generation,
-                    level: scene.level,
-                },
-                Some(FakeEvent::Deadline(_)) => TraceFenceResult::Refused {
-                    reason: FenceRefusal::Deadline,
-                    polls: SCENE_POLLS,
-                    wall_ms: SCENE_DEADLINE_MS,
-                },
-                Some(FakeEvent::Refused {
-                    reason,
-                    polls,
-                    wall_ms,
-                    ..
-                }) => TraceFenceResult::Refused {
-                    reason,
-                    polls,
-                    wall_ms,
-                },
-                Some(FakeEvent::WarpCompleted(_)) | None => TraceFenceResult::Pending,
-            };
-            self.fence_log.push(TraceFenceObservation {
-                order: u32::try_from(self.fence_log.len()).unwrap_or(u32::MAX),
-                kind: TraceFenceKind::Scene,
-                id: pending.id,
-                result,
-            });
-            if let Some(event) = self.callback.take() {
-                if let FakeEvent::Completed(scene) = event
-                    && (self.retained_scene.is_none() || scene.level == RefinementLevel::Final)
-                {
-                    self.retained_scene = Some(scene.id);
-                    self.refuse_warp = false;
-                }
-                self.pending = None;
-                events.push(event);
-            }
-        }
-        if let Some(pending_warp) = self.pending_warp {
-            self.warp_fence_observations += 1;
-            let result = match self.warp_callback {
-                Some(FakeEvent::WarpCompleted(_)) => TraceFenceResult::WarpCompleted {
-                    kind: self.pending_warp_kind,
-                    source_scene_id: self.pending_warp_source,
-                },
-                Some(FakeEvent::Refused {
-                    reason,
-                    polls,
-                    wall_ms,
-                    ..
-                }) => TraceFenceResult::Refused {
-                    reason,
-                    polls,
-                    wall_ms,
-                },
-                Some(FakeEvent::Deadline(_)) => TraceFenceResult::Refused {
-                    reason: FenceRefusal::Deadline,
-                    polls: SCENE_POLLS,
-                    wall_ms: SCENE_DEADLINE_MS,
-                },
-                Some(FakeEvent::Completed(_)) | None => TraceFenceResult::Pending,
-            };
-            self.fence_log.push(TraceFenceObservation {
-                order: u32::try_from(self.fence_log.len()).unwrap_or(u32::MAX),
-                kind: TraceFenceKind::Warp,
-                id: pending_warp,
-                result,
-            });
-            if let Some(event) = self.warp_callback.take() {
-                if matches!(event, FakeEvent::WarpCompleted(_)) {
-                    if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
-                        self.presented_clear_only = self.presented_clear_only.saturating_add(1);
-                    }
-                    if self.pending_warp_kind == Some(WarpKind::ReliefRedraw) {
-                        self.warp_relief_redraw_count =
-                            self.warp_relief_redraw_count.saturating_add(1);
-                    }
-                    let presented_scene = self.pending_warp_source.take();
-                    self.presented_scene = presented_scene;
-                    if self.capture == TraceCaptureState::InFlight {
-                        self.capture = TraceCaptureState::Ready;
-                        self.capture_scene = presented_scene;
-                    }
-                }
-                self.pending_warp_kind = None;
-                self.pending_warp = None;
-                events.push(event);
-            }
-        }
+        self.poll_scene(&mut events);
+        self.poll_warp(&mut events);
         events
     }
 }
@@ -1188,6 +1292,121 @@ struct TurnOutcome {
     surface_action: TraceSurfaceAction,
 }
 
+struct NativeRefreshTurn<'a> {
+    frame_loop: &'a mut FrameLoop,
+    presenter: &'a mut FakePresenter,
+    clock: FakeClock,
+    policy: FramePolicy,
+    warps: bool,
+    outcome: TurnOutcome,
+}
+
+impl OrderedRefresh for NativeRefreshTurn<'_> {
+    type Error = TurnOutcome;
+    type Output = TurnOutcome;
+
+    fn drain_capture(&mut self) -> Result<(), Self::Error> {
+        self.presenter.drain_frame_capture();
+        Ok(())
+    }
+
+    fn stage_capture(&mut self, stage: CaptureDrained) -> Result<(), Self::Error> {
+        let CaptureDrained = stage;
+        self.presenter.stage_frame_capture();
+        Ok(())
+    }
+
+    fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error> {
+        let CaptureStaged = stage;
+        for event in FrameLoop::refresh(self.presenter, self.clock.now_ms) {
+            match event {
+                FakeEvent::Completed(scene) => {
+                    self.frame_loop
+                        .completed(scene.id, scene.generation, scene.level);
+                    self.outcome.completed_scene_id = Some(scene.id);
+                }
+                FakeEvent::WarpCompleted(id) => {
+                    self.outcome.completed_warp_id = Some(id);
+                    self.presenter.presented_warps.push(id);
+                    self.outcome.presented = true;
+                    self.outcome.surface_action = self.presenter.runtime.complete_warp(id);
+                }
+                FakeEvent::Deadline(id) => {
+                    self.outcome.refused_scene_id = Some(id);
+                    let refusal = self.frame_loop.refused(
+                        SubmissionKind::Scene,
+                        FenceRefusal::Deadline,
+                        id,
+                        SCENE_POLLS,
+                        SCENE_DEADLINE_MS,
+                    );
+                    self.outcome.refused = refusal.class != RefusalClass::Device;
+                }
+                FakeEvent::Refused {
+                    id,
+                    kind,
+                    reason,
+                    polls,
+                    wall_ms,
+                } => {
+                    match kind {
+                        SubmissionKind::Scene => self.outcome.refused_scene_id = Some(id),
+                        SubmissionKind::Warp => self.outcome.refused_warp_id = Some(id),
+                    }
+                    let refusal = self.frame_loop.refused(kind, reason, id, polls, wall_ms);
+                    self.outcome.refused = refusal.class != RefusalClass::Device;
+                    if matches!(kind, SubmissionKind::Warp) {
+                        self.outcome.surface_action = self.presenter.runtime.refuse_warp(id);
+                    }
+                }
+            }
+        }
+        if self.frame_loop.stopped().is_some() {
+            return Err(self.outcome);
+        }
+        Ok(())
+    }
+
+    fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error> {
+        let FencesObserved = stage;
+        let has_retained_scene = self.presenter.retained_scene.is_some();
+        self.presenter.write_hot_for_slot(has_retained_scene, 0);
+        Ok(())
+    }
+
+    fn consider_scene(&mut self, stage: HotWritten) -> Result<(), Self::Error> {
+        let HotWritten = stage;
+        if !self.outcome.refused
+            && let Some(level) = self.frame_loop.due()
+        {
+            let id = self.presenter.submit(self.frame_loop.generation(), level);
+            self.frame_loop.submitted(id, level);
+            self.outcome.scene_id = Some(id);
+        }
+        self.presenter
+            .runtime
+            .actions
+            .push(BrowserAction::SceneConsidered);
+        Ok(())
+    }
+
+    fn consider_warp(&mut self, stage: SceneConsidered) -> Result<Self::Output, Self::Error> {
+        let SceneConsidered = stage;
+        if self.warps
+            && self.presenter.pending_warp.is_none()
+            && self.frame_loop.warp_requested(self.policy)
+        {
+            self.outcome.warp_id = Some(self.presenter.submit_warp(self.frame_loop.generation()));
+            self.frame_loop.warp_submitted();
+        }
+        self.presenter
+            .runtime
+            .actions
+            .push(BrowserAction::WarpConsidered);
+        Ok(self.outcome)
+    }
+}
+
 /// Drives the same typed stage protocol consumed by the production browser refresh.
 fn drive_turn(
     frame_loop: &mut FrameLoop,
@@ -1196,83 +1415,17 @@ fn drive_turn(
     policy: FramePolicy,
     warps: bool,
 ) -> TurnOutcome {
-    let refresh_order = BrowserRefreshOrder::begin();
-    let mut outcome = TurnOutcome::default();
-    FakePresenter::drain_frame_capture();
-    let refresh_order = refresh_order.capture_drained();
-    FakePresenter::stage_frame_capture();
-    let refresh_order = refresh_order.capture_staged();
-    for event in FrameLoop::refresh(presenter, clock.now_ms) {
-        match event {
-            FakeEvent::Completed(scene) => {
-                frame_loop.completed(scene.id, scene.generation, scene.level);
-                outcome.completed_scene_id = Some(scene.id);
-            }
-            FakeEvent::WarpCompleted(id) => {
-                outcome.completed_warp_id = Some(id);
-                presenter.presented_warps.push(id);
-                outcome.presented = true;
-                outcome.surface_action = match presenter.surface.complete(id) {
-                    SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-                    SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
-                    SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
-                };
-            }
-            FakeEvent::Deadline(id) => {
-                outcome.refused_scene_id = Some(id);
-                let refusal = frame_loop.refused(
-                    SubmissionKind::Scene,
-                    FenceRefusal::Deadline,
-                    id,
-                    SCENE_POLLS,
-                    SCENE_DEADLINE_MS,
-                );
-                outcome.refused = refusal.class != RefusalClass::Device;
-            }
-            FakeEvent::Refused {
-                id,
-                kind,
-                reason,
-                polls,
-                wall_ms,
-            } => {
-                match kind {
-                    SubmissionKind::Scene => outcome.refused_scene_id = Some(id),
-                    SubmissionKind::Warp => outcome.refused_warp_id = Some(id),
-                }
-                let refusal = frame_loop.refused(kind, reason, id, polls, wall_ms);
-                outcome.refused = refusal.class != RefusalClass::Device;
-                if matches!(kind, SubmissionKind::Warp) {
-                    outcome.surface_action = match presenter.surface.refuse(id) {
-                        SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-                        SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
-                        SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
-                    };
-                }
-            }
-        }
+    let turn = NativeRefreshTurn {
+        frame_loop,
+        presenter,
+        clock,
+        policy,
+        warps,
+        outcome: TurnOutcome::default(),
+    };
+    match execute_ordered_refresh(turn) {
+        Ok(outcome) | Err(outcome) => outcome,
     }
-    let refresh_order = refresh_order.fences_observed();
-    if frame_loop.stopped().is_some() {
-        return outcome;
-    }
-    let has_retained_scene = presenter.retained_scene.is_some();
-    presenter.write_hot_for_slot(has_retained_scene, 0);
-    let refresh_order = refresh_order.hot_written();
-    if !outcome.refused
-        && let Some(level) = frame_loop.due()
-    {
-        let id = presenter.submit(frame_loop.generation(), level);
-        frame_loop.submitted(id, level);
-        outcome.scene_id = Some(id);
-    }
-    let refresh_order = refresh_order.scene_considered();
-    if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-        outcome.warp_id = Some(presenter.submit_warp(frame_loop.generation()));
-        frame_loop.warp_submitted();
-    }
-    let _refresh_order = refresh_order.warp_considered();
-    outcome
 }
 
 fn drive_refresh(
@@ -1535,6 +1688,148 @@ fn finished_picture_trace() -> Vec<FrameTraceTurn> {
     completed_picture_trace("finished-picture", false)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct BrowserActionTurn {
+    scenario: &'static str,
+    turn: u32,
+    actions: Vec<BrowserAction>,
+}
+
+fn browser_action_turn(
+    scenario: &'static str,
+    turn: u32,
+    frame_loop: &mut FrameLoop,
+    presenter: &mut FakePresenter,
+    clock: FakeClock,
+    warps: bool,
+) -> BrowserActionTurn {
+    let action_start = presenter.runtime.actions.len();
+    let _outcome = drive_viewer_harness(frame_loop, presenter, clock, warps);
+    BrowserActionTurn {
+        scenario,
+        turn,
+        actions: presenter.runtime.actions[action_start..].to_vec(),
+    }
+}
+
+fn short_browser_action_trace() -> Vec<BrowserActionTurn> {
+    let scenario = "short";
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.restart(7);
+    let mut presenter = FakePresenter::default();
+    let mut clock = FakeClock::default();
+    let mut trace = vec![browser_action_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    )];
+    presenter.fire_completed_callback();
+    clock.advance(1.0);
+    trace.push(browser_action_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn retained_browser_action_trace(
+    scenario: &'static str,
+    warp_kind: WarpKind,
+) -> Vec<BrowserActionTurn> {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+    frame_loop.accept_request(37, true);
+    frame_loop.scene_selection_changed(37);
+    let mut presenter = retained_presenter(false);
+    presenter.forced_warp_kind = Some(warp_kind);
+    let mut clock = FakeClock::default();
+    let mut trace = vec![browser_action_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    )];
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    trace.push(browser_action_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn completed_picture_browser_action_trace(
+    scenario: &'static str,
+    arm_capture: bool,
+) -> Vec<BrowserActionTurn> {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(7, true);
+    assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false))));
+    let mut presenter = FakePresenter::default();
+    let mut clock = FakeClock::default();
+    let mut trace = vec![browser_action_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    )];
+    presenter.fire_completed_callback();
+    presenter.fire_warp_completed();
+    if arm_capture {
+        presenter.arm_capture();
+    }
+    clock.advance(1.0);
+    trace.push(browser_action_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    ));
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    trace.push(browser_action_turn(
+        scenario,
+        2,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn named_browser_action_traces() -> Vec<BrowserActionTurn> {
+    [
+        short_browser_action_trace(),
+        retained_browser_action_trace("zoom", WarpKind::AnchorHomography),
+        retained_browser_action_trace("height", WarpKind::ReliefRedraw),
+        completed_picture_browser_action_trace("capture", true),
+        completed_picture_browser_action_trace("finished-picture", false),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+const BROWSER_ACTION_TRACE_FIXTURE: &str = "[\n    BrowserActionTurn {\n        scenario: \"short\",\n        turn: 0,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            HotWritten {\n                slot_order: 0,\n            },\n            Submitted {\n                kind: Scene,\n                id: 1,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"short\",\n        turn: 1,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Scene,\n                id: 1,\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            Submitted {\n                kind: Scene,\n                id: 2,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"zoom\",\n        turn: 0,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 0,\n            },\n            Submitted {\n                kind: Warp,\n                id: 38,\n            },\n            SurfaceRetained {\n                warp_id: 38,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"zoom\",\n        turn: 1,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Warp,\n                id: 38,\n            },\n            SurfaceReleased {\n                warp_id: 38,\n                action: Present {\n                    warp_id: 38,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"height\",\n        turn: 0,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 0,\n            },\n            Submitted {\n                kind: Warp,\n                id: 38,\n            },\n            SurfaceRetained {\n                warp_id: 38,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"height\",\n        turn: 1,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Warp,\n                id: 38,\n            },\n            SurfaceReleased {\n                warp_id: 38,\n                action: Present {\n                    warp_id: 38,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"capture\",\n        turn: 0,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            HotWritten {\n                slot_order: 0,\n            },\n            Submitted {\n                kind: Scene,\n                id: 1,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 7,\n            },\n            Submitted {\n                kind: Warp,\n                id: 2,\n            },\n            SurfaceRetained {\n                warp_id: 2,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"capture\",\n        turn: 1,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Scene,\n                id: 1,\n            },\n            FenceObserved {\n                kind: Warp,\n                id: 2,\n            },\n            SurfaceReleased {\n                warp_id: 2,\n                action: Present {\n                    warp_id: 2,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 7,\n            },\n            Submitted {\n                kind: Warp,\n                id: 3,\n            },\n            SurfaceRetained {\n                warp_id: 3,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"capture\",\n        turn: 2,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Warp,\n                id: 3,\n            },\n            SurfaceReleased {\n                warp_id: 3,\n                action: Present {\n                    warp_id: 3,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"finished-picture\",\n        turn: 0,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            HotWritten {\n                slot_order: 0,\n            },\n            Submitted {\n                kind: Scene,\n                id: 1,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 7,\n            },\n            Submitted {\n                kind: Warp,\n                id: 2,\n            },\n            SurfaceRetained {\n                warp_id: 2,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"finished-picture\",\n        turn: 1,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Scene,\n                id: 1,\n            },\n            FenceObserved {\n                kind: Warp,\n                id: 2,\n            },\n            SurfaceReleased {\n                warp_id: 2,\n                action: Present {\n                    warp_id: 2,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            SurfaceAcquired {\n                generation: 7,\n            },\n            Submitted {\n                kind: Warp,\n                id: 3,\n            },\n            SurfaceRetained {\n                warp_id: 3,\n            },\n            WarpConsidered,\n        ],\n    },\n    BrowserActionTurn {\n        scenario: \"finished-picture\",\n        turn: 2,\n        actions: [\n            CaptureDrained,\n            CaptureStaged,\n            FenceObserved {\n                kind: Warp,\n                id: 3,\n            },\n            SurfaceReleased {\n                warp_id: 3,\n                action: Present {\n                    warp_id: 3,\n                },\n            },\n            HotWritten {\n                slot_order: 0,\n            },\n            SceneConsidered,\n            WarpConsidered,\n        ],\n    },\n]";
+
 const APP_FRAME_TRACE_FIXTURE: &str = "[\n    FrameTraceTurn {\n        scenario: \"short\",\n        turn: 0,\n        input_time_ms: 0.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 1,\n                drained_main_epoch: 1,\n            },\n        ],\n        hot_epoch: 1,\n        main_epoch: 1,\n        submitted_scene_id: Some(\n            1,\n        ),\n        submitted_scene_level: Some(\n            Preview,\n        ),\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [],\n        completed_scene_id: None,\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Pending,\n            scene_update: Idle,\n            scene_flight: Pending,\n            warp_flight: Idle,\n            retained_scene: None,\n            presented_scene: None,\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: true,\n                scene_update_pending: false,\n                scene_in_flight: true,\n                presented_view_stale: false,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"short\",\n        turn: 1,\n        input_time_ms: 1.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 2,\n                drained_main_epoch: 2,\n            },\n        ],\n        hot_epoch: 2,\n        main_epoch: 2,\n        submitted_scene_id: Some(\n            2,\n        ),\n        submitted_scene_level: Some(\n            Interactive,\n        ),\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [\n            TraceFenceObservation {\n                order: 0,\n                kind: Scene,\n                id: 1,\n                result: SceneCompleted {\n                    generation: 7,\n                    level: Preview,\n                },\n            },\n        ],\n        completed_scene_id: Some(\n            1,\n        ),\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Pending,\n            scene_update: Idle,\n            scene_flight: Pending,\n            warp_flight: Idle,\n            retained_scene: Some(\n                1,\n            ),\n            presented_scene: None,\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: true,\n                scene_update_pending: false,\n                scene_in_flight: true,\n                presented_view_stale: true,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"zoom\",\n        turn: 0,\n        input_time_ms: 0.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 1,\n                drained_main_epoch: 1,\n            },\n        ],\n        hot_epoch: 1,\n        main_epoch: 1,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: Some(\n            38,\n        ),\n        submitted_warp_kind: Some(\n            AnchorHomography,\n        ),\n        submitted_warp_source_scene_id: Some(\n            37,\n        ),\n        fence_observations: [],\n        completed_scene_id: None,\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 0,\n            due: None,\n            refinement: Idle,\n            scene_update: Pending,\n            scene_flight: Idle,\n            warp_flight: Pending,\n            retained_scene: Some(\n                37,\n            ),\n            presented_scene: Some(\n                37,\n            ),\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: true,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"zoom\",\n        turn: 1,\n        input_time_ms: 1.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 2,\n                drained_main_epoch: 2,\n            },\n        ],\n        hot_epoch: 2,\n        main_epoch: 2,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [\n            TraceFenceObservation {\n                order: 0,\n                kind: Warp,\n                id: 38,\n                result: WarpCompleted {\n                    kind: Some(\n                        AnchorHomography,\n                    ),\n                    source_scene_id: Some(\n                        37,\n                    ),\n                },\n            },\n        ],\n        completed_scene_id: None,\n        completed_warp_id: Some(\n            38,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 38,\n        },\n        facts: StableFrameFacts {\n            generation: 0,\n            due: None,\n            refinement: Idle,\n            scene_update: Pending,\n            scene_flight: Idle,\n            warp_flight: Idle,\n            retained_scene: Some(\n                37,\n            ),\n            presented_scene: Some(\n                37,\n            ),\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: true,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"height\",\n        turn: 0,\n        input_time_ms: 0.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 1,\n                drained_main_epoch: 1,\n            },\n        ],\n        hot_epoch: 1,\n        main_epoch: 1,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: Some(\n            38,\n        ),\n        submitted_warp_kind: Some(\n            ReliefRedraw,\n        ),\n        submitted_warp_source_scene_id: Some(\n            37,\n        ),\n        fence_observations: [],\n        completed_scene_id: None,\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 0,\n            due: None,\n            refinement: Idle,\n            scene_update: Pending,\n            scene_flight: Idle,\n            warp_flight: Pending,\n            retained_scene: Some(\n                37,\n            ),\n            presented_scene: Some(\n                37,\n            ),\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: true,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"height\",\n        turn: 1,\n        input_time_ms: 1.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 2,\n                drained_main_epoch: 2,\n            },\n        ],\n        hot_epoch: 2,\n        main_epoch: 2,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [\n            TraceFenceObservation {\n                order: 0,\n                kind: Warp,\n                id: 38,\n                result: WarpCompleted {\n                    kind: Some(\n                        ReliefRedraw,\n                    ),\n                    source_scene_id: Some(\n                        37,\n                    ),\n                },\n            },\n        ],\n        completed_scene_id: None,\n        completed_warp_id: Some(\n            38,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 38,\n        },\n        facts: StableFrameFacts {\n            generation: 0,\n            due: None,\n            refinement: Idle,\n            scene_update: Pending,\n            scene_flight: Idle,\n            warp_flight: Idle,\n            retained_scene: Some(\n                37,\n            ),\n            presented_scene: Some(\n                37,\n            ),\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: true,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"capture\",\n        turn: 0,\n        input_time_ms: 0.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 1,\n                drained_main_epoch: 1,\n            },\n        ],\n        hot_epoch: 1,\n        main_epoch: 1,\n        submitted_scene_id: Some(\n            1,\n        ),\n        submitted_scene_level: Some(\n            Final,\n        ),\n        submitted_warp_id: Some(\n            2,\n        ),\n        submitted_warp_kind: Some(\n            ClearOnly,\n        ),\n        submitted_warp_source_scene_id: None,\n        fence_observations: [],\n        completed_scene_id: None,\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Pending,\n            scene_update: Idle,\n            scene_flight: Pending,\n            warp_flight: Pending,\n            retained_scene: None,\n            presented_scene: None,\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: true,\n                scene_update_pending: false,\n                scene_in_flight: true,\n                presented_view_stale: false,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"capture\",\n        turn: 1,\n        input_time_ms: 1.0,\n        capture_before: Armed,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 2,\n                drained_main_epoch: 2,\n            },\n        ],\n        hot_epoch: 2,\n        main_epoch: 2,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: Some(\n            3,\n        ),\n        submitted_warp_kind: Some(\n            AnchorHomography,\n        ),\n        submitted_warp_source_scene_id: Some(\n            1,\n        ),\n        fence_observations: [\n            TraceFenceObservation {\n                order: 0,\n                kind: Scene,\n                id: 1,\n                result: SceneCompleted {\n                    generation: 7,\n                    level: Final,\n                },\n            },\n            TraceFenceObservation {\n                order: 1,\n                kind: Warp,\n                id: 2,\n                result: WarpCompleted {\n                    kind: Some(\n                        ClearOnly,\n                    ),\n                    source_scene_id: None,\n                },\n            },\n        ],\n        completed_scene_id: Some(\n            1,\n        ),\n        completed_warp_id: Some(\n            2,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 2,\n        },\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Idle,\n            scene_update: Idle,\n            scene_flight: Idle,\n            warp_flight: Pending,\n            retained_scene: Some(\n                1,\n            ),\n            presented_scene: None,\n            capture: InFlight,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: false,\n                scene_in_flight: false,\n                presented_view_stale: true,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"capture\",\n        turn: 2,\n        input_time_ms: 2.0,\n        capture_before: InFlight,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 3,\n                drained_main_epoch: 3,\n            },\n        ],\n        hot_epoch: 3,\n        main_epoch: 3,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [\n            TraceFenceObservation {\n                order: 2,\n                kind: Warp,\n                id: 3,\n                result: WarpCompleted {\n                    kind: Some(\n                        AnchorHomography,\n                    ),\n                    source_scene_id: Some(\n                        1,\n                    ),\n                },\n            },\n        ],\n        completed_scene_id: None,\n        completed_warp_id: Some(\n            3,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 3,\n        },\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Idle,\n            scene_update: Idle,\n            scene_flight: Idle,\n            warp_flight: Idle,\n            retained_scene: Some(\n                1,\n            ),\n            presented_scene: Some(\n                1,\n            ),\n            capture: Ready,\n            capture_scene: Some(\n                1,\n            ),\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: false,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: true,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"finished-picture\",\n        turn: 0,\n        input_time_ms: 0.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 1,\n                drained_main_epoch: 1,\n            },\n        ],\n        hot_epoch: 1,\n        main_epoch: 1,\n        submitted_scene_id: Some(\n            1,\n        ),\n        submitted_scene_level: Some(\n            Final,\n        ),\n        submitted_warp_id: Some(\n            2,\n        ),\n        submitted_warp_kind: Some(\n            ClearOnly,\n        ),\n        submitted_warp_source_scene_id: None,\n        fence_observations: [],\n        completed_scene_id: None,\n        completed_warp_id: None,\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: None,\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Pending,\n            scene_update: Idle,\n            scene_flight: Pending,\n            warp_flight: Pending,\n            retained_scene: None,\n            presented_scene: None,\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: true,\n                scene_update_pending: false,\n                scene_in_flight: true,\n                presented_view_stale: false,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"finished-picture\",\n        turn: 1,\n        input_time_ms: 1.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 2,\n                drained_main_epoch: 2,\n            },\n        ],\n        hot_epoch: 2,\n        main_epoch: 2,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: Some(\n            3,\n        ),\n        submitted_warp_kind: Some(\n            AnchorHomography,\n        ),\n        submitted_warp_source_scene_id: Some(\n            1,\n        ),\n        fence_observations: [\n            TraceFenceObservation {\n                order: 0,\n                kind: Scene,\n                id: 1,\n                result: SceneCompleted {\n                    generation: 7,\n                    level: Final,\n                },\n            },\n            TraceFenceObservation {\n                order: 1,\n                kind: Warp,\n                id: 2,\n                result: WarpCompleted {\n                    kind: Some(\n                        ClearOnly,\n                    ),\n                    source_scene_id: None,\n                },\n            },\n        ],\n        completed_scene_id: Some(\n            1,\n        ),\n        completed_warp_id: Some(\n            2,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 2,\n        },\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Idle,\n            scene_update: Idle,\n            scene_flight: Idle,\n            warp_flight: Pending,\n            retained_scene: Some(\n                1,\n            ),\n            presented_scene: None,\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: false,\n                scene_in_flight: false,\n                presented_view_stale: true,\n                presented_scene_is_completed: false,\n                warp_holds_stale: false,\n            },\n            picture_finished: false,\n        },\n    },\n    FrameTraceTurn {\n        scenario: \"finished-picture\",\n        turn: 2,\n        input_time_ms: 2.0,\n        capture_before: Idle,\n        hot_writes: [\n            TraceHotWrite {\n                slot_order: 0,\n                drained_hot_epoch: 3,\n                drained_main_epoch: 3,\n            },\n        ],\n        hot_epoch: 3,\n        main_epoch: 3,\n        submitted_scene_id: None,\n        submitted_scene_level: None,\n        submitted_warp_id: None,\n        submitted_warp_kind: None,\n        submitted_warp_source_scene_id: None,\n        fence_observations: [\n            TraceFenceObservation {\n                order: 2,\n                kind: Warp,\n                id: 3,\n                result: WarpCompleted {\n                    kind: Some(\n                        AnchorHomography,\n                    ),\n                    source_scene_id: Some(\n                        1,\n                    ),\n                },\n            },\n        ],\n        completed_scene_id: None,\n        completed_warp_id: Some(\n            3,\n        ),\n        refused_scene_id: None,\n        refused_warp_id: None,\n        surface_action: Present {\n            warp_id: 3,\n        },\n        facts: StableFrameFacts {\n            generation: 7,\n            due: None,\n            refinement: Idle,\n            scene_update: Idle,\n            scene_flight: Idle,\n            warp_flight: Idle,\n            retained_scene: Some(\n                1,\n            ),\n            presented_scene: Some(\n                1,\n            ),\n            capture: Idle,\n            capture_scene: None,\n            picture: PictureState {\n                refinement_pending: false,\n                scene_update_pending: false,\n                scene_in_flight: false,\n                presented_view_stale: false,\n                presented_scene_is_completed: true,\n                warp_holds_stale: false,\n            },\n            picture_finished: true,\n        },\n    },\n]";
 
 fn named_frame_traces() -> Vec<FrameTraceTurn> {
@@ -1548,6 +1843,143 @@ fn named_frame_traces() -> Vec<FrameTraceTurn> {
     .into_iter()
     .flatten()
     .collect()
+}
+
+fn browser_stage_positions(turn: &BrowserActionTurn) -> [usize; 3] {
+    let hot_written = turn
+        .actions
+        .iter()
+        .position(|action| matches!(action, BrowserAction::HotWritten { .. }))
+        .expect("every completed refresh writes HOT");
+    let scene_considered = turn
+        .actions
+        .iter()
+        .position(|action| matches!(action, BrowserAction::SceneConsidered))
+        .expect("every refresh considers a scene");
+    let warp_considered = turn
+        .actions
+        .iter()
+        .position(|action| matches!(action, BrowserAction::WarpConsidered))
+        .expect("every refresh considers a warp");
+    [hot_written, scene_considered, warp_considered]
+}
+
+fn assert_browser_stage_order(
+    turn: &BrowserActionTurn,
+    [hot_written, scene_considered, warp_considered]: [usize; 3],
+) {
+    assert!(
+        hot_written < scene_considered && scene_considered < warp_considered,
+        "{} turn {} preserves HOT, scene, warp order",
+        turn.scenario,
+        turn.turn
+    );
+    assert!(
+        turn.actions.iter().enumerate().all(|(index, action)| {
+            !matches!(action, BrowserAction::FenceObserved { .. }) || index < hot_written
+        }),
+        "{} turn {} observes every fence before HOT",
+        turn.scenario,
+        turn.turn
+    );
+    for (index, action) in turn.actions.iter().enumerate() {
+        match action {
+            BrowserAction::HotWritten { slot_order } => assert_eq!(*slot_order, 0),
+            BrowserAction::Submitted { id, .. } => assert_ne!(*id, 0),
+            BrowserAction::SurfaceAcquired { generation } => {
+                assert!(matches!(*generation, 0 | 7));
+            }
+            BrowserAction::SurfaceRetained { warp_id } => {
+                assert!(turn.actions[..index].iter().any(|prior| {
+                    matches!(
+                        prior,
+                        BrowserAction::Submitted {
+                            kind: SubmissionKind::Warp,
+                            id
+                        } if id == warp_id
+                    )
+                }));
+            }
+            BrowserAction::SurfaceReleased { warp_id, action } => {
+                assert_eq!(*action, TraceSurfaceAction::Present { warp_id: *warp_id });
+            }
+            BrowserAction::CaptureDrained
+            | BrowserAction::CaptureStaged
+            | BrowserAction::FenceObserved { .. }
+            | BrowserAction::SceneConsidered
+            | BrowserAction::WarpConsidered => {}
+        }
+    }
+}
+
+fn assert_browser_surface_order(
+    turn: &BrowserActionTurn,
+    scene_considered: usize,
+    warp_considered: usize,
+) {
+    if let Some(acquired) = turn
+        .actions
+        .iter()
+        .position(|action| matches!(action, BrowserAction::SurfaceAcquired { .. }))
+    {
+        let submitted = turn
+            .actions
+            .iter()
+            .position(|action| {
+                matches!(
+                    action,
+                    BrowserAction::Submitted {
+                        kind: SubmissionKind::Warp,
+                        ..
+                    }
+                )
+            })
+            .expect("an acquired surface is submitted");
+        let retained = turn
+            .actions
+            .iter()
+            .position(|action| matches!(action, BrowserAction::SurfaceRetained { .. }))
+            .expect("a submitted surface is retained");
+        assert!(
+            scene_considered < acquired
+                && acquired < submitted
+                && submitted < retained
+                && retained < warp_considered,
+            "{} turn {} preserves scene, acquire, submit, retain, warp order",
+            turn.scenario,
+            turn.turn
+        );
+    }
+    for (released, action) in turn.actions.iter().enumerate() {
+        let BrowserAction::SurfaceReleased { warp_id, .. } = action else {
+            continue;
+        };
+        assert!(
+            turn.actions[..released].iter().any(|prior| {
+                matches!(
+                    prior,
+                    BrowserAction::FenceObserved {
+                        kind: TraceFenceKind::Warp,
+                        id
+                    } if id == warp_id
+                )
+            }),
+            "{} turn {} releases warp {warp_id} only after observing its fence",
+            turn.scenario,
+            turn.turn
+        );
+    }
+}
+
+#[test]
+fn browser_refresh_actions_match_the_frozen_ordered_turns() {
+    let trace = named_browser_action_traces();
+    for turn in &trace {
+        let [hot_written, scene_considered, warp_considered] = browser_stage_positions(turn);
+        assert_browser_stage_order(turn, [hot_written, scene_considered, warp_considered]);
+        assert_browser_surface_order(turn, scene_considered, warp_considered);
+    }
+    assert_eq!(format!("{trace:#?}"), BROWSER_ACTION_TRACE_FIXTURE);
 }
 
 #[test]
