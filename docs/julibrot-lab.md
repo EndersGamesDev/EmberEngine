@@ -26,6 +26,8 @@ Every refinement grid is screen-aligned: each grid pixel samples the inverse ima
 
 `AST → lock boundary → owner → descriptors → heaps → kernels → geo → projection → scene → re-projection → surface`
 
+The engine-wide contract for this chain is [Engine design](engine-design.md), whose §11 names the Julibrot refactoring seams.
+
 |Slice|Package|Owns|
 |-----|-------|----|
 |math|`crates/labs/julibrot/math`|the Julibrot algebra: object rotation `O`, camera rotation `Q`, plane basis, presets, `f32` escape reference, high-precision reference orbits, perturbation and rebasing theory, the navigation-drift and warp-accuracy oracles, the bignum choice|
