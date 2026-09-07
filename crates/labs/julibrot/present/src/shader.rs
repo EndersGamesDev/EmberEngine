@@ -422,6 +422,7 @@ mod tests {
         ));
         assert!(source.contains("let dx = dpdx(grid_coordinate);"));
         assert!(source.contains("let dy = dpdy(grid_coordinate);"));
+        assert!(source.contains("if (scene.reserved_0.x <= 0.0) { return false; }"));
         assert!(source.contains(
             "let right = project_constant_height(vec2<f32>(neighbour_x, screen_y), height);"
         ));

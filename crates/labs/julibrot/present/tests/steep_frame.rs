@@ -506,10 +506,8 @@ fn scene_vertex_at_screen(
             };
             let right = draw_screen(neighbour_column, row);
             let above = draw_screen(column, neighbour_row);
-            flat.expected_stretch = maximum_singular_stretch(
-                [right[0] - screen[0], 0.0],
-                [0.0, above[1] - screen[1]],
-            );
+            flat.expected_stretch =
+                maximum_singular_stretch([right[0] - screen[0], 0.0], [0.0, above[1] - screen[1]]);
         }
         return flat;
     }
@@ -643,22 +641,8 @@ fn scene_vertex_at_screen(
         };
         let right_screen = [draw_screen(neighbour_column, row)[0], screen[1]];
         let above_screen = [screen[0], draw_screen(column, neighbour_row)[1]];
-        let right = scene_vertex_at_screen(
-            pose,
-            right_screen,
-            grid,
-            record,
-            Rule::Fixed,
-            mapping,
-        );
-        let above = scene_vertex_at_screen(
-            pose,
-            above_screen,
-            grid,
-            record,
-            Rule::Fixed,
-            mapping,
-        );
+        let right = scene_vertex_at_screen(pose, right_screen, grid, record, Rule::Fixed, mapping);
+        let above = scene_vertex_at_screen(pose, above_screen, grid, record, Rule::Fixed, mapping);
         vertex.expected_stretch = if right.valid && above.valid {
             maximum_singular_stretch(
                 [right.x - vertex.x, right.y - vertex.y],
@@ -893,14 +877,12 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                             }) / reciprocal
                         });
                         if let Some(excess_px) = rule.excess_px() {
-                            let expected_stretch = weights.iter().zip(tri).fold(
-                                0.0,
-                                |sum, (weight, vertex)| {
+                            let expected_stretch =
+                                weights.iter().zip(tri).fold(0.0, |sum, (weight, vertex)| {
                                     (weight * vertex.reciprocal_w)
                                         .mul_add(vertex.expected_stretch, sum)
-                                },
-                            ) / reciprocal;
-                            let stretched = fragment_maximum_stretch(tri, weights, area)
+                                }) / reciprocal;
+                            let stretched = fragment_maximum_stretch(&tri, weights, area)
                                 .is_none_or(|actual| {
                                     !expected_stretch.is_finite()
                                         || expected_stretch <= 0.0
@@ -962,10 +944,10 @@ fn maximum_singular_stretch(dx: [f64; 2], dy: [f64; 2]) -> f64 {
     let discriminant = trace
         .mul_add(trace, -4.0 * determinant * determinant)
         .max(0.0);
-    (0.5 * (trace + discriminant.sqrt())).max(0.0).sqrt()
+    trace.midpoint(discriminant.sqrt()).max(0.0).sqrt()
 }
 
-fn fragment_maximum_stretch(tri: [Vertex; 3], weights: [f64; 3], area: f64) -> Option<f64> {
+fn fragment_maximum_stretch(tri: &[Vertex; 3], weights: [f64; 3], area: f64) -> Option<f64> {
     let derivative_x = [
         (tri[1].y - tri[2].y) / area,
         (tri[2].y - tri[0].y) / area,
@@ -978,7 +960,7 @@ fn fragment_maximum_stretch(tri: [Vertex; 3], weights: [f64; 3], area: f64) -> O
     ];
     let reciprocal = weights
         .into_iter()
-        .zip(tri)
+        .zip(tri.iter().copied())
         .fold(0.0, |sum, (weight, vertex)| {
             weight.mul_add(vertex.reciprocal_w, sum)
         });
@@ -988,19 +970,19 @@ fn fragment_maximum_stretch(tri: [Vertex; 3], weights: [f64; 3], area: f64) -> O
     let derivative = |axis: usize, weight_derivatives: [f64; 3]| {
         let numerator = weights
             .into_iter()
-            .zip(tri)
+            .zip(tri.iter().copied())
             .fold(0.0, |sum, (weight, vertex)| {
                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
             });
         let numerator_derivative = weight_derivatives
             .into_iter()
-            .zip(tri)
+            .zip(tri.iter().copied())
             .fold(0.0, |sum, (weight, vertex)| {
                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
             });
         let reciprocal_derivative = weight_derivatives
             .into_iter()
-            .zip(tri)
+            .zip(tri.iter().copied())
             .fold(0.0, |sum, (weight, vertex)| {
                 weight.mul_add(vertex.reciprocal_w, sum)
             });
@@ -1153,7 +1135,7 @@ fn records_equal(left: [f32; 4], right: [f32; 4]) -> bool {
         .all(|(left, right)| left.to_bits() == right.to_bits())
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ReliefRedrawMeasurement {
     zoom_delta: f64,
     agree: u64,
@@ -1258,6 +1240,33 @@ impl ReliefRedrawMeasurement {
         assert!(self.requested_centre_error_px <= PLACEMENT_TOLERANCE_PX);
         assert!(self.requested_anchor_error_px <= PLACEMENT_TOLERANCE_PX);
     }
+
+    fn assert_partition(&self, expected: ReliefRedrawPartition) {
+        let total = u64::from(EXTENT[0]) * u64::from(EXTENT[1]);
+        assert_eq!(self.agree, expected.agree);
+        assert_eq!(self.hole, expected.hole);
+        assert_eq!(
+            self.clear_over_truth_surface,
+            expected.clear_over_truth_surface
+        );
+        assert_eq!(self.occluded_wrong, expected.occluded_wrong);
+        assert_eq!(self.resolution_only, expected.resolution_only);
+        assert_eq!(self.largest_connected_hole, expected.largest_connected_hole);
+        assert_eq!(
+            self.exposed_fraction,
+            (expected.hole + expected.occluded_wrong) as f64 / total as f64
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReliefRedrawPartition {
+    agree: u64,
+    hole: u64,
+    clear_over_truth_surface: u64,
+    occluded_wrong: u64,
+    resolution_only: u64,
+    largest_connected_hole: u64,
 }
 
 fn largest_connected_region(mask: &[bool]) -> u64 {
@@ -1276,17 +1285,9 @@ fn largest_connected_region(mask: &[bool]) -> u64 {
             let column = index % width;
             let row = index / width;
             let neighbours = [
-                if column > 0 {
-                    Some(index - 1)
-                } else {
-                    None
-                },
+                if column > 0 { Some(index - 1) } else { None },
                 (column + 1 < width).then_some(index + 1),
-                if row > 0 {
-                    Some(index - width)
-                } else {
-                    None
-                },
+                if row > 0 { Some(index - width) } else { None },
                 (row + 1 < height).then_some(index + width),
             ];
             for neighbour in neighbours.into_iter().flatten() {
@@ -1633,9 +1634,77 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         &box_truth,
         box_zoom_delta,
     );
-    panic!(
+    println!(
         "guarded relief redraw measurement\nexcess_px={REDRAW_STRETCH_EXCESS_PX}\nbefore={reports:#?}\nafter={guarded_reports:#?}\nbox_before={box_before:#?}\nbox_after={box_after:#?}"
     );
+
+    let guarded_expected = [
+        ReliefRedrawPartition {
+            agree: 469_453,
+            hole: 30_691,
+            clear_over_truth_surface: 28_795,
+            occluded_wrong: 18_256,
+            resolution_only: 0,
+            largest_connected_hole: 28_573,
+        },
+        ReliefRedrawPartition {
+            agree: 479_066,
+            hole: 24_941,
+            clear_over_truth_surface: 20_953,
+            occluded_wrong: 14_393,
+            resolution_only: 0,
+            largest_connected_hole: 24_768,
+        },
+    ];
+    assert_eq!(guarded_reports.len(), guarded_expected.len());
+    for (actual, expected) in guarded_reports.iter().zip(guarded_expected) {
+        actual.assert_partition(expected);
+    }
+
+    assert_eq!(box_before, box_after, "uniform magnification must not discard");
+    box_before.assert_partition(ReliefRedrawPartition {
+        agree: 506_479,
+        hole: 55,
+        clear_over_truth_surface: 55,
+        occluded_wrong: 11_866,
+        resolution_only: 0,
+        largest_connected_hole: 3,
+    });
+}
+
+/// Pending decision: enabling or removing the candidate stretch guard remains open.
+///
+/// The measured candidate fails both requirements below: its residual wrong pixels exceed the
+/// resolution-only tolerance, and its `+0.1` hole-plus-wrong exposure exceeds eight percent.
+#[test]
+#[ignore = "open decision: keep the relief stretch guard disabled or remove it"]
+fn candidate_relief_stretch_guard_meets_the_moving_frame_acceptance_bar() {
+    let guarded = [
+        ReliefRedrawPartition {
+            agree: 469_453,
+            hole: 30_691,
+            clear_over_truth_surface: 28_795,
+            occluded_wrong: 18_256,
+            resolution_only: 0,
+            largest_connected_hole: 28_573,
+        },
+        ReliefRedrawPartition {
+            agree: 479_066,
+            hole: 24_941,
+            clear_over_truth_surface: 20_953,
+            occluded_wrong: 14_393,
+            resolution_only: 0,
+            largest_connected_hole: 24_768,
+        },
+    ];
+    let total = f64::from(EXTENT[0]) * f64::from(EXTENT[1]);
+    for report in guarded {
+        assert!(report.occluded_wrong <= report.resolution_only);
+        assert!(
+            (report.hole + report.occluded_wrong) as f64 / total
+                <= RELIEF_REDRAW_MAX_EXPOSED_FRACTION
+        );
+    }
 }
 
 /// This render lands in the band the browser read back, which is a calibration, not a proof.

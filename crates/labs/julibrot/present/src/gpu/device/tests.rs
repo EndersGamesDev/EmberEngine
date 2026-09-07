@@ -285,7 +285,10 @@ fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         None,
     ))
     .expect("the native presentation test device is created");
-    (Arc::new(device), Arc::new(queue))
+    // `Arc::new` makes Clippy's `arc_with_non_send_sync` probe recurse through wgpu's backend
+    // dispatch graph on this nightly. `Presenter` requires these shared handles, and conversion
+    // constructs the same concrete Arc without asking that unrelated lint to solve the graph.
+    (Arc::from(device), Arc::from(queue))
 }
 
 fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
@@ -460,11 +463,14 @@ fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
     assert_eq!(classic.route, FrameReadbackRoute::OffscreenRerender);
     assert_eq!(ice.route, FrameReadbackRoute::OffscreenRerender);
     assert_eq!(classic.rgba.len(), ice.rgba.len());
+    let (classic_pixels, classic_remainder) = classic.rgba.as_chunks::<4>();
+    let (ice_pixels, ice_remainder) = ice.rgba.as_chunks::<4>();
+    assert!(classic_remainder.is_empty());
+    assert!(ice_remainder.is_empty());
     assert!(
-        classic
-            .rgba
-            .chunks_exact(4)
-            .zip(ice.rgba.chunks_exact(4))
+        classic_pixels
+            .iter()
+            .zip(ice_pixels)
             .any(|(classic, ice)| classic != ice),
         "the present-time palette changes pixels without a new scene"
     );
@@ -1023,9 +1029,7 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
         .clone();
     retained_grid.width /= 2;
     retained_grid.height /= 2;
-    assert!(
-        relief_scene_uniform(&retained_grid, &sampled, &sampled.pose, sampled.extent).is_err()
-    );
+    assert!(relief_scene_uniform(&retained_grid, &sampled, &sampled.pose, sampled.extent).is_err());
 }
 
 #[test]
@@ -1372,7 +1376,8 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
     assert!((display[0] - 0.75).abs() < 1.0e-6);
     assert!((display[1] + 0.775).abs() < 1.0e-6);
-    assert_eq!(uniform.reserved_0, [1.0, 960.0, 540.0, 1.0]);
+    assert_eq!(super::redraw::RELIEF_STRETCH_GUARD, None);
+    assert_eq!(uniform.reserved_0, [0.0; 4]);
 
     let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
         .expect("the source delivery lattice composes into the destination pose");

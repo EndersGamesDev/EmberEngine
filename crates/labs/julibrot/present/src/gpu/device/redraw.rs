@@ -5,6 +5,11 @@ use super::{
     warp_load_color,
 };
 
+/// Optional excess-stretch allowance for generalized relief redraws, in destination pixels.
+///
+/// `None` leaves the measured candidate guard disabled while its coverage trade-off is decided.
+pub(super) const RELIEF_STRETCH_GUARD: Option<f64> = None;
+
 impl Presenter {
     pub(super) fn prepare_relief_redraw(
         &mut self,
@@ -101,14 +106,14 @@ pub(super) fn relief_scene_uniform(
         },
     })?;
     if !crate::planner::exact_relief_redraw_family(&source.pose, destination) {
+        let Some(excess_px) = RELIEF_STRETCH_GUARD else {
+            return Ok(uniform);
+        };
         #[allow(
             clippy::cast_precision_loss,
             reason = "the checked presentation extent is narrowed once into the scene GPU ABI"
         )]
-        let presentation_extent = [
-            surface_extent[0] as f32,
-            surface_extent[1] as f32,
-        ];
+        let presentation_extent = [surface_extent[0] as f32, surface_extent[1] as f32];
         if presentation_extent
             .into_iter()
             .any(|value| !value.is_finite() || value <= 0.0)
@@ -117,7 +122,17 @@ pub(super) fn relief_scene_uniform(
                 operation: "pack relief redraw presentation extent",
             });
         }
-        uniform.reserved_0 = [1.0, presentation_extent[0], presentation_extent[1], 1.0];
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the finite guard allowance is narrowed once into the scene GPU ABI"
+        )]
+        let excess_px = excess_px as f32;
+        if !excess_px.is_finite() || excess_px < 0.0 {
+            return Err(PresentError::Device {
+                operation: "pack relief redraw stretch allowance",
+            });
+        }
+        uniform.reserved_0 = [1.0, presentation_extent[0], presentation_extent[1], excess_px];
     }
     Ok(uniform)
 }
