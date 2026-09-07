@@ -2700,7 +2700,8 @@ mod browser {
                     .skip_drafts_for_accepted_warp(frame_loop.presenter.accepted_warp_source(slot))
             {
                 frame_loop.prepared_level = None;
-                frame_loop.prepare_due_level();
+                let prepared_final = frame_loop.prepare_due_level();
+                debug_assert!(prepared_final);
                 hot = viewer.drain_hot(frame_loop.prepared_extent())?;
                 frame_loop.owner_epoch = hot.state.epoch;
                 frame_loop.main = hot.state.main;
