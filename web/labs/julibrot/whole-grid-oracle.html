@@ -77,21 +77,17 @@
       return hash.toString(16).padStart(16, "0");
     }
 
-    // Consecutive equal pixels become one lossless run over the raw RGBA stream. The byte digest
-    // below remains independent of this compact spelling.
-    function rgbaRuns(bytes) {
-      assert(bytes.length % 4 === 0, "RGBA runs need complete pixels");
-      const runs = [];
-      for (let start = 0; start < bytes.length; start += 4) {
-        const rgba = Array.from(bytes.subarray(start, start + 4));
-        const previous = runs[runs.length - 1];
-        if (previous && previous.rgba.every((channel, index) => channel === rgba[index])) {
-          previous.length += 1;
-        } else {
-          runs.push({ length: 1, rgba });
-        }
+    // The whole-frame digest is the equality oracle. Ordered row digests localize a mismatch
+    // without storing a second spelling of two million raw bytes in the repository.
+    function rgbaRowDigests(bytes, width, height) {
+      const bytesPerRow = width * 4;
+      assert(bytes.length === bytesPerRow * height, "RGBA rows need the declared extent");
+      const rows = [];
+      for (let row = 0; row < height; row += 1) {
+        const start = row * bytesPerRow;
+        rows.push(fnv1a64(bytes.subarray(start, start + bytesPerRow)));
       }
-      return runs;
+      return rows;
     }
 
     function assert(condition, message) {
@@ -116,7 +112,7 @@
         assert(frame.scene_id === (facts.completed_scene_id ?? null), "copied and completed scene ids differ");
         assert(frame.rgba.length === frame.width * frame.height * 4, "RGBA byte count does not match the extent");
         const actual = {
-          schema: 1,
+          schema: 2,
           row: { id: "preset:0", value: row },
           route: frame.route,
           extent: [frame.width, frame.height],
@@ -126,8 +122,7 @@
           rgba: {
             byte_length: frame.rgba.length,
             digest: { algorithm: "fnv1a64", hex: fnv1a64(frame.rgba) },
-            encoding: "rgba-runs-v1",
-            runs: rgbaRuns(frame.rgba),
+            rows: rgbaRowDigests(frame.rgba, frame.width, frame.height),
           },
         };
         const text = JSON.stringify(actual, null, 2);
