@@ -6,8 +6,6 @@
 
 #![deny(missing_docs)]
 // Contract names remain explicit when imported beside current runtime types.
-#![allow(clippy::module_name_repetitions)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
@@ -26,7 +24,6 @@ pub struct GameKey {
 
 /// Host-enforced resource limits for one hosted version.
 // A common `max_` prefix makes every charged boundary unambiguous at call sites.
-#[allow(clippy::struct_field_names)]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct VersionLimits {
     /// Maximum simultaneously active lobbies for this version.
