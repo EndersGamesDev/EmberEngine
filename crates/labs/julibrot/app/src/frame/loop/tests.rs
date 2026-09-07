@@ -440,9 +440,10 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
     assert!(
         source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
     );
-    assert!(source.contains(
-        "let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
-    ));
+    assert!(source.contains(concat!(
+        "let (refresh_order, scene_id) = refresh_order.run_scene(|| {\n",
+        "                if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
+    )));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
     assert!(source.contains(
         "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"

@@ -786,9 +786,11 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
             < arrivals.find("viewer.finish_reference_submission("),
         "the arrival is processed before its submission is finished"
     );
-    assert!(
-        FRAME.contains("super::warp_presents_requested_view(self.presenter.facts().warp_kind)")
-    );
+    assert!(FRAME.contains(concat!(
+        "if super::warp_presents_requested_view(\n",
+        "                                self.presenter.facts().warp_kind,\n",
+        "                            ) {"
+    )));
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));
