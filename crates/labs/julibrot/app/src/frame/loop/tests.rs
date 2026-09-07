@@ -1046,7 +1046,7 @@ fn drive_turn(
         return outcome;
     }
     let has_retained_scene = presenter.retained_scene.is_some();
-    presenter.write_hot(frame_loop.hold_refused_warp(has_retained_scene));
+    presenter.write_hot(has_retained_scene);
     if !outcome.refused
         && let Some(level) = frame_loop.due()
     {
@@ -1710,19 +1710,6 @@ fn viewer_harness_holds_an_auto_refusal_while_the_final_fill_is_pending() {
 }
 
 #[test]
-fn automatic_stale_hold_tracks_pending_replacement_work() {
-    let mut frame_loop = FrameLoop::default();
-    frame_loop.accept_request(37, true);
-    assert!(frame_loop.hold_refused_warp(true));
-
-    frame_loop.schedule.pause();
-    assert!(!frame_loop.hold_refused_warp(true));
-
-    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
-    assert!(frame_loop.hold_refused_warp(true));
-}
-
-#[test]
 fn viewer_harness_keeps_the_picture_when_a_non_final_round_is_retired_and_resumed() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
@@ -1773,7 +1760,6 @@ fn manual_control_change_writes_hot_and_schedules_no_scene() {
     let mut presenter = FakePresenter::default();
     let clock = FakeClock::default();
     frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
-    assert!(frame_loop.hold_refused_warp(false));
     frame_loop.accept_request(7, true);
     frame_loop.scene_selection_changed(7);
     assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
@@ -1936,7 +1922,6 @@ fn exposed_accepted_final_warp_submits_final_directly_and_returns_to_idle() {
 #[test]
 fn refused_warp_and_first_scene_run_the_full_ladder() {
     let mut refused = FrameLoop::default();
-    assert!(!refused.hold_refused_warp(false));
     refused.accept_request(37, true);
     assert!(!refused.skip_drafts_for_accepted_warp(None));
     assert_eq!(refused.due(), Some(RefinementLevel::Preview));

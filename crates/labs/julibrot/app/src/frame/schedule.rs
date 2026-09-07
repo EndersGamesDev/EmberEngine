@@ -675,13 +675,6 @@ impl FrameLoop {
         matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
     }
 
-    pub(super) const fn hold_refused_warp(&self, has_retained_scene: bool) -> bool {
-        if matches!(self.scene_mode, SceneMode::Manual) {
-            return true;
-        }
-        has_retained_scene && self.refinement_pending()
-    }
-
     #[cfg(target_arch = "wasm32")]
     pub(super) const fn ladder_round(&self) -> u64 {
         self.ladder_round
