@@ -16,8 +16,8 @@
   <script type="module">
     // This test-only page runs one shipped row through the public lab driver and prints the exact
     // fixture shape used for later whole-grid comparisons. `app_refresh()` both polls GPU fences
-    // and runs presentation turns, so owner epoch, presentation ledger and capture count remain
-    // reported load-dependent evidence until R2-04d adds a poll-only production boundary.
+    // and runs presentation turns, so owner epoch, presentation ledger, capture count and GPU poll
+    // counts remain reported load-dependent evidence until R2-04d adds a poll-only boundary.
     // `?generate=1` takes preset zero from the served wasm; without it, the committed fixture
     // supplies the frozen row and comparison.
     import { openLab } from "./lab.js?v=1";
@@ -31,8 +31,14 @@
     // recency makes label convergence load-dependent; each individual attempt remains bounded.
     const MAXIMUM_CAPTURES = 40;
     const LOAD_DEPENDENT_REASON =
-      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger and capture_count until R2-04d adds a poll-only production boundary";
-    const LOAD_DEPENDENT_FIELDS = ["owner_epoch", "presentation_ledger", "capture_count"];
+      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls and warp_polls; all remain reported evidence until R2-04d adds a poll-only production boundary";
+    const LOAD_DEPENDENT_FIELDS = [
+      "owner_epoch",
+      "presentation_ledger",
+      "capture_count",
+      "scene_polls",
+      "warp_polls",
+    ];
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
     const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
@@ -70,13 +76,13 @@
       for (const field of fields) delete record[field];
     }
 
-    // S-05 normalization removes only named wall durations and environment strings. The two
-    // approved load-dependent facts move beside the stable facts instead of being discarded.
+    // S-05 normalization removes only named wall durations and environment strings. The approved
+    // load-dependent fields move beside the stable facts instead of being discarded.
     function stableFacts(facts) {
       const stable = JSON.parse(JSON.stringify(facts));
       omit(stable, ENVIRONMENT_FIELDS);
       omit(stable, PAGE_WALL_FIELDS);
-      omit(stable, ["owner_epoch", "presentation_ledger"]);
+      omit(stable, ["owner_epoch", "presentation_ledger", "scene_polls", "warp_polls"]);
       if (stable.worker_facts) omit(stable.worker_facts, WORKER_WALL_FIELDS);
       if (Array.isArray(stable.level_timings)) {
         for (const level of stable.level_timings) omit(level, LEVEL_WALL_FIELDS);
@@ -213,8 +219,6 @@
             warmup_label: facts.warmup_label,
             completed_scene_id: facts.completed_scene_id ?? null,
             copied_scene_id: frame.scene_id,
-            scene_polls: facts.scene_polls,
-            warp_polls: facts.warp_polls,
             texture_reallocations: facts.texture_reallocations,
           },
           load_dependent: {
@@ -222,6 +226,8 @@
             owner_epoch: facts.owner_epoch,
             presentation_ledger: facts.presentation_ledger,
             capture_count: measured.captureCount,
+            scene_polls: facts.scene_polls,
+            warp_polls: facts.warp_polls,
           },
           rgba: {
             byte_length: frame.rgba.length,
