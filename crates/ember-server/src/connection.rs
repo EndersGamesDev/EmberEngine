@@ -365,7 +365,7 @@ fn run_connection(
                 drop(websocket.flush());
             }
             Ok(Message::Close(_) | Message::Frame(_)) => break,
-            Err(tungstenite::Error::Io(error)) if is_transient_read(&error) => {}
+            Err(tungstenite::Error::Io(error)) if ember_net::is_transient_read(&error) => {}
             Err(error) => {
                 tracing::debug!(connection = id, %peer, %error, "WebSocket connection ended");
                 break;
@@ -422,13 +422,6 @@ fn parse_ingress(
         .cloned()
         .map(Ingress::Legacy)
         .ok_or_else(|| "unknown legacy_game selector".to_string())
-}
-
-fn is_transient_read(error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-    )
 }
 
 #[cfg(test)]

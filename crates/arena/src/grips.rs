@@ -182,7 +182,10 @@ fn project_pair(point: Vec3, a: Vec3, ra: f32, b: Vec3, rb: f32) -> Option<Vec3>
 /// The shield remains at its existing independent handle. `None` explicitly
 /// rejects a pose with no reachable two-hand placement; render the unanimated
 /// grip/mount for that frame rather than letting IK clamp away from the glove.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The solver needs the rig, grip, world pose, aim, and shield state as coordinate inputs"
+)]
 pub fn constrain_mount(
     character: &RigCharacter,
     pose: &Pose,
@@ -222,7 +225,10 @@ pub fn constrain_mount(
 /// both arms' reach spheres. This retains adult limb lengths for every gun,
 /// crouch and aim pitch instead of pulling the wrists away from the fingers.
 // The same explicit body placement inputs are used by rig::push_rig.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The mount calculation mirrors the explicit placement inputs used by the rig"
+)]
 pub fn mount(
     character: &RigCharacter,
     pose: &Pose,
@@ -264,7 +270,10 @@ pub fn mount(
 }
 
 /// Solve in character space while the authored gun/gloves remain metre-sized.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Arm solving consumes the same explicit character-space inputs as mount calculation"
+)]
 pub fn pose_arms(
     character: &RigCharacter,
     pose: &mut Pose,
@@ -380,7 +389,10 @@ mod tests {
                             assert_eq!(reachable.shield, candidate.shield);
                             // Pose is intentionally not Clone/Copy; copy its value fields
                             // so the fixture can reuse the original stance on each sample.
-                            #[allow(clippy::unnecessary_struct_initialization)]
+                            #[allow(
+                                clippy::unnecessary_struct_initialization,
+                                reason = "Pose is not Copy or Clone and the fixture reuses the original"
+                            )]
                             let mut solved = Pose {
                                 local_rot: pose.local_rot,
                                 root_pos: pose.root_pos,

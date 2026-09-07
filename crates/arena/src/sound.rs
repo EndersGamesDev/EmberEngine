@@ -325,8 +325,8 @@ impl Sfx {
     /// The name a recorded sample of this cue carries in `assets/sfx/`
     /// (`<name>.wav`), which is also the CSV name the plot helper writes.
     /// The slot's tests and README are its readers; the player never is.
+    #[cfg(test)]
     #[must_use]
-    #[allow(dead_code)]
     pub const fn file_name(self) -> &'static str {
         match self {
             Self::Shot => "shot",
@@ -400,7 +400,7 @@ impl Sfx {
 /// the frame raised them. The v20 client sorts its spatial queue by the
 /// same `priority` through `feel::prioritize_plays`; this is the plain
 /// form the tests pin the rule on.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn prioritize(queue: &mut [(Sfx, f32)]) {
     queue.sort_by_key(|(s, _)| s.priority());
 }
@@ -793,8 +793,8 @@ fn feedback_for(delay: f32, tail: f32) -> f32 {
 
 /// The near variant of a gun's shot: the plan's name for the voice, which
 /// the cue dispatcher reaches through `gunshot_at`.
+#[cfg(test)]
 #[must_use]
-#[allow(dead_code)]
 pub fn gunshot(p: &GunParams) -> Vec<f32> {
     gunshot_at(p, Dist::Near)
 }

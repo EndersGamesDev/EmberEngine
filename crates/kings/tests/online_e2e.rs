@@ -226,8 +226,13 @@ fn create_and_join(a: &mut Peer, b: &mut Peer) {
     assert!(!b.game.is_creator);
     assert_eq!(b.game.phase, Phase::Waiting);
     assert!(
-        a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2
-            && g.can_start),
+        a.wait_for(Duration::from_secs(5), |g| {
+            g.roster.len() == 2
+                && g.can_start
+                && g.board.as_ref().is_some_and(|board| {
+                    board.seats.iter().filter(|seat| seat.present).count() == 2
+                })
+        }),
         "ada never learned bob had joined, or was never told she may start.\n  {}",
         a.dump("ada")
     );

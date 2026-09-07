@@ -11,7 +11,7 @@ There are five paths. Pick by what you are starting from:
 |---|---|---|
 | Nothing but an idea | **A** — generated: images → mesh | the veteran (`assets/models/parts2/vet-*.glb`) |
 | An artist's rigged model (FBX/glTF) | **B** — imported: split by bone | the SWAT operator (`assets/models/swat-parts.glb`) |
-| An artist's scene/level | **C** — imported: split by island | the factory skyline (`assets/models/level-backdrop.glb`) |
+| An artist's scene/level | **C** — imported: split by island | the factory-skyline generator (`tools/level_backdrop.py`; its unreferenced output is not retained) |
 | An artist's static prop, already in named parts | **D** — imported: keep the parts, add pivots | the revolver viewmodel (`tools/v15/build_viewmodel.py`; `tools/9mm_convert.py` is the never-run predecessor) |
 | A whole map's worth of surfaces and props, from nothing | **E** — generated pictures onto boxes and generated meshes | arena v13 "Trench City" — runbook `tools/v13/`, meshes `assets/models/v13/`, textures `assets/textures/v13/` |
 

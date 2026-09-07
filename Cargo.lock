@@ -178,6 +178,7 @@ version = "0.1.0"
 dependencies = [
  "arena-core",
  "ember-engine",
+ "ember-net",
  "glam",
  "js-sys",
  "rodio",
@@ -204,6 +205,7 @@ name = "arena-server"
 version = "0.1.0"
 dependencies = [
  "arena-core",
+ "ember-net",
  "rustls",
  "serde_json",
  "tracing",
@@ -1480,6 +1482,7 @@ dependencies = [
 name = "fire-core"
 version = "0.1.0"
 dependencies = [
+ "ember-net",
  "glam",
  "serde",
  "serde_json",
@@ -2324,6 +2327,7 @@ dependencies = [
 name = "kings-core"
 version = "0.1.0"
 dependencies = [
+ "ember-net",
  "serde",
  "serde_json",
 ]
@@ -2367,6 +2371,7 @@ dependencies = [
 name = "league-core"
 version = "0.1.0"
 dependencies = [
+ "ember-net",
  "proptest",
  "serde",
  "serde_json",

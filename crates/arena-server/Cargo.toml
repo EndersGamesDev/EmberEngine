@@ -5,6 +5,7 @@ version.workspace = true
 
 [dependencies]
 arena-core = { path = "../arena-core" }
+ember-net = { path = "../ember-net" }
 serde_json.workspace = true
 # rustls feature is for the wss-capable example/e2e bot, not the server
 # itself (TLS terminates at the tunnel).
