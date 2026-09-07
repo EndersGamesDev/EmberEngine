@@ -2504,20 +2504,68 @@ struct PendingZoomScene {
     requested_revision: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomInitialScene {
+    SettledFinal,
+    FinalInFlight,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRefinementOnEdit {
+    Restart,
+    StayIdle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomLatticeProbe {
+    Skip,
+    Enforce,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomEditState {
+    None,
+    Applied,
+    CrosshairRefused,
+    ZoomRefused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRecordState {
+    Ready,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRefinementState {
+    Pending,
+    Idle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomHoldState {
+    Disarmed,
+    Armed,
+    Selected,
+    RefusedByLattice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomSourceCoverage {
+    NoZoom,
+    CoversDestination,
+}
+
 #[derive(Clone, Copy, Debug)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "each boolean independently scripts one visible-turn timing or presenter gate"
-)]
 struct ZoomScript<'a> {
     scenario: &'static str,
     retained_level: RefinementLevel,
     edits: &'a [(u32, f64, Option<[f64; 2]>)],
-    final_already_in_flight: bool,
-    restart_refinement_on_edit: bool,
+    initial_scene: ZoomInitialScene,
+    refinement_on_edit: ZoomRefinementOnEdit,
     forget_records_before_selection_at_turn: Option<u32>,
     destination_extent: [u32; 2],
-    probe_hold_lattice: bool,
+    lattice_probe: ZoomLatticeProbe,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2533,13 +2581,14 @@ struct ZoomTurnRecord {
     presented: Option<WarpKind>,
     presented_exposed_fraction: Option<f64>,
     refusal_reason: Option<WarpRefusalReason>,
-    records_ready: bool,
+    edit_state: ZoomEditState,
+    attempted_crosshair: Option<[f64; 2]>,
+    attempted_zoom_delta: Option<f64>,
+    records: ZoomRecordState,
     retained_level: RefinementLevel,
-    refinement_pending: bool,
-    hold_armed: bool,
-    hold_selected_before_lattice: bool,
-    lattice_refused: bool,
-    covering_retained_source: bool,
+    refinement: ZoomRefinementState,
+    hold: ZoomHoldState,
+    source_coverage: ZoomSourceCoverage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2578,18 +2627,14 @@ fn measured_relief_plan(
 
 fn measured_relief_exposure_zoom_edit() -> Option<(u32, f64, Option<[f64; 2]>)> {
     let crosshairs = [
-        [470.0, 260.0],
-        [470.0, -260.0],
-        [-470.0, 260.0],
-        [-470.0, -260.0],
-        [430.0, 230.0],
-        [430.0, -230.0],
-        [-430.0, 230.0],
-        [-430.0, -230.0],
-        [360.0, 180.0],
-        [360.0, -180.0],
-        [-360.0, 180.0],
-        [-360.0, -180.0],
+        [40.0, 30.0],
+        [40.0, -30.0],
+        [-40.0, 30.0],
+        [-40.0, -30.0],
+        [180.0, 90.0],
+        [180.0, -90.0],
+        [-180.0, 90.0],
+        [-180.0, -90.0],
     ];
     for delta_log2 in [1.43, 3.0, 0.5, 0.1, 6.0] {
         for crosshair in crosshairs {
@@ -2599,18 +2644,16 @@ fn measured_relief_exposure_zoom_edit() -> Option<(u32, f64, Option<[f64; 2]>)> 
                 .expect("retained measured pose")
                 .pose;
             let retained = measured_relief_scene(37, RefinementLevel::Final, &retained_pose);
-            viewer
-                .set_crosshair(crosshair)
-                .expect("finite far off-centre crosshair");
-            viewer
-                .zoom_about_crosshair(delta_log2)
-                .expect("finite far off-centre zoom");
-            let requested = viewer
-                .drain_hot(MEASURED_FINAL_EXTENT)
-                .expect("far off-centre requested pose")
-                .pose;
+            if viewer.set_crosshair(crosshair).is_err()
+                || viewer.zoom_about_crosshair(delta_log2).is_err()
+            {
+                continue;
+            }
+            let Ok(requested) = viewer.drain_hot(MEASURED_FINAL_EXTENT) else {
+                continue;
+            };
             if matches!(
-                measured_relief_plan(&retained, &requested).refusal_reason,
+                measured_relief_plan(&retained, &requested.pose).refusal_reason,
                 Some(WarpRefusalReason::ReliefExposure { .. })
             ) {
                 return Some((0, delta_log2, Some(crosshair)));
@@ -2649,18 +2692,22 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
     let mut presented_revision = 0_u32;
     let mut last_presented_kind = Some(WarpKind::AnchorHomography);
     let mut pending_warp: Option<PendingZoomWarp> = None;
-    let mut pending_scene = script.final_already_in_flight.then_some(PendingZoomScene {
+    let final_already_in_flight = script.initial_scene == ZoomInitialScene::FinalInFlight;
+    let mut pending_scene = final_already_in_flight.then_some(PendingZoomScene {
         completes_at_turn: 18,
         pose: settled_final_pose,
         requested_revision: 0,
     });
-    let mut records_ready = !script.final_already_in_flight;
+    let mut records_ready = !final_already_in_flight;
     let mut next_scene_id = 38_u64;
     let mut trace = Vec::new();
 
     for turn in 0..=TOTAL_TURNS {
         let mut presented = None;
         let mut presented_exposed_fraction = None;
+        let mut edit_state = ZoomEditState::None;
+        let mut attempted_crosshair = None;
+        let mut attempted_zoom_delta = None;
         if pending_warp.is_some_and(|warp| warp.completes_at_turn == turn) {
             let warp = pending_warp.take().expect("due warp is pending");
             presented = Some(warp.kind);
@@ -2684,16 +2731,24 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         for &(_, delta_log2, crosshair) in
             script.edits.iter().filter(|edit| edit.0 == turn)
         {
+            attempted_crosshair = crosshair;
+            attempted_zoom_delta = Some(delta_log2);
             if let Some(crosshair) = crosshair {
-                viewer
-                    .set_crosshair(crosshair)
-                    .expect("scripted off-centre crosshair");
+                if viewer.set_crosshair(crosshair).is_err() {
+                    edit_state = ZoomEditState::CrosshairRefused;
+                    continue;
+                }
             }
-            viewer
-                .zoom_about_crosshair(delta_log2)
-                .expect("scripted measured zoom");
+            if viewer.zoom_about_crosshair(delta_log2).is_err() {
+                edit_state = ZoomEditState::ZoomRefused;
+                continue;
+            }
+            edit_state = ZoomEditState::Applied;
             requested_revision = requested_revision.saturating_add(1);
-            frame_loop.accept_request(37, script.restart_refinement_on_edit);
+            frame_loop.accept_request(
+                37,
+                script.refinement_on_edit == ZoomRefinementOnEdit::Restart,
+            );
         }
 
         let destination_extent = script.destination_extent;
@@ -2720,7 +2775,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         }
         let hold_armed = frame_loop.hold_refused_warp(true);
         let hold_selected_before_lattice = selected == WarpKind::HoldStale;
-        let lattice_refused = script.probe_hold_lattice
+        let lattice_refused = script.lattice_probe == ZoomLatticeProbe::Enforce
             && hold_selected_before_lattice
             && LatticePair::new(retained.extent, destination_extent).is_none_or(|lattice| {
                 lattice.destination() != destination_extent
@@ -2731,6 +2786,15 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         if lattice_refused {
             selected = WarpKind::ClearOnly;
         }
+        let hold = if lattice_refused {
+            ZoomHoldState::RefusedByLattice
+        } else if hold_selected_before_lattice {
+            ZoomHoldState::Selected
+        } else if hold_armed {
+            ZoomHoldState::Armed
+        } else {
+            ZoomHoldState::Disarmed
+        };
 
         let view_is_stale = presented_revision != requested_revision;
         if pending_scene.is_none()
@@ -2765,13 +2829,26 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             presented,
             presented_exposed_fraction,
             refusal_reason: plan.refusal_reason,
-            records_ready,
+            edit_state,
+            attempted_crosshair,
+            attempted_zoom_delta,
+            records: if records_ready {
+                ZoomRecordState::Ready
+            } else {
+                ZoomRecordState::Unavailable
+            },
             retained_level: retained.level,
-            refinement_pending: frame_loop.refinement_pending(),
-            hold_armed,
-            hold_selected_before_lattice,
-            lattice_refused,
-            covering_retained_source: requested_revision != 0,
+            refinement: if frame_loop.refinement_pending() {
+                ZoomRefinementState::Pending
+            } else {
+                ZoomRefinementState::Idle
+            },
+            hold,
+            source_coverage: if requested_revision == 0 {
+                ZoomSourceCoverage::NoZoom
+            } else {
+                ZoomSourceCoverage::CoversDestination
+            },
         });
     }
     trace
@@ -2785,77 +2862,77 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
 fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
     let idle_refused_edit = measured_relief_exposure_zoom_edit();
     let found_idle_relief_exposure = idle_refused_edit.is_some();
-    let idle_refused_edit = idle_refused_edit.unwrap_or((0, 3.0, Some([470.0, 260.0])));
+    let idle_refused_edit = idle_refused_edit.unwrap_or((0, 3.0, Some([40.0, 30.0])));
     let traces = vec![
         drive_measured_zoom_trace(ZoomScript {
             scenario: "off-centre box +1.43",
             retained_level: RefinementLevel::Final,
-            edits: &[(0, 1.43, Some([180.0, -90.0]))],
-            final_already_in_flight: false,
-            restart_refinement_on_edit: true,
+            edits: &[(0, 1.43, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
             scenario: "slider +0.5 at 100 ms",
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.1, None), (6, 0.5, None)],
-            final_already_in_flight: false,
-            restart_refinement_on_edit: true,
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
             scenario: "retained Preview before Final",
             retained_level: RefinementLevel::Preview,
             edits: &[(0, 0.5, None)],
-            final_already_in_flight: true,
-            restart_refinement_on_edit: true,
+            initial_scene: ZoomInitialScene::FinalInFlight,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
             scenario: "idle Final far off-centre refusal",
             retained_level: RefinementLevel::Final,
             edits: &[idle_refused_edit],
-            final_already_in_flight: false,
-            restart_refinement_on_edit: false,
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
             scenario: "record lease forgotten before redraw submission",
             retained_level: RefinementLevel::Final,
-            edits: &[(0, 0.5, Some([180.0, -90.0]))],
-            final_already_in_flight: false,
-            restart_refinement_on_edit: true,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
             forget_records_before_selection_at_turn: Some(0),
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
             scenario: "idle Final record-lease gap",
             retained_level: RefinementLevel::Final,
-            edits: &[(0, 0.5, Some([180.0, -90.0]))],
-            final_already_in_flight: false,
-            restart_refinement_on_edit: false,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             forget_records_before_selection_at_turn: Some(0),
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: false,
+            lattice_probe: ZoomLatticeProbe::Skip,
         }),
         drive_measured_zoom_trace(ZoomScript {
-            scenario: "Preview hold rejected by destination lattice",
+            scenario: "Preview hold lattice enforcement",
             retained_level: RefinementLevel::Preview,
-            edits: &[(0, 0.5, Some([180.0, -90.0]))],
-            final_already_in_flight: true,
-            restart_refinement_on_edit: true,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::FinalInFlight,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
-            probe_hold_lattice: true,
+            lattice_probe: ZoomLatticeProbe::Enforce,
         }),
     ];
 
@@ -2877,7 +2954,20 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
         .collect();
     let mut violations = Vec::new();
     for turn in traces.iter().flatten() {
-        if !turn.covering_retained_source || turn.presented.is_none() {
+        if turn.edit_state == ZoomEditState::CrosshairRefused {
+            violations.push(ZoomRuleViolation {
+                reason: "visible-frame crosshair was refused",
+                record: *turn,
+            });
+        } else if turn.edit_state == ZoomEditState::ZoomRefused {
+            violations.push(ZoomRuleViolation {
+                reason: "positive scripted zoom was refused",
+                record: *turn,
+            });
+        }
+        if turn.source_coverage != ZoomSourceCoverage::CoversDestination
+            || turn.presented.is_none()
+        {
             continue;
         }
         if turn.presented == Some(WarpKind::ClearOnly) {
