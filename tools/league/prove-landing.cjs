@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { safeRelative, safePath, hash } = require('./publish.cjs');
+const { safeRelative, safePath, hash, gameVersion } = require('./publish.cjs');
 const { landingFiles, patchHub } = require('./publish-landing.cjs');
 
 const BASE = 'https://endersgamesdev.github.io/EmberEngine/';
@@ -33,26 +33,27 @@ function officialUrl(value, base = BASE) {
     && !url.username && !url.password, `URL escapes the official EmberEngine site: ${url.href}`);
   return url;
 }
-function verifyLinks(html, hub, catalog) {
+function verifyLinks(html, hub, catalog, selectedVersion = 'v3') {
+  selectedVersion = gameVersion(selectedVersion);
   assert.equal(patchHub(hub), hub, 'Public hub is missing the exact League Story & trailer link');
-  const landingUrl = officialUrl(ENTRY), playUrl = officialUrl(`${ENTRY}v3/`);
+  const landingUrl = officialUrl(ENTRY), playUrl = officialUrl(`${ENTRY}${selectedVersion}/`);
   const anchors = [...html.matchAll(/<a\b[^>]*\bhref\s*=\s*(["'])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi)];
   assert(anchors.length > 0, 'Landing has no links');
   const play = [];
   for (const [, , href, body] of anchors) {
     const url = officialUrl(href, landingUrl);
     if (/\bplay\b/i.test(body.replace(/<[^>]*>/g, ' '))) {
-      assert.equal(url.href, playUrl.href, 'Every landing Play link must open V3');
+      assert.equal(url.href, playUrl.href, `Every landing Play link must open ${selectedVersion}`);
       play.push({ href, resolved: url.href });
     }
   }
   assert(play.length > 0, 'Landing has no Play link');
   const leagues = catalog.games?.filter(game => game.id === 'league');
   assert.equal(leagues?.length, 1, 'Public hub catalog needs exactly one League entry');
-  const selected = leagues[0].versions?.filter(version => version.v === 'v3');
-  assert.equal(selected?.length, 1, 'Public hub catalog needs exactly one V3 entry');
-  assert(selected[0].live && selected[0].proto === 2, 'V3 must be live with protocol 2');
-  assert.equal(officialUrl(selected[0].path).href, playUrl.href, 'Catalog V3 Play destination differs');
+  const selected = leagues[0].versions?.filter(version => version.v === selectedVersion);
+  assert.equal(selected?.length, 1, `Public hub catalog needs exactly one ${selectedVersion} entry`);
+  assert(selected[0].live && selected[0].proto === 2, `${selectedVersion} must be live with protocol 2`);
+  assert.equal(officialUrl(selected[0].path).href, playUrl.href, `Catalog ${selectedVersion} Play destination differs`);
   assert(/<video\b[^>]*\bid=["']trailer-video["'][^>]*>/i.test(html), 'Playable trailer video is missing');
   const sources = [...html.matchAll(/<source\b[^>]*\bsrc\s*=\s*(["'])(.*?)\1/gi)];
   assert(sources.some(([, , src]) => officialUrl(src, landingUrl).href === officialUrl(`${ENTRY}media/trailer.mp4`).href),
@@ -93,6 +94,7 @@ async function main({ root = process.cwd(), args = process.argv.slice(2), fetchI
     // Also rejects ignored/untracked media, missing tracked files and Git-mode links.
     const local = landingFiles(root);
     const publication = JSON.parse(fs.readFileSync(safePath(root, 'target/league-landing-publish/results.json')));
+    const selected = gameVersion(publication.gameVersion || 'v3'); report.gameVersion = selected;
     assert.equal(publication.sourceCommit, commit, 'Landing publication belongs to a different source commit');
     assert(!publication.preparedOnly && (publication.pushed || publication.noChanges), 'Landing publication has not completed');
     assert(/^[0-9a-f]{40}$/.test(publication.candidate), 'Invalid published candidate tree');
@@ -110,9 +112,9 @@ async function main({ root = process.cwd(), args = process.argv.slice(2), fetchI
     }
     // These are the frozen published discovery and destination bytes, not a local rebuild.
     expected.set('games.json', published('games.json'));
-    expected.set(`${ENTRY}v3/index.html`, published(`${ENTRY}v3/index.html`));
+    expected.set(`${ENTRY}${selected}/index.html`, published(`${ENTRY}${selected}/index.html`));
     assert(expected.size <= 128, 'Landing proof exceeds the bounded 128-file manifest');
-    verifyLinks(local.get(`${ENTRY}index.html`).toString('utf8'), expected.get('index.html').toString('utf8'), JSON.parse(expected.get('games.json')));
+    verifyLinks(local.get(`${ENTRY}index.html`).toString('utf8'), expected.get('index.html').toString('utf8'), JSON.parse(expected.get('games.json')), selected);
     const downloads = new Map(), queue = [...expected];
     let cursor = 0;
     // Three reads at a time; no sleeps or retries can hide an incomplete deployment.
@@ -131,7 +133,7 @@ async function main({ root = process.cwd(), args = process.argv.slice(2), fetchI
       }
     }));
     assert.equal(report.errors.length, 0, `${report.errors.length} public asset checks failed`);
-    report.links = verifyLinks(downloads.get(`${ENTRY}index.html`).toString('utf8'), downloads.get('index.html').toString('utf8'), JSON.parse(downloads.get('games.json')));
+    report.links = verifyLinks(downloads.get(`${ENTRY}index.html`).toString('utf8'), downloads.get('index.html').toString('utf8'), JSON.parse(downloads.get('games.json')), selected);
     cleanSource(root, commit);
     const after = landingFiles(root);
     assert.deepEqual([...after.keys()].sort(), [...local.keys()].sort(), 'Source manifest changed during proof');

@@ -7,7 +7,8 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const assert=require('node:assert/strict');
 const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
 const {startPreview}=require('./preview.cjs');
-const {hash}=require('./publish.cjs');
+const {hash,gameVersion}=require('./publish.cjs');
+const selected=gameVersion(process.env.LEAGUE_GAME_VERSION||'v3');
 const root=path.resolve(__dirname,'../..'),directory=path.join(root,'web/games/league');
 const publicBase=process.env.LEAGUE_LANDING_BASE_URL?.trim();
 const out=path.join(root,publicBase?'target/league-landing-public':'target/league-landing-smoke'),started=Date.now();
@@ -40,7 +41,7 @@ async function page(options={}){
 }
 async function links(page,label){
   const targets=await page.locator('a').evaluateAll(elements=>elements.filter(element=>/^Play\b/i.test(element.textContent.trim())).map(element=>({text:element.textContent.trim(),url:element.href})));
-  check(targets.length>=3&&targets.every(target=>target.url===new URL('v3/',landingUrl).href),`${label}: every Play link points to v3`);
+  check(targets.length>=3&&targets.every(target=>target.url===new URL(selected+'/',landingUrl).href),`${label}: every Play link points to ${selected}`);
   const hubs=await page.locator('a.brand, .site-foot a').evaluateAll(elements=>elements.filter(element=>element.classList.contains('brand')||/all ember games/i.test(element.textContent)).map(element=>({url:element.href,relative:element.getAttribute('href')})));
   check(hubs.length>=2&&hubs.every(hub=>hub.url===new URL('../../',landingUrl).href&&!/^(?:\.\.\/){3}/.test(hub.relative)),`${label}: hub links retain the GitHub Pages project prefix`);
 }

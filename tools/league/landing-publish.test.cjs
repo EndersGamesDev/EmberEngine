@@ -86,8 +86,10 @@ test('uncertain, duplicate or manually altered hub anchors are refused', () => {
 
 test('CLI is explicit and landing paths cannot reach game versions or peer files', () => {
   const commit = 'a'.repeat(40);
-  assert.deepEqual(parseArgs([`--source-commit=${commit}`]), { commit, push: false });
-  assert.deepEqual(parseArgs([`--source-commit=${commit}`, '--push']), { commit, push: true });
+  assert.deepEqual(parseArgs([`--source-commit=${commit}`]), { commit, push: false, gameVersion: 'v3' });
+  assert.deepEqual(parseArgs([`--source-commit=${commit}`, '--push']), { commit, push: true, gameVersion: 'v3' });
+  assert.deepEqual(parseArgs([`--source-commit=${commit}`, '--game-version=v4']), { commit, push: false, gameVersion: 'v4' });
+  assert.throws(() => parseArgs([`--source-commit=${commit}`, '--game-version=v2']));
   for (const args of [[], ['--push'], [`--source-commit=${commit}`, '--push', '--push'], [`--source-commit=${commit}`, '--unknown'], ['--source-commit=short']]) assert.throws(() => parseArgs(args));
   for (const file of ['games/league/index.html', 'games/league/landing.css', 'games/league/landing.js', 'games/league/story.json', 'games/league/media/nested/trailer.webm']) assert(landingPath(file), file);
   for (const file of ['index.html', 'games.json', 'server.json', 'games/league/v3/index.html', 'games/league/v2/pkg/league.js', 'games/league/media/../v3/x', 'games/league/media/', 'games/league/media2/x', 'games/arena/index.html']) assert(!landingPath(file), file);
@@ -139,6 +141,25 @@ test('missing frozen version and staged landing symlink cannot pass scope', t =>
   const file = 'games/league/media/trailer.webm', oid = git(root, 'rev-parse', `:${file}`);
   git(root, 'update-index', '--cacheinfo', `120000,${oid},${file}`);
   assert.throws(() => proveLandingScope(root, base, git(root, 'write-tree')), /link\/submodule refused/);
+});
+
+test('V4 landing scope also freezes the newly published game version', t => {
+  const root = fixture(t); pages(root);
+  write(root, 'games/league/v4/index.html', 'published V4');
+  git(root, 'add', '.'); git(root, 'commit', '-qm', 'V4 fixture');
+  const base = git(root, 'rev-parse', 'HEAD'); patchCandidate(root);
+  assert(proveLandingScope(root, base, staged(root)).frozen.some(row => row.path === 'games/league/v4'));
+  write(root, 'games/league/v4/index.html', 'unexpected V4 edit');
+  assert.throws(() => proveLandingScope(root, base, staged(root)), /Frozen League version changed/);
+});
+
+test('V4 public landing proof refuses stale V3 Play destinations', () => {
+  const { verifyLinks } = require('./prove-landing.cjs');
+  const html = '<a href="./v4/">Play now</a><video id="trailer-video"><source src="./media/trailer.mp4"></video>';
+  const catalog = { games: [{ id: 'league', versions: [{ v: 'v4', path: 'games/league/v4/', live: true, proto: 2 }] }] };
+  assert.equal(verifyLinks(html, patchHub(HUB), catalog, 'v4').play.length, 1);
+  assert.throws(() => verifyLinks(html.replace('./v4/', './v3/'), patchHub(HUB), catalog, 'v4'), /must open v4/);
+  assert.throws(() => verifyLinks(html, patchHub(HUB), catalog), /must open v3/);
 });
 
 test('prepare uses a sparse manifest without publishing or changing frozen Pages', t => {

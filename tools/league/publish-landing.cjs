@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { safeRelative, safePath, collectFiles, treeFiles, hash } = require('./publish.cjs');
+const { safeRelative, safePath, collectFiles, treeFiles, hash, gameVersion } = require('./publish.cjs');
 
 const ENTRY = 'games/league';
 const FIXED = ['index.html', 'landing.css', 'landing.js', 'story.json'];
@@ -60,7 +60,10 @@ function objectAt(cwd, revision, file) {
 function proveLandingScope(cwd, base, candidate) {
   treeFiles(cwd, candidate, ENTRY); // Catch Git-mode links even on Windows.
   const frozen = [];
-  for (const version of ['v1', 'v2', 'v3']) {
+  const versions = git(cwd, 'ls-tree', '-z', `${base}:${ENTRY}`).toString().split('\0').filter(Boolean)
+    .map(row => row.slice(row.indexOf('\t') + 1)).filter(name => /^v[1-9][0-9]{0,5}$/.test(name));
+  for (const required of ['v1', 'v2', 'v3']) assert(versions.includes(required), `Required frozen version missing: ${required}`);
+  for (const version of versions) {
     const file = `${ENTRY}/${version}`, before = objectAt(cwd, base, file);
     assert.equal(before.type, 'tree', `Frozen ${version} must be a tree`);
     assert.deepEqual(objectAt(cwd, candidate, file), before, `Frozen League version changed: ${file}`);
@@ -107,10 +110,12 @@ function landingFiles(root) {
 function parseArgs(args) {
   const names = args.map(value => value.split('=')[0]);
   assert.equal(new Set(names).size, names.length, 'Duplicate argument');
-  assert(args.every(value => value === '--push' || /^--source-commit=[0-9a-f]{40}$/.test(value)), 'Use --source-commit=<full HEAD> and optional --push');
+  assert(args.every(value => value === '--push' || /^--source-commit=[0-9a-f]{40}$/.test(value) || /^--game-version=v[1-9][0-9]{0,5}$/.test(value)), 'Use --source-commit=<full HEAD>, optional --game-version=vN and --push');
   const commit = args.find(value => value.startsWith('--source-commit='))?.slice('--source-commit='.length);
   assert(commit, '--source-commit is required');
-  return { commit, push: args.includes('--push') };
+  const selected = gameVersion(args.find(value => value.startsWith('--game-version='))?.slice('--game-version='.length) || 'v3');
+  assert(Number(selected.slice(1)) >= 3, 'The story landing requires V3 or later');
+  return { commit, push: args.includes('--push'), gameVersion: selected };
 }
 
 function main({ root = process.cwd(), args = process.argv.slice(2) } = {}) {
@@ -126,7 +131,7 @@ function main({ root = process.cwd(), args = process.argv.slice(2) } = {}) {
   const base = text(root, 'rev-parse', 'origin/gh-pages');
   const catalog = JSON.parse(git(root, 'show', `${base}:games.json`));
   const league = catalog.games?.find(game => game.id === 'league');
-  assert(league?.versions?.some(version => version.v === 'v3' && version.path === `${ENTRY}/v3/` && version.live && version.proto === 2), 'Publish V3 with its protocol 2 catalog entry before the landing page');
+  assert(league?.versions?.some(version => version.v === options.gameVersion && version.path === `${ENTRY}/${options.gameVersion}/` && version.live && version.proto === 2), `Publish ${options.gameVersion} with its protocol 2 catalog entry before the landing page`);
   // Refuse links in mutable paths before checkout or deletion. Frozen versions
   // are compared by tree id, never copied out or touched by this release.
   const existing = treeFiles(root, base, ENTRY).filter(row => landingPath(row.file));
@@ -156,7 +161,7 @@ function main({ root = process.cwd(), args = process.argv.slice(2) } = {}) {
   assert.equal(text(root, 'ls-remote', 'origin', 'refs/heads/main').split(/\s+/)[0], commit, 'Concurrent main update: prepare again');
   assert.equal(text(root, 'ls-remote', 'origin', 'refs/heads/gh-pages').split(/\s+/)[0], base, 'Concurrent Pages update: prepare again');
   const report = {
-    sourceCommit: commit, base, candidate, worktree, ...scope,
+    sourceCommit: commit, gameVersion: options.gameVersion, base, candidate, worktree, ...scope,
     files: [...files].map(([file, bytes]) => ({ file, bytes: bytes.length, sha256: hash(bytes) })),
     preparedOnly: !options.push, pushed: false, noChanges: scope.changes.length === 0,
   };
