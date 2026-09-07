@@ -1236,13 +1236,13 @@ mod tests {
     use super::{
         Admission, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
     };
-    use crate::endpoint::{
-        NormalizedWorkerFacts, OwnershipPhase, OwnershipTrace, begin_ownership_trace,
-        finish_ownership_trace,
-    };
     use crate::endpoint::tests::{
         OWNERSHIP_SCENARIO_GENERATION, OWNERSHIP_SCENARIO_MAX_ITER,
         OWNERSHIP_SCENARIO_OWNER_NOW_US, OWNERSHIP_SCENARIO_RECORDS,
+    };
+    use crate::endpoint::{
+        NormalizedWorkerFacts, OwnershipPhase, OwnershipTrace, begin_ownership_trace,
+        finish_ownership_trace,
     };
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
@@ -1519,13 +1519,7 @@ mod tests {
         let lease = producer.next_request().unwrap().unwrap();
         let records = vec![zero_record(); OWNERSHIP_SCENARIO_RECORDS];
         producer
-            .complete(
-                lease,
-                &records,
-                OWNERSHIP_SCENARIO_MAX_ITER,
-                1_000,
-                250_000,
-            )
+            .complete(lease, &records, OWNERSHIP_SCENARIO_MAX_ITER, 1_000, 250_000)
             .unwrap();
         let mut response = owner.next_arrival().unwrap();
         assert_eq!(response.generation(), OWNERSHIP_SCENARIO_GENERATION);
@@ -1565,11 +1559,8 @@ mod tests {
     ) -> Vec<OwnershipModeDifference> {
         assert_eq!(same_thread.events.len(), browser.events.len());
         let mut differences = Vec::new();
-        for (index, (same_event, browser_event)) in same_thread
-            .events
-            .iter()
-            .zip(&browser.events)
-            .enumerate()
+        for (index, (same_event, browser_event)) in
+            same_thread.events.iter().zip(&browser.events).enumerate()
         {
             assert_eq!(same_event.phase, browser_event.phase, "event {index}");
             assert_eq!(same_event.result, browser_event.result, "event {index}");
@@ -1578,9 +1569,18 @@ mod tests {
                 same_event.logical_owner, browser_event.logical_owner,
                 "event {index}"
             );
-            assert_eq!(same_event.generation, browser_event.generation, "event {index}");
-            assert_eq!(same_event.pool_epoch, browser_event.pool_epoch, "event {index}");
-            assert_eq!(same_event.credit_us, browser_event.credit_us, "event {index}");
+            assert_eq!(
+                same_event.generation, browser_event.generation,
+                "event {index}"
+            );
+            assert_eq!(
+                same_event.pool_epoch, browser_event.pool_epoch,
+                "event {index}"
+            );
+            assert_eq!(
+                same_event.credit_us, browser_event.credit_us,
+                "event {index}"
+            );
             assert_eq!(
                 same_event.orbit_queue_depth, browser_event.orbit_queue_depth,
                 "event {index}"
@@ -1594,13 +1594,11 @@ mod tests {
                 "event {index}"
             );
             assert_eq!(
-                same_event.request_buffers_owned_main,
-                browser_event.request_buffers_owned_main,
+                same_event.request_buffers_owned_main, browser_event.request_buffers_owned_main,
                 "event {index}"
             );
             assert_eq!(
-                same_event.orbit_buffers_owned_main,
-                browser_event.orbit_buffers_owned_main,
+                same_event.orbit_buffers_owned_main, browser_event.orbit_buffers_owned_main,
                 "event {index}"
             );
             if same_event.slot != browser_event.slot {

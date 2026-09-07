@@ -1387,10 +1387,7 @@ pub(crate) mod tests {
         let mut harness = Harness::boot(OWNERSHIP_SCENARIO_MAX_ITER);
         begin_ownership_trace();
         assert_eq!(
-            harness.submit(
-                OWNERSHIP_SCENARIO_GENERATION,
-                OWNERSHIP_SCENARIO_MAX_ITER
-            ),
+            harness.submit(OWNERSHIP_SCENARIO_GENERATION, OWNERSHIP_SCENARIO_MAX_ITER),
             SubmitOutcome::Transferred
         );
 

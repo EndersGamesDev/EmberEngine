@@ -787,9 +787,8 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
         "the arrival is processed before its submission is finished"
     );
     assert!(FRAME.contains(concat!(
-        "if super::warp_presents_requested_view(\n",
-        "                                self.presenter.facts().warp_kind,\n",
-        "                            ) {"
+        "if super::warp_presents_requested_view(self.presenter.facts().warp_kind)\n",
+        "                            {"
     )));
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));

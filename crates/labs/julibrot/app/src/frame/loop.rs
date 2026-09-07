@@ -1418,13 +1418,12 @@ mod browser {
                                 receipt.precision_mode,
                                 frame,
                             ) {
-                                let _released = runtime
-                                    .release_unsubmitted_warp(self.loop_state.generation());
+                                let _released =
+                                    runtime.release_unsubmitted_warp(self.loop_state.generation());
                                 return Err(error);
                             }
-                            if super::warp_presents_requested_view(
-                                self.presenter.facts().warp_kind,
-                            ) {
+                            if super::warp_presents_requested_view(self.presenter.facts().warp_kind)
+                            {
                                 self.pending_warp_view =
                                     Some((receipt.warp_id, self.view_stamp(viewer)));
                             }
