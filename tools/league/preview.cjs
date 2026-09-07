@@ -26,7 +26,26 @@ async function startPreview({port=8094,gamePort=7794,gameVersion='v2',protocol=g
     const file=path.resolve(base,'.'+rel);
     if(!file.startsWith(base+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}
     const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.webp':'image/webp','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.webm':'video/webm','.vtt':'text/vtt; charset=utf-8','.wav':'audio/wav'};
-    res.setHeader('Content-Type',types[path.extname(file)]||'application/octet-stream');res.setHeader('Cache-Control','no-store');res.end(fs.readFileSync(file));
+    const size=fs.statSync(file).size;
+    res.setHeader('Content-Type',types[path.extname(file)]||'application/octet-stream');res.setHeader('Cache-Control','no-store');
+    res.setHeader('Accept-Ranges','bytes');
+    let start=0,end=size-1,status=200;
+    if(req.method==='GET'&&req.headers.range){
+      const range=/^bytes=(\d*)-(\d*)$/.exec(req.headers.range.trim());
+      if(range&&(range[1]||range[2])){
+        if(range[1]){start=Number(range[1]);end=range[2]?Number(range[2]):end;}
+        else {const suffix=Number(range[2]);start=Math.max(0,size-suffix);end=size-1;}
+      }
+      if(!range||(!range[1]&&!range[2])||range.slice(1).some(value=>value&&!Number.isSafeInteger(Number(value)))||!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=size||end<start){
+        res.writeHead(416,{'Content-Range':`bytes */${size}`,'Content-Length':'0'}).end();return;
+      }
+      end=Math.min(end,size-1);status=206;res.setHeader('Content-Range',`bytes ${start}-${end}/${size}`);
+    }
+    res.writeHead(status,{'Content-Length':String(Math.max(0,end-start+1))});
+    if(req.method==='HEAD'||size===0){res.end();return;}
+    const stream=fs.createReadStream(file,{start,end});
+    res.on('close',()=>stream.destroy());
+    stream.on('error',error=>res.destroy(error));stream.pipe(res);
   });
   try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
   catch(error){game?.kill();throw error;}
