@@ -15,22 +15,22 @@
   <pre id="report">opening the served build</pre>
   <script type="module">
     // This test-only page runs one shipped row through the public lab driver and prints the exact
-    // fixture shape used for later whole-grid comparisons. Its measured captures use fixed direct
-    // refresh turns after settlement, so a hidden tab cannot add policy samples. `?generate=1`
-    // takes preset zero from the served wasm; without it, the committed fixture supplies the
-    // frozen row and comparison.
+    // fixture shape used for later whole-grid comparisons. `app_refresh()` both polls GPU fences
+    // and runs presentation turns, so owner epoch, presentation ledger and capture count remain
+    // reported load-dependent evidence until R2-04d adds a poll-only production boundary.
+    // `?generate=1` takes preset zero from the served wasm; without it, the committed fixture
+    // supplies the frozen row and comparison.
     import { openLab } from "./lab.js?v=1";
 
     const FIXTURE_URL = "./whole-grid-v1.json";
     const LOSSLESS_FILE = "whole-grid-v1.rgba.deflate.bin";
     const LOSSLESS_ENCODING = "zlib-rfc1950";
     const MAX_INLINE_BINARY_BYTES = 600_000;
-    const FIXED_POLICY_PRESENT_COUNT = 2;
-    const REFRESHES_PER_PRESENT = 3;
-    const CALLBACK_WAIT_MS = 1_000;
-    const MEASUREMENT_WALL_MS = 5_000;
-    const READBACK_POLL_MS = 250;
-    const READBACK_TIMEOUT_MS = 120_000;
+    const FRAME_TIMEOUT_MS = 30_000;
+    const MAXIMUM_CAPTURES = 12;
+    const LOAD_DEPENDENT_REASON =
+      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger and capture_count until R2-04d adds a poll-only production boundary";
+    const LOAD_DEPENDENT_FIELDS = ["owner_epoch", "presentation_ledger", "capture_count"];
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
     const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
@@ -68,12 +68,13 @@
       for (const field of fields) delete record[field];
     }
 
-    // S-05 normalization removes only named wall durations and environment strings. Credit, polls,
-    // ids, epochs, modes, extents, byte counts, queue depths and policy results stay exact.
+    // S-05 normalization removes only named wall durations and environment strings. The two
+    // approved load-dependent facts move beside the stable facts instead of being discarded.
     function stableFacts(facts) {
       const stable = JSON.parse(JSON.stringify(facts));
       omit(stable, ENVIRONMENT_FIELDS);
       omit(stable, PAGE_WALL_FIELDS);
+      omit(stable, ["owner_epoch", "presentation_ledger"]);
       if (stable.worker_facts) omit(stable.worker_facts, WORKER_WALL_FIELDS);
       if (Array.isArray(stable.level_timings)) {
         for (const level of stable.level_timings) omit(level, LEVEL_WALL_FIELDS);
@@ -151,128 +152,33 @@
       return compressed;
     }
 
-    const pause = durationMs => new Promise(resolve => setTimeout(resolve, durationMs));
-
-    function captureState(api) {
-      return JSON.parse(api.app_frame_capture_json());
-    }
-
-    function refreshClock(api) {
-      let nowMs = performance.now();
-      let refreshCount = 0;
-      return {
-        advance(deltaMs) {
-          nowMs += deltaMs;
-          api.app_refresh(nowMs);
-          refreshCount += 1;
-          return JSON.parse(api.app_facts_json());
-        },
-        poll() {
-          api.app_refresh(nowMs);
-          return JSON.parse(api.app_facts_json());
-        },
-        count() {
-          return refreshCount;
-        },
-      };
-    }
-
-    function assertNoPresentation(facts, presentedFacts) {
-      assert(
-        JSON.stringify(facts.presentation_ledger) ===
-          JSON.stringify(presentedFacts.presentation_ledger),
-        "readback polling submitted an additional presentation",
-      );
-      assert(
-        facts.completed_scene_id === presentedFacts.completed_scene_id &&
-          facts.presented_scene_id === presentedFacts.presented_scene_id,
-        "readback polling changed the completed or presented scene",
-      );
-    }
-
-    async function takeFixedFrame(api, clock, presentedFacts) {
-      const deadline = performance.now() + READBACK_TIMEOUT_MS;
-      for (;;) {
-        const state = captureState(api);
-        assert(
-          !state.frame_capture_refusal,
-          `frame capture was refused: ${state.frame_capture_refusal}`,
-        );
-        if (state.frame_capture_ready) {
-          const bytes = api.app_take_frame_rgba();
-          assert(bytes, "fixed capture completed without RGBA bytes");
-          assert(
-            bytes.length === state.frame_capture_width * state.frame_capture_height * 4,
-            "fixed capture byte count differs from its extent",
-          );
-          return {
-            width: state.frame_capture_width,
-            height: state.frame_capture_height,
-            route: state.frame_capture_copy_route,
-            scene_id: state.frame_capture_scene_id,
-            rgba: bytes,
-          };
-        }
-        assert(performance.now() <= deadline, "fixed frame readback timed out");
-        await pause(READBACK_POLL_MS);
-        assertNoPresentation(clock.poll(), presentedFacts);
-      }
-    }
-
-    async function presentOnFixedTurns(api, clock, expectedSampleClass, capture) {
-      if (capture) {
-        const support = captureState(api);
-        assert(
-          support.frame_capture_supported,
-          `frame capture is unavailable: ${support.frame_capture_status}`,
-        );
-        assert(
-          !support.frame_capture_pending && !support.frame_capture_ready,
-          "a prior frame capture is still held",
-        );
-        api.app_request_frame_capture();
-      }
-      api.app_request_frame();
-
-      clock.advance(1);
-
-      // No browser callback can run between these two calls. This fixes the first fence
-      // observation as pending instead of letting animation scheduling decide the poll count.
-      clock.advance(1);
-
-      // The callback gets one real-time window, then a bounded synthetic wall makes this warp the
-      // newest policy sample without crossing the frame-copy deadline. A missing warp callback
-      // refuses this fixed presentation instead of adding timing-dependent presentation turns.
-      await pause(CALLBACK_WAIT_MS);
-      const facts = clock.advance(MEASUREMENT_WALL_MS);
-      assert(facts.refresh_status === "Presented", "fixed presentation missed its completion turn");
-      assert(
-        facts.warmup_label === expectedSampleClass,
-        `fixed presentation expected ${expectedSampleClass}, got ${facts.warmup_label}`,
-      );
-      return {
-        frame: capture ? await takeFixedFrame(api, clock, facts) : null,
-        facts,
-      };
-    }
-
     async function measuredFrame(lab) {
-      // The final settled presentation supplies the cold sample. Stop the driver's animation and
-      // fallback schedulers, then contribute exactly the policy probe and measured presentations.
-      // Only the latter is captured; variable readback polls happen after its facts are frozen.
-      lab.stop();
-      const clock = refreshClock(lab.api);
-      await presentOnFixedTurns(lab.api, clock, "PolicyProbe", false);
-      const measured = await presentOnFixedTurns(lab.api, clock, "Measured", true);
-      assert(
-        clock.count() === FIXED_POLICY_PRESENT_COUNT * REFRESHES_PER_PRESENT,
-        "fixed presentation refresh count differs",
-      );
-      return {
-        ...measured,
-        presentCount: FIXED_POLICY_PRESENT_COUNT,
-        refreshCount: clock.count(),
-      };
+      for (let capture = 1; capture <= MAXIMUM_CAPTURES; capture += 1) {
+        const frame = await lab.frame({ timeoutMs: FRAME_TIMEOUT_MS });
+        const facts = lab.facts();
+        if (facts.warmup_label === "Measured") return { frame, facts, captureCount: capture };
+      }
+      throw new Error(`warm-up did not reach Measured in ${MAXIMUM_CAPTURES} captured frames`);
+    }
+
+    function exactRecord(record) {
+      const exact = JSON.parse(JSON.stringify(record));
+      omit(exact.load_dependent, LOAD_DEPENDENT_FIELDS);
+      return exact;
+    }
+
+    function loadDependentReport(actual, expected) {
+      const report = {};
+      for (const field of LOAD_DEPENDENT_FIELDS) {
+        const actualValue = actual.load_dependent[field];
+        const expectedValue = expected.load_dependent[field];
+        report[field] = {
+          equal: JSON.stringify(actualValue) === JSON.stringify(expectedValue),
+          expected: expectedValue,
+          actual: actualValue,
+        };
+      }
+      return JSON.stringify(report, null, 2);
     }
 
     async function run() {
@@ -303,16 +209,17 @@
           stable_facts: stable,
           determinism: {
             warmup_label: facts.warmup_label,
-            policy_present_count: measured.presentCount,
-            refreshes_per_present: REFRESHES_PER_PRESENT,
-            policy_refresh_count: measured.refreshCount,
             completed_scene_id: facts.completed_scene_id ?? null,
             copied_scene_id: frame.scene_id,
-            owner_epoch: facts.owner_epoch,
             scene_polls: facts.scene_polls,
             warp_polls: facts.warp_polls,
             texture_reallocations: facts.texture_reallocations,
-            presentation_ledger: stable.presentation_ledger,
+          },
+          load_dependent: {
+            reason: LOAD_DEPENDENT_REASON,
+            owner_epoch: facts.owner_epoch,
+            presentation_ledger: facts.presentation_ledger,
+            capture_count: measured.captureCount,
           },
           rgba: {
             byte_length: frame.rgba.length,
@@ -322,13 +229,18 @@
               file: LOSSLESS_FILE,
               encoding: LOSSLESS_ENCODING,
               byte_length: compressed.length,
+              digest: { algorithm: "sha256", hex: await sha256(compressed) },
             },
           },
         };
         const text = JSON.stringify(actual, null, 2);
         if (expected) {
-          assert(JSON.stringify(actual) === JSON.stringify(expected), "served whole-grid fixture differs");
-          REPORT.textContent = `PASS ${FIXTURE_URL}\n\n${text}`;
+          assert(
+            JSON.stringify(exactRecord(actual)) === JSON.stringify(exactRecord(expected)),
+            "served whole-grid fixture differs",
+          );
+          const loadReport = loadDependentReport(actual, expected);
+          REPORT.textContent = `PASS ${FIXTURE_URL}\n\nload-dependent comparison\n${loadReport}\n\n${text}`;
         } else {
           const size = compressed.length;
           if (size <= MAX_INLINE_BINARY_BYTES) {

@@ -258,6 +258,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
+- R2-04d (surface resolution extraction) is the scheduled home for a poll-only browser boundary; until then the served whole-grid oracle reports `owner_epoch`, `presentation_ledger`, and `capture_count` as load-dependent evidence because `app_refresh()` both polls GPU fences and runs presentation turns.
 - The integrated `Cargo.lock` change is the workspace-only `pollster.workspace = true` dev-dependency edge for the present crate's native palette tests; it adds no registry crate.
 - A clear-only present stamps the requested view as presented (`crates/labs/julibrot/app/src/frame/loop.rs:466`), so the finished-picture reading can be true over a blank surface; the companion restart rule is settled and this stamp is not.
 - `retire_main_grid_pair` frees a span and leaves the field naming it (`crates/labs/julibrot/app/src/frame/loop/browser/submit.rs:270` against the bare field at `crates/labs/julibrot/app/src/frame/loop.rs:745`); an optional grid would make the recovery invariant structural.
