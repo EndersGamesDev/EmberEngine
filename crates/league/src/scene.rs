@@ -165,7 +165,11 @@ fn push_flat(v: &mut Vec<MeshVertex>, a: [f32; 3], b: [f32; 3], c: [f32; 3]) {
     let ab = Vec3::from(b) - Vec3::from(a);
     let ac = Vec3::from(c) - Vec3::from(a);
     let n = ab.cross(ac).normalize_or_zero();
-    let n = if n.length_squared() < 0.5 { [0.0, 1.0, 0.0] } else { n.to_array() };
+    let n = if n.length_squared() < 0.5 {
+        [0.0, 1.0, 0.0]
+    } else {
+        n.to_array()
+    };
     push_tri(v, a, b, c, n);
 }
 
@@ -232,7 +236,10 @@ fn plane_mesh() -> MeshData {
     let mut vertices = Vec::with_capacity(6);
     push_tri(&mut vertices, a, c, b, n);
     push_tri(&mut vertices, a, d, c, n);
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 fn medallion_vertices() -> Vec<MeshVertex> {
@@ -271,7 +278,10 @@ fn frustum_mesh() -> MeshData {
         push_tri(&mut vertices, [0.0, 1.0, 0.0], t0, t1, [0.0, 1.0, 0.0]);
         push_tri(&mut vertices, [0.0, -1.0, 0.0], b1, b0, [0.0, -1.0, 0.0]);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A diamond: two square-based pyramids, point up and down.
@@ -290,7 +300,10 @@ fn octa_mesh() -> MeshData {
         push_flat(&mut vertices, a, up, b);
         push_flat(&mut vertices, b, dn, a);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A flat disc: a thin cylinder at y=0 for team rings, pads and zones.
@@ -325,7 +338,10 @@ fn cone_mesh() -> MeshData {
         push_flat(&mut vertices, b0, apex, b1);
         push_tri(&mut vertices, [0.0, -1.0, 0.0], b1, b0, [0.0, -1.0, 0.0]);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// Fine inlaid linework, never a broad opaque team-coloured plate.
@@ -380,7 +396,10 @@ fn blade_mesh() -> MeshData {
     push_flat(&mut vertices, l, dn, tip);
     push_flat(&mut vertices, dn, r, tip);
     push_flat(&mut vertices, hilt, r, dn);
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A toothed wheel: a 12-tooth gear, axis Y, radius 1 at the tooth tips,
@@ -392,11 +411,7 @@ fn gear_mesh() -> MeshData {
     let h = 0.15;
     let radius_at = |i: usize| -> f32 {
         // two of every four steps sit on the tooth tip, two at the root
-        if (i / 2).is_multiple_of(2) {
-            1.0
-        } else {
-            0.8
-        }
+        if (i / 2).is_multiple_of(2) { 1.0 } else { 0.8 }
     };
     for i in 0..STEPS {
         let r0 = radius_at(i);
@@ -410,7 +425,10 @@ fn gear_mesh() -> MeshData {
         push_flat(&mut vertices, b0, b1, t1);
         push_flat(&mut vertices, b0, t1, t0);
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 /// A low-poly sphere: an octahedron subdivided twice and normalised.
@@ -453,7 +471,10 @@ fn sphere_mesh() -> MeshData {
             });
         }
     }
-    MeshData { vertices, texture: None }
+    MeshData {
+        vertices,
+        texture: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -994,29 +1015,64 @@ fn push_minion(frame: &mut Frame, u: &UnitLite, t: f32) {
     if u.k == 2 {
         // caster: a robe, a pale head and a staff held forward
         frame.instances.push(
-            ins(v3(u.x, 0.72 + step, u.z), v3(0.42, 0.72, 0.42), scale3(col, 0.85)).with_rot(r).with_mesh(MESH_CONE),
+            ins(
+                v3(u.x, 0.72 + step, u.z),
+                v3(0.42, 0.72, 0.42),
+                scale3(col, 0.85),
+            )
+            .with_rot(r)
+            .with_mesh(MESH_CONE),
         );
         frame.instances.push(
-            ins(v3(u.x, 1.62 + step, u.z), v3(0.22, 0.22, 0.22), mix(col, [1.0, 1.0, 1.0], 0.45)).with_mesh(MESH_SPHERE),
+            ins(
+                v3(u.x, 1.62 + step, u.z),
+                v3(0.22, 0.22, 0.22),
+                mix(col, [1.0, 1.0, 1.0], 0.45),
+            )
+            .with_mesh(MESH_SPHERE),
         );
         let (sx, sz) = ahead(u.x, u.z, u.fa, 0.35, 0.3);
         frame.instances.push(
-            ins(v3(sx, 1.0 + step, sz), v3(0.06, 0.9, 0.06), [0.5, 0.4, 0.25]).with_rot(r).with_mesh(0),
+            ins(
+                v3(sx, 1.0 + step, sz),
+                v3(0.06, 0.9, 0.06),
+                [0.5, 0.4, 0.25],
+            )
+            .with_rot(r)
+            .with_mesh(0),
         );
         frame.instances.push(
-            ins(v3(sx, 1.95 + step, sz), v3(0.14, 0.14, 0.14), [1.0, 0.9, 0.5]).with_mesh(MESH_OCTA),
+            ins(
+                v3(sx, 1.95 + step, sz),
+                v3(0.14, 0.14, 0.14),
+                [1.0, 0.9, 0.5],
+            )
+            .with_mesh(MESH_OCTA),
         );
     } else {
         // melee: a squat body, a helmet and a shield on the left arm
         frame.instances.push(
-            ins(v3(u.x, 0.6 + step, u.z), v3(0.46, 0.6, 0.38), col).with_rot(r).with_mesh(0),
+            ins(v3(u.x, 0.6 + step, u.z), v3(0.46, 0.6, 0.38), col)
+                .with_rot(r)
+                .with_mesh(0),
         );
         frame.instances.push(
-            ins(v3(u.x, 1.35 + step, u.z), v3(0.26, 0.28, 0.26), scale3(col, 0.6)).with_mesh(MESH_CONE),
+            ins(
+                v3(u.x, 1.35 + step, u.z),
+                v3(0.26, 0.28, 0.26),
+                scale3(col, 0.6),
+            )
+            .with_mesh(MESH_CONE),
         );
         let (hx, hz) = ahead(u.x, u.z, u.fa, 0.1, -0.42);
         frame.instances.push(
-            ins(v3(hx, 0.7 + step, hz), v3(0.16, 0.34, 0.06), mix(col, [0.9, 0.9, 0.9], 0.3)).with_rot(r).with_mesh(0),
+            ins(
+                v3(hx, 0.7 + step, hz),
+                v3(0.16, 0.34, 0.06),
+                mix(col, [0.9, 0.9, 0.9], 0.3),
+            )
+            .with_rot(r)
+            .with_mesh(0),
         );
     }
 }
@@ -1159,14 +1215,32 @@ fn push_champion(
 /// multiply on top. Motion is procedural: a breath bob, a lean into the
 /// facing, and a slow turn for the kits that are more orb than body.
 #[allow(clippy::too_many_arguments)]
-fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], holo: bool, wob: f32, pose: crate::combat::AttackPose) {
+fn push_baked(
+    frame: &mut Frame,
+    baked: &art::Champion,
+    u: &UnitLite,
+    t: f32,
+    wear: Wear,
+    col: [f32; 3],
+    holo: bool,
+    wob: f32,
+    pose: crate::combat::AttackPose,
+) {
     let tinted = holo || wear.immune || wear.exhaust || (wear.demon && u.def != data::KNIGHT);
     let paint = if tinted { col } else { [1.0, 1.0, 1.0] };
     let breath = (t * 2.2 + u.id as f32).sin() * 0.015;
     let scale = Vec3::splat(wob * (1.0 + breath)) * pose.stretch;
-    let spin = if u.def == data::SWARM { Quat::from_rotation_y(t * 0.35) } else { Quat::IDENTITY };
+    let spin = if u.def == data::SWARM {
+        Quat::from_rotation_y(t * 0.35)
+    } else {
+        Quat::IDENTITY
+    };
     let body = face(u.fa) * spin * pose.rotation;
-    let lift = if u.def == data::SWARM { 0.25 + (t * 1.7 + u.id as f32).sin() * 0.06 } else { 0.0 };
+    let lift = if u.def == data::SWARM {
+        0.25 + (t * 1.7 + u.id as f32).sin() * 0.06
+    } else {
+        0.0
+    };
     let origin = v3(u.x, lift, u.z) + pose.offset;
     for part in &baked.parts {
         // A part turns by `swing` about its own pivot p, then the whole body
@@ -1194,9 +1268,13 @@ fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, we
             let a = t * 2.4 + TAU * (i as f32) / 3.0 + u.id as f32;
             let h = lift + 0.9 + 0.25 * (t * 3.0 + i as f32 * 2.0).sin();
             frame.instances.push(
-                ins(v3(u.x + a.cos() * 1.05, h, u.z + a.sin() * 1.05), v3(0.13, 0.13, 0.13), mix(col, [1.0, 1.0, 1.0], 0.35))
-                    .with_rot(Quat::from_rotation_y(-a))
-                    .with_mesh(MESH_OCTA),
+                ins(
+                    v3(u.x + a.cos() * 1.05, h, u.z + a.sin() * 1.05),
+                    v3(0.13, 0.13, 0.13),
+                    mix(col, [1.0, 1.0, 1.0], 0.35),
+                )
+                .with_rot(Quat::from_rotation_y(-a))
+                .with_mesh(MESH_OCTA),
             );
         }
     }
@@ -1206,13 +1284,27 @@ fn push_baked(frame: &mut Frame, baked: &art::Champion, u: &UnitLite, t: f32, we
 /// swings: `sword`, `blade`, `staff`, `weapon`, `hook`, `hand` all count.
 fn part_is_weapon(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    ["sword", "blade", "staff", "weapon", "hook", "hand"].iter().any(|k| n.contains(k))
+    ["sword", "blade", "staff", "weapon", "hook", "hand"]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 /// The procedural bodies: one silhouette per kit from the primitive set,
 /// used until a champion's baked art is delivered.
 #[allow(clippy::too_many_arguments)]
-fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear, col: [f32; 3], wob: f32, r: Quat, x: f32, y: f32, z: f32) {
+fn push_procedural(
+    frame: &mut Frame,
+    def: u8,
+    u: &UnitLite,
+    t: f32,
+    wear: Wear,
+    col: [f32; 3],
+    wob: f32,
+    r: Quat,
+    x: f32,
+    y: f32,
+    z: f32,
+) {
     match def {
         data::KNIGHT => {
             let (body, s) = if wear.demon {
@@ -1221,25 +1313,45 @@ fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear,
                 (col, 1.0)
             };
             frame.instances.push(
-                ins(v3(x, (0.95 + y) * s, z), v3(0.62 * s * wob, 0.78 * s, 0.46 * s * wob), body).with_rot(r).with_mesh(0),
+                ins(
+                    v3(x, (0.95 + y) * s, z),
+                    v3(0.62 * s * wob, 0.78 * s, 0.46 * s * wob),
+                    body,
+                )
+                .with_rot(r)
+                .with_mesh(0),
             );
             frame.instances.push(
-                ins(v3(x, (1.66 + y) * s, z), v3(0.25 * s, 0.25 * s, 0.25 * s), mix(body, [1.0, 0.85, 0.6], 0.3))
-                    .with_mesh(MESH_SPHERE),
+                ins(
+                    v3(x, (1.66 + y) * s, z),
+                    v3(0.25 * s, 0.25 * s, 0.25 * s),
+                    mix(body, [1.0, 0.85, 0.6], 0.3),
+                )
+                .with_mesh(MESH_SPHERE),
             );
             for side in [-0.46, 0.46] {
                 let (px, pz) = ahead(x, z, u.fa, 0.0, side * s);
                 frame.instances.push(
-                    ins(v3(px, (1.3 + y) * s, pz), v3(0.2 * s, 0.14 * s, 0.24 * s), scale3(body, 0.8)).with_rot(r).with_mesh(0),
+                    ins(
+                        v3(px, (1.3 + y) * s, pz),
+                        v3(0.2 * s, 0.14 * s, 0.24 * s),
+                        scale3(body, 0.8),
+                    )
+                    .with_rot(r)
+                    .with_mesh(0),
                 );
             }
             if wear.demon {
                 for side in [-0.16, 0.16] {
                     let (hx, hz) = ahead(x, z, u.fa, 0.05, side * s);
                     frame.instances.push(
-                        ins(v3(hx, (2.0 + y) * s, hz), v3(0.08, 0.22, 0.08), [0.15, 0.05, 0.05])
-                            .with_rot(r * Quat::from_rotation_x(side.signum() * 0.35))
-                            .with_mesh(MESH_CONE),
+                        ins(
+                            v3(hx, (2.0 + y) * s, hz),
+                            v3(0.08, 0.22, 0.08),
+                            [0.15, 0.05, 0.05],
+                        )
+                        .with_rot(r * Quat::from_rotation_x(side.signum() * 0.35))
+                        .with_mesh(MESH_CONE),
                     );
                 }
                 frame.instances.push(
@@ -1248,70 +1360,115 @@ fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear,
             }
             // the blade, held on the right, pointing where the knight looks
             let (bx, bz) = ahead(x, z, u.fa, 0.15, 0.4 * s);
-            let blade = if wear.fire { [1.0, 0.8, 0.25] } else { [0.85, 0.85, 0.92] };
+            let blade = if wear.fire {
+                [1.0, 0.8, 0.25]
+            } else {
+                [0.85, 0.85, 0.92]
+            };
             frame.instances.push(
-                ins(v3(bx, (1.0 + y) * s, bz), v3(1.35 * s, 0.09, 0.16), blade).with_rot(r).with_mesh(MESH_BLADE),
+                ins(v3(bx, (1.0 + y) * s, bz), v3(1.35 * s, 0.09, 0.16), blade)
+                    .with_rot(r)
+                    .with_mesh(MESH_BLADE),
             );
             if wear.fire {
                 let (tx, tz) = ahead(x, z, u.fa, 1.3 * s, 0.4 * s);
                 let flick = 0.14 + 0.05 * (t * 21.0).sin();
                 frame.instances.push(
-                    ins(v3(tx, 1.15 + y + flick, tz), v3(flick, flick * 1.6, flick), [1.0, 0.55, 0.1]).with_mesh(MESH_OCTA),
+                    ins(
+                        v3(tx, 1.15 + y + flick, tz),
+                        v3(flick, flick * 1.6, flick),
+                        [1.0, 0.55, 0.1],
+                    )
+                    .with_mesh(MESH_OCTA),
                 );
             }
         }
         data::HALLOW => {
             let float = y * 2.0 + 0.1;
             frame.instances.push(
-                ins(v3(x, 0.9 + float, z), v3(0.55 * wob, 0.9, 0.55 * wob), col).with_rot(r).with_mesh(MESH_CONE),
+                ins(v3(x, 0.9 + float, z), v3(0.55 * wob, 0.9, 0.55 * wob), col)
+                    .with_rot(r)
+                    .with_mesh(MESH_CONE),
             );
             frame.instances.push(
-                ins(v3(x, 1.95 + float, z), v3(0.22, 0.22, 0.22), mix(col, [1.0, 1.0, 1.0], 0.5)).with_mesh(MESH_SPHERE),
+                ins(
+                    v3(x, 1.95 + float, z),
+                    v3(0.22, 0.22, 0.22),
+                    mix(col, [1.0, 1.0, 1.0], 0.5),
+                )
+                .with_mesh(MESH_SPHERE),
             );
             frame.instances.push(
-                ins(v3(x, 2.35 + float, z), v3(0.36, 1.0, 0.36), [1.0, 0.9, 0.5]).with_mesh(MESH_RING),
+                ins(v3(x, 2.35 + float, z), v3(0.36, 1.0, 0.36), [1.0, 0.9, 0.5])
+                    .with_mesh(MESH_RING),
             );
             // a hand raised toward whatever it faces
             let (hx, hz) = ahead(x, z, u.fa, 0.55, 0.25);
             frame.instances.push(
-                ins(v3(hx, 1.35 + float, hz), v3(0.12, 0.12, 0.12), mix(col, [1.0, 1.0, 1.0], 0.5)).with_mesh(MESH_SPHERE),
+                ins(
+                    v3(hx, 1.35 + float, hz),
+                    v3(0.12, 0.12, 0.12),
+                    mix(col, [1.0, 1.0, 1.0], 0.5),
+                )
+                .with_mesh(MESH_SPHERE),
             );
         }
         data::MAW => {
             frame.instances.push(
-                ins(v3(x, 0.55 + y, z), v3(0.85 * wob, 0.55, 0.75 * wob), col).with_rot(r).with_mesh(MESH_FRUSTUM),
+                ins(v3(x, 0.55 + y, z), v3(0.85 * wob, 0.55, 0.75 * wob), col)
+                    .with_rot(r)
+                    .with_mesh(MESH_FRUSTUM),
             );
             let (hx, hz) = ahead(x, z, u.fa, 0.35, 0.0);
             frame.instances.push(
-                ins(v3(hx, 1.1 + y, hz), v3(0.62, 0.42, 0.62), scale3(col, 0.9)).with_rot(r).with_mesh(0),
+                ins(v3(hx, 1.1 + y, hz), v3(0.62, 0.42, 0.62), scale3(col, 0.9))
+                    .with_rot(r)
+                    .with_mesh(0),
             );
             // the jaws chew on a slow cycle
             let chew = 0.5 + 0.5 * (t * 2.6 + u.id as f32).sin();
             let (jx, jz) = ahead(x, z, u.fa, 0.85, 0.0);
             frame.instances.push(
-                ins(v3(jx, 1.28 + y, jz), v3(0.5, 0.09, 0.56), scale3(col, 0.7)).with_rot(r).with_mesh(0),
+                ins(v3(jx, 1.28 + y, jz), v3(0.5, 0.09, 0.56), scale3(col, 0.7))
+                    .with_rot(r)
+                    .with_mesh(0),
             );
             frame.instances.push(
-                ins(v3(jx, 0.92 + y - chew * 0.18, jz), v3(0.5, 0.09, 0.56), scale3(col, 0.7)).with_rot(r).with_mesh(0),
+                ins(
+                    v3(jx, 0.92 + y - chew * 0.18, jz),
+                    v3(0.5, 0.09, 0.56),
+                    scale3(col, 0.7),
+                )
+                .with_rot(r)
+                .with_mesh(0),
             );
             for side in [-0.2, 0.2] {
                 let (ex, ez) = ahead(x, z, u.fa, 0.62, side);
                 frame.instances.push(
-                    ins(v3(ex, 1.32 + y, ez), v3(0.07, 0.07, 0.07), [1.0, 0.9, 0.2]).with_mesh(MESH_SPHERE),
+                    ins(v3(ex, 1.32 + y, ez), v3(0.07, 0.07, 0.07), [1.0, 0.9, 0.2])
+                        .with_mesh(MESH_SPHERE),
                 );
             }
             for (i, back) in [-0.15, -0.42, -0.68].into_iter().enumerate() {
                 let (sx, sz) = ahead(x, z, u.fa, back, 0.0);
                 let h = 0.32 - i as f32 * 0.06;
                 frame.instances.push(
-                    ins(v3(sx, 1.05 + h + y, sz), v3(0.11, h, 0.11), scale3(col, 0.6)).with_mesh(MESH_CONE),
+                    ins(
+                        v3(sx, 1.05 + h + y, sz),
+                        v3(0.11, h, 0.11),
+                        scale3(col, 0.6),
+                    )
+                    .with_mesh(MESH_CONE),
                 );
             }
         }
         data::TESSERA => {
             let spin = t * 1.6;
             let tilt = Quat::from_rotation_x(PI / 2.0);
-            frame.instances.push(ins(v3(x, 0.22 + y, z), v3(0.3, 0.22, 0.3), scale3(col, 0.6)).with_mesh(MESH_FRUSTUM));
+            frame.instances.push(
+                ins(v3(x, 0.22 + y, z), v3(0.3, 0.22, 0.3), scale3(col, 0.6))
+                    .with_mesh(MESH_FRUSTUM),
+            );
             frame.instances.push(
                 ins(v3(x, 0.98 + y, z), v3(0.62 * wob, 0.62, 0.62 * wob), col)
                     .with_rot(r * tilt * Quat::from_rotation_y(spin))
@@ -1326,24 +1483,44 @@ fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear,
                 );
             }
             frame.instances.push(
-                ins(v3(x, 1.85 + y, z), v3(0.2, 0.2, 0.2), mix(col, [1.0, 1.0, 1.0], 0.4)).with_mesh(MESH_SPHERE),
+                ins(
+                    v3(x, 1.85 + y, z),
+                    v3(0.2, 0.2, 0.2),
+                    mix(col, [1.0, 1.0, 1.0], 0.4),
+                )
+                .with_mesh(MESH_SPHERE),
             );
         }
         _ => {
             // SW4RM: a hovering core with three drones in orbit
-            frame.instances.push(ins(v3(x, 0.35 + y, z), v3(0.7 * wob, 1.0, 0.7 * wob), scale3(col, 0.45)).with_mesh(MESH_DISC));
             frame.instances.push(
-                ins(v3(x, 1.15 + y, z), v3(0.42 * wob, 0.42 * wob, 0.42 * wob), col)
-                    .with_rot(r * Quat::from_rotation_y(t * 0.8))
-                    .with_mesh(MESH_OCTA),
+                ins(
+                    v3(x, 0.35 + y, z),
+                    v3(0.7 * wob, 1.0, 0.7 * wob),
+                    scale3(col, 0.45),
+                )
+                .with_mesh(MESH_DISC),
+            );
+            frame.instances.push(
+                ins(
+                    v3(x, 1.15 + y, z),
+                    v3(0.42 * wob, 0.42 * wob, 0.42 * wob),
+                    col,
+                )
+                .with_rot(r * Quat::from_rotation_y(t * 0.8))
+                .with_mesh(MESH_OCTA),
             );
             for i in 0..3 {
                 let a = t * 2.4 + TAU * (i as f32) / 3.0 + u.id as f32;
                 let h = 1.0 + 0.25 * (t * 3.0 + i as f32 * 2.0).sin();
                 frame.instances.push(
-                    ins(v3(x + a.cos() * 0.85, h + y, z + a.sin() * 0.85), v3(0.14, 0.14, 0.14), mix(col, [1.0, 1.0, 1.0], 0.35))
-                        .with_rot(Quat::from_rotation_y(-a))
-                        .with_mesh(MESH_OCTA),
+                    ins(
+                        v3(x + a.cos() * 0.85, h + y, z + a.sin() * 0.85),
+                        v3(0.14, 0.14, 0.14),
+                        mix(col, [1.0, 1.0, 1.0], 0.35),
+                    )
+                    .with_rot(Quat::from_rotation_y(-a))
+                    .with_mesh(MESH_OCTA),
                 );
             }
         }
@@ -1352,7 +1529,16 @@ fn push_procedural(frame: &mut Frame, def: u8, u: &UnitLite, t: f32, wear: Wear,
 
 /// Buff wearables shared by every kit, baked or procedural.
 #[allow(clippy::too_many_arguments)]
-fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y: f32, z: f32, r: Quat) {
+fn push_wearables(
+    frame: &mut Frame,
+    u: &UnitLite,
+    t: f32,
+    wear: Wear,
+    x: f32,
+    y: f32,
+    z: f32,
+    r: Quat,
+) {
     if wear.shield {
         frame.instances.push(
             ins(v3(x, 1.0 + y, z), v3(0.95, 1.0, 0.95), [0.55, 0.75, 1.0])
@@ -1371,7 +1557,12 @@ fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y
         for i in 0..3 {
             let a = TAU * (i as f32) / 3.0 + t * 0.2;
             frame.instances.push(
-                ins(v3(x + a.cos() * 0.7, 0.12, z + a.sin() * 0.7), v3(0.14, 0.12, 0.14), [0.16, 0.14, 0.1]).with_mesh(0),
+                ins(
+                    v3(x + a.cos() * 0.7, 0.12, z + a.sin() * 0.7),
+                    v3(0.14, 0.12, 0.14),
+                    [0.16, 0.14, 0.1],
+                )
+                .with_mesh(0),
             );
         }
     }
@@ -1379,8 +1570,16 @@ fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y
         for i in 0..2 {
             let ph = t * 9.0 + i as f32 * 2.1 + u.id as f32;
             frame.instances.push(
-                ins(v3(x + ph.cos() * 0.3, 1.9 + y + 0.15 * (ph * 1.7).sin(), z + ph.sin() * 0.3), v3(0.1, 0.16, 0.1), [1.0, 0.5, 0.1])
-                    .with_mesh(MESH_OCTA),
+                ins(
+                    v3(
+                        x + ph.cos() * 0.3,
+                        1.9 + y + 0.15 * (ph * 1.7).sin(),
+                        z + ph.sin() * 0.3,
+                    ),
+                    v3(0.1, 0.16, 0.1),
+                    [1.0, 0.5, 0.1],
+                )
+                .with_mesh(MESH_OCTA),
             );
         }
     }
@@ -1388,7 +1587,9 @@ fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y
         for side in [-0.3, 0.3] {
             let (lx, lz) = ahead(x, z, u.fa, -0.9, side);
             frame.instances.push(
-                ins(v3(lx, 0.6 + y, lz), v3(0.6, 0.04, 0.04), [0.9, 0.95, 1.0]).with_rot(r).with_mesh(0),
+                ins(v3(lx, 0.6 + y, lz), v3(0.6, 0.04, 0.04), [0.9, 0.95, 1.0])
+                    .with_rot(r)
+                    .with_mesh(0),
             );
         }
     }
@@ -1400,7 +1601,11 @@ fn push_wearables(frame: &mut Frame, u: &UnitLite, t: f32, wear: Wear, x: f32, y
         );
     }
     if wear.regen || wear.mana {
-        let c = if wear.regen { [0.4, 1.0, 0.45] } else { [0.4, 0.6, 1.0] };
+        let c = if wear.regen {
+            [0.4, 1.0, 0.45]
+        } else {
+            [0.4, 0.6, 1.0]
+        };
         let rise = (t * 1.5 + u.id as f32).fract();
         frame.instances.push(
             ins(v3(x + 0.45, 0.8 + rise * 1.2, z), v3(0.07, 0.07, 0.07), c).with_mesh(MESH_OCTA),
@@ -1421,7 +1626,9 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
         // a baked body carries its own height in the sidecar; the bar rides
         // a hand above it and widens with it, the procedural bodies keep
         // their tuned constants
-        0 | 3 => art::champion(u.def).map_or((1.4, 2.55), |c| (1.2 + c.height * 0.3, c.height + 1.1)),
+        0 | 3 => {
+            art::champion(u.def).map_or((1.4, 2.55), |c| (1.2 + c.height * 0.3, c.height + 1.1))
+        }
         4 | 5 => (2.4, 3.8),
         6 | 7 => (3.0, 4.9),
         _ => (0.7, 1.8),
@@ -1430,7 +1637,14 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
     let h = if objective { 0.16 } else { 0.12 };
     // bars are HUD, not world: they cast no shadow
     frame.instances.push(
-        ins(v3(u.x, y, u.z), v3(w + 0.08, h + 0.06, 0.03), [0.04, 0.04, 0.05]).with_rot(tilt).with_mesh(0).without_shadow(),
+        ins(
+            v3(u.x, y, u.z),
+            v3(w + 0.08, h + 0.06, 0.03),
+            [0.04, 0.04, 0.05],
+        )
+        .with_rot(tilt)
+        .with_mesh(0)
+        .without_shadow(),
     );
     let col = if u.t == 2 {
         [0.85, 0.78, 0.4]
@@ -1441,14 +1655,28 @@ fn push_hp_bar(frame: &mut Frame, u: &UnitLite) {
     };
     // the fill grows from the left edge; local +X is screen right
     frame.instances.push(
-        ins(v3(u.x - w * (1.0 - frac) / 2.0, y, u.z), v3(w * frac, h, 0.035), col).with_rot(tilt).with_mesh(0).without_shadow(),
+        ins(
+            v3(u.x - w * (1.0 - frac) / 2.0, y, u.z),
+            v3(w * frac, h, 0.035),
+            col,
+        )
+        .with_rot(tilt)
+        .with_mesh(0)
+        .without_shadow(),
     );
     if (u.k == 0 || u.k == 3) && u.mm > 0.0 {
         let mf = (u.mn / u.mm).clamp(0.0, 1.0);
         // the mana sliver hangs just under the bar, in the card's own plane
         let down = tilt * Vec3::new(0.0, -0.13, 0.0);
         frame.instances.push(
-            ins(v3(u.x - w * (1.0 - mf) / 2.0, y, u.z) + down, v3(w * mf, 0.05, 0.035), [0.35, 0.55, 1.0]).with_rot(tilt).with_mesh(0).without_shadow(),
+            ins(
+                v3(u.x - w * (1.0 - mf) / 2.0, y, u.z) + down,
+                v3(w * mf, 0.05, 0.035),
+                [0.35, 0.55, 1.0],
+            )
+            .with_rot(tilt)
+            .with_mesh(0)
+            .without_shadow(),
         );
     }
 }
@@ -1474,7 +1702,13 @@ fn push_proj(frame: &mut Frame, p: &ProjSnap, t: f32) {
             let jit = (t * 31.0 + x * 3.0).sin() * 0.12;
             let (px, pz) = ahead(x, z, yaw, 0.0, jit);
             frame.instances.push(
-                ins(v3(px, 1.1 + jit * 0.5, pz), v3(0.16, 0.12, 0.16), [0.5, 0.95, 1.0]).with_rot(r).with_mesh(MESH_OCTA),
+                ins(
+                    v3(px, 1.1 + jit * 0.5, pz),
+                    v3(0.16, 0.12, 0.16),
+                    [0.5, 0.95, 1.0],
+                )
+                .with_rot(r)
+                .with_mesh(MESH_OCTA),
             );
         }
         2 => {
@@ -1487,18 +1721,32 @@ fn push_proj(frame: &mut Frame, p: &ProjSnap, t: f32) {
         }
         3 => {
             // the hook head and three chain links trailing it
-            frame.instances.push(ins(v3(x, 0.9, z), v3(0.24, 0.24, 0.24), [0.6, 0.75, 0.35]).with_rot(r).with_mesh(MESH_OCTA));
+            frame.instances.push(
+                ins(v3(x, 0.9, z), v3(0.24, 0.24, 0.24), [0.6, 0.75, 0.35])
+                    .with_rot(r)
+                    .with_mesh(MESH_OCTA),
+            );
             for i in 1..=3 {
                 let (lx, lz) = ahead(x, z, yaw, -0.45 * i as f32, 0.0);
-                frame.instances.push(ins(v3(lx, 0.9, lz), v3(0.16, 0.08, 0.08), [0.45, 0.45, 0.4]).with_rot(r).with_mesh(0));
+                frame.instances.push(
+                    ins(v3(lx, 0.9, lz), v3(0.16, 0.08, 0.08), [0.45, 0.45, 0.4])
+                        .with_rot(r)
+                        .with_mesh(0),
+                );
             }
         }
         _ => {
             // an auto-attack: a bright bead with a short tail
             let bead = mix(col, [1.0, 1.0, 1.0], 0.5);
-            frame.instances.push(ins(v3(x, 1.05, z), v3(0.13, 0.13, 0.13), bead).with_mesh(MESH_SPHERE));
+            frame
+                .instances
+                .push(ins(v3(x, 1.05, z), v3(0.13, 0.13, 0.13), bead).with_mesh(MESH_SPHERE));
             let (tx, tz) = ahead(x, z, yaw, -0.3, 0.0);
-            frame.instances.push(ins(v3(tx, 1.05, tz), v3(0.5, 0.05, 0.05), col).with_rot(r).with_mesh(0));
+            frame.instances.push(
+                ins(v3(tx, 1.05, tz), v3(0.5, 0.05, 0.05), col)
+                    .with_rot(r)
+                    .with_mesh(0),
+            );
         }
     }
 }
@@ -1517,19 +1765,30 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
             // (Stacked gears read as one flat cog from above, and a cone
             // hid the bodies it was meant to threaten.)
             let pulse = 0.85 + 0.15 * (t * 9.0).sin();
-            frame.instances.push(ins(v3(x, 0.07, z), v3(r, 1.0, r), [0.55, 0.2, 0.05]).with_mesh(MESH_DISC));
+            frame
+                .instances
+                .push(ins(v3(x, 0.07, z), v3(r, 1.0, r), [0.55, 0.2, 0.05]).with_mesh(MESH_DISC));
             frame.instances.push(
-                ins(v3(x, 0.16, z), v3(r, 1.0, r), [1.0 * pulse, 0.5 * pulse, 0.12])
-                    .with_rot(Quat::from_rotation_y(spin))
-                    .with_mesh(MESH_RING),
+                ins(
+                    v3(x, 0.16, z),
+                    v3(r, 1.0, r),
+                    [1.0 * pulse, 0.5 * pulse, 0.12],
+                )
+                .with_rot(Quat::from_rotation_y(spin))
+                .with_mesh(MESH_RING),
             );
             frame.instances.push(
-                ins(v3(x, 2.5, z), v3(r * 0.65, 1.0, r * 0.65), [1.0, 0.75 * pulse, 0.2])
-                    .with_rot(Quat::from_rotation_y(-spin * 1.5) * Quat::from_rotation_x(0.3))
-                    .with_mesh(MESH_RING),
+                ins(
+                    v3(x, 2.5, z),
+                    v3(r * 0.65, 1.0, r * 0.65),
+                    [1.0, 0.75 * pulse, 0.2],
+                )
+                .with_rot(Quat::from_rotation_y(-spin * 1.5) * Quat::from_rotation_x(0.3))
+                .with_mesh(MESH_RING),
             );
             frame.instances.push(
-                ins(v3(x, 1.4, z), v3(r * 0.12, 1.4, r * 0.12), [1.0, 0.85, 0.4]).with_mesh(MESH_FRUSTUM),
+                ins(v3(x, 1.4, z), v3(r * 0.12, 1.4, r * 0.12), [1.0, 0.85, 0.4])
+                    .with_mesh(MESH_FRUSTUM),
             );
             for i in 0..8 {
                 let a = spin * 2.0 + TAU * (i as f32) / 8.0;
@@ -1540,7 +1799,11 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
                     ins(
                         v3(x + a.cos() * rr, h, z + a.sin() * rr),
                         v3(0.18, 0.18, 0.18),
-                        if hot { [1.0, 0.6, 0.15] } else { [0.3, 0.14, 0.06] },
+                        if hot {
+                            [1.0, 0.6, 0.15]
+                        } else {
+                            [0.3, 0.14, 0.06]
+                        },
                     )
                     .with_rot(Quat::from_rotation_y(a * 3.0))
                     .with_mesh(if hot { MESH_OCTA } else { 0 }),
@@ -1549,11 +1812,18 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
         }
         1 => {
             // a chrono trap: a low violet plate with four teeth at the rim
-            frame.instances.push(ins(v3(x, 0.08, z), v3(r, 1.0, r), [0.45, 0.35, 0.85]).with_mesh(MESH_RING));
+            frame
+                .instances
+                .push(ins(v3(x, 0.08, z), v3(r, 1.0, r), [0.45, 0.35, 0.85]).with_mesh(MESH_RING));
             for i in 0..4 {
                 let a = TAU * (i as f32) / 4.0 + spin * 0.3;
                 frame.instances.push(
-                    ins(v3(x + a.cos() * r * 0.9, 0.2, z + a.sin() * r * 0.9), v3(0.12, 0.2, 0.12), [0.7, 0.6, 1.0]).with_mesh(MESH_CONE),
+                    ins(
+                        v3(x + a.cos() * r * 0.9, 0.2, z + a.sin() * r * 0.9),
+                        v3(0.12, 0.2, 0.12),
+                        [0.7, 0.6, 1.0],
+                    )
+                    .with_mesh(MESH_CONE),
                 );
             }
         }
@@ -1564,7 +1834,14 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
                     .with_rot(Quat::from_rotation_y(spin * 0.5))
                     .with_mesh(MESH_GEAR),
             );
-            frame.instances.push(ins(v3(x, 0.08, z), v3(r * 1.05, 1.0, r * 1.05), [0.75, 0.65, 1.0]).with_mesh(MESH_RING));
+            frame.instances.push(
+                ins(
+                    v3(x, 0.08, z),
+                    v3(r * 1.05, 1.0, r * 1.05),
+                    [0.75, 0.65, 1.0],
+                )
+                .with_mesh(MESH_RING),
+            );
             for (len, rate) in [(r * 0.85, 0.5), (r * 0.6, 6.0)] {
                 frame.instances.push(
                     ins(v3(x, 0.72, z), v3(len, 0.08, 0.1), [0.95, 0.92, 0.8])
@@ -1575,13 +1852,23 @@ fn push_zone(frame: &mut Frame, zone: &ZoneLite, t: f32) {
         }
         _ => {
             // the fen shroud: a rotting ring and spores drifting up
-            frame.instances.push(ins(v3(x, 0.1, z), v3(r, 1.0, r), [0.25, 0.5, 0.2]).with_mesh(MESH_RING));
+            frame
+                .instances
+                .push(ins(v3(x, 0.1, z), v3(r, 1.0, r), [0.25, 0.5, 0.2]).with_mesh(MESH_RING));
             for i in 0..4 {
                 let a = TAU * (i as f32) / 4.0 + t * 0.7;
                 let rise = (t * 0.8 + i as f32 * 0.25).fract();
                 frame.instances.push(
-                    ins(v3(x + a.cos() * r * 0.6, 0.3 + rise * 1.6, z + a.sin() * r * 0.6), v3(0.1, 0.1, 0.1), [0.45, 0.8, 0.3])
-                        .with_mesh(MESH_OCTA),
+                    ins(
+                        v3(
+                            x + a.cos() * r * 0.6,
+                            0.3 + rise * 1.6,
+                            z + a.sin() * r * 0.6,
+                        ),
+                        v3(0.1, 0.1, 0.1),
+                        [0.45, 0.8, 0.3],
+                    )
+                    .with_mesh(MESH_OCTA),
                 );
             }
         }
@@ -1598,7 +1885,9 @@ fn push_chain(frame: &mut Frame, x: f32, z: f32, x2: f32, z2: f32, y: f32, col: 
     for i in 0..n {
         let f = (i as f32 + 0.5) / n as f32;
         frame.instances.push(
-            ins(v3(x + dx * f, y, z + dz * f), v3(0.3, 0.07, 0.09), col).with_rot(r).with_mesh(0),
+            ins(v3(x + dx * f, y, z + dz * f), v3(0.3, 0.07, 0.09), col)
+                .with_rot(r)
+                .with_mesh(0),
         );
     }
 }
@@ -1622,15 +1911,29 @@ fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
                 // a melee blow: the blade sweeps from the striker to the struck
                 let yaw = line_yaw(fx) + (age - 0.5) * 1.6;
                 let big = if crit { 1.35 } else { 1.0 };
-                let col = if crit { [1.0, 0.95, 0.7] } else { [1.0, 0.85, 0.55] };
+                let col = if crit {
+                    [1.0, 0.95, 0.7]
+                } else {
+                    [1.0, 0.85, 0.55]
+                };
                 frame.instances.push(
-                    ins(v3(fx.x, 1.1, fx.z), v3(1.6 * big, 0.06, 0.5), col).with_rot(face(yaw)).with_mesh(MESH_BLADE),
+                    ins(v3(fx.x, 1.1, fx.z), v3(1.6 * big, 0.06, 0.5), col)
+                        .with_rot(face(yaw))
+                        .with_mesh(MESH_BLADE),
                 );
             } else {
                 // a ranged hit lands: a spark that shrinks
-                let col = if spell { [0.8, 0.6, 1.0] } else { [1.0, 0.9, 0.6] };
+                let col = if spell {
+                    [0.8, 0.6, 1.0]
+                } else {
+                    [1.0, 0.9, 0.6]
+                };
                 let s = 0.45 * (1.0 - age) * if crit { 1.5 } else { 1.0 };
-                frame.instances.push(ins(v3(fx.x, 1.2, fx.z), v3(s, s, s), col).with_rot(Quat::from_rotation_y(age * 4.0)).with_mesh(MESH_OCTA));
+                frame.instances.push(
+                    ins(v3(fx.x, 1.2, fx.z), v3(s, s, s), col)
+                        .with_rot(Quat::from_rotation_y(age * 4.0))
+                        .with_mesh(MESH_OCTA),
+                );
             }
         }
         1 => {
@@ -1639,22 +1942,54 @@ fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
             let len = (dx * dx + dz * dz).sqrt().max(0.01);
             let r = face(line_yaw(fx));
             let mid = v3(f32::midpoint(fx.x, fx.x2), 1.05, f32::midpoint(fx.z, fx.z2));
-            frame.instances.push(ins(mid, v3(len, 0.22 * (1.0 - age), 0.22 * (1.0 - age)), [1.0, fade(0.45), fade(0.15)]).with_rot(r).with_mesh(0));
-            frame.instances.push(ins(mid, v3(len, 0.09, 0.09), [1.0, 1.0, fade(0.85)]).with_rot(r).with_mesh(0));
+            frame.instances.push(
+                ins(
+                    mid,
+                    v3(len, 0.22 * (1.0 - age), 0.22 * (1.0 - age)),
+                    [1.0, fade(0.45), fade(0.15)],
+                )
+                .with_rot(r)
+                .with_mesh(0),
+            );
+            frame.instances.push(
+                ins(mid, v3(len, 0.09, 0.09), [1.0, 1.0, fade(0.85)])
+                    .with_rot(r)
+                    .with_mesh(0),
+            );
         }
         2 | 3 => {
             // expanding ring (explosion, zone spawn) with a flash at birth
             let r = fx.v * (0.4 + age * 1.1);
-            let col = if fx.k == 2 { [fade(1.0), fade(0.6), fade(0.15)] } else { [fade(0.8), fade(0.7), 1.0] };
-            frame.instances.push(ins(v3(fx.x, 0.12, fx.z), v3(r, 1.0, r), col).with_mesh(MESH_RING));
+            let col = if fx.k == 2 {
+                [fade(1.0), fade(0.6), fade(0.15)]
+            } else {
+                [fade(0.8), fade(0.7), 1.0]
+            };
+            frame
+                .instances
+                .push(ins(v3(fx.x, 0.12, fx.z), v3(r, 1.0, r), col).with_mesh(MESH_RING));
             if age < 0.35 {
                 let h = fx.v.min(4.0) * (1.0 - age / 0.35);
-                frame.instances.push(ins(v3(fx.x, h * 0.5, fx.z), v3(fx.v * 0.2, h * 0.5, fx.v * 0.2), col).with_mesh(MESH_CONE));
+                frame.instances.push(
+                    ins(
+                        v3(fx.x, h * 0.5, fx.z),
+                        v3(fx.v * 0.2, h * 0.5, fx.v * 0.2),
+                        col,
+                    )
+                    .with_mesh(MESH_CONE),
+                );
             }
         }
         4 => {
             // trap planted: a violet pulse
-            frame.instances.push(ins(v3(fx.x, 0.09, fx.z), v3(fx.v * (1.2 - age * 0.4), 1.0, fx.v * (1.2 - age * 0.4)), [fade(0.6), fade(0.5), 1.0]).with_mesh(MESH_RING));
+            frame.instances.push(
+                ins(
+                    v3(fx.x, 0.09, fx.z),
+                    v3(fx.v * (1.2 - age * 0.4), 1.0, fx.v * (1.2 - age * 0.4)),
+                    [fade(0.6), fade(0.5), 1.0],
+                )
+                .with_mesh(MESH_RING),
+            );
         }
         5 => {
             // death: five shards thrown out and up
@@ -1663,39 +1998,71 @@ fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
                 let d = 0.3 + age * 1.6;
                 let h = 1.0 + age * 2.2 - age * age * 3.0;
                 frame.instances.push(
-                    ins(v3(fx.x + a.cos() * d, h.max(0.1), fx.z + a.sin() * d), v3(0.14, 0.14, 0.14), [fade(0.7), fade(0.7), fade(0.7)])
-                        .with_rot(Quat::from_rotation_y(a + age * 6.0))
-                        .with_mesh(0),
+                    ins(
+                        v3(fx.x + a.cos() * d, h.max(0.1), fx.z + a.sin() * d),
+                        v3(0.14, 0.14, 0.14),
+                        [fade(0.7), fade(0.7), fade(0.7)],
+                    )
+                    .with_rot(Quat::from_rotation_y(a + age * 6.0))
+                    .with_mesh(0),
                 );
             }
         }
         6 => {
             // level-up: a column of light and a gold ring
-            frame.instances.push(ins(v3(fx.x, 1.6 + age, fx.z), v3(0.25, 1.6, 0.25), [fade(0.9), fade(0.8), 1.0]).with_mesh(MESH_FRUSTUM));
-            frame.instances.push(ins(v3(fx.x, 0.1, fx.z), v3(0.6 + age * 1.6, 1.0, 0.6 + age * 1.6), [1.0, fade(0.85), fade(0.3)]).with_mesh(MESH_RING));
+            frame.instances.push(
+                ins(
+                    v3(fx.x, 1.6 + age, fx.z),
+                    v3(0.25, 1.6, 0.25),
+                    [fade(0.9), fade(0.8), 1.0],
+                )
+                .with_mesh(MESH_FRUSTUM),
+            );
+            frame.instances.push(
+                ins(
+                    v3(fx.x, 0.1, fx.z),
+                    v3(0.6 + age * 1.6, 1.0, 0.6 + age * 1.6),
+                    [1.0, fade(0.85), fade(0.3)],
+                )
+                .with_mesh(MESH_RING),
+            );
         }
         7 => {
             // coin blink
             frame.instances.push(
-                ins(v3(fx.x, 2.2 + age * 0.8, fx.z), v3(0.2, 0.2, 0.2), [1.0, fade(0.85), fade(0.3)])
-                    .with_rot(Quat::from_rotation_y(age * 9.0))
-                    .with_mesh(0),
+                ins(
+                    v3(fx.x, 2.2 + age * 0.8, fx.z),
+                    v3(0.2, 0.2, 0.2),
+                    [1.0, fade(0.85), fade(0.3)],
+                )
+                .with_rot(Quat::from_rotation_y(age * 9.0))
+                .with_mesh(0),
             );
         }
         8 => {
             // dash / blink / split streak between points, rings at both ends
             let (dx, dz) = (fx.x2 - fx.x, fx.z2 - fx.z);
             let len = (dx * dx + dz * dz).sqrt();
-            let col = if fx.v >= 1.0 { [fade(0.5), 1.0, 1.0] } else { [fade(0.5), fade(0.8), 1.0] };
+            let col = if fx.v >= 1.0 {
+                [fade(0.5), 1.0, 1.0]
+            } else {
+                [fade(0.5), fade(0.8), 1.0]
+            };
             if len > 0.05 {
                 frame.instances.push(
-                    ins(v3(f32::midpoint(fx.x, fx.x2), 0.9, f32::midpoint(fx.z, fx.z2)), v3(len, 0.06, 0.35 * (1.0 - age)), col)
-                        .with_rot(face(line_yaw(fx)))
-                        .with_mesh(0),
+                    ins(
+                        v3(f32::midpoint(fx.x, fx.x2), 0.9, f32::midpoint(fx.z, fx.z2)),
+                        v3(len, 0.06, 0.35 * (1.0 - age)),
+                        col,
+                    )
+                    .with_rot(face(line_yaw(fx)))
+                    .with_mesh(0),
                 );
             }
             for (px, pz) in [(fx.x, fx.z), (fx.x2, fx.z2)] {
-                frame.instances.push(ins(v3(px, 0.1, pz), v3(0.5 + age, 1.0, 0.5 + age), col).with_mesh(MESH_RING));
+                frame.instances.push(
+                    ins(v3(px, 0.1, pz), v3(0.5 + age, 1.0, 0.5 + age), col).with_mesh(MESH_RING),
+                );
             }
         }
         9 => {
@@ -1706,11 +2073,23 @@ fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
                 _ => [fade(0.5), 1.0, fade(0.5)],
             };
             let s = if fx.v >= 3.0 { 2.0 } else { 1.0 };
-            frame.instances.push(ins(v3(fx.x, 1.1, fx.z), v3((0.9 + age * 0.6) * s, 1.4, (0.9 + age * 0.6) * s), col).with_mesh(MESH_RING));
+            frame.instances.push(
+                ins(
+                    v3(fx.x, 1.1, fx.z),
+                    v3((0.9 + age * 0.6) * s, 1.4, (0.9 + age * 0.6) * s),
+                    col,
+                )
+                .with_mesh(MESH_RING),
+            );
             for i in 0..3 {
                 let a = TAU * (i as f32) / 3.0 + age * 3.0;
                 frame.instances.push(
-                    ins(v3(fx.x + a.cos() * 0.6, 0.8 + age * 1.8, fx.z + a.sin() * 0.6), v3(0.09, 0.14, 0.09), col).with_mesh(MESH_OCTA),
+                    ins(
+                        v3(fx.x + a.cos() * 0.6, 0.8 + age * 1.8, fx.z + a.sin() * 0.6),
+                        v3(0.09, 0.14, 0.09),
+                        col,
+                    )
+                    .with_mesh(MESH_OCTA),
                 );
             }
         }
@@ -1718,15 +2097,24 @@ fn push_fx(frame: &mut Frame, fx: &FxLite, age: f32) {
         11 => {
             // exhaust mark
             frame.instances.push(
-                ins(v3(fx.x, 1.9, fx.z), v3(0.5 * (1.0 - age), 0.5, 0.5 * (1.0 - age)), [fade(0.5), fade(0.4), fade(0.9)]).with_mesh(MESH_OCTA),
+                ins(
+                    v3(fx.x, 1.9, fx.z),
+                    v3(0.5 * (1.0 - age), 0.5, 0.5 * (1.0 - age)),
+                    [fade(0.5), fade(0.4), fade(0.9)],
+                )
+                .with_mesh(MESH_OCTA),
             );
         }
         12 => {
             // shield flash: a blue ring rising
             frame.instances.push(
-                ins(v3(fx.x, 0.6 + age * 1.2, fx.z), v3(1.0 + age * 0.4, 1.0, 1.0 + age * 0.4), [fade(0.6), fade(0.8), 1.0])
-                    .with_rot(Quat::from_rotation_x(0.3))
-                    .with_mesh(MESH_RING),
+                ins(
+                    v3(fx.x, 0.6 + age * 1.2, fx.z),
+                    v3(1.0 + age * 0.4, 1.0, 1.0 + age * 0.4),
+                    [fade(0.6), fade(0.8), 1.0],
+                )
+                .with_rot(Quat::from_rotation_x(0.3))
+                .with_mesh(MESH_RING),
             );
         }
         _ => {}
@@ -1805,7 +2193,14 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
             1 | 2 if !u.dead => push_minion(&mut frame, u, t),
             0 | 3 if !u.dead => {
                 let mine = u.k == 0 && input.my_slot == Some(u.slot);
-                push_champion(&mut frame, u, t, wear_of(u.id, input.buffs), mine, crate::combat::attack_pose(u, input.fx));
+                push_champion(
+                    &mut frame,
+                    u,
+                    t,
+                    wear_of(u.id, input.buffs),
+                    mine,
+                    crate::combat::attack_pose(u, input.fx),
+                );
             }
             _ => {}
         }
@@ -1838,7 +2233,9 @@ pub fn scene_with(input: &SceneInput<'_>) -> Frame {
 fn push_showcase(frame: &mut Frame, _camera: &Camera, t: f32) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var("LEAGUE_SHOWCASE").is_ok_and(|v| v != "0" && !v.is_empty())) {
+    if !*ON
+        .get_or_init(|| std::env::var("LEAGUE_SHOWCASE").is_ok_and(|v| v != "0" && !v.is_empty()))
+    {
         return;
     }
     let stand_in = |id: u32, k: u8, team: u8, def: u8, x: f32, z: f32, fa: f32| UnitLite {
@@ -1858,8 +2255,23 @@ fn push_showcase(frame: &mut Frame, _camera: &Camera, t: f32) {
         colour: data::CHAMPS[usize::from(def.min(4))].colour,
     };
     for def in 0..5u8 {
-        let u = stand_in(9000 + u32::from(def), 0, def % 2, def, (f32::from(def) - 2.0) * 3.2, 1.0, t * 0.6 + f32::from(def) * 0.4);
-        push_champion(frame, &u, t, Wear::default(), false, crate::combat::AttackPose::default());
+        let u = stand_in(
+            9000 + u32::from(def),
+            0,
+            def % 2,
+            def,
+            (f32::from(def) - 2.0) * 3.2,
+            1.0,
+            t * 0.6 + f32::from(def) * 0.4,
+        );
+        push_champion(
+            frame,
+            &u,
+            t,
+            Wear::default(),
+            false,
+            crate::combat::AttackPose::default(),
+        );
         push_hp_bar(frame, &u);
     }
     // the objectives are units too, and the draft has none: stand them in
@@ -1907,10 +2319,14 @@ fn review_camera(input: &SceneInput<'_>) -> Option<Camera> {
     let mode = MODE.get_or_init(|| {
         let raw = std::env::var("LEAGUE_CAM").ok()?;
         let raw = raw.trim();
-        let (raw, zoom) = raw
-            .split_once('@')
-            .map_or((raw, 1.0f32), |(m, k)| (m.trim(), k.trim().parse::<f32>().unwrap_or(1.0)));
-        let zoom = if zoom.is_finite() && zoom > 0.05 { zoom } else { 1.0 };
+        let (raw, zoom) = raw.split_once('@').map_or((raw, 1.0f32), |(m, k)| {
+            (m.trim(), k.trim().parse::<f32>().unwrap_or(1.0))
+        });
+        let zoom = if zoom.is_finite() && zoom > 0.05 {
+            zoom
+        } else {
+            1.0
+        };
         if raw.eq_ignore_ascii_case("auto") {
             return Some((Mode::Auto, zoom));
         }
@@ -1918,7 +2334,10 @@ fn review_camera(input: &SceneInput<'_>) -> Option<Camera> {
             return n.trim().parse().ok().map(|s| (Mode::Slot(s), zoom));
         }
         let (x, z) = raw.split_once(',')?;
-        Some((Mode::Fixed(x.trim().parse().ok()?, z.trim().parse().ok()?), zoom))
+        Some((
+            Mode::Fixed(x.trim().parse().ok()?, z.trim().parse().ok()?),
+            zoom,
+        ))
     });
     let (mode, zoom) = (*mode)?;
     let focus = match mode {
@@ -1963,7 +2382,13 @@ pub fn action_focus(units: &[UnitLite]) -> Option<(f32, f32)> {
     {
         return Some(p);
     }
-    let home = |u: &UnitLite| if u.t == 0 { -data::CORE_X } else { data::CORE_X };
+    let home = |u: &UnitLite| {
+        if u.t == 0 {
+            -data::CORE_X
+        } else {
+            data::CORE_X
+        }
+    };
     champs
         .iter()
         .max_by(|a, b| (a.x - home(a)).abs().total_cmp(&(b.x - home(b)).abs()))
@@ -2116,7 +2541,10 @@ mod tests {
     fn face_puts_local_x_on_the_sim_forward() {
         for yaw in [0.0, 0.7, PI / 2.0, 2.5, -1.1] {
             let f = face(yaw) * Vec3::X;
-            assert!((f.x - yaw.cos()).abs() < 1e-5 && (f.z - yaw.sin()).abs() < 1e-5, "yaw {yaw}: {f}");
+            assert!(
+                (f.x - yaw.cos()).abs() < 1e-5 && (f.z - yaw.sin()).abs() < 1e-5,
+                "yaw {yaw}: {f}"
+            );
             assert!(f.y.abs() < 1e-5);
         }
     }
@@ -2228,8 +2656,12 @@ mod tests {
         for (x, z) in [(10.0, 2.0), (18.0, -5.0), (-3.0, 9.0), (25.0, 12.0)] {
             for aspect in [16.0 / 9.0, 4.0 / 3.0] {
                 let (nx, ny) = project(&cam, aspect, x, 0.0, z);
-                let (gx, gz) = ground_point(&cam, aspect, [nx, ny]).expect("a ground point projects back");
-                assert!((gx - x).abs() < 0.01 && (gz - z).abs() < 0.01, "({x},{z}) -> ({nx},{ny}) -> ({gx},{gz})");
+                let (gx, gz) =
+                    ground_point(&cam, aspect, [nx, ny]).expect("a ground point projects back");
+                assert!(
+                    (gx - x).abs() < 0.01 && (gz - z).abs() < 0.01,
+                    "({x},{z}) -> ({nx},{ny}) -> ({gx},{gz})"
+                );
             }
         }
         // screen right is +x: the lane runs left to right
@@ -2254,11 +2686,17 @@ mod tests {
         assert!((x - 5.0).abs() < 1e-5 && z.abs() < 1e-5);
         assert!(action_focus(&[]).is_none());
         // one side only: the champion furthest from its own core
-        let one_side = [unit(1, 0, 0, 0, -30.0, 4.0, 0), unit(2, 0, 0, 1, -10.0, 0.0, 1)];
+        let one_side = [
+            unit(1, 0, 0, 0, -30.0, 4.0, 0),
+            unit(2, 0, 0, 1, -10.0, 0.0, 1),
+        ];
         let (cx, cz) = action_focus(&one_side).unwrap();
         assert!((cx + 10.0).abs() < 1e-5 && cz.abs() < 1e-5);
         // a duel with the two far apart frames the pusher, not empty lane
-        let apart = [unit(1, 0, 0, 0, -58.0, 0.0, 0), unit(2, 0, 1, 1, -20.0, 3.0, 1)];
+        let apart = [
+            unit(1, 0, 0, 0, -58.0, 0.0, 0),
+            unit(2, 0, 1, 1, -20.0, 3.0, 1),
+        ];
         let (px, pz) = action_focus(&apart).unwrap();
         assert!((px + 20.0).abs() < 1e-5 && (pz - 3.0).abs() < 1e-5);
     }
@@ -2275,7 +2713,15 @@ mod tests {
             unit(16, 3, 0, 0, -2.0, 2.0, 0),
         ];
         for def in 0..5u8 {
-            units.push(unit(20 + u32::from(def), 0, def % 2, def, f32::from(def) * 3.0, 0.0, def));
+            units.push(unit(
+                20 + u32::from(def),
+                0,
+                def % 2,
+                def,
+                f32::from(def) * 3.0,
+                0.0,
+                def,
+            ));
         }
         units[1].dead = true; // a taken court
         let buffs: Vec<BuffSnap> = (0..12u8)
@@ -2314,7 +2760,9 @@ mod tests {
                 left: 0.1,
             }))
             .collect();
-        let zones: Vec<ZoneLite> = (0..4u8).map(|k| (k, f32::from(k) * 5.0, 3.0, 3.0, 0.5)).collect();
+        let zones: Vec<ZoneLite> = (0..4u8)
+            .map(|k| (k, f32::from(k) * 5.0, 3.0, 3.0, 0.5))
+            .collect();
         let projs: Vec<ProjSnap> = (0..4u8)
             .map(|k| ProjSnap {
                 champ: 255,
@@ -2337,14 +2785,28 @@ mod tests {
             camera: camera_for((0.0, 0.0)),
             my_slot: Some(1),
         });
-        assert!(frame.instances.len() > 150, "{} instances", frame.instances.len());
+        assert!(
+            frame.instances.len() > 150,
+            "{} instances",
+            frame.instances.len()
+        );
         // every id must be one `build_meshes` registers: the nine procedural
         // meshes plus whatever baked parts are embedded
         let registered = build_meshes().len() as u32;
         for i in &frame.instances {
-            assert!(i.position.is_finite() && i.scale.is_finite() && i.color.is_finite(), "{i:?}");
-            assert!(i.rot.is_finite() && (i.rot.length() - 1.0).abs() < 1e-3, "{i:?}");
-            assert!(i.mesh <= registered, "mesh id {} is not registered ({registered} meshes)", i.mesh);
+            assert!(
+                i.position.is_finite() && i.scale.is_finite() && i.color.is_finite(),
+                "{i:?}"
+            );
+            assert!(
+                i.rot.is_finite() && (i.rot.length() - 1.0).abs() < 1e-3,
+                "{i:?}"
+            );
+            assert!(
+                i.mesh <= registered,
+                "mesh id {} is not registered ({registered} meshes)",
+                i.mesh
+            );
         }
         // the callers' entry draws the same world without wearables
         let plain = scene(&units, &zones, &fx, 1.0, camera_for((0.0, 0.0)), &projs);

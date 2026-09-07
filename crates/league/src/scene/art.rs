@@ -79,9 +79,18 @@ const SOURCES: &[Source] = &[
 /// champions, in this order, so their ids are fixed (`scene::MESH_GARDEN`,
 /// `MESH_LANE`, `MESH_COURT`).
 const SURFACES: &[(&str, &[u8])] = &[
-    ("garden", include_bytes!("../../../../assets/models/league/v4/surface-garden.glb")),
-    ("lane", include_bytes!("../../../../assets/models/league/v4/surface-lane.glb")),
-    ("court", include_bytes!("../../../../assets/models/league/v4/surface-court.glb")),
+    (
+        "garden",
+        include_bytes!("../../../../assets/models/league/v4/surface-garden.glb"),
+    ),
+    (
+        "lane",
+        include_bytes!("../../../../assets/models/league/v4/surface-lane.glb"),
+    ),
+    (
+        "court",
+        include_bytes!("../../../../assets/models/league/v4/surface-court.glb"),
+    ),
 ];
 
 /// How many meshes [`surfaces`] returns, always, so the ids that follow
@@ -94,9 +103,18 @@ pub const SURFACE_COUNT: u32 = 3;
 /// for the clusters. Registered right after the surfaces, in this order
 /// (`scene::MESH_OBELISK`, `MESH_ARCH`, `MESH_TREE`).
 const PROPS: &[(&str, &[u8])] = &[
-    ("obelisk", include_bytes!("../../../../assets/models/league/v2/obelisk.glb")),
-    ("arch", include_bytes!("../../../../assets/models/league/v2/arch.glb")),
-    ("tree", include_bytes!("../../../../assets/models/league/v2/tree.glb")),
+    (
+        "obelisk",
+        include_bytes!("../../../../assets/models/league/v2/obelisk.glb"),
+    ),
+    (
+        "arch",
+        include_bytes!("../../../../assets/models/league/v2/arch.glb"),
+    ),
+    (
+        "tree",
+        include_bytes!("../../../../assets/models/league/v2/tree.glb"),
+    ),
 ];
 
 /// How many meshes [`props`] returns, always.
@@ -113,16 +131,25 @@ pub fn props() -> Vec<MeshData> {
             Ok(mut parts) if !parts.is_empty() => {
                 let part = parts.swap_remove(0);
                 if part.mesh.texture.is_none() {
-                    tracing::warn!(prop = name, "league art: prop has no 8-bit texture; it will draw flat");
+                    tracing::warn!(
+                        prop = name,
+                        "league art: prop has no 8-bit texture; it will draw flat"
+                    );
                 }
                 part.mesh
             }
             Ok(_) => {
-                tracing::warn!(prop = name, "league art: prop glb has no primitive; drawing nothing useful");
+                tracing::warn!(
+                    prop = name,
+                    "league art: prop glb has no primitive; drawing nothing useful"
+                );
                 plain_quad()
             }
             Err(e) => {
-                tracing::warn!(prop = name, "league art: prop glb unreadable ({e}); drawing nothing useful");
+                tracing::warn!(
+                    prop = name,
+                    "league art: prop glb unreadable ({e}); drawing nothing useful"
+                );
                 plain_quad()
             }
         })
@@ -140,16 +167,25 @@ pub fn surfaces() -> Vec<MeshData> {
             Ok(mut parts) if !parts.is_empty() => {
                 let part = parts.swap_remove(0);
                 if part.mesh.texture.is_none() {
-                    tracing::warn!(surface = name, "league art: surface has no 8-bit texture; it will draw flat");
+                    tracing::warn!(
+                        surface = name,
+                        "league art: surface has no 8-bit texture; it will draw flat"
+                    );
                 }
                 part.mesh
             }
             Ok(_) => {
-                tracing::warn!(surface = name, "league art: surface glb has no primitive; drawing a plain quad");
+                tracing::warn!(
+                    surface = name,
+                    "league art: surface glb has no primitive; drawing a plain quad"
+                );
                 plain_quad()
             }
             Err(e) => {
-                tracing::warn!(surface = name, "league art: surface glb unreadable ({e}); drawing a plain quad");
+                tracing::warn!(
+                    surface = name,
+                    "league art: surface glb unreadable ({e}); drawing a plain quad"
+                );
                 plain_quad()
             }
         })
@@ -160,9 +196,20 @@ pub fn surfaces() -> Vec<MeshData> {
 fn plain_quad() -> MeshData {
     use ember_engine::MeshVertex;
     let n = [0.0, 1.0, 0.0];
-    let v = |x: f32, z: f32| MeshVertex { pos: [x, 0.0, z], normal: n, uv: [0.0, 0.0] };
+    let v = |x: f32, z: f32| MeshVertex {
+        pos: [x, 0.0, z],
+        normal: n,
+        uv: [0.0, 0.0],
+    };
     MeshData {
-        vertices: vec![v(-0.5, -0.5), v(0.5, 0.5), v(0.5, -0.5), v(-0.5, -0.5), v(-0.5, 0.5), v(0.5, 0.5)],
+        vertices: vec![
+            v(-0.5, -0.5),
+            v(0.5, 0.5),
+            v(0.5, -0.5),
+            v(-0.5, -0.5),
+            v(-0.5, 0.5),
+            v(0.5, 0.5),
+        ],
         texture: None,
     }
 }
@@ -199,7 +246,10 @@ pub fn meshes(first_id: u32) -> Vec<MeshData> {
         let side: Sidecar = match serde_json::from_str(src.sidecar) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(def = src.def, "league art: sidecar unreadable ({e}); champion keeps its procedural body");
+                tracing::warn!(
+                    def = src.def,
+                    "league art: sidecar unreadable ({e}); champion keeps its procedural body"
+                );
                 continue;
             }
         };
@@ -234,7 +284,10 @@ pub fn meshes(first_id: u32) -> Vec<MeshData> {
             champ.parts.push(Part {
                 name: p.name.clone(),
                 mesh: next,
-                pivot: side.pivots.get(&p.name).map_or(Vec3::ZERO, |v| Vec3::from(*v)),
+                pivot: side
+                    .pivots
+                    .get(&p.name)
+                    .map_or(Vec3::ZERO, |v| Vec3::from(*v)),
             });
             out.push(p.mesh.clone());
             next += 1;

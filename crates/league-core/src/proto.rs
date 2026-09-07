@@ -437,7 +437,10 @@ mod tests {
     fn legacy_effects_default_to_generic_and_new_identity_round_trips() {
         let old_fx = r#"{"k":0,"x":1.0,"z":2.0,"x2":3.0,"z2":4.0,"v":0.0}"#;
         let mut fx: Fx = serde_json::from_str(old_fx).unwrap();
-        assert_eq!((fx.champ, fx.ability), (UNKNOWN_PRESENTATION, UNKNOWN_PRESENTATION));
+        assert_eq!(
+            (fx.champ, fx.ability),
+            (UNKNOWN_PRESENTATION, UNKNOWN_PRESENTATION)
+        );
         assert_eq!(fx.source, 0);
         fx.champ = 4;
         fx.ability = 3;
@@ -450,7 +453,8 @@ mod tests {
         let mut proj: ProjSnap = serde_json::from_str(old_proj).unwrap();
         assert_eq!(proj.champ, UNKNOWN_PRESENTATION);
         proj.champ = 2;
-        let round_trip: ProjSnap = serde_json::from_str(&serde_json::to_string(&proj).unwrap()).unwrap();
+        let round_trip: ProjSnap =
+            serde_json::from_str(&serde_json::to_string(&proj).unwrap()).unwrap();
         assert_eq!(proj, round_trip);
     }
 
