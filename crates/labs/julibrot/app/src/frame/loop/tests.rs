@@ -30,8 +30,7 @@ use super::{
     stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
-    AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up,
-    box_zoom_delta_log2,
+    AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
     LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,

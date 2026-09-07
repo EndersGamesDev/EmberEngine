@@ -8,7 +8,9 @@ use super::schedule::{
 #[cfg(test)]
 use super::schedule::{PresenterPoll, RefinementSchedule, classify_refusal, stamped_extent};
 #[cfg(any(target_arch = "wasm32", test))]
-use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene};
+use super::warp::{
+    defer_scene_until_relief_redraw, hold_redraw_during_scene, warp_submission_due,
+};
 
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
