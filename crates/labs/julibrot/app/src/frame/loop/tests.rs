@@ -1914,7 +1914,6 @@ fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
     assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1945,7 +1944,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1970,7 +1968,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::PictureFast);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1995,7 +1992,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -4072,7 +4068,7 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
     let initial = viewer
         .take_reference_submission()
         .expect("startup navigation");
-    assert!(viewer.owner_mut().accept_navigation_without_orbit(
+    assert!(viewer.accept_navigation_without_orbit(
         initial.navigation.generation,
         initial.navigation.centre_revision,
     ));
@@ -4084,7 +4080,7 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
     let accepted_centre = accepted.navigation.centre.clone();
     let plane = viewer.checked_plane();
     let precision = precision_for(14.0, WIDTH, CAP).expect("deep precision");
-    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+    assert!(viewer.accept_navigation_with_orbit(
         accepted.navigation.generation,
         accepted.navigation.centre_revision,
         7,
@@ -4120,7 +4116,7 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
         ),
         "zoom is dispatch scale, not a reason to issue another orbit request"
     );
-    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+    assert!(viewer.accept_navigation_with_orbit(
         nudged.navigation.generation,
         nudged.navigation.centre_revision,
         7,
@@ -4148,7 +4144,12 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
     let moved = viewer
         .take_reference_submission()
         .expect("the moved centre exposes a worker submission");
-    let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+    let displacement = viewer
+        .drain_hot([WIDTH, HEIGHT])
+        .expect("navigation HOT drains")
+        .state
+        .hot
+        .centre_from_reference_px;
     assert!(displacement[0].hypot(displacement[1]) > f64::from(WIDTH) / 4.0);
     assert!(reference_submission_requires_worker(
         false,
@@ -4492,7 +4493,7 @@ fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeas
     let initial = viewer
         .take_reference_submission()
         .expect("startup navigation");
-    assert!(viewer.owner_mut().accept_navigation_without_orbit(
+    assert!(viewer.accept_navigation_without_orbit(
         initial.navigation.generation,
         initial.navigation.centre_revision,
     ));
@@ -4506,7 +4507,7 @@ fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeas
         .take_reference_submission()
         .expect("the burst releases its coalesced navigation");
     let precision = precision_for(60.0, WIDTH, CAP).expect("zoom sixty precision");
-    assert!(viewer.owner_mut().accept_navigation_with_orbit(
+    assert!(viewer.accept_navigation_with_orbit(
         accepted.navigation.generation,
         accepted.navigation.centre_revision,
         ORBIT_ID,
@@ -4567,7 +4568,7 @@ fn a_discarded_correction_can_only_adopt_while_its_submission_is_in_flight() {
     let (mut finished_first, generation, centre_revision, lease) = burst_to_an_escaped_reference();
     assert!(finished_first.finish_reference_submission(generation));
     assert!(
-        !finished_first.owner_mut().accept_navigation_with_orbit(
+        !finished_first.accept_navigation_with_orbit(
             generation,
             centre_revision,
             7,
@@ -4576,7 +4577,10 @@ fn a_discarded_correction_can_only_adopt_while_its_submission_is_in_flight() {
         ),
         "a finished submission is a navigation the owner will not answer"
     );
-    let stranded = finished_first.owner().drain_main().main;
+    let stranded = finished_first
+        .drain_main()
+        .expect("stranded MAIN drains")
+        .main;
     assert!(
         !perturbation_reference_is_current(
             stranded.generation_applied,
@@ -4593,7 +4597,7 @@ fn a_discarded_correction_can_only_adopt_while_its_submission_is_in_flight() {
     // Adopting while the submission is still in flight, which is what the loop must do.
     let (mut adopted, generation, centre_revision, lease) = burst_to_an_escaped_reference();
     assert!(
-        adopted.owner_mut().accept_navigation_with_orbit(
+        adopted.accept_navigation_with_orbit(
             generation,
             centre_revision,
             7,
@@ -4604,7 +4608,7 @@ fn a_discarded_correction_can_only_adopt_while_its_submission_is_in_flight() {
     );
     let mut adopted_lease = lease;
     super::adopt_reference_lease_for_correction(&mut adopted_lease, generation, centre_revision);
-    let main = adopted.owner().drain_main().main;
+    let main = adopted.drain_main().expect("adopted MAIN drains").main;
     assert_eq!(main.generation_applied, generation);
     assert_eq!(main.centre_revision, centre_revision);
     assert_eq!(

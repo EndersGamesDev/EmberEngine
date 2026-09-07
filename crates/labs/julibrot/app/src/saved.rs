@@ -170,7 +170,6 @@ impl SavedView {
     pub fn capture(viewer: &ViewerController) -> Result<Self, AppError> {
         let requested = viewer.requested();
         let centre = viewer
-            .owner()
             .navigation_centre()
             .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
         Ok(Self {
@@ -514,10 +513,7 @@ mod tests {
         let viewer = deep_viewer();
         let saved = SavedView::capture(&viewer).expect("a capturable row");
         let decoded = saved.centre().expect("a decodable centre");
-        let original = viewer
-            .owner()
-            .navigation_centre()
-            .expect("configured navigation");
+        let original = viewer.navigation_centre().expect("configured navigation");
         assert_eq!(decoded.precision_bits, original.precision_bits);
         assert_eq!(decoded.to_f64_mirror(), original.to_f64_mirror());
         assert_eq!(decoded, original);
@@ -630,10 +626,7 @@ mod tests {
     fn equal_origin_and_centre_setters_do_not_rebuild_or_request() {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         finish_initial_reference(&mut viewer);
-        let centre = viewer
-            .owner()
-            .navigation_centre()
-            .expect("configured centre");
+        let centre = viewer.navigation_centre().expect("configured centre");
 
         viewer
             .set_plane_origin(viewer.requested().plane_origin)
@@ -651,16 +644,13 @@ mod tests {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         finish_initial_reference(&mut viewer);
         viewer.pan_px([24.0, 0.0]).expect("finite pan");
-        let centre = viewer
-            .owner()
-            .navigation_centre()
-            .expect("configured centre");
-        assert_ne!(viewer.owner().reference_centre(), Some(centre.clone()));
+        let centre = viewer.navigation_centre().expect("configured centre");
+        assert_ne!(viewer.reference_centre(), Some(centre.clone()));
 
         viewer.set_centre(centre.clone()).expect("centre repair");
 
-        assert_eq!(viewer.owner().navigation_centre(), Some(centre.clone()));
-        assert_eq!(viewer.owner().reference_centre(), Some(centre));
+        assert_eq!(viewer.navigation_centre(), Some(centre.clone()));
+        assert_eq!(viewer.reference_centre(), Some(centre));
         assert_eq!(
             viewer
                 .take_reference_submission()
