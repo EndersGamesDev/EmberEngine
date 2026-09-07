@@ -391,6 +391,14 @@
       });
       row.append(sel, btn);
       card.append(h, tag, desc, update, row);
+      /* league-story-link:v1 */
+      if (g.id === 'league') {
+        const story = document.createElement('a');
+        story.href = 'games/league/';
+        story.textContent = 'Story & trailer';
+        story.style.cssText = 'color:#72d5b5;font-size:.82rem;margin-top:10px;display:inline-block;text-underline-offset:3px';
+        card.append(story);
+      }
       cards.append(card);
     }
 

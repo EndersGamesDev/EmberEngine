@@ -238,13 +238,21 @@
     {
       "id": "league",
       "title": "UltimateLegue",
-      "tag": "Crystalforge / Five champions / 1v1 + 3v3",
-      "desc": "Draft your champion and three runes, master four abilities, and turn gold into a winning build. Capture the two side objectives for team bonuses, push with your minions, and destroy the enemy core. Play online or practice with bots.",
+      "tag": "1v1 + 3v3 · one lane · five champions",
+      "desc": "Fight for the Crystalforge in a top-down browser arena. Five champions bring distinct abilities and auto attacks to an ivory bridge between rival cores. Claim the North and South Courts, earn gold, build six items and shape your rune page. Play alone with bots or join an online lobby. V3 adds right-click orders, bindable attack move and an Escape menu with fullscreen, controls and a complete tutorial. Discover the champions and their connected stories in the new trailer and world page.",
       "versions": [
+        {
+          "v": "v3",
+          "path": "games/league/v3/",
+          "live": true,
+          "proto": 2,
+          "handover": true,
+          "note": "Right-click move and attack, bindable attack move, ability animation takeover, and an Escape menu with fullscreen, key bindings and a complete new-player guide"
+        },
         {
           "v": "v2",
           "path": "games/league/v2/",
-          "live": true,
+          "live": false,
           "proto": 1,
           "handover": true,
           "note": "Crystalforge: five fleet-created champions, a textured garden arena, distinct combat animations, redesigned HUD and saved keybindings"
@@ -257,7 +265,8 @@
           "handover": true,
           "note": "first build: one lane, five champions, draft with rune pages and summoner spells, courts, cores, a shop, and bots"
         }
-      ]
+      ],
+      "landing": "games/league/"
     },
     {
       "id": "fire",

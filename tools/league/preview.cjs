@@ -4,7 +4,8 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {spawn}=require('node:child_process');
 const root=path.resolve(__dirname,'../..');
 
-async function startPreview({port=8094,gamePort=7794,uiDirectory=path.join(root,'web/games/league/v2'),online=true}={}){
+async function startPreview({port=8094,gamePort=7794,gameVersion='v2',protocol=gameVersion==='v3'?2:1,uiDirectory=path.join(root,`web/games/league/${gameVersion}`),online=true}={}){
+  if(!/^v[1-9][0-9]*$/.test(gameVersion)||!Number.isInteger(protocol)||protocol<1)throw new Error('Invalid preview version/protocol');
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);
   const web=path.join(root,'web'),origin=`http://127.0.0.1:${port}`,ws=`ws://127.0.0.1:${gamePort}`;
   let game;
@@ -14,17 +15,17 @@ async function startPreview({port=8094,gamePort=7794,uiDirectory=path.join(root,
   }
   const server=http.createServer((req,res)=>{
     let url;try{url=new URL(req.url,origin);}catch{res.writeHead(400).end();return;}
-    if(url.pathname==='/server.json'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({hosts:online?[{name:'preview',league_ws:ws,league_proto:1}]:[],mirrors:[]}));return;}
+    if(url.pathname==='/server.json'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({hosts:online?[{name:'preview',league_ws:ws,league_proto:protocol}]:[],mirrors:[]}));return;}
     if(url.pathname==='/favicon.ico'){res.writeHead(204).end();return;}
     let rel;try{rel=decodeURIComponent(url.pathname);}catch{res.writeHead(400).end();return;}
     if(rel.endsWith('/'))rel+='index.html';
     let base=web;
-    const ui=rel.match(/^\/games\/league\/v2\/(index\.html|ui\.css|ui\.js)$/);
+    const ui=rel.match(new RegExp(`^/games/league/${gameVersion}/(index\\.html|ui\\.css|ui\\.js)$`));
     if(ui){base=path.resolve(uiDirectory);rel='/'+ui[1];}
-    else if(rel.startsWith('/games/league/v2/pkg/'))rel='/pkg/'+path.basename(rel);
+    else if(rel.startsWith(`/games/league/${gameVersion}/pkg/`))rel='/pkg/'+path.basename(rel);
     const file=path.resolve(base,'.'+rel);
     if(!file.startsWith(base+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}
-    const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.webp':'image/webp','.svg':'image/svg+xml','.png':'image/png'};
+    const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.webp':'image/webp','.svg':'image/svg+xml','.png':'image/png','.mp4':'video/mp4','.webm':'video/webm','.vtt':'text/vtt; charset=utf-8','.wav':'audio/wav'};
     res.setHeader('Content-Type',types[path.extname(file)]||'application/octet-stream');res.setHeader('Cache-Control','no-store');res.end(fs.readFileSync(file));
   });
   try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
