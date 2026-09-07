@@ -93,7 +93,7 @@ impl Presentation {
         self.last_tick = tick;
     }
 
-    fn id(&mut self) -> u64 {
+    const fn id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         id
@@ -129,7 +129,7 @@ impl Presentation {
                 self.unavailable = None;
             }
         }
-        self.impact = (self.impact - dt * 3.0).max(0.0);
+        self.impact = dt.mul_add(-3.0, self.impact).max(0.0);
     }
 
     pub fn damage(&mut self, unit: &UnitLite, amount: f32, tick: u64, mine: bool) {
@@ -184,8 +184,11 @@ impl Presentation {
             0 if effect.v.is_finite() && effect.v >= 0.0 && effect.v <= 7.0 => {
                 // An airborne crit roll is not a confirmed impact. Melee starts
                 // have already resolved their hit; objective attacks do too.
-                let critical =
-                    effect.v == 1.0 || effect.v == 3.0 || effect.v == 5.0 || effect.v == 7.0;
+                // The flag word is integral by contract; compare bit patterns so
+                // no float equality is involved.
+                let critical = [1.0_f32, 3.0, 5.0, 7.0]
+                    .iter()
+                    .any(|flag| flag.to_bits() == effect.v.to_bits());
                 let start = effect.v >= 4.0;
                 let melee = data::CHAMPS
                     .get(usize::from(effect.champ))
@@ -351,7 +354,7 @@ fn ring(frame: &mut Frame, x: f32, z: f32, radius: f32, colour: Vec3) {
 pub fn draw(frame: &mut Frame, world: &World) {
     if let Some(order) = &world.feedback.order {
         let shrink = (1.0 - order.age / 0.85).clamp(0.0, 1.0);
-        let radius = 0.65 + shrink * 0.45;
+        let radius = shrink.mul_add(0.45, 0.65);
         let colour = if order.kind == "move" {
             Vec3::new(0.22, 1.0, 0.8)
         } else {
@@ -374,7 +377,7 @@ pub fn draw(frame: &mut Frame, world: &World) {
             let (sin, cos) = angle.sin_cos();
             frame.instances.push(
                 Instance::new(
-                    Vec3::new(order.x + cos * 1.2, 0.19, order.z + sin * 1.2),
+                    Vec3::new(cos.mul_add(1.2, order.x), 0.19, sin.mul_add(1.2, order.z)),
                     Vec3::new(0.35, 0.04, 0.07),
                     colour,
                 )
@@ -391,9 +394,9 @@ pub fn draw(frame: &mut Frame, world: &World) {
     }) {
         let radius = if unit.k >= 4 { 2.35 } else { 1.15 };
         let colour = Vec3::new(1.0, 0.25, 0.13);
-        for dx in [-1.0, 1.0] {
-            for dz in [-1.0, 1.0] {
-                let at = Vec3::new(unit.x + dx * radius, 0.22, unit.z + dz * radius);
+        for dx in [-1.0_f32, 1.0] {
+            for dz in [-1.0_f32, 1.0] {
+                let at = Vec3::new(dx.mul_add(radius, unit.x), 0.22, dz.mul_add(radius, unit.z));
                 for scale in [Vec3::new(0.4, 0.045, 0.07), Vec3::new(0.07, 0.045, 0.4)] {
                     frame
                         .instances
@@ -442,7 +445,7 @@ pub fn json(world: &World) -> serde_json::Value {
                 return None;
             }
             let mut value = serde_json::to_value(event).ok()?;
-            value["sx"] = serde_json::json!((x + 1.0) * 0.5);
+            value["sx"] = serde_json::json!(f32::midpoint(x, 1.0));
             value["sy"] = serde_json::json!((1.0 - y) * 0.5);
             Some(value)
         })
@@ -590,7 +593,8 @@ mod tests {
             assert!((0.0..=1.0).contains(&event["sy"].as_f64().unwrap()));
         }
         world.cam = (4000.0, 0.0);
-        assert!(json(&world)["events"].as_array().unwrap().is_empty());
+        let offscreen = json(&world)["events"].as_array().unwrap().clone();
+        assert_eq!(offscreen, Vec::<serde_json::Value>::new());
         world.feedback.tick(2.0);
         assert!(world.feedback.events.is_empty());
         assert_eq!(world.feedback.impact.to_bits(), 0.0_f32.to_bits());
