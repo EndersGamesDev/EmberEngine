@@ -23,12 +23,14 @@ use super::{
     FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity, KernelGridTarget,
     KernelJob, KernelPlan, KernelPlanning, KernelPublication, KernelReferenceIdentity,
     KernelRetirement, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, LEVELS,
-    OrderedRefresh, PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES,
-    ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule, RefusalClass, SceneConsidered,
-    SceneMode, SubmissionKind, WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication,
-    WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission,
-    accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
-    coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
+    OrderedRefresh, PresentEventEffect, PresentEventOwner, PresentEventPort,
+    PresentEventTransaction, PresentEventTurn, PresentEventView, PresentFenceRefusal,
+    PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES,
+    REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule,
+    RefusalClass, SceneConsidered, SceneMode, SubmissionKind, WholeGridJob, WholeGridMode,
+    WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort,
+    WorkerSubmission, accepted_reference_facts, apply_precision_mode, arrival_is_current,
+    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
     expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
     main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
     published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
@@ -40,8 +42,9 @@ use crate::{
     SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
-    LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
-    WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
+    DropReason, LatticePair, PresentEvent, SampleClass, SceneFrame, SubmissionMeasurement, Warp,
+    WarpKind, WarpRefusalReason, WarpValidation, relief_redraw_source_covers_destination,
+    renders_same_picture,
 };
 use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
@@ -702,7 +705,10 @@ struct PendingFakeScene {
 enum FakeEvent {
     Completed(PendingFakeScene),
     Deadline(u64),
-    WarpCompleted(u64),
+    WarpCompleted {
+        id: u64,
+        source_scene_id: Option<u64>,
+    },
     Refused {
         id: u64,
         kind: SubmissionKind,
@@ -710,6 +716,104 @@ enum FakeEvent {
         polls: u32,
         wall_ms: f64,
     },
+}
+
+impl FakeEvent {
+    const fn completes_fence(self) -> bool {
+        matches!(self, Self::Completed(_) | Self::WarpCompleted { .. })
+    }
+
+    fn into_present_event(self, completion_sequence: u64) -> PresentEvent {
+        match self {
+            Self::Completed(scene) => PresentEvent::SceneCompleted {
+                frame: fake_scene_frame(scene, completion_sequence),
+                reference_sample: None,
+            },
+            Self::Deadline(id) => PresentEvent::FenceRefused {
+                kind: SubmissionKind::Scene,
+                id,
+                reason: FenceRefusal::Deadline,
+                polls: SCENE_POLLS,
+                wall_ms: SCENE_DEADLINE_MS,
+                precision_mode: PrecisionMode::Deterministic.as_str(),
+            },
+            Self::WarpCompleted {
+                id,
+                source_scene_id,
+            } => PresentEvent::WarpCompleted {
+                measurement: fake_measurement(
+                    SubmissionKind::Warp,
+                    id,
+                    completion_sequence,
+                    source_scene_id,
+                ),
+            },
+            Self::Refused {
+                id,
+                kind,
+                reason,
+                polls,
+                wall_ms,
+            } => PresentEvent::FenceRefused {
+                kind,
+                id,
+                reason,
+                polls,
+                wall_ms,
+                precision_mode: PrecisionMode::Deterministic.as_str(),
+            },
+        }
+    }
+}
+
+const fn fake_measurement(
+    kind: SubmissionKind,
+    id: u64,
+    completion_sequence: u64,
+    source_scene_id: Option<u64>,
+) -> SubmissionMeasurement {
+    SubmissionMeasurement {
+        kind,
+        id,
+        completion_sequence,
+        source_scene_id,
+        sample_class: SampleClass::Measured,
+        precision_mode: PrecisionMode::Deterministic.as_str(),
+        wall_ms: 1.0,
+        fence_wait_ms: 0.5,
+        polls: 1,
+    }
+}
+
+fn fake_scene_frame(scene: PendingFakeScene, completion_sequence: u64) -> SceneFrame {
+    let plane = Plane {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+    SceneFrame {
+        scene_id: scene.id,
+        pose: Pose {
+            epoch: u64::from(scene.generation),
+            orbit_generation: scene.generation,
+            plane,
+            object: ObjectAngles::IDENTITY,
+            plane_origin: [0.0; 4],
+            zoom_log2: 0.0,
+            view: ViewControls::NEUTRAL,
+            grid_width: 1,
+            grid_height: 1,
+            map: PoseMap::Mapped(Homography::IDENTITY),
+            centre_from_reference_px: [0.0; 2],
+        },
+        iteration_cap: 1,
+        level: scene.level,
+        extent: [1, 1],
+        texture_index: 0,
+        centre_revision: scene.generation,
+        plane_origin_f64: [0.0; 4],
+        precision_mode: PrecisionMode::Deterministic.as_str(),
+        measurement: fake_measurement(SubmissionKind::Scene, scene.id, completion_sequence, None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1198,6 +1302,13 @@ enum TracePendingState {
     Pending,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ReplayPresentPoll {
+    events: Vec<PresentEvent>,
+    retained_scene_id: Option<u64>,
+    presented_scene_id: Option<u64>,
+}
+
 impl TracePendingState {
     const fn from_pending(pending: bool) -> Self {
         if pending { Self::Pending } else { Self::Idle }
@@ -1243,6 +1354,9 @@ struct FakePresenter {
     worker_submitted_generations: Vec<u32>,
     worker_owner_now_us: u64,
     worker_turns: Vec<WorkerTurn>,
+    replay_present_poll: Option<ReplayPresentPoll>,
+    present_turns: Vec<PresentEventTurn>,
+    next_completion_sequence: u64,
     runtime: FakeRuntime,
     capture: TraceCaptureState,
     capture_scene: Option<u64>,
@@ -1460,7 +1574,10 @@ impl FakePresenter {
     }
 
     fn fire_warp_completed(&mut self) {
-        self.warp_callback = self.pending_warp.map(FakeEvent::WarpCompleted);
+        self.warp_callback = self.pending_warp.map(|id| FakeEvent::WarpCompleted {
+            id,
+            source_scene_id: self.pending_warp_source,
+        });
     }
 
     fn fire_warp_refusal(&mut self, reason: FenceRefusal, polls: u32, wall_ms: f64) {
@@ -1498,7 +1615,7 @@ impl FakePresenter {
                 polls,
                 wall_ms,
             },
-            Some(FakeEvent::WarpCompleted(_)) | None => TraceFenceResult::Pending,
+            Some(FakeEvent::WarpCompleted { .. }) | None => TraceFenceResult::Pending,
         };
         self.fence_log.push(TraceFenceObservation {
             order: u32::try_from(self.fence_log.len()).unwrap_or(u32::MAX),
@@ -1528,7 +1645,7 @@ impl FakePresenter {
         };
         self.warp_fence_observations += 1;
         let result = match self.warp_callback {
-            Some(FakeEvent::WarpCompleted(_)) => TraceFenceResult::WarpCompleted {
+            Some(FakeEvent::WarpCompleted { .. }) => TraceFenceResult::WarpCompleted {
                 kind: self.pending_warp_kind,
                 source_scene_id: self.pending_warp_source,
             },
@@ -1560,7 +1677,7 @@ impl FakePresenter {
             id: pending_warp,
         });
         if let Some(event) = self.warp_callback.take() {
-            if matches!(event, FakeEvent::WarpCompleted(_)) {
+            if matches!(event, FakeEvent::WarpCompleted { .. }) {
                 if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
                     self.presented_clear_only = self.presented_clear_only.saturating_add(1);
                 }
@@ -1581,10 +1698,8 @@ impl FakePresenter {
     }
 }
 
-impl PresenterPoll for FakePresenter {
-    type Event = FakeEvent;
-
-    fn poll_once(&mut self, _now_ms: f64) -> Vec<Self::Event> {
+impl FakePresenter {
+    fn poll_once(&mut self, _now_ms: f64) -> Vec<FakeEvent> {
         let mut events = Vec::new();
         self.poll_scene(&mut events);
         self.poll_warp(&mut events);
@@ -1767,6 +1882,123 @@ struct NativeRefreshTurn<'a> {
     outcome: TurnOutcome,
 }
 
+/// Native lowering that applies replayed presenter receipts through the refresh turn.
+struct ReplayPresentEvents<'a> {
+    frame_loop: &'a mut FrameLoop,
+    presenter: &'a mut FakePresenter,
+    outcome: &'a mut TurnOutcome,
+    applied_presented_scene_id: Option<u64>,
+}
+
+impl ReplayPresentEvents<'_> {
+    fn effect(&self, presented: bool, refused: bool, cancelled: bool) -> PresentEventEffect {
+        PresentEventEffect {
+            presented,
+            refused,
+            cancelled,
+            retained_scene_id: self.presenter.retained_scene,
+            presented_scene_id: self.applied_presented_scene_id,
+        }
+    }
+}
+
+impl PresentEventPort for ReplayPresentEvents<'_> {
+    type Error = TurnOutcome;
+
+    fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
+        if let Some(replay) = self.presenter.replay_present_poll.take() {
+            self.presenter.retained_scene = replay.retained_scene_id;
+            self.presenter.presented_scene = replay.presented_scene_id;
+            return replay.events;
+        }
+        let events = self.presenter.poll_once(now_ms);
+        let mut completion_sequence = self.presenter.next_completion_sequence;
+        let events = events
+            .into_iter()
+            .map(|event| {
+                let completes_fence = event.completes_fence();
+                let event = event.into_present_event(completion_sequence);
+                if completes_fence {
+                    completion_sequence = completion_sequence.saturating_add(1);
+                }
+                event
+            })
+            .collect();
+        self.presenter.next_completion_sequence = completion_sequence;
+        events
+    }
+
+    fn scene_completed(
+        &mut self,
+        event: &PresentSceneCompletion,
+    ) -> Result<PresentEventEffect, Self::Error> {
+        self.frame_loop.completed(
+            event.frame.scene_id,
+            event.frame.pose.orbit_generation,
+            event.frame.level,
+        );
+        self.outcome.completed_scene_id = Some(event.frame.scene_id);
+        Ok(self.effect(false, false, false))
+    }
+
+    fn scene_dropped(
+        &mut self,
+        event: &PresentSceneDrop,
+    ) -> Result<PresentEventEffect, Self::Error> {
+        self.frame_loop.retired(event.scene_id);
+        Ok(self.effect(false, false, false))
+    }
+
+    fn warp_completed(
+        &mut self,
+        event: &PresentWarpCompletion,
+    ) -> Result<PresentEventEffect, Self::Error> {
+        let measurement = event.measurement;
+        self.outcome.completed_warp_id = Some(measurement.id);
+        self.presenter.presented_warps.push(measurement.id);
+        self.outcome.presented = true;
+        self.outcome.surface_action = self.presenter.runtime.complete_warp(measurement.id);
+        self.applied_presented_scene_id = measurement.source_scene_id;
+        Ok(self.effect(true, false, false))
+    }
+
+    fn fence_refused(
+        &mut self,
+        event: &PresentFenceRefusal,
+    ) -> Result<PresentEventEffect, Self::Error> {
+        match event.kind {
+            SubmissionKind::Scene => self.outcome.refused_scene_id = Some(event.id),
+            SubmissionKind::Warp => self.outcome.refused_warp_id = Some(event.id),
+        }
+        let refusal = self.frame_loop.refused(
+            event.kind,
+            event.reason,
+            event.id,
+            event.polls,
+            event.wall_ms,
+        );
+        let refused = refusal.class == RefusalClass::Transient;
+        let cancelled = refusal.class == RefusalClass::Cancelled;
+        self.outcome.refused = refusal.class != RefusalClass::Device;
+        if matches!(event.kind, SubmissionKind::Warp) {
+            self.outcome.surface_action = self.presenter.runtime.refuse_warp(event.id);
+        }
+        Ok(self.effect(false, refused, cancelled))
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        if self.frame_loop.stopped().is_some() {
+            Err(*self.outcome)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn invalid_receipt(&self, _detail: &'static str) -> Self::Error {
+        *self.outcome
+    }
+}
+
 impl OrderedRefresh for NativeRefreshTurn<'_> {
     type Error = TurnOutcome;
     type Output = TurnOutcome;
@@ -1784,53 +2016,16 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
 
     fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error> {
         let CaptureStaged = stage;
-        for event in FrameLoop::refresh(self.presenter, self.clock.now_ms) {
-            match event {
-                FakeEvent::Completed(scene) => {
-                    self.frame_loop
-                        .completed(scene.id, scene.generation, scene.level);
-                    self.outcome.completed_scene_id = Some(scene.id);
-                }
-                FakeEvent::WarpCompleted(id) => {
-                    self.outcome.completed_warp_id = Some(id);
-                    self.presenter.presented_warps.push(id);
-                    self.outcome.presented = true;
-                    self.outcome.surface_action = self.presenter.runtime.complete_warp(id);
-                }
-                FakeEvent::Deadline(id) => {
-                    self.outcome.refused_scene_id = Some(id);
-                    let refusal = self.frame_loop.refused(
-                        SubmissionKind::Scene,
-                        FenceRefusal::Deadline,
-                        id,
-                        SCENE_POLLS,
-                        SCENE_DEADLINE_MS,
-                    );
-                    self.outcome.refused = refusal.class != RefusalClass::Device;
-                }
-                FakeEvent::Refused {
-                    id,
-                    kind,
-                    reason,
-                    polls,
-                    wall_ms,
-                } => {
-                    match kind {
-                        SubmissionKind::Scene => self.outcome.refused_scene_id = Some(id),
-                        SubmissionKind::Warp => self.outcome.refused_warp_id = Some(id),
-                    }
-                    let refusal = self.frame_loop.refused(kind, reason, id, polls, wall_ms);
-                    self.outcome.refused = refusal.class != RefusalClass::Device;
-                    if matches!(kind, SubmissionKind::Warp) {
-                        self.outcome.surface_action = self.presenter.runtime.refuse_warp(id);
-                    }
-                }
-            }
-        }
-        if self.frame_loop.stopped().is_some() {
-            return Err(self.outcome);
-        }
-        Ok(())
+        let applied_presented_scene_id = self.presenter.presented_scene;
+        let mut port = ReplayPresentEvents {
+            frame_loop: self.frame_loop,
+            presenter: self.presenter,
+            outcome: &mut self.outcome,
+            applied_presented_scene_id,
+        };
+        let observation = PresentEventOwner::observe(&mut port, self.clock.now_ms);
+        self.presenter.present_turns.push(observation.turn);
+        observation.finish
     }
 
     fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error> {
@@ -2721,6 +2916,554 @@ fn native_refresh_replays_plain_worker_service_transactions() {
     append_worker_turn(&mut fixture, "accepted-arrival", &recorded[0]);
     append_worker_turn(&mut fixture, "submit-plus-arrival", &recorded[1]);
     assert_eq!(fixture, WORKER_SERVICE_REPLAY_FIXTURE);
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PresentTurnInput {
+    name: &'static str,
+    clock: FakeClock,
+    generation: u32,
+    scheduled_scene: (u64, RefinementLevel),
+    surface_warp: Option<u64>,
+    initial_retained_scene_id: Option<u64>,
+    initial_presented_scene_id: Option<u64>,
+    poll: ReplayPresentPoll,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RecordedPresentTurn {
+    input: PresentTurnInput,
+    events: PresentEventTurn,
+    outcome: TurnOutcome,
+}
+
+#[derive(Clone, Copy)]
+struct ReplayMeasurement {
+    kind: SubmissionKind,
+    id: u64,
+    completion_sequence: u64,
+    source_scene_id: Option<u64>,
+    sample_class: SampleClass,
+    wall_ms: f64,
+    fence_wait_ms: f64,
+    polls: u32,
+}
+
+const fn replay_present_measurement(input: ReplayMeasurement) -> SubmissionMeasurement {
+    SubmissionMeasurement {
+        kind: input.kind,
+        id: input.id,
+        completion_sequence: input.completion_sequence,
+        source_scene_id: input.source_scene_id,
+        sample_class: input.sample_class,
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        wall_ms: input.wall_ms,
+        fence_wait_ms: input.fence_wait_ms,
+        polls: input.polls,
+    }
+}
+
+fn replay_present_scene() -> SceneFrame {
+    let plane = Plane {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+    SceneFrame {
+        scene_id: 41,
+        pose: Pose {
+            epoch: 7,
+            orbit_generation: 7,
+            plane,
+            object: ObjectAngles::IDENTITY,
+            plane_origin: [0.0; 4],
+            zoom_log2: 0.0,
+            view: ViewControls::NEUTRAL,
+            grid_width: 64,
+            grid_height: 32,
+            map: PoseMap::Mapped(Homography::IDENTITY),
+            centre_from_reference_px: [0.0; 2],
+        },
+        iteration_cap: 512,
+        level: RefinementLevel::Preview,
+        extent: [64, 32],
+        texture_index: 1,
+        centre_revision: 3,
+        plane_origin_f64: [0.0; 4],
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        measurement: replay_present_measurement(ReplayMeasurement {
+            kind: SubmissionKind::Scene,
+            id: 41,
+            completion_sequence: 9,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        }),
+    }
+}
+
+fn completed_present_turn_input() -> PresentTurnInput {
+    PresentTurnInput {
+        name: "completed",
+        clock: FakeClock { now_ms: 1.0 },
+        generation: 7,
+        scheduled_scene: (41, RefinementLevel::Preview),
+        surface_warp: Some(42),
+        initial_retained_scene_id: Some(37),
+        initial_presented_scene_id: Some(37),
+        poll: ReplayPresentPoll {
+            events: vec![
+                PresentEvent::SceneCompleted {
+                    frame: replay_present_scene(),
+                    reference_sample: Some(17),
+                },
+                PresentEvent::WarpCompleted {
+                    measurement: replay_present_measurement(ReplayMeasurement {
+                        kind: SubmissionKind::Warp,
+                        id: 42,
+                        completion_sequence: 10,
+                        source_scene_id: Some(41),
+                        sample_class: SampleClass::PolicyProbe,
+                        wall_ms: 2.0,
+                        fence_wait_ms: 1.0,
+                        polls: 2,
+                    }),
+                },
+            ],
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+        },
+    }
+}
+
+fn cancelled_present_turn_input() -> PresentTurnInput {
+    PresentTurnInput {
+        name: "dropped-and-cancelled",
+        clock: FakeClock { now_ms: 2.0 },
+        generation: 8,
+        scheduled_scene: (51, RefinementLevel::Preview),
+        surface_warp: Some(52),
+        initial_retained_scene_id: Some(41),
+        initial_presented_scene_id: Some(41),
+        poll: ReplayPresentPoll {
+            events: vec![
+                PresentEvent::SceneDropped {
+                    scene_id: 51,
+                    orbit_generation: 8,
+                    reason: DropReason::ReplacedMain,
+                    measurement: replay_present_measurement(ReplayMeasurement {
+                        kind: SubmissionKind::Scene,
+                        id: 51,
+                        completion_sequence: 20,
+                        source_scene_id: None,
+                        sample_class: SampleClass::ColdWarmUp,
+                        wall_ms: 3.0,
+                        fence_wait_ms: 1.5,
+                        polls: 2,
+                    }),
+                },
+                PresentEvent::FenceRefused {
+                    kind: SubmissionKind::Warp,
+                    id: 52,
+                    reason: FenceRefusal::Cancelled,
+                    polls: 3,
+                    wall_ms: 4.0,
+                    precision_mode: PrecisionMode::Deterministic.as_str(),
+                },
+            ],
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+        },
+    }
+}
+
+fn device_refused_present_turn_input() -> PresentTurnInput {
+    PresentTurnInput {
+        name: "dropped-and-device-refused",
+        clock: FakeClock { now_ms: 3.0 },
+        generation: 9,
+        scheduled_scene: (61, RefinementLevel::Preview),
+        surface_warp: Some(62),
+        initial_retained_scene_id: Some(41),
+        initial_presented_scene_id: Some(41),
+        poll: ReplayPresentPoll {
+            events: vec![
+                PresentEvent::SceneDropped {
+                    scene_id: 61,
+                    orbit_generation: 9,
+                    reason: DropReason::InvalidExtent,
+                    measurement: replay_present_measurement(ReplayMeasurement {
+                        kind: SubmissionKind::Scene,
+                        id: 61,
+                        completion_sequence: 30,
+                        source_scene_id: None,
+                        sample_class: SampleClass::Measured,
+                        wall_ms: 5.0,
+                        fence_wait_ms: 2.5,
+                        polls: 4,
+                    }),
+                },
+                PresentEvent::FenceRefused {
+                    kind: SubmissionKind::Warp,
+                    id: 62,
+                    reason: FenceRefusal::Device,
+                    polls: 5,
+                    wall_ms: 6.0,
+                    precision_mode: PrecisionMode::Deterministic.as_str(),
+                },
+            ],
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+        },
+    }
+}
+
+fn present_turn_inputs() -> [PresentTurnInput; 3] {
+    [
+        completed_present_turn_input(),
+        cancelled_present_turn_input(),
+        device_refused_present_turn_input(),
+    ]
+}
+
+fn record_present_turn(input: PresentTurnInput) -> RecordedPresentTurn {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.restart(input.generation);
+    frame_loop.submitted(input.scheduled_scene.0, input.scheduled_scene.1);
+    let mut presenter = FakePresenter {
+        retained_scene: input.initial_retained_scene_id,
+        presented_scene: input.initial_presented_scene_id,
+        replay_present_poll: Some(input.poll.clone()),
+        ..FakePresenter::default()
+    };
+    if let Some(warp_id) = input.surface_warp {
+        presenter.runtime.acquire_for_warp(input.generation);
+        presenter.runtime.retain_for_warp(warp_id, input.generation);
+    }
+    let outcome = drive_turn(
+        &mut frame_loop,
+        &mut presenter,
+        input.clock,
+        FramePolicy::SingleFrameOnDemand,
+        false,
+    );
+    let events = presenter
+        .present_turns
+        .pop()
+        .unwrap_or_else(|| unreachable!("the native refresh records its present-event turn"));
+    RecordedPresentTurn {
+        input,
+        events,
+        outcome,
+    }
+}
+
+fn append_present_measurement(output: &mut String, measurement: SubmissionMeasurement) {
+    let _written = writeln!(
+        output,
+        "  measurement kind={:?} id={} sequence={} source={:?} sample={:?} precision={} wall_bits={:016x} fence_bits={:016x} polls={}",
+        measurement.kind,
+        measurement.id,
+        measurement.completion_sequence,
+        measurement.source_scene_id,
+        measurement.sample_class,
+        measurement.precision_mode,
+        measurement.wall_ms.to_bits(),
+        measurement.fence_wait_ms.to_bits(),
+        measurement.polls,
+    );
+}
+
+fn append_present_scene(output: &mut String, frame: &SceneFrame, reference_sample: Option<u32>) {
+    let _written = writeln!(
+        output,
+        "event=SceneCompleted reference_sample={reference_sample:?} id={} iteration_cap={} level={:?} extent={}x{} texture={} centre_revision={} precision={}",
+        frame.scene_id,
+        frame.iteration_cap,
+        frame.level,
+        frame.extent[0],
+        frame.extent[1],
+        frame.texture_index,
+        frame.centre_revision,
+        frame.precision_mode,
+    );
+    let pose = frame.pose;
+    let _written = write!(
+        output,
+        "  pose epoch={} orbit_generation={} grid={}x{} zoom_bits={:016x} plane_u_bits=",
+        pose.epoch,
+        pose.orbit_generation,
+        pose.grid_width,
+        pose.grid_height,
+        pose.zoom_log2.to_bits(),
+    );
+    append_f32_bits(output, &pose.plane.basis_u);
+    let _written = write!(output, " plane_v_bits=");
+    append_f32_bits(output, &pose.plane.basis_v);
+    let object = [
+        pose.object.rho_12,
+        pose.object.rho_13,
+        pose.object.rho_14,
+        pose.object.rho_23,
+        pose.object.rho_24,
+        pose.object.rho_34,
+    ];
+    let _written = write!(output, " object_bits=");
+    append_f64_bits(output, &object);
+    let _written = write!(output, " origin_bits=");
+    append_f64_bits(output, &pose.plane_origin);
+    let _written = write!(output, " view_bits=");
+    append_f64_bits(output, &pose.view.as_array());
+    let _written = write!(output, " centre_bits=");
+    append_f64_bits(output, &pose.centre_from_reference_px);
+    let _written = writeln!(output);
+    match pose.map {
+        PoseMap::Mapped(map) => {
+            let _written = write!(output, "  map rows_bits=");
+            append_f64_bits(output, &map.rows);
+            let _written = write!(output, " inverse_bits=");
+            append_f64_bits(output, &map.inverse);
+            let _written = writeln!(
+                output,
+                " condition_bits={:016x} apron_bits={:016x}",
+                map.condition_number.to_bits(),
+                map.apron_scale.to_bits(),
+            );
+        }
+        PoseMap::EdgeOn => {
+            let _written = writeln!(output, "  map EdgeOn");
+        }
+    }
+    let _written = write!(output, "  frame_origin_bits=");
+    append_f64_bits(output, &frame.plane_origin_f64);
+    let _written = writeln!(output);
+    append_present_measurement(output, frame.measurement);
+}
+
+fn append_present_event(output: &mut String, transaction: &PresentEventTransaction) {
+    let event = transaction
+        .view()
+        .unwrap_or_else(|detail| unreachable!("recorded present transaction is valid: {detail}"));
+    match event {
+        PresentEventView::SceneCompleted(event) => {
+            append_present_scene(output, &event.frame, event.reference_sample);
+        }
+        PresentEventView::SceneDropped(event) => {
+            let _written = writeln!(
+                output,
+                "event=SceneDropped id={} orbit_generation={} reason={:?}",
+                event.scene_id, event.orbit_generation, event.reason,
+            );
+            append_present_measurement(output, event.measurement);
+        }
+        PresentEventView::WarpCompleted(event) => {
+            let _written = writeln!(output, "event=WarpCompleted");
+            append_present_measurement(output, event.measurement);
+        }
+        PresentEventView::FenceRefused(event) => {
+            let _written = writeln!(
+                output,
+                "event=FenceRefused kind={:?} id={} reason={:?} polls={} wall_bits={:016x} precision={}",
+                event.kind,
+                event.id,
+                event.reason,
+                event.polls,
+                event.wall_ms.to_bits(),
+                event.precision_mode,
+            );
+        }
+    }
+}
+
+fn append_present_turn(output: &mut String, turn: &RecordedPresentTurn) {
+    let input = &turn.input;
+    let _written = writeln!(output, "turn={}", input.name);
+    let _written = writeln!(
+        output,
+        "input now_bits={:016x} generation={} scheduled_scene={}/{:?} surface_warp={:?} initial_retained={:?} initial_presented={:?} poll_events={} polled_retained={:?} polled_presented={:?}",
+        input.clock.now_ms.to_bits(),
+        input.generation,
+        input.scheduled_scene.0,
+        input.scheduled_scene.1,
+        input.surface_warp,
+        input.initial_retained_scene_id,
+        input.initial_presented_scene_id,
+        input.poll.events.len(),
+        input.poll.retained_scene_id,
+        input.poll.presented_scene_id,
+    );
+    let _written = writeln!(output, "record now_bits={:016x}", turn.events.now_ms_bits);
+    for event in &turn.events.events {
+        append_present_event(output, &event.transaction);
+        let receipt = event.receipt;
+        let effect = event.effect;
+        let _written = writeln!(
+            output,
+            "  receipt kind={:?} id={} sequence={:?} orbit={:?} drop={:?} precision={}",
+            receipt.kind,
+            receipt.id,
+            receipt.completion_sequence,
+            receipt.orbit_generation,
+            receipt.drop_reason,
+            receipt.precision_mode,
+        );
+        let _written = writeln!(
+            output,
+            "  effect presented={} refused={} cancelled={} retained={:?} presented_scene={:?}",
+            effect.presented,
+            effect.refused,
+            effect.cancelled,
+            effect.retained_scene_id,
+            effect.presented_scene_id,
+        );
+    }
+    let facts = turn.events.facts;
+    let _written = writeln!(
+        output,
+        "facts presented={} refused={} cancelled={} retained={:?} presented_scene={:?}",
+        facts.presented,
+        facts.refused,
+        facts.cancelled,
+        facts.retained_scene_id,
+        facts.presented_scene_id,
+    );
+    let outcome = turn.outcome;
+    let _written = writeln!(
+        output,
+        "outcome scene={:?} warp={:?} presented={} refused={} completed_scene={:?} completed_warp={:?} refused_scene={:?} refused_warp={:?} surface={:?}",
+        outcome.scene_id,
+        outcome.warp_id,
+        outcome.presented,
+        outcome.refused,
+        outcome.completed_scene_id,
+        outcome.completed_warp_id,
+        outcome.refused_scene_id,
+        outcome.refused_warp_id,
+        outcome.surface_action,
+    );
+}
+
+const PRESENT_EVENT_REPLAY_FIXTURE: &str = "\
+turn=completed
+input now_bits=3ff0000000000000 generation=7 scheduled_scene=41/Preview surface_warp=Some(42) initial_retained=Some(37) initial_presented=Some(37) poll_events=2 polled_retained=Some(41) polled_presented=Some(41)
+record now_bits=3ff0000000000000
+event=SceneCompleted reference_sample=Some(17) id=41 iteration_cap=512 level=Preview extent=64x32 texture=1 centre_revision=3 precision=PictureFast
+  pose epoch=7 orbit_generation=7 grid=64x32 zoom_bits=0000000000000000 plane_u_bits=[3f800000,00000000,00000000,00000000] plane_v_bits=[00000000,3f800000,00000000,00000000] object_bits=[0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000] origin_bits=[0000000000000000,0000000000000000,0000000000000000,0000000000000000] view_bits=[0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,0000000000000000,4020000000000000,4020000000000000] centre_bits=[0000000000000000,0000000000000000]
+  map rows_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] inverse_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] condition_bits=3ff0000000000000 apron_bits=3ff0000000000000
+  frame_origin_bits=[0000000000000000,0000000000000000,0000000000000000,0000000000000000]
+  measurement kind=Scene id=41 sequence=9 source=None sample=Measured precision=PictureFast wall_bits=3ff0000000000000 fence_bits=3fe0000000000000 polls=1
+  receipt kind=Scene id=41 sequence=Some(9) orbit=Some(7) drop=None precision=PictureFast
+  effect presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(37)
+event=WarpCompleted
+  measurement kind=Warp id=42 sequence=10 source=Some(41) sample=PolicyProbe precision=PictureFast wall_bits=4000000000000000 fence_bits=3ff0000000000000 polls=2
+  receipt kind=Warp id=42 sequence=Some(10) orbit=None drop=None precision=PictureFast
+  effect presented=true refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+facts presented=true refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+outcome scene=Some(1) warp=None presented=true refused=false completed_scene=Some(41) completed_warp=Some(42) refused_scene=None refused_warp=None surface=Present { warp_id: 42 }
+turn=dropped-and-cancelled
+input now_bits=4000000000000000 generation=8 scheduled_scene=51/Preview surface_warp=Some(52) initial_retained=Some(41) initial_presented=Some(41) poll_events=2 polled_retained=Some(41) polled_presented=Some(41)
+record now_bits=4000000000000000
+event=SceneDropped id=51 orbit_generation=8 reason=ReplacedMain
+  measurement kind=Scene id=51 sequence=20 source=None sample=ColdWarmUp precision=PictureFast wall_bits=4008000000000000 fence_bits=3ff8000000000000 polls=2
+  receipt kind=Scene id=51 sequence=Some(20) orbit=Some(8) drop=Some(ReplacedMain) precision=PictureFast
+  effect presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+event=FenceRefused kind=Warp id=52 reason=Cancelled polls=3 wall_bits=4010000000000000 precision=Deterministic
+  receipt kind=Warp id=52 sequence=None orbit=None drop=None precision=Deterministic
+  effect presented=false refused=false cancelled=true retained=Some(41) presented_scene=Some(41)
+facts presented=false refused=false cancelled=true retained=Some(41) presented_scene=Some(41)
+outcome scene=None warp=None presented=false refused=true completed_scene=None completed_warp=None refused_scene=None refused_warp=Some(52) surface=Drop { warp_id: 52 }
+turn=dropped-and-device-refused
+input now_bits=4008000000000000 generation=9 scheduled_scene=61/Preview surface_warp=Some(62) initial_retained=Some(41) initial_presented=Some(41) poll_events=2 polled_retained=Some(41) polled_presented=Some(41)
+record now_bits=4008000000000000
+event=SceneDropped id=61 orbit_generation=9 reason=InvalidExtent
+  measurement kind=Scene id=61 sequence=30 source=None sample=Measured precision=PictureFast wall_bits=4014000000000000 fence_bits=4004000000000000 polls=4
+  receipt kind=Scene id=61 sequence=Some(30) orbit=Some(9) drop=Some(InvalidExtent) precision=PictureFast
+  effect presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+event=FenceRefused kind=Warp id=62 reason=Device polls=5 wall_bits=4018000000000000 precision=Deterministic
+  receipt kind=Warp id=62 sequence=None orbit=None drop=None precision=Deterministic
+  effect presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+facts presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=Some(62) surface=Drop { warp_id: 62 }
+";
+
+#[test]
+fn native_refresh_replays_plain_present_event_transactions() {
+    let recorded = present_turn_inputs().map(record_present_turn);
+    for turn in &recorded {
+        assert_eq!(turn.events.now_ms_bits, turn.input.clock.now_ms.to_bits());
+        let replayed = record_present_turn(turn.input.clone());
+        assert_eq!(&replayed, turn);
+    }
+    let mut fixture = String::new();
+    for turn in &recorded {
+        append_present_turn(&mut fixture, turn);
+    }
+    assert_eq!(fixture, PRESENT_EVENT_REPLAY_FIXTURE);
+    assert!(recorded[0].events.facts.presented);
+    assert!(recorded[1].events.facts.cancelled);
+    let device_events = &recorded[2].events.events;
+    assert_eq!(device_events.len(), 2);
+    let device_refusal = device_events
+        .last()
+        .unwrap_or_else(|| unreachable!("the failed turn retains its device refusal"))
+        .transaction
+        .view()
+        .unwrap_or_else(|detail| unreachable!("the retained refusal is valid: {detail}"));
+    assert!(matches!(
+        device_refusal,
+        PresentEventView::FenceRefused(event) if event.reason == FenceRefusal::Device
+    ));
+    assert_eq!(recorded[2].outcome.refused_warp_id, Some(62));
+}
+
+#[test]
+fn browser_and_native_refresh_share_present_event_transaction_order() {
+    let owner = include_str!("../loop.rs");
+    let owner_body = owner
+        .split_once("impl PresentEventOwner")
+        .unwrap_or_else(|| unreachable!("present-event owner exists"))
+        .1
+        .split_once("enum KernelGridTarget")
+        .unwrap_or_else(|| unreachable!("present-event owner ends before kernel ownership"))
+        .0;
+    let poll = owner_body
+        .find("let transactions = port.poll(now_ms);")
+        .unwrap_or_else(|| unreachable!("owner polls the event source"));
+    let apply = owner_body
+        .find("port.scene_completed(event)?")
+        .unwrap_or_else(|| unreachable!("owner applies each transaction"));
+    let finish = owner_body
+        .find("port.finish()")
+        .unwrap_or_else(|| unreachable!("owner finishes after applying its transactions"));
+    assert!(poll < apply && apply < finish);
+    assert!(owner_body.contains("PresentEventTransaction::from_presenter(&event)"));
+    assert!(owner_body.contains("let receipt = view"));
+    assert!(owner_body.contains("receipt.matches(view)"));
+
+    let browser = owner
+        .split_once("impl OrderedRefresh for BrowserRefreshTurn")
+        .unwrap_or_else(|| unreachable!("browser refresh lowering exists"))
+        .1
+        .split_once("impl BrowserFrameLoop")
+        .unwrap_or_else(|| unreachable!("browser refresh lowering ends"))
+        .0;
+    let browser_events = browser
+        .find("PresentEventOwner::observe(&mut port, self.now_ms)")
+        .unwrap_or_else(|| unreachable!("browser refresh calls the present-event owner"));
+    let browser_hot = browser
+        .find("frame_loop.synchronize_precision_mode(viewer)")
+        .unwrap_or_else(|| unreachable!("browser refresh writes HOT after events"));
+    assert!(browser_events < browser_hot);
+
+    let native = include_str!("tests.rs")
+        .split_once("impl OrderedRefresh for NativeRefreshTurn")
+        .unwrap_or_else(|| unreachable!("native refresh lowering exists"))
+        .1
+        .split_once("fn write_hot(&mut self, stage: FencesObserved)")
+        .unwrap_or_else(|| unreachable!("native event stage ends before HOT"))
+        .0;
+    assert!(native.contains("PresentEventOwner::observe(&mut port, self.clock.now_ms)"));
 }
 
 fn drive_viewer_harness(
@@ -5538,7 +6281,7 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
                 retained_height_scale = pending_height_scale
                     .take()
                     .expect("an in-flight scene carries its requested height");
-                let events = FrameLoop::refresh(&mut presenter, clock.now_ms);
+                let events = presenter.poll_once(clock.now_ms);
                 assert_eq!(events.len(), 1, "{} completed scene event", row.name);
                 let FakeEvent::Completed(scene) = events[0] else {
                     panic!("{} completed scene event", row.name);

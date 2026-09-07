@@ -32,7 +32,7 @@ impl BrowserFrameLoop {
     /// Returns whether cooperative refresh work remains.
     #[must_use]
     pub fn pending(&self, runtime: &BrowserRuntime, viewer: &ViewerController) -> bool {
-        let present = self.presenter.facts();
+        let present = self.presenter.facts_ref();
         self.loop_state.needs_refresh(
             present.in_flight_scene_id.is_some(),
             runtime.has_pending_surface(),
@@ -45,7 +45,7 @@ impl BrowserFrameLoop {
 
     /// Selects automatic or button-driven scene refinement without changing the current pose.
     pub fn set_scene_mode(&mut self, mode: super::SceneMode) {
-        let has_scene = self.presenter.facts().completed_scene_id.is_some();
+        let has_scene = self.presenter.facts_ref().completed_scene_id.is_some();
         self.loop_state
             .set_scene_mode(mode, self.main.generation_applied, has_scene);
         self.prepared_level = None;
