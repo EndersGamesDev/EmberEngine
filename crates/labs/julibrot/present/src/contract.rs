@@ -138,7 +138,7 @@ pub enum WarpValidation {
 }
 
 /// Completed four-byte-fence measurement.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubmissionMeasurement {
     /// Scene or warp region.
     pub kind: SubmissionKind,
@@ -158,22 +158,6 @@ pub struct SubmissionMeasurement {
     pub fence_wait_ms: f64,
     /// Number of cooperative device polls.
     pub polls: u32,
-}
-
-impl core::fmt::Debug for SubmissionMeasurement {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("SubmissionMeasurement")
-            .field("kind", &self.kind)
-            .field("id", &self.id)
-            .field("source_scene_id", &self.source_scene_id)
-            .field("sample_class", &self.sample_class)
-            .field("precision_mode", &self.precision_mode)
-            .field("wall_ms", &self.wall_ms)
-            .field("fence_wait_ms", &self.fence_wait_ms)
-            .field("polls", &self.polls)
-            .finish()
-    }
 }
 
 /// Fence-completed scene texture and the semantic state rendered into it.
