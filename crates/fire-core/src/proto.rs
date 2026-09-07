@@ -251,27 +251,11 @@ pub fn is_transient_read(e: &std::io::Error) -> bool {
     ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
 }
 
-/// Names and handles arrive from the network. Strip control characters and
-/// cap the length, or a peer can write terminal escapes into the server's log
-/// and the other players' lobby lists.
-#[must_use]
-pub fn sanitize(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().filter(|c| !c.is_control()).take(max).collect();
-    if cleaned.trim().is_empty() {
-        String::new()
-    } else {
-        cleaned
-    }
-}
+pub use ember_net::sanitize;
 
 #[must_use]
 pub fn sanitize_handle(s: &str) -> String {
-    let h = sanitize(s, MAX_HANDLE_LEN);
-    if h.is_empty() {
-        "driver".to_string()
-    } else {
-        h
-    }
+    ember_net::sanitize_handle(s, MAX_HANDLE_LEN, "driver")
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
+ember-net = { path = "../ember-net" }
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

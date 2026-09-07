@@ -30,25 +30,11 @@ const fn unknown_presentation() -> u8 {
     UNKNOWN_PRESENTATION
 }
 
-/// Strip control characters and cap length; empty stays empty.
-#[must_use]
-pub fn sanitize(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().filter(|c| !c.is_control()).take(max).collect();
-    if cleaned.trim().is_empty() {
-        String::new()
-    } else {
-        cleaned
-    }
-}
+pub use ember_net::sanitize;
 
 #[must_use]
 pub fn sanitize_handle(s: &str) -> String {
-    let h = sanitize(s, MAX_HANDLE_LEN);
-    if h.is_empty() {
-        "summoner".to_string()
-    } else {
-        h
-    }
+    ember_net::sanitize_handle(s, MAX_HANDLE_LEN, "summoner")
 }
 
 /// Transient socket errors that are not a dead peer. The Windows value

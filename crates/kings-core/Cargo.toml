@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
+ember-net = { path = "../ember-net" }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]

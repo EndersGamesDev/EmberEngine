@@ -10,6 +10,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ember-net = { path = "../ember-net" }
 serde = { workspace = true }
 
 [dev-dependencies]
