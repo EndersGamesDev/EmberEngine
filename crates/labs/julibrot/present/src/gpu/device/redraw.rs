@@ -77,9 +77,9 @@ pub(super) fn relief_scene_uniform(
     destination: &Pose,
     surface_extent: [u32; 2],
 ) -> Result<SceneUniform, PresentError> {
-    if RELIEF_STRETCH_GUARD.is_some_and(|excess_px| {
-        excess_px.to_bits() != RELIEF_STRETCH_GUARD_CANDIDATE.to_bits()
-    }) {
+    if RELIEF_STRETCH_GUARD
+        .is_some_and(|excess_px| excess_px.to_bits() != RELIEF_STRETCH_GUARD_CANDIDATE.to_bits())
+    {
         return Err(PresentError::Device {
             operation: "select relief redraw stretch guard",
         });
