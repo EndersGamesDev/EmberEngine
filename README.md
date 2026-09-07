@@ -2,6 +2,7 @@
 
 https://endersgamesdev.github.io/EmberEngine/
 #Ender build this with ai 
+#all projects are non commerce and open source here no shops abos games on desktop for free and everyone avaible 
 
 Every published version of every game, with the protocol it speaks, the build stamp it was published under and the commit it was built from: `CHANGELOG.md`.
 
