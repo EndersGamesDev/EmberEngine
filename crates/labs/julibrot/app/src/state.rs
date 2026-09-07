@@ -659,7 +659,7 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure for non-finite input or result.
-    fn wheel_zoom(
+    pub(crate) fn wheel_zoom(
         &mut self,
         delta_log2: f64,
         anchor_px_up: [f64; 2],

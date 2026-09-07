@@ -416,9 +416,7 @@ fn requested_and_owner_hot_zoom_keep_bit_identity_through_every_absolute_reset_p
     let mut viewer = ViewerController::new(EXTENT).expect("canonical viewer");
     viewer.set_zoom_log2(12.0).expect("slider zoom");
     assert_zoom_identity(&mut viewer);
-    viewer
-        .zoom_about_crosshair(0.375)
-        .expect("crosshair zoom");
+    viewer.wheel_zoom(0.375, [37.0, -19.0]).expect("wheel zoom");
     assert_zoom_identity(&mut viewer);
     viewer
         .set_plane_origin([0.0, 0.0, -0.75, 0.1])
