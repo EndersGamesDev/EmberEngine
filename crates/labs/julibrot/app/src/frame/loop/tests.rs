@@ -3946,7 +3946,7 @@ fn a_held_warp_does_not_stamp_the_requested_view_as_presented() {
     }
 }
 
-/// Builds the owner state the measured zoom row reaches: a burst of navigations, an accepted
+/// Builds the viewer state the measured zoom row reaches: a burst of navigations, an accepted
 /// reference whose orbit escaped after four iterations, and the census correction in flight.
 fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeaseIdentity) {
     const WIDTH: u32 = 960;
