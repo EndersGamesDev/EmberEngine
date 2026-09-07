@@ -352,12 +352,7 @@ mod imp {
                                 drop(socket.flush());
                             }
                             Err(tungstenite::Error::Io(error))
-                                if matches!(
-                                    error.kind(),
-                                    std::io::ErrorKind::WouldBlock
-                                        | std::io::ErrorKind::TimedOut
-                                        | std::io::ErrorKind::Interrupted
-                                ) || error.raw_os_error() == Some(997) => {}
+                                if ember_net::is_transient_read(&error) => {}
                             Err(error) => {
                                 close(
                                     &thread_status,

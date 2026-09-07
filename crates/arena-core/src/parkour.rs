@@ -54,7 +54,10 @@ impl ParkourState {
 
 /// One command's movement intent. `jump` is a consumed press, not a held key.
 // Independent controls mirror the existing wire protocol.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent controls mirror the stable wire protocol"
+)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct MovementInput {
     pub mv: [f32; 2],
@@ -170,7 +173,10 @@ fn wall_contact(pos: [f32; 2], y: f32, obstacles: &[Obstacle]) -> [f32; 2] {
 /// thin wall cannot be crossed between endpoint collision checks. Jump pulses
 /// are consumed only on the first slice. Invalid/nonpositive time moves nothing.
 #[must_use]
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The public movement boundary keeps its position, velocity, state, input, level, and bounds explicit"
+)]
 pub fn step_movement(
     pos: [f32; 2],
     y: f32,
@@ -234,7 +240,11 @@ pub fn step_movement(
 // One linear movement pass keeps transition ordering explicit.
 // Contact normals are exact signed basis vectors; collision rejection is an
 // exact unchanged endpoint, not an approximate proximity comparison.
-#[allow(clippy::too_many_lines, clippy::float_cmp)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::float_cmp,
+    reason = "One ordered movement pass keeps transitions explicit; comparisons use exact sentinel and endpoint values"
+)]
 fn motion_slice(
     previous: MovementStep,
     input: MovementInput,

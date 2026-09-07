@@ -154,7 +154,10 @@ pub const fn sanitize_axis(axis: f32) -> f32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)] // Sanitizer results are exact frozen values.
+#[allow(
+    clippy::float_cmp,
+    reason = "Sanitizer results are exact frozen values"
+)]
 mod tests {
     use super::{C2S, PROTO_VERSION, S2C, sanitize_axis, sanitize_text};
 

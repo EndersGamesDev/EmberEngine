@@ -286,7 +286,10 @@ pub struct PlayerMeta {
 
 /// Per-player state inside a State broadcast.
 // The wire-format booleans are independent protocol fields and cannot be consolidated compatibly.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent booleans are stable wire-format fields"
+)]
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct PState {
     pub id: u8,
@@ -741,7 +744,10 @@ mod tests {
     // the wire is added here too: splitting it by message would only hide
     // the list.
     #[test]
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "One round-trip matrix keeps every message shape auditable together"
+    )]
     fn json_roundtrip() {
         let s = serde_json::to_string(&C2S::Input {
             seq: 7,

@@ -602,7 +602,10 @@ fn spread_with_stats(
 /// everyone holds by default. One match, not seven functions, so every
 /// number sits beside the others it is tuned against.
 #[must_use]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Each match arm is one complete weapon-balance row"
+)]
 pub const fn weapon_stats(id: u8) -> WeaponStats {
     match id {
         2 => WeaponStats {
@@ -1933,7 +1936,11 @@ pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
 /// slows down. This is shared by the server and client prediction.
 // These independent input flags and body fields mirror shared prediction;
 // grouping them would obscure which pre-step state controls jump reach.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "Shared prediction requires the explicit body state and independent movement flags"
+)]
 #[must_use]
 pub fn movement_speed(
     pos: [f32; 2],
@@ -2093,7 +2100,10 @@ pub fn step_vertical(
 }
 
 // These independent input flags are shared public simulation API and cannot be consolidated.
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent input bits are the stable public simulation boundary"
+)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
@@ -2397,7 +2407,10 @@ fn world_end(
 /// reason the `tan` always was: bullets are stepped server-side only.
 // Eight arguments because each one is an independent input of the round and
 // bundling them into a struct would only hide the list the doc above names.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Each argument is an independent input to deterministic projectile launch"
+)]
 pub fn launch(
     p: &PlayerSt,
     stats: &WeaponStats,
@@ -2468,7 +2481,10 @@ pub const fn projectile_id(tick: u64, owner: u8, pellet: u8) -> u64 {
     ((tick & ((1_u64 << 40) - 1)) << 12) | ((owner as u64) << 4) | ((pellet as u64) & 15)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The private round helper mirrors the deterministic launch inputs"
+)]
 fn push_round(
     p: &PlayerSt,
     stats: &WeaponStats,
@@ -2903,7 +2919,10 @@ impl Sim {
     /// ground; the damage above used the true point.
     // Eight arguments including self: the round, where it went off, the two
     // exclusions and the two output lists. A struct would hide the list.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "Detonation keeps its collision context, exclusions, and ordered output sinks explicit"
+    )]
     fn detonate(
         &self,
         obstacles: &[Obstacle],
@@ -2969,10 +2988,8 @@ impl Sim {
     // The production caller always supplies `launch`. Collision-only tests
     // inject a zero-cone row without changing movement, fire, or hit ordering.
     #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        clippy::cast_sign_loss,
-        clippy::too_many_lines
+        clippy::too_many_lines,
+        reason = "One tick preserves movement, fire, damage, pickup, and round-event order"
     )]
     fn step_using_rules<F>(
         &mut self,
