@@ -26,18 +26,19 @@ use ledger::{
 use readback::{PendingFrameReadback, ReadbackTarget};
 use redraw::encode_relief_redraw;
 #[cfg(test)]
-use redraw::relief_scene_uniform;
+use redraw::{relief_scene_uniform, relief_scene_uniform_with_guard};
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
     extent_3d, validate_backdrop, validate_extent, validate_grid, validate_grid_parts,
 };
+use shade::{create_shade_pipeline, create_value_target};
 use uniforms::{
     create_heap_layout, create_scene_layout, create_warp_hot_layout, create_warp_texture_layout,
 };
-use warp::{color, create_warp_pipeline, warp_load_color};
+use warp::{create_warp_pipeline, warp_load_color};
 #[cfg(test)]
-use warp::{destination_extent, planned_exposed_fraction, relief_redraw_clear_fraction};
+use warp::{destination_extent, planned_exposed_fraction};
 
 mod census;
 mod ledger;
@@ -45,13 +46,15 @@ mod poll;
 pub mod readback;
 mod redraw;
 mod scene;
+mod shade;
 mod uniforms;
 mod warp;
 
 #[cfg(test)]
 pub use scene::scene_load_color;
 
-const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const GLITCH_COUNT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const FENCE_BYTES: u64 = 4;
 const HOT_HOMOGRAPHY_BYTE_OFFSET: u64 = 144;
@@ -298,6 +301,7 @@ struct GpuState {
     hot_buffer: wgpu::Buffer,
     scene_buffers: [wgpu::Buffer; 2],
     scene_textures: [SceneTexture; 2],
+    presentation_values: SceneTexture,
     depth: DepthTarget,
     indices: Option<IndexTarget>,
     backdrop_indices: Option<IndexTarget>,
@@ -309,12 +313,15 @@ struct GpuState {
     relief_redraw_pipeline: wgpu::RenderPipeline,
     relief_redraw_backdrop_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
+    shade_pipeline: wgpu::RenderPipeline,
+    palette_buffer: wgpu::Buffer,
+    palette_group: wgpu::BindGroup,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
     heap_limits: DialectLimits,
 }
 
-/// Two-texture Julibrot scene owner and sole warp-pass runtime.
+/// Two-texture Julibrot value-scene owner and shared reprojection-plus-shade runtime.
 pub struct Presenter {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -408,11 +415,10 @@ impl Presenter {
             .main
             .as_ref()
             .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
-        let selection_replaced = self.main.as_ref().is_some_and(|previous| {
-            previous.state.palette_id != main.state.palette_id
-                || previous.grid != main.grid
-                || previous.backdrop != main.backdrop
-        });
+        let selection_replaced = self
+            .main
+            .as_ref()
+            .is_some_and(|previous| scene_selection_replaced(previous, &main));
         if selection_replaced {
             self.ledger.mark_replaced();
         }
@@ -487,6 +493,10 @@ impl Presenter {
         self.facts.iteration_cap = Some(held.frame.iteration_cap);
         self.active_warp_scene = Some(held.frame.scene_id);
     }
+}
+
+fn scene_selection_replaced(previous: &PresentMain, current: &PresentMain) -> bool {
+    previous.grid != current.grid || previous.backdrop != current.backdrop
 }
 
 fn validate_config(
@@ -598,6 +608,7 @@ fn create_gpu_state(
     });
     let warp_texture_layout = create_warp_texture_layout(device);
     let warp_hot_layout = create_warp_hot_layout(device);
+    let palette_layout = uniforms::create_palette_layout(device);
     let warp_hot_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Julibrot immutable warp HOT group"),
         layout: &warp_hot_layout,
@@ -631,6 +642,21 @@ fn create_gpu_state(
         create_scene_texture(device, &warp_texture_layout, &sampler, [1, 1]),
         create_scene_texture(device, &warp_texture_layout, &sampler, [1, 1]),
     ];
+    let presentation_values = create_value_target(device, &warp_texture_layout, &sampler, [1, 1]);
+    let palette_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Julibrot present-time palette uniform"),
+        size: 48,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let palette_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Julibrot present-time palette group"),
+        layout: &palette_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: palette_buffer.as_entire_binding(),
+        }],
+    });
     let glitch_count_target = create_glitch_count_target(device, [1, 1]);
     let glitch_readback = create_glitch_readback(device, [1, 1]);
     let depth = create_depth_target(device, [1, 1]);
@@ -667,7 +693,7 @@ fn create_gpu_state(
         "glitch_count_fragment",
         &heap_layout,
         &scene_layout,
-        SCENE_FORMAT,
+        GLITCH_COUNT_FORMAT,
         None,
     );
     let relief_redraw_pipeline = create_scene_pipeline(
@@ -678,7 +704,7 @@ fn create_gpu_state(
         "scene_fragment",
         &heap_layout,
         &scene_layout,
-        config.surface_format,
+        SCENE_FORMAT,
         Some(SceneLayer::Main),
     );
     let relief_redraw_backdrop_pipeline = create_scene_pipeline(
@@ -689,14 +715,16 @@ fn create_gpu_state(
         "scene_fragment",
         &heap_layout,
         &scene_layout,
-        config.surface_format,
+        SCENE_FORMAT,
         Some(SceneLayer::Backdrop),
     );
-    let warp_pipeline = create_warp_pipeline(
+    let warp_pipeline =
+        create_warp_pipeline(device, SCENE_FORMAT, &warp_texture_layout, &warp_hot_layout);
+    let shade_pipeline = create_shade_pipeline(
         device,
         config.surface_format,
         &warp_texture_layout,
-        &warp_hot_layout,
+        &palette_layout,
     );
     Ok(GpuState {
         heap_group,
@@ -707,6 +735,7 @@ fn create_gpu_state(
         hot_buffer,
         scene_buffers,
         scene_textures,
+        presentation_values,
         depth,
         indices: None,
         backdrop_indices: None,
@@ -718,6 +747,9 @@ fn create_gpu_state(
         relief_redraw_pipeline,
         relief_redraw_backdrop_pipeline,
         warp_pipeline,
+        shade_pipeline,
+        palette_buffer,
+        palette_group,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),
         heap_limits,

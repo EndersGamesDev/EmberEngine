@@ -3,8 +3,8 @@ use ember_lab_heap::DialectLimits;
 const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
-struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, exterior_zero_rgba: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, reserved_0: vec4<f32>, reserved_1: vec4<f32>, reserved_2: vec4<f32>, }
+struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
 @group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
@@ -29,25 +29,6 @@ fn terminal_status(value: f32) -> bool { return value == 0.0 || value == 1.0 || 
 fn malformed(record: vec4<f32>) -> bool {
     return !binary(record.y) || !terminal_status(record.w) || !finite(record.z) || record.z < 0.0 || record.z != floor(record.z);
 }
-fn hue_component(hue: f32, offset: f32) -> f32 {
-    return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-}
-fn shade(record: vec4<f32>) -> vec4<f32> {
-    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (record.w == 2.0) { return hot.exterior_zero_rgba; }
-    if (record.y == 0.0) {
-        if (record.x == -1.0) { return scene.interior_rgba; }
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
-    if (!finite(record.x) || !finite(scene.palette_map.x) || scene.palette_map.x <= 0.0) {
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
-    let hue = fract(max(record.x, 0.0) / scene.palette_map.x + scene.palette_map.y);
-    let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
-    let rgb = scene.palette_map.w * mix(vec3<f32>(1.0), phase_rgb, scene.palette_map.z);
-    return vec4<f32>(rgb, 1.0);
-}
 fn record_height(record: vec4<f32>) -> f32 {
     if (malformed(record) || record.w == 1.0 || record.w == 2.0) { return 0.0; }
     if (record.y == 0.0) {
@@ -59,7 +40,7 @@ fn record_height(record: vec4<f32>) -> f32 {
 }
 ";
 const SCENE_BODY: &str = r"
-struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
+struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, @location(3) expected_stretch: f32, }
 struct Ambient5 { low: vec4<f32>, fifth: f32, }
 // A grid of width samples covers width pixels, so the mesh spanning their centres stops half a
 // pixel short of the frame on every side. The rasterizer's fill rule hides that on the left and
@@ -75,6 +56,11 @@ fn grid_screen(index: u32, count: u32) -> f32 {
     if (index == 0u) { return -centre; }
     if (index + 1u == count) { return centre; }
     return f32(index) + 0.5 - centre;
+}
+fn neighbouring_grid_screen(index: u32, count: u32) -> f32 {
+    if (count <= 1u) { return 0.0; }
+    if (index + 1u < count) { return grid_screen(index + 1u, count); }
+    return grid_screen(index - 1u, count);
 }
 fn rotate_12(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.y; out.low.y = pair.y * value.low.x + pair.x * value.low.y; return out; }
 fn rotate_13(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.z; out.low.z = pair.y * value.low.x + pair.x * value.low.z; return out; }
@@ -101,29 +87,79 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     rotated.fifth += hot.camera_translation_1.x;
     return rotated;
 }
+fn project_constant_height(screen: vec2<f32>, height: f32) -> vec3<f32> {
+    let homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, vec3<f32>(screen, 1.0)), dot(scene.screen_to_plane_row_1.xyz, vec3<f32>(screen, 1.0)), dot(scene.screen_to_plane_row_2.xyz, vec3<f32>(screen, 1.0)));
+    if (!all(vec3<bool>(finite(homogeneous.x), finite(homogeneous.y), finite(homogeneous.z))) || homogeneous.z <= 0.0) { return vec3<f32>(0.0); }
+    let plane_offset = homogeneous.xy / homogeneous.z;
+    if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return vec3<f32>(0.0); }
+    let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);
+    let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
+    let ambient = ambient_camera(Ambient5(display, height));
+    let distance_five = hot.view_scale.y;
+    let distance_four = hot.view_scale.z;
+    let denominator_five = distance_five - ambient.fifth;
+    if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return vec3<f32>(0.0); }
+    let projected_four = ambient.low * (distance_five / denominator_five);
+    let denominator_four = distance_four - projected_four.w;
+    if (denominator_four <= 1.0e-4) { return vec3<f32>(0.0); }
+    let world = projected_four.xyz * (distance_four / denominator_four);
+    let yawed = vec3<f32>(hot.observer_rotation.x * world.x + hot.observer_rotation.y * world.z, world.y, -hot.observer_rotation.y * world.x + hot.observer_rotation.x * world.z);
+    let view = vec3<f32>(yawed.x, hot.observer_rotation.z * yawed.y - hot.observer_rotation.w * yawed.z, hot.observer_rotation.w * yawed.y + hot.observer_rotation.z * yawed.z - distance_four);
+    if (-view.z <= 1.0e-4) { return vec3<f32>(0.0); }
+    let perspective_scale = hot.view_scale.w * distance_four * 0.5;
+    return vec3<f32>(vec2<f32>(perspective_scale * view.x / hot.view_scale.w, perspective_scale * view.y) / -view.z, 1.0);
+}
+fn maximum_singular_stretch(dx: vec2<f32>, dy: vec2<f32>) -> f32 {
+    let trace = dot(dx, dx) + dot(dy, dy);
+    let determinant = dx.x * dy.y - dx.y * dy.x;
+    let discriminant = max(trace * trace - 4.0 * determinant * determinant, 0.0);
+    return sqrt(max(0.5 * (trace + sqrt(discriminant)), 0.0));
+}
+fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>, expected_stretch: f32) -> bool {
+    if (scene.reserved_0.x <= 0.0) { return false; }
+    let dx = dpdx(grid_coordinate);
+    let dy = dpdy(grid_coordinate);
+    if (!finite(expected_stretch) || expected_stretch <= 0.0) { return true; }
+    let trace = dot(dx, dx) + dot(dy, dy);
+    let determinant = dx.x * dy.y - dx.y * dy.x;
+    let discriminant = max(trace * trace - 4.0 * determinant * determinant, 0.0);
+    let minimum_eigenvalue = max(0.5 * (trace - sqrt(discriminant)), 0.0);
+    let maximum_stretch = expected_stretch + scene.reserved_0.w;
+    return !finite(minimum_eigenvalue) || minimum_eigenvalue * maximum_stretch * maximum_stretch < 1.0;
+}
 @vertex fn scene_vertex(@builtin(vertex_index) index: u32) -> SceneVertex {
     let column = index % scene.grid.x;
     let row = index / scene.grid.x;
     let record = load_escape(index);
     let screen_x = grid_screen(column, scene.grid.x);
     let screen_y = grid_screen(row, scene.grid.y);
+    let neighbour_x = neighbouring_grid_screen(column, scene.grid.x);
+    let neighbour_y = neighbouring_grid_screen(row, scene.grid.y);
     let direct_ndc = vec2<f32>(2.0 * screen_x / f32(scene.grid.x), 2.0 * screen_y / f32(scene.grid.y));
     var output: SceneVertex;
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
     output.valid = 1.0;
+    output.expected_stretch = 0.0;
     output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
     // With no lift every sample stays in the plane, and the projection restricted to the plane is
     // the screen-to-plane map's own inverse: direct_ndc IS that projection, not a stand-in for it.
     // The same holds for an edge-on map, which has no plane point anywhere to project.
-    if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }
+    if (scene.span.z != 0u || hot.view_scale.x == 0.0) {
+        if (scene.reserved_0.x > 0.0) {
+            let expected_x = abs(neighbour_x - screen_x) * scene.reserved_0.y / f32(scene.grid.x);
+            let expected_y = abs(neighbour_y - screen_y) * scene.reserved_0.z / f32(scene.grid.y);
+            output.expected_stretch = max(expected_x, expected_y);
+        }
+        return output;
+    }
     output.valid = 0.0;
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     // A horizon record is a pixel whose screen-to-plane denominator was not positive: the plane
     // reaches no point there, so the scene has no vertex there either. Placing it at direct_ndc
     // once the camera turns would draw a flat slab at the near depth over relief that is really in
-    // front of it. The pass clears to the same exterior colour these cells carry, so dropping the
-    // vertex leaves the picture unchanged wherever the projection is the identity.
+    // front of it. Dropping the vertex leaves the pass's clear status; the retained record is not
+    // projected at a made-up position.
     if (record.w == 2.0) { return output; }
     let screen = vec3<f32>(screen_x, screen_y, 1.0);
     let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));
@@ -141,7 +177,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     // plane, not the pole, and it is where the perspective magnification passes twenty. Past d5
     // itself the projective algebra returns the point's mirror image, which the former clamp drew.
     // Refusing the whole band matches what the four-dimensional and observer limits below already
-    // do, and shows sky rather than a surface at a position the record field did not give.
+    // do, and leaves clear rather than a surface at a position the record field did not give.
     let denominator_five = distance_five - ambient.fifth;
     if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
@@ -162,25 +198,39 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let view = vec3<f32>(yawed.x, camera_pitch_cosine * yawed.y - camera_pitch_sine * yawed.z, camera_pitch_sine * yawed.y + camera_pitch_cosine * yawed.z - distance_four);
     if (-view.z <= 1.0e-4) { output.valid = 0.0; output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0); return output; }
     let clip_depth = (camera_far / (camera_near - camera_far)) * view.z + camera_far * camera_near / (camera_near - camera_far);
-    let aspect = f32(scene.grid.x) / f32(scene.grid.y);
+    let aspect = hot.view_scale.w;
     let perspective_scale = aspect * distance_four * 0.5;
     output.position = vec4<f32>(perspective_scale * view.x / aspect, perspective_scale * view.y, clip_depth, -view.z);
+    if (scene.reserved_0.x > 0.0) {
+        let right = project_constant_height(vec2<f32>(neighbour_x, screen_y), height);
+        let above = project_constant_height(vec2<f32>(screen_x, neighbour_y), height);
+        if (right.z < 0.5 || above.z < 0.5) {
+            output.expected_stretch = -1.0;
+        } else {
+            let centre = output.position.xy / output.position.w;
+            let half_extent = 0.5 * scene.reserved_0.yz;
+            let dx = (right.xy - centre) * half_extent;
+            let dy = (above.xy - centre) * half_extent;
+            output.expected_stretch = maximum_singular_stretch(dx, dy);
+        }
+    }
     return output;
 }
 @fragment fn scene_fragment(input: SceneVertex) -> @location(0) vec4<f32> {
+    if (redraw_cell_is_stretched(input.grid_coordinate, input.expected_stretch)) { discard; }
     if (input.valid < 0.999999) { discard; }
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
-    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (record.w == 2.0 || scene.span.z != 0u) { return hot.exterior_zero_rgba; }
+    if (malformed(record)) { return vec4<f32>(0.0, 0.0, 7.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }
+    if (record.w == 2.0) { return vec4<f32>(0.0, 1.0, 2.0, 1.0); }
+    if (scene.span.z != 0u) { return vec4<f32>(0.0, 1.0, 6.0, 1.0); }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     if (dot(normal_cross, normal_cross) > 1.0e-12) { normal = normalize(normal_cross); }
     let light = 0.58 + 0.24 * abs(dot(normal, normalize(vec3<f32>(0.4, 0.7, 0.6))));
-    let base = shade(record);
-    return vec4<f32>(base.rgb * light, base.a);
+    return vec4<f32>(record.xy, record.w, light);
 }
 ";
 
@@ -330,7 +380,7 @@ mod tests {
     }
 
     #[test]
-    fn both_present_shaders_translate_for_webgl2() {
+    fn every_present_shader_translates_for_webgl2() {
         let scene = scene_shader(limits());
         for (source, entries) in [
             (
@@ -347,6 +397,13 @@ mod tests {
                     (naga::ShaderStage::Fragment, "warp_fragment"),
                 ],
             ),
+            (
+                crate::shade_shader(),
+                [
+                    (naga::ShaderStage::Vertex, "shade_vertex"),
+                    (naga::ShaderStage::Fragment, "shade_fragment"),
+                ],
+            ),
         ] {
             for (stage, entry_point) in entries {
                 assert_translates_to_webgl2(source, stage, entry_point);
@@ -359,6 +416,24 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("@vertex fn scene_vertex"));
         assert!(source.contains("let record = load_escape(index);"));
+        assert!(source.contains("fn project_constant_height(screen: vec2<f32>, height: f32)"));
+        assert!(source.contains(
+            "fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>, expected_stretch: f32)"
+        ));
+        assert!(source.contains("let dx = dpdx(grid_coordinate);"));
+        assert!(source.contains("let dy = dpdy(grid_coordinate);"));
+        assert!(source.contains("if (scene.reserved_0.x <= 0.0) { return false; }"));
+        assert!(source.contains(
+            "let right = project_constant_height(vec2<f32>(neighbour_x, screen_y), height);"
+        ));
+        assert!(source.contains("let half_extent = 0.5 * scene.reserved_0.yz;"));
+        assert!(source.contains("output.expected_stretch = maximum_singular_stretch(dx, dy);"));
+        assert!(source.contains("let maximum_stretch = expected_stretch + scene.reserved_0.w;"));
+        assert!(
+            source.contains(
+                "if (redraw_cell_is_stretched(input.grid_coordinate, input.expected_stretch)) { discard; }"
+            )
+        );
         assert!(
             source.contains("let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;")
         );
@@ -366,23 +441,23 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_loads_bottom_row_and_keeps_glitches_out_of_debug() {
+    fn the_scene_loads_bottom_row_and_emits_colour_free_values() {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
         assert!(source.contains("if (malformed(record))"));
-        assert!(
-            source.contains("if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }")
-        );
+        assert!(source.contains("if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }"));
         assert!(!source.contains("if (malformed(record) || record.w == 1.0) { return vec4<f32>"));
-        assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
+        assert!(source.contains("if (record.w == 2.0) { return vec4<f32>(0.0, 1.0, 2.0, 1.0); }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
-        // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior
-        // sample: only a non-finite count is a contract violation, and the hue clamps at zero the
-        // way the height law already clamps.
+        // A beyond-bailout escape carries a negative smooth count and stays an ordinary value;
+        // only a non-finite count affects its height. Presentation applies the hue clamp later.
         assert!(!source.contains("record.x < 0.0"));
-        assert!(source.contains("fract(max(record.x, 0.0) / scene.palette_map.x"));
         assert!(source.contains("if (!finite(record.x)) { return 0.0; }"));
-        assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
+        assert!(source.contains("return vec4<f32>(record.xy, record.w, light);"));
+        assert!(!source.contains("palette_map"));
+        assert!(!source.contains("interior_rgba"));
+        assert!(!source.contains("clear_rgba"));
+        assert!(!source.contains("fn shade("));
         assert!(source.contains("textureLoad(heap_data"));
     }
 
@@ -432,7 +507,7 @@ mod tests {
             // neither. It is one sample whose map denominator was not positive, so the plane
             // reaches no point for it, and placing it at direct_ndc under a turned camera drew a
             // flat slab at the near depth over relief that is really in front of it.
-            "if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }",
+            "if (scene.span.z != 0u || hot.view_scale.x == 0.0) {",
             "if (record.w == 2.0) { return output; }",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
             "rotate_45(value, hot.camera_rotation_pairs_4.zw)",
@@ -451,6 +526,7 @@ mod tests {
             "let denominator_five = distance_five - ambient.fifth;",
             "if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return output; }",
             "let denominator_four = distance_four - projected_four.w;",
+            "let aspect = hot.view_scale.w;",
             "if (denominator_four <= 1.0e-4) { return output; }",
             "let camera_yaw_cosine = hot.observer_rotation.x;",
             "let camera_pitch_cosine = hot.observer_rotation.z;",

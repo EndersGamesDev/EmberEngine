@@ -8,7 +8,7 @@ use super::super::{
 };
 
 impl Presenter {
-    /// Submits the one image scene pass, optional Final census, and completion fence.
+    /// Submits the one value scene pass, optional Final census, and completion fence.
     ///
     /// # Errors
     ///
@@ -38,9 +38,6 @@ impl Presenter {
         let pose = self.hot[hot_slot.index() as usize].ok_or(PresentError::Device {
             operation: "select unwritten HOT slot",
         })?;
-        let (palette_id, palette_record) = main.selected_palette().ok_or(PresentError::Device {
-            operation: "decode palette identifier",
-        })?;
         let precision_mode = main.precision_mode().ok_or(PresentError::Device {
             operation: "decode precision policy",
         })?;
@@ -54,7 +51,6 @@ impl Presenter {
             main.grid.span.logical_len,
             main.plane,
             main.map,
-            palette_record,
         )
         .map_err(|error| match error {
             PresentDataError::InvalidMap => PresentError::Device {
@@ -78,7 +74,6 @@ impl Presenter {
                     backdrop.grid.span.logical_len,
                     backdrop.plane,
                     backdrop.map,
-                    palette_record,
                 )
             })
             .transpose()
@@ -130,7 +125,6 @@ impl Presenter {
             Ok(crate::state::PendingScene {
                 scene_id,
                 pose,
-                palette: palette_id,
                 iteration_cap: main.state.delivered_iter_cap,
                 level: main.grid.level,
                 extent,
@@ -162,7 +156,6 @@ impl Presenter {
             &self.gpu,
             texture_index as usize,
             hot_slot.dynamic_offset(),
-            palette_record,
             main.backdrop.is_some(),
         );
         let readback = &self.gpu.glitch_readback;

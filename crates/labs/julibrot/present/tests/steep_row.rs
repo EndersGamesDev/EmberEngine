@@ -151,7 +151,6 @@ fn uploaded(pose: &Pose) -> Uploaded {
         pose.grid_width * pose.grid_height,
         pose.plane,
         pose.map,
-        CLASSIC_PALETTE,
     )
     .expect("the row's map packs into the scene payload");
     Uploaded {

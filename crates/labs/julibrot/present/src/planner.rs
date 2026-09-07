@@ -1,6 +1,6 @@
 use ember_julibrot_math::{
-    Plane, Pose, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION, ViewControls, plane_chart_relation,
-    warp_matrix,
+    Homography, Plane, Pose, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION, ViewControls,
+    pixel_scale, plane_chart_relation, warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
@@ -18,9 +18,18 @@ const ERROR_SAMPLE_CAPACITY: usize = 405;
 const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 const REDRAW_NEUTRAL_EPSILON: f64 = 1.0e-12;
+const RELIEF_EXPOSURE_STEPS: u32 = 65;
+const MEASURED_RELIEF_REDRAW_EXPOSED_FRACTION: f64 = 0.071_952_160_494;
 
 /// Maximum measured reprojection error a displayed warp may move a feature.
 pub const WARP_MAX_ERROR_PX: f64 = 1.0;
+
+/// Largest conservative hole or residual-disagreement share admitted for a relief redraw.
+///
+/// The 960 by 540 measured relief zoom row reached 7.1952 percent at its worse measured step.
+/// Eight percent is the nearest round boundary above it and leaves 0.8048 percentage point for
+/// the coverage census before the moving frame stays an unmoved hold.
+pub const RELIEF_REDRAW_MAX_EXPOSED_FRACTION: f64 = 0.08;
 
 /// Half a retained texel, the reach of the retained image beyond its outermost sample centre.
 ///
@@ -81,12 +90,6 @@ impl Warp {
 
 /// Selects retained-record redraw when the image homography exceeds the displayed-error ceiling.
 ///
-/// A measured over-ceiling plan keeps its source identity only in the geometrically exact redraw
-/// family. Every other over-ceiling plan clears and waits for a sampled scene. A corpus with
-/// scene-limit refusals retains the metrics from its finite subset but remains refused: those
-/// numbers describe the error where both scenes draw, not permission to paint a source point
-/// where the destination scene draws sky.
-///
 /// A plan only reaches here once the retained records have been shown to describe the destination:
 /// the object samples match and the plane-chart residual is inside its limit. What remains is
 /// whether the one image homography can carry the picture, and the corpus answers that in pixels.
@@ -94,28 +97,47 @@ impl Warp {
 /// displacement that depends on each pixel's own escape height — the escape height enters the
 /// projection on the fifth ambient axis, so `height_scale`, the fifth-axis distance, the four
 /// camera factors that turn that axis into the chart and the fifth translation all move a lifted
-/// record by an amount no image map is able to express. That case is `ReliefRedraw`: the retained
-/// escape records still describe the destination exactly, so redrawing them under the new pose
-/// reprojects the motion with no new sampling at all.
+/// record by an amount no image map is able to express. That case is `ReliefRedraw`: every retained
+/// record is redrawn at its source chart point through the destination projection, with no new
+/// kernel sampling. Its positions are exact; its old lattice is deliberately stale resolution.
 ///
-/// A corpus refusal is a different matter. It means a perspective limit fell on the sampled
-/// relief of one of the poses, where that pose has no drawn point to compare against, so the plan
-/// stays an honest `ClearOnly` even if every resolved displacement is below one pixel.
+/// The exact redraw family has no stale-lattice allowance and pays only for source-footprint
+/// exposure. A generalized redraw takes the larger of that fixed 65-by-65 coverage census and the
+/// measured relief row's 7.1952 percent hole-plus-residual-disagreement risk. Eight percent admits
+/// both measured zoom steps with 0.8048 percentage point of headroom and refuses a move whose
+/// retained footprint needs more. A corpus refusal no longer clears the whole surface: the scene
+/// vertex stage refuses that record at its own near limit, while the fragment stretch guard clears
+/// retained cells that bridge a disocclusion.
 fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
-    if let Some(max_px) = plan.approx_max_error_px {
-        if max_px <= WARP_MAX_ERROR_PX && plan.refusal_reason.is_none() {
-            return plan;
-        }
-        if max_px > WARP_MAX_ERROR_PX
-            && plan.refusal_reason.is_none()
-            && exact_relief_redraw_family(from_pose, to_pose)
+    let maximum = plan.approx_max_error_px;
+    let over_ceiling = maximum.is_some_and(|max_px| max_px > WARP_MAX_ERROR_PX);
+    let corpus_refused = matches!(
+        plan.refusal_reason,
+        Some(WarpRefusalReason::ErrorCorpus { .. })
+    );
+    if !over_ceiling && !corpus_refused && plan.refusal_reason.is_none() {
+        return plan;
+    }
+    if over_ceiling || corpus_refused {
+        let exact_family = exact_relief_redraw_family(from_pose, to_pose);
+        if let Some(predicted_fraction) =
+            relief_redraw_exposed_fraction(&plan, to_pose, exact_family)
         {
-            plan.exposed = true;
-            plan.kind = WarpKind::ReliefRedraw;
-            plan.refusal_reason = None;
-            return plan;
-        }
-        if max_px > WARP_MAX_ERROR_PX {
+            if predicted_fraction <= RELIEF_REDRAW_MAX_EXPOSED_FRACTION {
+                plan.destination_pose = Some(*to_pose);
+                plan.exposed = true;
+                plan.predicted_exposed_fraction = Some(predicted_fraction);
+                plan.kind = WarpKind::ReliefRedraw;
+                plan.refusal_reason = None;
+                plan.approx_max_error_px = None;
+                plan.approx_p95_error_px = None;
+                return plan;
+            }
+            plan.refusal_reason = Some(WarpRefusalReason::ReliefExposure {
+                predicted_fraction,
+                limit: RELIEF_REDRAW_MAX_EXPOSED_FRACTION,
+            });
+        } else if let Some(max_px) = maximum.filter(|max_px| *max_px > WARP_MAX_ERROR_PX) {
             plan.refusal_reason = Some(WarpRefusalReason::ErrorCeiling {
                 max_px,
                 p95_px: plan.approx_p95_error_px.unwrap_or(max_px),
@@ -127,10 +149,12 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
     }
     plan.source_scene_id = None;
     plan.source_texture_index = None;
+    plan.destination_pose = None;
     plan.source_valid = false;
     plan.lattice = None;
     plan.rows = identity_warp_rows();
     plan.exposed = true;
+    plan.predicted_exposed_fraction = None;
     plan.kind = WarpKind::ClearOnly;
     plan
 }
@@ -144,7 +168,7 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
 /// layer remains one fixed plane that the later perspectives and observer map projectively. Equal
 /// non-neutral cameras do not suffice because mixing the height axis generally destroys that
 /// fixed-plane relation.
-fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
+pub fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
     if [from.grid_width, from.grid_height] != [to.grid_width, to.grid_height] {
         return false;
     }
@@ -190,6 +214,239 @@ fn object_samples_match(from: &Pose, to: &Pose) -> bool {
     plane_chart_relation(from.plane, to.plane).is_some()
 }
 
+fn relief_redraw_exposed_fraction(
+    plan: &WarpPlan,
+    to_pose: &Pose,
+    exact_family: bool,
+) -> Option<f64> {
+    let lattice = plan.lattice?;
+    let mut exposed = 0_u32;
+    for row in 0..RELIEF_EXPOSURE_STEPS {
+        for column in 0..RELIEF_EXPOSURE_STEPS {
+            let chart = [
+                2.0 * f64::from(column) / f64::from(RELIEF_EXPOSURE_STEPS - 1) - 1.0,
+                2.0 * f64::from(row) / f64::from(RELIEF_EXPOSURE_STEPS - 1) - 1.0,
+            ];
+            let target = [
+                chart[0] * 0.5 * f64::from(to_pose.grid_width),
+                chart[1] * 0.5 * f64::from(to_pose.grid_height),
+            ];
+            if !in_front_of_horizon(to_pose, target) {
+                continue;
+            }
+            let outside = lattice.source_uv(plan.rows, chart).is_none_or(|uv| {
+                let reach = [
+                    RETAINED_TEXEL_REACH_PX / f64::from(lattice.source()[0]),
+                    RETAINED_TEXEL_REACH_PX / f64::from(lattice.source()[1]),
+                ];
+                uv[0] < -reach[0]
+                    || uv[0] > 1.0 + reach[0]
+                    || uv[1] < -reach[1]
+                    || uv[1] > 1.0 + reach[1]
+            });
+            exposed = exposed.saturating_add(u32::from(outside));
+        }
+    }
+    let coverage = f64::from(exposed) / f64::from(RELIEF_EXPOSURE_STEPS * RELIEF_EXPOSURE_STEPS);
+    Some(if exact_family {
+        coverage
+    } else {
+        coverage.max(MEASURED_RELIEF_REDRAW_EXPOSED_FRACTION)
+    })
+}
+
+/// Builds the source-grid pose consumed by the relief scene vertex stage.
+///
+/// The returned grid and map enumerate the delivered source lattice, while its plane and view are
+/// the destination projection. Source zoom, plane origin, basis, centre displacement, map, and a
+/// possibly reduced delivery extent are composed into that map. `None` means either pose has no
+/// finite chart map or the composed map is singular.
+#[must_use]
+pub fn relief_redraw_source_pose(
+    source: &Pose,
+    source_extent: [u32; 2],
+    destination: &Pose,
+) -> Option<Pose> {
+    let PoseMap::Mapped(source_map) = source.map else {
+        return None;
+    };
+    let PoseMap::Mapped(destination_map) = destination.map else {
+        return None;
+    };
+    if source_extent.contains(&0) || [destination.grid_width, destination.grid_height].contains(&0)
+    {
+        return None;
+    }
+    let source_to_destination = source_to_destination_chart(source, destination)?;
+    let delivery_to_source = [
+        f64::from(source.grid_width) / f64::from(source_extent[0]),
+        0.0,
+        0.0,
+        0.0,
+        f64::from(source.grid_height) / f64::from(source_extent[1]),
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ];
+    let coordinate_scale = f64::from(source_extent[0]) / f64::from(destination.grid_width);
+    let destination_to_uniform = [
+        coordinate_scale,
+        0.0,
+        0.0,
+        0.0,
+        coordinate_scale,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ];
+    let rows = compose_homography(
+        destination_to_uniform,
+        compose_homography(
+            source_to_destination,
+            compose_homography(source_map.rows, delivery_to_source),
+        ),
+    );
+    let inverse = invert_3x3(rows)?;
+    let mut redraw = *destination;
+    redraw.grid_width = source_extent[0];
+    redraw.grid_height = source_extent[1];
+    redraw.map = PoseMap::Mapped(Homography {
+        rows,
+        inverse,
+        condition_number: source_map
+            .condition_number
+            .max(destination_map.condition_number),
+        apron_scale: destination_map.apron_scale,
+    });
+    Some(redraw)
+}
+
+/// Whether the requested chart rectangle lies inside the retained record chart rectangle.
+///
+/// This test deliberately precedes presentation-lattice scaling. The source pose's grid names the
+/// record-chart coordinate rectangle, while `SceneFrame::extent` names the texture-delivery
+/// lattice. A reduced Preview represents the same plane footprint on a coarser chart lattice. The
+/// half-texel reach is therefore converted from delivered texels into source-chart pixels.
+#[must_use]
+pub fn relief_redraw_source_covers_destination(source: &SceneFrame, destination: &Pose) -> bool {
+    if source.extent.contains(&0) {
+        return false;
+    }
+    let Some(chart) = source_to_destination_chart(&source.pose, destination) else {
+        return false;
+    };
+    let determinant = chart[0].mul_add(chart[4], -chart[1] * chart[3]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return false;
+    }
+    let source_width = f64::from(source.pose.grid_width);
+    let source_height = f64::from(source.pose.grid_height);
+    let source_half = [
+        RETAINED_TEXEL_REACH_PX.mul_add(
+            source_width / f64::from(source.extent[0]),
+            source_width * 0.5,
+        ),
+        RETAINED_TEXEL_REACH_PX.mul_add(
+            source_height / f64::from(source.extent[1]),
+            source_height * 0.5,
+        ),
+    ];
+    screen_corners(destination).into_iter().all(|destination| {
+        let translated = [destination[0] - chart[2], destination[1] - chart[5]];
+        let retained = [
+            chart[4].mul_add(translated[0], -chart[1] * translated[1]) / determinant,
+            (-chart[3]).mul_add(translated[0], chart[0] * translated[1]) / determinant,
+        ];
+        retained
+            .iter()
+            .zip(source_half)
+            .all(|(value, half)| value.is_finite() && (-half..=half).contains(value))
+    })
+}
+
+/// Builds the affine map from retained source-chart pixels to requested chart pixels.
+pub fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<[f64; 9]> {
+    plane_chart_relation(source.plane, destination.plane)?;
+    let source_scale = pixel_scale(source.zoom_log2, source.grid_width).ok()?;
+    let destination_scale = pixel_scale(destination.zoom_log2, destination.grid_width).ok()?;
+    let scale = source_scale / destination_scale;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let origin_delta: [f64; 4] =
+        core::array::from_fn(|axis| source.plane_origin[axis] - destination.plane_origin[axis]);
+    let source_basis = [source.plane.basis_u, source.plane.basis_v];
+    let destination_basis = [destination.plane.basis_u, destination.plane.basis_v];
+    let relation: [[f64; 2]; 2] = core::array::from_fn(|destination_axis| {
+        core::array::from_fn(|source_axis| {
+            source_basis[source_axis]
+                .into_iter()
+                .zip(destination_basis[destination_axis])
+                .fold(0.0, |sum, (source, destination)| {
+                    f64::from(source).mul_add(f64::from(destination), sum)
+                })
+                * scale
+        })
+    });
+    let shift: [f64; 2] = core::array::from_fn(|axis| {
+        let origin = origin_delta
+            .into_iter()
+            .zip(destination_basis[axis])
+            .fold(0.0, |sum, (value, basis)| {
+                value.mul_add(f64::from(basis), sum)
+            })
+            / destination_scale;
+        relation[axis][0].mul_add(
+            source.centre_from_reference_px[0],
+            relation[axis][1].mul_add(
+                source.centre_from_reference_px[1],
+                origin - destination.centre_from_reference_px[axis],
+            ),
+        )
+    });
+    Some([
+        relation[0][0],
+        relation[0][1],
+        shift[0],
+        relation[1][0],
+        relation[1][1],
+        shift[1],
+        0.0,
+        0.0,
+        1.0,
+    ])
+}
+
+fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
+    let determinant = matrix[2].mul_add(
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
+        matrix[0].mul_add(
+            matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
+            -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
+        ),
+    );
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return None;
+    }
+    let inverse = [
+        matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]) / determinant,
+        matrix[2].mul_add(matrix[7], -matrix[1] * matrix[8]) / determinant,
+        matrix[1].mul_add(matrix[5], -matrix[2] * matrix[4]) / determinant,
+        matrix[5].mul_add(matrix[6], -matrix[3] * matrix[8]) / determinant,
+        matrix[0].mul_add(matrix[8], -matrix[2] * matrix[6]) / determinant,
+        matrix[2].mul_add(matrix[3], -matrix[0] * matrix[5]) / determinant,
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]) / determinant,
+        matrix[1].mul_add(matrix[6], -matrix[0] * matrix[7]) / determinant,
+        matrix[0].mul_add(matrix[4], -matrix[1] * matrix[3]) / determinant,
+    ];
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
+}
+
 const fn clear_only(exposed: bool, refusal_reason: Option<WarpRefusalReason>) -> WarpPlan {
     WarpPlan {
         rows: identity_warp_rows(),
@@ -198,9 +455,11 @@ const fn clear_only(exposed: bool, refusal_reason: Option<WarpRefusalReason>) ->
         lattice: None,
         source_scene_id: None,
         source_texture_index: None,
+        destination_pose: None,
         source_valid: false,
         edge_on: false,
         exposed,
+        predicted_exposed_fraction: None,
         kind: WarpKind::ClearOnly,
         refusal_reason,
         chart_residual: 0.0,
@@ -257,9 +516,11 @@ fn exact_self(last_frame: &SceneFrame, to_pose: &Pose) -> Option<WarpPlan> {
         lattice: Some(lattice),
         source_scene_id: Some(last_frame.scene_id),
         source_texture_index: Some(last_frame.texture_index),
+        destination_pose: None,
         source_valid: true,
         edge_on: false,
         exposed: false,
+        predicted_exposed_fraction: None,
         kind: WarpKind::AnchorHomography,
         refusal_reason: None,
         chart_residual: 0.0,
@@ -323,9 +584,11 @@ fn anchor_plan(
         lattice: Some(lattice),
         source_scene_id: Some(last_frame.scene_id),
         source_texture_index: Some(last_frame.texture_index),
+        destination_pose: None,
         source_valid: true,
         edge_on: false,
         exposed: warp_exposes_source(inverse_sampling, from_pose, to_pose),
+        predicted_exposed_fraction: None,
         kind: WarpKind::AnchorHomography,
         refusal_reason,
         chart_residual,
@@ -744,7 +1007,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{PaletteId, SampleClass, SubmissionKind, SubmissionMeasurement};
+    use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
 
     const SWEEP_ANGLES: u32 = 256;
     const RELIEF_YAW: f64 = 0.349;
@@ -1253,15 +1516,14 @@ mod tests {
                 .maximum_and_p95()
                 .expect("some measured relief zoom samples resolve");
             let plan = reproject(&frame(&from), &from, &to);
-            assert_eq!(plan.kind, WarpKind::ClearOnly);
-            assert_eq!(plan.approx_max_error_px, Some(metrics.0));
-            assert_eq!(plan.approx_p95_error_px, Some(metrics.1));
+            assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+            assert_eq!(plan.approx_max_error_px, None);
+            assert_eq!(plan.approx_p95_error_px, None);
+            assert_eq!(plan.refusal_reason, None);
+            assert_eq!(plan.destination_pose, Some(to));
             assert_eq!(
-                plan.refusal_reason,
-                Some(WarpRefusalReason::ErrorCeiling {
-                    max_px: metrics.0,
-                    p95_px: metrics.1,
-                })
+                plan.predicted_exposed_fraction,
+                Some(MEASURED_RELIEF_REDRAW_EXPOSED_FRACTION)
             );
             assert!(raw.source_valid);
             assert_eq!(resolved.len(), 320);
@@ -1305,16 +1567,43 @@ mod tests {
                 .expect("the flat map carries the screen centre");
             assert!(carried_centre.into_iter().all(|value| value.abs() < 1.0e-9));
 
-            let plan = reproject(&frame(&from), &from, &to);
-            assert_eq!(plan.kind, WarpKind::ClearOnly);
+            let residual = chart_residual(&from, &to);
+            let raw = anchor_plan(&frame(&from), &from, &to, flat.forward, residual)
+                .expect("the screen-centred zoom has a finite image plan");
             assert!(
-                (plan.approx_max_error_px.expect("measured maximum") - expected_max).abs() < 0.005
+                (raw.approx_max_error_px.expect("measured maximum") - expected_max).abs() < 0.005
             );
-            assert!((plan.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005);
-            assert!(matches!(
-                plan.refusal_reason,
-                Some(WarpRefusalReason::ErrorCeiling { .. })
-            ));
+            assert!((raw.approx_p95_error_px.expect("measured p95") - expected_p95).abs() < 0.005);
+            let plan = reproject(&frame(&from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+            assert_eq!(plan.destination_pose, Some(to));
+            assert_eq!(plan.refusal_reason, None);
+            assert_eq!(plan.approx_max_error_px, None);
+            assert_eq!(plan.approx_p95_error_px, None);
+            assert_eq!(
+                plan.predicted_exposed_fraction,
+                Some(MEASURED_RELIEF_REDRAW_EXPOSED_FRACTION)
+            );
+        }
+    }
+
+    #[test]
+    fn measured_relief_zoom_row_holds_when_source_coverage_exceeds_eight_percent() {
+        let from = measured_relief_zoom_pose();
+        let to = screen_centred_measured_relief_zoom(&from, -1.0, [960, 540]);
+        let plan = reproject(&frame(&from), &from, &to);
+        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert!(!plan.source_valid);
+        assert!(plan.exposed);
+        match plan.refusal_reason {
+            Some(WarpRefusalReason::ReliefExposure {
+                predicted_fraction,
+                limit,
+            }) => {
+                assert!(predicted_fraction > limit);
+                assert_eq!(limit, RELIEF_REDRAW_MAX_EXPOSED_FRACTION);
+            }
+            other => panic!("the measured coverage ceiling must refuse the redraw: {other:?}"),
         }
     }
 
@@ -1322,7 +1611,6 @@ mod tests {
         SceneFrame {
             scene_id: 3,
             pose: *pose,
-            palette: PaletteId::Classic,
             iteration_cap: 256,
             level: RefinementLevel::Interactive,
             extent: [pose.grid_width, pose.grid_height],
@@ -1665,27 +1953,19 @@ mod tests {
     }
 
     #[test]
-    fn tumbled_cross_term_above_the_homography_ceiling_clears() {
+    fn tumbled_cross_term_above_the_homography_ceiling_redraws_records() {
         let from = pose(relief(0.6), [0.0; 2]);
         let mut to = pose(relief(0.8), [8.0, -4.0]);
         to.zoom_log2 += 0.25;
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ClearOnly);
-        assert!(!plan.source_valid);
+        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+        assert!(plan.source_valid);
         assert!(plan.exposed);
-        assert_eq!(plan.source_scene_id, None);
-        assert_eq!(plan.source_texture_index, None);
-        let maximum = plan
-            .approx_max_error_px
-            .expect("the sampled corpus reports a maximum");
-        assert!(
-            maximum > WARP_MAX_ERROR_PX,
-            "maximum error was {maximum} pixels"
-        );
-        assert!(
-            plan.approx_p95_error_px
-                .is_some_and(|error| error <= maximum)
-        );
+        assert_eq!(plan.source_scene_id, Some(3));
+        assert_eq!(plan.source_texture_index, Some(0));
+        assert_eq!(plan.destination_pose, Some(to));
+        assert_eq!(plan.approx_max_error_px, None);
+        assert_eq!(plan.approx_p95_error_px, None);
     }
 
     fn counterexample_view(
@@ -1711,7 +1991,7 @@ mod tests {
     }
 
     #[test]
-    fn reviewers_pole_counterexamples_are_fail_closed() {
+    fn pole_counterexamples_hold_when_their_source_exposure_exceeds_the_redraw_limit() {
         let cases = [
             (
                 counterexample_view(
@@ -1757,7 +2037,16 @@ mod tests {
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
             assert!(!plan.source_valid);
-            assert!(plan.approx_max_error_px.is_none_or(f64::is_finite));
+            assert_eq!(plan.destination_pose, None);
+            let Some(WarpRefusalReason::ReliefExposure {
+                predicted_fraction,
+                limit,
+            }) = plan.refusal_reason
+            else {
+                panic!("the extreme pole fixture must name its relief exposure refusal");
+            };
+            assert!(predicted_fraction > limit);
+            assert_eq!(limit, RELIEF_REDRAW_MAX_EXPOSED_FRACTION);
         }
     }
 
@@ -1780,13 +2069,10 @@ mod tests {
         assert!(plan.source_valid);
         assert!(plan.exposed);
         assert_eq!(plan.source_scene_id, Some(3));
-        let maximum = plan
-            .approx_max_error_px
-            .expect("a relief redraw still publishes the measured maximum");
-        assert!(
-            maximum > WARP_MAX_ERROR_PX,
-            "a relief redraw is measured over the ceiling, not unmeasurable: {maximum}"
-        );
+        assert_eq!(plan.destination_pose, Some(to));
+        assert_eq!(plan.predicted_exposed_fraction, Some(0.0));
+        assert_eq!(plan.approx_max_error_px, None);
+        assert_eq!(plan.approx_p95_error_px, None);
 
         let displayed = unpack_rows(plan.rows);
         let mut floor_error = 0.0_f64;
@@ -1835,7 +2121,10 @@ mod tests {
         }
 
         fn maximum(from: &Pose, to: &Pose) -> f64 {
-            reproject(&frame(from), from, to)
+            let flat = warp_matrix(from, to).expect("the published relief pair has a flat map");
+            let residual = chart_residual(from, to);
+            anchor_plan(&frame(from), from, to, flat.forward, residual)
+                .expect("the published relief pair has an image candidate")
                 .approx_max_error_px
                 .expect("the published relief fixture is measurable")
         }
@@ -1899,11 +2188,11 @@ mod tests {
     }
 
     #[test]
-    fn the_five_dimensional_near_limit_refuses_and_resampling_still_clears() {
+    fn the_five_dimensional_near_limit_is_left_to_each_redrawn_vertex() {
         // Three of this fixture's five census heights lift past `0.05 * d5` and are refused.
-        // Moving the sampling lattice still requires fresh records, so the plan clears rather
-        // than mislabelling stale records as an exact redraw. Finite samples remain publishable,
-        // but they do not turn the refused heights into drawable points.
+        // Moving the sampling lattice changes resolution, while each retained record still names
+        // its source chart point. The redraw admits that stale resolution and leaves the same
+        // near-limit decision to every vertex rather than clamping it.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
@@ -1914,20 +2203,15 @@ mod tests {
         to.zoom_log2 += 0.125;
         assert_ne!(from, to);
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ClearOnly);
-        assert!(!plan.source_valid);
-        assert!(plan.approx_max_error_px.is_none_or(f64::is_finite));
-        match plan.refusal_reason {
-            Some(WarpRefusalReason::ErrorCorpus { refused_samples }) => {
-                assert!(refused_samples > 0);
-            }
-            Some(WarpRefusalReason::ErrorCeiling { .. }) => {}
-            other => panic!("the near-limit corpus needs its measured refusal: {other:?}"),
-        }
+        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+        assert!(plan.source_valid);
+        assert_eq!(plan.destination_pose, Some(to));
+        assert_eq!(plan.refusal_reason, None);
+        assert_eq!(plan.approx_max_error_px, None);
     }
 
-    /// The owner's broken row, taken from the page's own Copy row JSON.
-    fn owner_relief_row() -> ViewControls {
+    /// The measured relief row, taken from the page's Copy row JSON.
+    fn measured_relief_row() -> ViewControls {
         ViewControls {
             height_scale: 1.327,
             distance_five: 8.0,
@@ -1945,13 +2229,13 @@ mod tests {
     }
 
     #[test]
-    fn the_owner_relief_row_presents_its_completed_scene_and_stops_asking_for_another() {
+    fn the_measured_relief_row_presents_its_completed_scene_and_stops_asking_for_another() {
         let object = ObjectAngles {
             rho_13: 1.174_251_648_646_25,
             rho_23: 1.612_768_861_833_65,
             ..ObjectAngles::IDENTITY
         };
-        let view = owner_relief_row();
+        let view = measured_relief_row();
         let plane = construct_plane(object).expect("the row's plane is orthonormal");
         let mut settled = object_pose(object, plane, view, [0.0; 2]);
         settled.zoom_log2 = 0.0;
@@ -2157,10 +2441,10 @@ mod tests {
     }
 
     #[test]
-    fn non_neutral_relief_sweep_measures_its_envelope_and_refuses_over_ceiling_rows() {
+    fn non_neutral_relief_sweep_measures_its_envelope_and_redraws_over_ceiling_rows() {
         let mut observed_max = 0.0_f64;
         let mut observed_p95 = 0.0_f64;
-        let mut cleared = 0_u32;
+        let mut relief_redraws = 0_u32;
         for (object, plane) in named_objects() {
             for step in 0..SWEEP_ANGLES {
                 let theta = -0.6 + 1.2 * f64::from(step) / f64::from(SWEEP_ANGLES - 1);
@@ -2169,24 +2453,25 @@ mod tests {
                 let from = object_pose(object, plane, from_view, [3.5, -2.25]);
                 let mut to = object_pose(object, plane, to_view, [5.5, -1.25]);
                 to.zoom_log2 += 0.025;
-                let plan = Warp::reproject(
+                let flat = warp_matrix(&from, &to).expect("the sweep has a finite flat map");
+                let raw = anchor_plan(
                     &frame(&from),
                     &from,
                     &to,
-                    PrecisionMode::PictureFast,
-                    WarpValidation::Measure,
-                );
-                assert_ne!(plan.kind, WarpKind::ReliefRedraw);
-                if plan.kind == WarpKind::ClearOnly {
-                    cleared = cleared.saturating_add(1);
-                }
-                let error = plan
+                    flat.forward,
+                    chart_residual(&from, &to),
+                )
+                .expect("the sweep has a finite image candidate");
+                let error = raw
                     .approx_max_error_px
                     .expect("the swept plan reports a sampled maximum");
-                let p95 = plan
+                let p95 = raw
                     .approx_p95_error_px
                     .expect("the swept plan reports a sampled percentile");
                 assert!(p95 <= error);
+                let plan = enforce_error_ceiling(raw, &from, &to);
+                relief_redraws =
+                    relief_redraws.saturating_add(u32::from(plan.kind == WarpKind::ReliefRedraw));
                 observed_max = observed_max.max(error);
                 observed_p95 = observed_p95.max(p95);
             }
@@ -2200,8 +2485,8 @@ mod tests {
             "swept p95 maximum was {observed_p95} pixels"
         );
         assert!(
-            cleared > 0,
-            "the measured non-neutral relief envelope never refused an over-ceiling row"
+            relief_redraws > 0,
+            "the measured non-neutral relief envelope never selected relief redraw"
         );
     }
 
@@ -2288,13 +2573,12 @@ mod tests {
         });
         let mut edge_on = poses[0];
         edge_on.map = PoseMap::EdgeOn;
-        let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
-        let scene_load = crate::gpu::scene_load_color(crate::CLASSIC_PALETTE);
-        let expected_sky = wgpu::Color {
-            r: f64::from(sky[0]),
-            g: f64::from(sky[1]),
-            b: f64::from(sky[2]),
-            a: f64::from(sky[3]),
+        let scene_load = crate::gpu::scene_load_color();
+        let expected_scene_clear = wgpu::Color {
+            r: 0.0,
+            g: 0.0,
+            b: 4.0,
+            a: 1.0,
         };
         let clear = crate::CLASSIC_PALETTE.clear_rgba;
         let clear = wgpu::Color {
@@ -2303,7 +2587,7 @@ mod tests {
             b: f64::from(clear[2]),
             a: f64::from(clear[3]),
         };
-        assert_eq!(scene_load, expected_sky);
+        assert_eq!(scene_load, expected_scene_clear);
         assert_ne!(scene_load, clear);
         let mut saw_mesh = false;
         let mut saw_sky = false;
@@ -2318,7 +2602,10 @@ mod tests {
                         saw_mesh = true;
                     } else {
                         saw_sky = true;
-                        assert_eq!(scene_load, expected_sky, "pixel {column},{row} was not sky");
+                        assert_eq!(
+                            scene_load, expected_scene_clear,
+                            "pixel {column},{row} was not clear"
+                        );
                         assert_ne!(scene_load, clear, "pixel {column},{row} used clear colour");
                     }
                 }

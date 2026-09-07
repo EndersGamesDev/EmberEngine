@@ -2,15 +2,13 @@ use ember_julibrot_kernels::EscapeGrid;
 use ember_julibrot_math::{Plane, Pose, plane_chart_relation};
 
 use crate::{
-    DropReason, FramePartition, PaletteId, PresentError, RefinementLevel, SceneFrame,
-    SubmissionMeasurement,
+    DropReason, FramePartition, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingScene {
     pub scene_id: u64,
     pub pose: Pose,
-    pub palette: PaletteId,
     pub iteration_cap: u32,
     pub level: RefinementLevel,
     pub extent: [u32; 2],
@@ -120,7 +118,6 @@ impl SceneLedger {
         let frame = SceneFrame {
             scene_id: pending.scene_id,
             pose: pending.pose,
-            palette: pending.palette,
             iteration_cap: pending.iteration_cap,
             level: pending.level,
             extent: pending.extent,
@@ -389,7 +386,6 @@ mod tests {
                 Ok(PendingScene {
                     scene_id,
                     pose: pose(generation),
-                    palette: PaletteId::Classic,
                     iteration_cap: 64,
                     level: RefinementLevel::Preview,
                     extent: [800, 600],
@@ -415,7 +411,6 @@ mod tests {
                 Ok(PendingScene {
                     scene_id: 2,
                     pose: pose(1),
-                    palette: PaletteId::Classic,
                     iteration_cap: 64,
                     level: RefinementLevel::Preview,
                     extent: [800, 600],
@@ -710,7 +705,6 @@ mod tests {
                 Ok(PendingScene {
                     scene_id: 3,
                     pose: final_pose,
-                    palette: PaletteId::Classic,
                     iteration_cap: 64,
                     level: RefinementLevel::Final,
                     extent: [1_920, 1_080],

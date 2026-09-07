@@ -27,11 +27,14 @@ use super::{
     perturbation_reference_is_current, published_iteration_cap,
     reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
     schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed,
+    stamped_screen_map, view_projection_changed, warp_submission_due,
 };
-use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
+use crate::{
+    AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up, box_zoom_delta_log2,
+};
 use ember_julibrot_present::{
-    PaletteId, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
+    LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
+    WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::ReferenceVerification;
 use ember_lab_heap::SpanArena;
@@ -721,6 +724,7 @@ struct FakePresenter {
     forced_warp_kind: Option<WarpKind>,
     warp_kind: Option<WarpKind>,
     warp_hold_count: u64,
+    warp_relief_redraw_count: u64,
     presented_clear_only: u64,
 }
 
@@ -823,6 +827,10 @@ impl PresenterPoll for FakePresenter {
                 if matches!(event, FakeEvent::WarpCompleted(_)) {
                     if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
                         self.presented_clear_only = self.presented_clear_only.saturating_add(1);
+                    }
+                    if self.pending_warp_kind == Some(WarpKind::ReliefRedraw) {
+                        self.warp_relief_redraw_count =
+                            self.warp_relief_redraw_count.saturating_add(1);
                     }
                     self.presented_scene = self.pending_warp_source.take();
                 }
@@ -1040,7 +1048,7 @@ fn drive_turn(
         return outcome;
     }
     let has_retained_scene = presenter.retained_scene.is_some();
-    presenter.write_hot(frame_loop.hold_refused_warp(has_retained_scene));
+    presenter.write_hot(has_retained_scene);
     if !outcome.refused
         && let Some(level) = frame_loop.due()
     {
@@ -1704,19 +1712,6 @@ fn viewer_harness_holds_an_auto_refusal_while_the_final_fill_is_pending() {
 }
 
 #[test]
-fn automatic_stale_hold_tracks_pending_replacement_work() {
-    let mut frame_loop = FrameLoop::default();
-    frame_loop.accept_request(37, true);
-    assert!(frame_loop.hold_refused_warp(true));
-
-    frame_loop.schedule.pause();
-    assert!(!frame_loop.hold_refused_warp(true));
-
-    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
-    assert!(frame_loop.hold_refused_warp(true));
-}
-
-#[test]
 fn viewer_harness_keeps_the_picture_when_a_non_final_round_is_retired_and_resumed() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
@@ -1767,7 +1762,6 @@ fn manual_control_change_writes_hot_and_schedules_no_scene() {
     let mut presenter = FakePresenter::default();
     let clock = FakeClock::default();
     frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
-    assert!(frame_loop.hold_refused_warp(false));
     frame_loop.accept_request(7, true);
     frame_loop.scene_selection_changed(7);
     assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
@@ -1930,7 +1924,6 @@ fn exposed_accepted_final_warp_submits_final_directly_and_returns_to_idle() {
 #[test]
 fn refused_warp_and_first_scene_run_the_full_ladder() {
     let mut refused = FrameLoop::default();
-    assert!(!refused.hold_refused_warp(false));
     refused.accept_request(37, true);
     assert!(!refused.skip_drafts_for_accepted_warp(None));
     assert_eq!(refused.due(), Some(RefinementLevel::Preview));
@@ -2409,10 +2402,750 @@ fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
 struct HeightDragRow {
     name: &'static str,
     distance_five: f64,
-    expected_clear_only: u64,
 }
 
-fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
+fn measured_relief_zoom_viewer() -> ViewerController {
+    let object = ObjectAngles {
+        rho_13: -0.163_226_878_883_618_53,
+        rho_24: -0.163_226_878_883_618_53,
+        ..ObjectAngles::IDENTITY
+    };
+    let view = ViewControls {
+        camera: [
+            0.387_171_329_215_743,
+            0.945_997_639_356_507,
+            -1.185_339_915_598_97,
+            -0.756_473_212_467_682,
+            -0.236_634_784_429_762,
+            -1.770_158_147_141_63,
+            2.011_666_416_834_24,
+            0.504_134_975_524_275,
+            -0.665_501_487_561_046,
+            0.374_175_368_514_795,
+        ],
+        camera_translation: [-0.04, 0.258, 0.0, 0.0, 0.0],
+        height_scale: 3.565,
+        distance_five: 8.0,
+        distance_four: 8.0,
+        ..ViewControls::NEUTRAL
+    };
+    let origin = [-0.629, 0.0, -0.083, 0.016];
+    let mut viewer = ViewerController::new([960, 540]).expect("measured relief viewer");
+    viewer
+        .set_object_angles(object)
+        .expect("measured relief object");
+    viewer
+        .set_plane_origin(origin)
+        .expect("measured relief origin");
+    viewer
+        .set_view_controls(view)
+        .expect("measured relief view");
+    viewer
+        .set_zoom_log2(1.259_194_831_013_92)
+        .expect("measured relief scale");
+    viewer
+        .set_centre(BigCentre::from_f64(origin, 1_024).expect("finite measured centre"))
+        .expect("measured relief centre");
+    viewer
+}
+
+const MEASURED_FINAL_EXTENT: [u32; 2] = [960, 540];
+const MEASURED_PREVIEW_EXTENT: [u32; 2] = [120, 68];
+
+fn measured_relief_scene(scene_id: u64, level: RefinementLevel, pose: &Pose) -> SceneFrame {
+    SceneFrame {
+        scene_id,
+        pose: *pose,
+        iteration_cap: 128,
+        level,
+        extent: [pose.grid_width, pose.grid_height],
+        texture_index: 0,
+        centre_revision: 1,
+        plane_origin_f64: pose.plane_origin,
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        measurement: SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id: scene_id,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::PictureFast.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        },
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingZoomWarp {
+    completes_at_turn: u32,
+    kind: WarpKind,
+    predicted_exposed_fraction: Option<f64>,
+    requested_revision: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingZoomScene {
+    completes_at_turn: u32,
+    pose: Pose,
+    requested_revision: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomInitialScene {
+    SettledFinal,
+    FinalInFlight,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRefinementOnEdit {
+    Restart,
+    StayIdle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomEditTrigger {
+    RequestedFrame,
+    StaleViewRecovery,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomLatticeProbe {
+    Skip,
+    Enforce,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomEditState {
+    None,
+    Applied,
+    CrosshairRefused,
+    ZoomRefused,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRecordState {
+    Ready,
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomRefinementState {
+    Pending,
+    Idle,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomHoldState {
+    Disarmed,
+    Armed,
+    Selected,
+    RefusedByLattice,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomSourceCoverage {
+    NotCovering,
+    CoversDestination,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ZoomScript<'a> {
+    scenario: &'static str,
+    retained_level: RefinementLevel,
+    edits: &'a [(u32, f64, Option<[f64; 2]>)],
+    initial_scene: ZoomInitialScene,
+    refinement_on_edit: ZoomRefinementOnEdit,
+    edit_trigger: ZoomEditTrigger,
+    forget_records_before_selection_at_turn: Option<u32>,
+    destination_extent: [u32; 2],
+    lattice_probe: ZoomLatticeProbe,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "all fields are retained so a failing assertion prints the complete per-turn plan record"
+)]
+struct ZoomTurnRecord {
+    scenario: &'static str,
+    turn: u32,
+    planned: WarpKind,
+    selected: WarpKind,
+    presented: Option<WarpKind>,
+    visible_kind: Option<WarpKind>,
+    presented_exposed_fraction: Option<f64>,
+    refusal_reason: Option<WarpRefusalReason>,
+    edit_state: ZoomEditState,
+    attempted_crosshair: Option<[f64; 2]>,
+    attempted_zoom_delta: Option<f64>,
+    records: ZoomRecordState,
+    retained_level: RefinementLevel,
+    refinement: ZoomRefinementState,
+    hold: ZoomHoldState,
+    source_coverage: ZoomSourceCoverage,
+    requested_revision: u32,
+    warp_in_flight_kind: Option<WarpKind>,
+    scene_in_flight: bool,
+    completed_requested_final: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "a failing ruling assertion prints the named violation and its complete turn record"
+)]
+struct ZoomRuleViolation {
+    reason: &'static str,
+    record: ZoomTurnRecord,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(
+    dead_code,
+    reason = "a failing ruling assertion prints each scenario's grey outcome and first grey turn"
+)]
+struct ZoomScenarioOutcome {
+    scenario: &'static str,
+    captured_grey: bool,
+    first_grey_turn: Option<ZoomTurnRecord>,
+}
+
+fn measured_relief_plan(
+    retained: &SceneFrame,
+    requested: &Pose,
+) -> ember_julibrot_present::WarpPlan {
+    Warp::reproject(
+        retained,
+        &retained.pose,
+        requested,
+        PrecisionMode::PictureFast,
+        WarpValidation::Ordinary,
+    )
+}
+
+fn measured_relief_source_covers_destination(
+    plan: &ember_julibrot_present::WarpPlan,
+    source: &SceneFrame,
+    requested: &Pose,
+) -> bool {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return plan.source_valid && relief_redraw_source_covers_destination(source, requested);
+    }
+    if !matches!(
+        plan.refusal_reason,
+        Some(
+            WarpRefusalReason::ErrorCeiling { .. }
+                | WarpRefusalReason::ErrorCorpus { .. }
+                | WarpRefusalReason::ReliefExposure { .. }
+        )
+    ) {
+        return false;
+    }
+    relief_redraw_source_covers_destination(source, requested)
+}
+
+fn measured_relief_exposure_zoom_edit() -> Option<(u32, f64, Option<[f64; 2]>)> {
+    let crosshairs = [
+        [40.0, 30.0],
+        [40.0, -30.0],
+        [-40.0, 30.0],
+        [-40.0, -30.0],
+        [180.0, 90.0],
+        [180.0, -90.0],
+        [-180.0, 90.0],
+        [-180.0, -90.0],
+    ];
+    for delta_log2 in [1.43, 3.0, 0.5, 0.1, 6.0] {
+        for crosshair in crosshairs {
+            let mut viewer = measured_relief_zoom_viewer();
+            let retained_pose = viewer
+                .drain_hot(MEASURED_FINAL_EXTENT)
+                .expect("retained measured pose")
+                .pose;
+            let retained = measured_relief_scene(37, RefinementLevel::Final, &retained_pose);
+            if viewer.set_crosshair(crosshair).is_err()
+                || viewer.zoom_about_crosshair(delta_log2).is_err()
+            {
+                continue;
+            }
+            let Ok(requested) = viewer.drain_hot(MEASURED_FINAL_EXTENT) else {
+                continue;
+            };
+            if matches!(
+                measured_relief_plan(&retained, &requested.pose).refusal_reason,
+                Some(WarpRefusalReason::ReliefExposure { .. })
+            ) {
+                return Some((0, delta_log2, Some(crosshair)));
+            }
+        }
+    }
+    None
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the visible-turn reproduction keeps its edit, render, and presentation order in one trace"
+)]
+fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
+    const WARP_FLIGHT_TURNS: u32 = 12;
+    const SCENE_FLIGHT_TURNS: u32 = 30;
+    const TOTAL_TURNS: u32 = 120;
+
+    let mut viewer = measured_relief_zoom_viewer();
+    let source_extent = if script.retained_level == RefinementLevel::Preview {
+        MEASURED_PREVIEW_EXTENT
+    } else {
+        MEASURED_FINAL_EXTENT
+    };
+    let retained_pose = viewer
+        .drain_hot(source_extent)
+        .expect("retained measured pose")
+        .pose;
+    let settled_final_pose = viewer
+        .drain_hot(MEASURED_FINAL_EXTENT)
+        .expect("settled Final pose")
+        .pose;
+    let mut retained = measured_relief_scene(37, script.retained_level, &retained_pose);
+    let mut frame_loop = FrameLoop::default();
+    let mut requested_revision = 0_u32;
+    let mut presented_revision = 0_u32;
+    let mut last_presented_kind = Some(WarpKind::AnchorHomography);
+    let mut pending_warp: Option<PendingZoomWarp> = None;
+    let final_already_in_flight = script.initial_scene == ZoomInitialScene::FinalInFlight;
+    let mut pending_scene = final_already_in_flight.then_some(PendingZoomScene {
+        completes_at_turn: 18,
+        pose: settled_final_pose,
+        requested_revision: 0,
+    });
+    let mut records_ready = !final_already_in_flight;
+    let mut next_scene_id = 38_u64;
+    let mut trace = Vec::new();
+
+    for turn in 0..=TOTAL_TURNS {
+        let mut presented = None;
+        let mut presented_exposed_fraction = None;
+        let mut edit_state = ZoomEditState::None;
+        let mut attempted_crosshair = None;
+        let mut attempted_zoom_delta = None;
+        if pending_warp.is_some_and(|warp| warp.completes_at_turn == turn) {
+            let warp = pending_warp.take().expect("due warp is pending");
+            presented = Some(warp.kind);
+            presented_exposed_fraction = warp.predicted_exposed_fraction;
+            last_presented_kind = Some(warp.kind);
+            if warp.kind != WarpKind::HoldStale {
+                presented_revision = warp.requested_revision;
+            }
+        }
+        if pending_scene.is_some_and(|scene| scene.completes_at_turn == turn) {
+            let scene = pending_scene.take().expect("due scene is pending");
+            retained = measured_relief_scene(next_scene_id, RefinementLevel::Final, &scene.pose);
+            next_scene_id = next_scene_id.saturating_add(1);
+            records_ready = true;
+            if scene.requested_revision == requested_revision {
+                frame_loop.schedule.pause();
+                frame_loop.accept_request(37, false);
+            }
+        }
+
+        for &(_, delta_log2, crosshair) in script.edits.iter().filter(|edit| edit.0 == turn) {
+            attempted_crosshair = crosshair;
+            attempted_zoom_delta = Some(delta_log2);
+            if let Some(crosshair) = crosshair {
+                let Ok(()) = viewer.set_crosshair(crosshair) else {
+                    edit_state = ZoomEditState::CrosshairRefused;
+                    continue;
+                };
+            }
+            if viewer.zoom_about_crosshair(delta_log2).is_err() {
+                edit_state = ZoomEditState::ZoomRefused;
+                continue;
+            }
+            edit_state = ZoomEditState::Applied;
+            requested_revision = requested_revision.saturating_add(1);
+            let restart_scene = script.refinement_on_edit == ZoomRefinementOnEdit::Restart;
+            if script.edit_trigger == ZoomEditTrigger::RequestedFrame {
+                frame_loop.accept_request(37, restart_scene);
+            } else if restart_scene {
+                frame_loop.scene_changed(37);
+            }
+        }
+
+        let destination_extent = script.destination_extent;
+        let requested = viewer
+            .drain_hot(destination_extent)
+            .expect("scripted requested pose")
+            .pose;
+        let completed_requested_final = requested_revision != 0
+            && retained.level == RefinementLevel::Final
+            && renders_same_picture(&retained.pose, &requested);
+        let view_is_stale = presented_revision != requested_revision;
+        if script.edit_trigger == ZoomEditTrigger::StaleViewRecovery
+            && super::stale_view_needs_a_new_scene(
+                SceneMode::Auto,
+                frame_loop.refinement_pending(),
+                view_is_stale,
+                completed_requested_final,
+            )
+        {
+            frame_loop.request_missing_final(37);
+        }
+        let plan = measured_relief_plan(&retained, &requested);
+        let source_covers_destination = requested_revision != 0
+            && measured_relief_source_covers_destination(&plan, &retained, &requested);
+        if script.forget_records_before_selection_at_turn == Some(turn) {
+            records_ready = false;
+        }
+        let retain_visible_redraw = plan.kind == WarpKind::ReliefRedraw
+            && !records_ready
+            && pending_scene.is_some()
+            && last_presented_kind == Some(WarpKind::ReliefRedraw);
+        let mut selected =
+            if plan.kind == WarpKind::ReliefRedraw && !records_ready && !retain_visible_redraw {
+                WarpKind::ClearOnly
+            } else {
+                plan.kind
+            };
+        if selected == WarpKind::ClearOnly && source_covers_destination {
+            selected = WarpKind::HoldStale;
+        }
+        let hold_armed = source_covers_destination;
+        let hold_selected_before_lattice = selected == WarpKind::HoldStale;
+        let lattice_refused = script.lattice_probe == ZoomLatticeProbe::Enforce
+            && hold_selected_before_lattice
+            && LatticePair::new(retained.extent, destination_extent).is_none_or(|lattice| {
+                lattice.destination() != destination_extent
+                    || lattice
+                        .covering_rows()
+                        .is_none_or(|rows| !lattice.covers_destination(rows))
+            });
+        if lattice_refused {
+            selected = WarpKind::ClearOnly;
+        }
+        let hold = if lattice_refused {
+            ZoomHoldState::RefusedByLattice
+        } else if hold_selected_before_lattice {
+            ZoomHoldState::Selected
+        } else if hold_armed {
+            ZoomHoldState::Armed
+        } else {
+            ZoomHoldState::Disarmed
+        };
+
+        let defer_scene_for_redraw =
+            defer_scene_until_relief_redraw(selected == WarpKind::ReliefRedraw, view_is_stale);
+        if pending_scene.is_none()
+            && requested_revision != 0
+            && frame_loop.refinement_pending()
+            && !defer_scene_for_redraw
+            && !renders_same_picture(&retained.pose, &requested)
+        {
+            pending_scene = Some(PendingZoomScene {
+                completes_at_turn: turn.saturating_add(SCENE_FLIGHT_TURNS),
+                pose: requested,
+                requested_revision,
+            });
+        }
+        let hold_redraw = selected == WarpKind::ReliefRedraw && pending_scene.is_some();
+        let warp_requested = warp_submission_due(
+            frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand),
+            defer_scene_for_redraw,
+        );
+        if warp_requested && pending_warp.is_none() && !hold_redraw {
+            pending_warp = Some(PendingZoomWarp {
+                completes_at_turn: turn.saturating_add(WARP_FLIGHT_TURNS),
+                kind: selected,
+                predicted_exposed_fraction: if selected == WarpKind::ReliefRedraw {
+                    plan.predicted_exposed_fraction
+                } else {
+                    None
+                },
+                requested_revision,
+            });
+            frame_loop.warp_submitted();
+        }
+        trace.push(ZoomTurnRecord {
+            scenario: script.scenario,
+            turn,
+            planned: plan.kind,
+            selected,
+            presented,
+            visible_kind: last_presented_kind,
+            presented_exposed_fraction,
+            refusal_reason: plan.refusal_reason,
+            edit_state,
+            attempted_crosshair,
+            attempted_zoom_delta,
+            records: if records_ready {
+                ZoomRecordState::Ready
+            } else {
+                ZoomRecordState::Unavailable
+            },
+            retained_level: retained.level,
+            refinement: if frame_loop.refinement_pending() {
+                ZoomRefinementState::Pending
+            } else {
+                ZoomRefinementState::Idle
+            },
+            hold,
+            source_coverage: if source_covers_destination {
+                ZoomSourceCoverage::CoversDestination
+            } else {
+                ZoomSourceCoverage::NotCovering
+            },
+            requested_revision,
+            warp_in_flight_kind: pending_warp.map(|warp| warp.kind),
+            scene_in_flight: pending_scene.is_some(),
+            completed_requested_final,
+        });
+    }
+    trace
+}
+
+/// Collects the planner's nonzero zoom-in exposure publications without making them grey failures.
+///
+/// The relief-warp planner round owns this follow-up. Keeping the values beside the seven native
+/// turn traces preserves the evidence while this lane enforces only the retained-picture ruling.
+fn measured_zoom_exposure_report(traces: &[Vec<ZoomTurnRecord>]) -> Vec<ZoomTurnRecord> {
+    traces
+        .iter()
+        .flatten()
+        .filter(|turn| {
+            turn.source_coverage == ZoomSourceCoverage::CoversDestination
+                && turn.presented.is_some()
+                && turn.presented_exposed_fraction.unwrap_or(0.0) > f64::EPSILON
+        })
+        .copied()
+        .collect()
+}
+
+#[test]
+#[allow(
+    clippy::print_stderr,
+    clippy::too_many_lines,
+    reason = "all scenarios run before one assertion, while fenced planner exposure stays visible as telemetry"
+)]
+fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
+    let idle_refused_edit = measured_relief_exposure_zoom_edit();
+    let found_idle_relief_exposure = idle_refused_edit.is_some();
+    let idle_refused_edit = idle_refused_edit.unwrap_or((0, 3.0, Some([40.0, 30.0])));
+    let traces = vec![
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "off-centre box +1.43",
+            retained_level: RefinementLevel::Final,
+            edits: &[(0, 1.43, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "slider +0.5 at 100 ms",
+            retained_level: RefinementLevel::Final,
+            edits: &[(0, 0.1, None), (6, 0.5, None)],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "retained Preview before Final",
+            retained_level: RefinementLevel::Preview,
+            edits: &[(0, 0.5, None)],
+            initial_scene: ZoomInitialScene::FinalInFlight,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "idle Final far off-centre refusal",
+            retained_level: RefinementLevel::Final,
+            edits: &[idle_refused_edit],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "record lease forgotten before redraw submission",
+            retained_level: RefinementLevel::Final,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: Some(0),
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "idle Final record-lease gap",
+            retained_level: RefinementLevel::Final,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: Some(0),
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        }),
+        drive_measured_zoom_trace(ZoomScript {
+            scenario: "Preview hold lattice enforcement",
+            retained_level: RefinementLevel::Preview,
+            edits: &[(0, 0.5, Some([40.0, 30.0]))],
+            initial_scene: ZoomInitialScene::FinalInFlight,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Enforce,
+        }),
+    ];
+
+    let outcomes: Vec<_> = traces
+        .iter()
+        .map(|trace| {
+            let first_grey_turn = trace.iter().copied().find(|turn| {
+                turn.presented == Some(WarpKind::ClearOnly)
+                    || turn
+                        .presented_exposed_fraction
+                        .is_some_and(|fraction| fraction > 0.5)
+            });
+            ZoomScenarioOutcome {
+                scenario: trace[0].scenario,
+                captured_grey: first_grey_turn.is_some(),
+                first_grey_turn,
+            }
+        })
+        .collect();
+    let exposure_report = measured_zoom_exposure_report(&traces);
+    eprintln!("zoom-in exposure follow-up for the relief-warp planner: {exposure_report:#?}");
+    let mut violations = Vec::new();
+    for turn in traces.iter().flatten() {
+        if turn.edit_state == ZoomEditState::CrosshairRefused {
+            violations.push(ZoomRuleViolation {
+                reason: "visible-frame crosshair was refused",
+                record: *turn,
+            });
+        } else if turn.edit_state == ZoomEditState::ZoomRefused {
+            violations.push(ZoomRuleViolation {
+                reason: "positive scripted zoom was refused",
+                record: *turn,
+            });
+        }
+        if turn.source_coverage != ZoomSourceCoverage::CoversDestination || turn.presented.is_none()
+        {
+            continue;
+        }
+        if turn.presented == Some(WarpKind::ClearOnly) {
+            violations.push(ZoomRuleViolation {
+                reason: "covered zoom-in presented ClearOnly",
+                record: *turn,
+            });
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "far off-centre ReliefExposure candidate found: {found_idle_relief_exposure}; covered zoom-in ruling violations: {violations:#?}; planner exposure follow-up: {exposure_report:#?}; scenario outcomes: {outcomes:#?}; per-turn traces: {traces:#?}"
+    );
+}
+
+#[test]
+fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
+    let trace_box = |scenario, centre, size| {
+        let anchor = anchor_px_up(
+            centre,
+            MEASURED_FINAL_EXTENT.map(f64::from),
+            MEASURED_FINAL_EXTENT,
+        )
+        .expect("box centre maps into the measured frame");
+        let delta_log2 = box_zoom_delta_log2(size, MEASURED_FINAL_EXTENT.map(f64::from))
+            .expect("box has a finite zoom");
+        let edits = [(0, delta_log2, Some(anchor))];
+        drive_measured_zoom_trace(ZoomScript {
+            scenario,
+            retained_level: RefinementLevel::Final,
+            edits: &edits,
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::StaleViewRecovery,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        })
+    };
+    let corner = trace_box(
+        "corner box after stale-view recovery",
+        [200.0, 130.0],
+        [320.0 - 80.0, 200.0 - 60.0],
+    );
+    let centred = trace_box(
+        "centred box after stale-view recovery",
+        [450.0, 250.0],
+        [600.0 - 300.0, 350.0 - 150.0],
+    );
+    let edited = corner
+        .iter()
+        .find(|turn| turn.edit_state == ZoomEditState::Applied)
+        .expect("corner box edit appears in its turn trace");
+    assert_eq!(edited.planned, WarpKind::ReliefRedraw, "{corner:#?}");
+    assert_eq!(
+        edited.source_coverage,
+        ZoomSourceCoverage::NotCovering,
+        "the corner box must exercise honest outside-source margins: {corner:#?}"
+    );
+    assert_eq!(
+        centred
+            .iter()
+            .find(|turn| turn.edit_state == ZoomEditState::Applied)
+            .map(|turn| turn.source_coverage),
+        Some(ZoomSourceCoverage::CoversDestination),
+        "the centred comparison must exercise retained-source coverage: {centred:#?}"
+    );
+
+    let first_uncovered = corner.iter().find(|turn| {
+        turn.requested_revision != 0
+            && !turn.completed_requested_final
+            && !turn.scene_in_flight
+            && !matches!(
+                turn.visible_kind,
+                Some(WarpKind::ReliefRedraw | WarpKind::HoldStale)
+            )
+            && !matches!(
+                turn.warp_in_flight_kind,
+                Some(WarpKind::ReliefRedraw | WarpKind::HoldStale)
+            )
+    });
+    let corner_final = corner.iter().find(|turn| turn.completed_requested_final);
+    let centred_final = centred.iter().find(|turn| turn.completed_requested_final);
+    let final_presentation = corner_final.and_then(|completed| {
+        corner.iter().find(|turn| {
+            turn.turn > completed.turn && turn.presented == Some(WarpKind::AnchorHomography)
+        })
+    });
+    assert!(
+        first_uncovered.is_none() && corner_final.is_some(),
+        "a visible or in-flight redraw, visible or in-flight hold, or in-flight scene must cover every turn until the requested Final arrives; first uncovered: {first_uncovered:#?}; Final: {corner_final:#?}; trace: {corner:#?}"
+    );
+    assert_eq!(
+        corner_final.map(|turn| turn.turn),
+        centred_final.map(|turn| turn.turn),
+        "a translated box must not retire the requested main scene or add a replacement flight; corner: {corner:#?}; centred: {centred:#?}"
+    );
+    assert!(
+        final_presentation.is_some(),
+        "the request must survive until the requested Final's anchor presentation: {corner:#?}"
+    );
+}
+
+fn measured_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     let object = ObjectAngles {
         rho_13: -1.316_653_720_171_549_4,
         rho_24: -1.316_653_720_171_549_4,
@@ -2456,16 +3189,15 @@ fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     }
 }
 
-fn owner_height_drag_plan(
+fn measured_height_drag_plan(
     row: HeightDragRow,
     retained_height_scale: f64,
     requested_height_scale: f64,
 ) -> WarpKind {
-    let retained = owner_height_drag_pose(row, retained_height_scale);
+    let retained = measured_height_drag_pose(row, retained_height_scale);
     let frame = SceneFrame {
         scene_id: 37,
         pose: retained,
-        palette: PaletteId::Classic,
         iteration_cap: 128,
         level: RefinementLevel::Final,
         extent: [retained.grid_width, retained.grid_height],
@@ -2487,7 +3219,7 @@ fn owner_height_drag_plan(
     Warp::reproject(
         &frame,
         &retained,
-        &owner_height_drag_pose(row, requested_height_scale),
+        &measured_height_drag_pose(row, requested_height_scale),
         PrecisionMode::PictureFast,
         WarpValidation::Ordinary,
     )
@@ -2500,11 +3232,10 @@ fn manual_final_height_change_keeps_the_accepted_relief_redraw_live() {
     frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
     assert_eq!(frame_loop.due(), None);
     assert_eq!(
-        owner_height_drag_plan(
+        measured_height_drag_plan(
             HeightDragRow {
                 name: "close-d5-2",
                 distance_five: 2.0,
-                expected_clear_only: 81,
             },
             0.0,
             0.4,
@@ -2538,12 +3269,12 @@ struct HeightDragStats {
     clear_only_before: u64,
     clear_only_presentations: u64,
     hold_presentations: u64,
+    relief_redraw_presentations: u64,
     final_after_drag_ms: f64,
 }
 
-/// Drives a moving retained source while the counterfactual `clear_only_before` classification is
-/// measured from one fixed flat source; they agree at these owner rows only because refusal is
-/// destination-driven there.
+/// Drives a moving retained source while the `clear_only_before` classification is also measured
+/// from one fixed flat source; both must remain painted throughout either height-drag fixture.
 #[allow(
     clippy::print_stderr,
     clippy::too_many_lines,
@@ -2568,7 +3299,7 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
 
     for input in 1..=DRAG_FRAMES {
         let requested_height_scale = 4.0 * f64::from(input) / f64::from(DRAG_FRAMES);
-        let flat_source_plan = owner_height_drag_plan(row, 0.0, requested_height_scale);
+        let flat_source_plan = measured_height_drag_plan(row, 0.0, requested_height_scale);
         if flat_source_plan == WarpKind::ClearOnly {
             clear_only_before = clear_only_before.saturating_add(1);
         }
@@ -2595,7 +3326,7 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
         frame_loop.accept_request(37, true);
         frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         let moving_source_plan =
-            owner_height_drag_plan(row, retained_height_scale, requested_height_scale);
+            measured_height_drag_plan(row, retained_height_scale, requested_height_scale);
         assert_eq!(
             moving_source_plan == WarpKind::ClearOnly,
             flat_source_plan == WarpKind::ClearOnly,
@@ -2636,7 +3367,8 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
             frame_loop.restart(37);
             frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         }
-        presenter.forced_warp_kind = Some(owner_height_drag_plan(row, retained_height_scale, 4.0));
+        presenter.forced_warp_kind =
+            Some(measured_height_drag_plan(row, retained_height_scale, 4.0));
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} settled scene id", row.name);
@@ -2656,45 +3388,38 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
         clear_only_before,
         clear_only_presentations: presenter.presented_clear_only,
         hold_presentations: presenter.warp_hold_count,
+        relief_redraw_presentations: presenter.warp_relief_redraw_count,
         final_after_drag_ms: clock.now_ms - drag_ended_ms,
     };
     eprintln!(
-        "height_drag row={} clear_only_before={} clear_only_after={} holds={} final_ms={:.3}",
+        "height_drag row={} clear_only_plans={} clear_only_presented={} holds={} relief_redraws={} final_ms={:.3}",
         row.name,
         stats.clear_only_before,
         stats.clear_only_presentations,
         stats.hold_presentations,
+        stats.relief_redraw_presentations,
         stats.final_after_drag_ms,
     );
     stats
 }
 
 #[test]
-fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_round() {
+fn three_second_height_drag_keeps_both_measured_rows_painted_and_settles_in_one_round() {
     for row in [
         HeightDragRow {
             name: "gentle-d5-8",
             distance_five: 8.0,
-            expected_clear_only: 24,
         },
         HeightDragRow {
             name: "close-d5-2",
             distance_five: 2.0,
-            expected_clear_only: 81,
         },
     ] {
         let stats = drive_height_drag(row);
-        assert_eq!(
-            stats.clear_only_before, row.expected_clear_only,
-            "{}",
-            row.name
-        );
+        assert_eq!(stats.clear_only_before, 0, "{}", row.name);
         assert_eq!(stats.clear_only_presentations, 0, "{}", row.name);
-        assert_eq!(
-            stats.hold_presentations, row.expected_clear_only,
-            "{}",
-            row.name
-        );
+        assert_eq!(stats.hold_presentations, 0, "{}", row.name);
+        assert!(stats.relief_redraw_presentations > 0, "{}", row.name);
         assert!(
             stats.final_after_drag_ms <= 3.0 * (1_000.0 / 30.0),
             "{}",
@@ -3049,7 +3774,7 @@ fn accepted_reference_facts_keep_verification_separate_from_escalations() {
 #[test]
 fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() {
     const CAP: u32 = 512;
-    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    /// Orbit length the measured row at a centre outside the set delivered at zoom sixty.
     const ESCAPED_AT: u32 = 4;
     const ACCEPTED_GENERATION: u32 = 42;
     const ACCEPTED_CENTRE_REVISION: u32 = 316;
@@ -3139,83 +3864,65 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
     assert!(ladder.refinement_pending());
 }
 
-/// Pins when an idle ladder facing a stale view starts another one.
+/// Pins when an idle automatic ladder starts another Final.
 ///
-/// A hold stamps no view, so the requested view reads stale for the whole time the previous picture
-/// stands in for it, including the turn its replacement completes on. The restart rule has to tell
-/// that turn from the case it exists for: a completed scene one present from the canvas is not a
-/// missing scene, while a view that moved on after its scene was shown is.
-///
-/// The scene identities come from the warp plan's source. A hold names the retained frame, which is
-/// also the frame the completed reading names, so a persisting hold leaves the two equal and the
-/// rule keeps working through it. A clear names nothing, so a blank canvas beside a completed scene
-/// is the one-present gap the opening frames of every page are in.
+/// A redraw may stamp the requested view before its replacement scene lands. If that scene is
+/// retired, the surface no longer reads stale, so the retained completed Final is the authority.
 #[test]
-fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
+fn automatic_recovery_stops_only_when_the_requested_final_exists() {
     use super::SceneMode::Auto;
     assert!(
-        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(5)),
-        "the completed scene has not been presented yet, so the picture for this view exists"
+        !super::stale_view_needs_a_new_scene(Auto, false, true, true),
+        "a completed requested Final only needs its presentation warp"
     );
     assert!(
-        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), None),
-        "a clear names no source: the completed scene has not reached the canvas yet"
+        !super::stale_view_needs_a_new_scene(Auto, false, false, true),
+        "a completed requested Final needs no replacement scene"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(7)),
-        "the completed scene is what is on screen and the view has still moved on"
+        super::stale_view_needs_a_new_scene(Auto, false, true, false),
+        "a stale view with no requested Final starts the ladder"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, None, None),
-        "an opening frame with no scene at all starts the first ladder"
-    );
-    assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, None, Some(5)),
-        "no completed scene exists, so nothing is on its way for this view"
+        super::stale_view_needs_a_new_scene(Auto, false, false, false),
+        "an accepted retained warp cannot conceal a missing requested Final"
     );
     assert!(!super::stale_view_needs_a_new_scene(
-        Auto, true, true, None, None
+        Auto, true, true, false
     ));
-    assert!(!super::stale_view_needs_a_new_scene(
-        Auto,
-        false,
-        false,
-        Some(7),
-        Some(7)
-    ));
+
+    let mut recovering = FrameLoop::default();
+    recovering.request_missing_final(7);
+    assert_eq!(recovering.due(), Some(RefinementLevel::Preview));
+    assert!(recovering.warp_requested(FramePolicy::SingleFrameOnDemand));
+    recovering.warp_submitted();
+    assert!(
+        recovering.warp_requested(FramePolicy::SingleFrameOnDemand),
+        "the redraw must not consume the request that will present the eventual Final"
+    );
 }
 
 /// Pins that manual refinement still records every stale turn.
 ///
-/// A manual page holds unconditionally, so under the scene-identity test its ladder would go
-/// unobserved for as long as the hold lasted and the pending-update flag the page shows would never
-/// be set. Manual refinement starts no work in this rule, so there is nothing for the test to save:
-/// the observation is bookkeeping, and it is kept. What the observation then does is unchanged —
-/// manual mode marks the update pending and waits, auto mode restarts.
+/// Coverage may select a hold in manual mode, but the pending-update flag must not depend on that
+/// presentation decision. Manual refinement starts no work in this rule, so the observation is
+/// bookkeeping: manual mode marks the update pending and waits, while auto mode restarts.
 #[test]
 fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
     use super::SceneMode::{Auto, Manual};
     assert!(
-        super::stale_view_needs_a_new_scene(Manual, false, true, Some(7), Some(5)),
+        super::stale_view_needs_a_new_scene(Manual, false, true, false),
         "a manual page records the moved pose in the very gap auto refinement waits through"
     );
     assert!(super::stale_view_needs_a_new_scene(
-        Manual,
-        false,
-        true,
-        Some(7),
-        None
+        Manual, false, true, true
     ));
     assert!(
-        !super::stale_view_needs_a_new_scene(Manual, true, true, Some(7), Some(7)),
+        !super::stale_view_needs_a_new_scene(Manual, true, true, false),
         "a pending ladder is already the record that work is due"
     );
     assert!(!super::stale_view_needs_a_new_scene(
-        Manual,
-        false,
-        false,
-        Some(7),
-        Some(7)
+        Manual, false, false, false
     ));
 
     // What the observation does in each mode: manual marks the update and stays paused.
@@ -3230,7 +3937,7 @@ fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
     assert_eq!(auto.due(), Some(RefinementLevel::Preview));
 }
 
-/// Pins the stale reading a hold must not clear./// Pins the stale reading a hold must not clear.
+/// Pins the stale reading a hold must not clear.
 ///
 /// The loop stamps the view it expects the next presented image to reproduce when it submits the
 /// warp that will draw it. A held warp draws the last completed picture unmoved, so the image that
@@ -3252,13 +3959,13 @@ fn a_held_warp_does_not_stamp_the_requested_view_as_presented() {
     }
 }
 
-/// Builds the owner state the owner's zoom row reaches: a burst of navigations, an accepted
+/// Builds the viewer state the measured zoom row reaches: a burst of navigations, an accepted
 /// reference whose orbit escaped after four iterations, and the census correction in flight.
 fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeaseIdentity) {
     const WIDTH: u32 = 960;
     const HEIGHT: u32 = 540;
     const CAP: u32 = 512;
-    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    /// Orbit length the measured row at a centre outside the set delivered at zoom sixty.
     const ESCAPED_AT: u32 = 4;
     const ORBIT_ID: u32 = 7;
 

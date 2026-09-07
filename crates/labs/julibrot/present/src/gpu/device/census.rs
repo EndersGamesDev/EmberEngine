@@ -3,9 +3,8 @@ use std::sync::{Arc, Mutex};
 use crate::fence::{FenceDecision, FenceLedger};
 
 use super::{
-    FENCE_BYTES, GLITCH_RECORDS_PER_TEXEL, GlitchCountTarget, GlitchReadback, GpuState,
-    PendingFence, PendingGlitchReadback, RGBA8_BYTES_PER_TEXEL, SCENE_FORMAT, SceneCensus,
-    extent_3d,
+    FENCE_BYTES, GLITCH_COUNT_FORMAT, GLITCH_RECORDS_PER_TEXEL, GlitchCountTarget, GlitchReadback,
+    GpuState, PendingFence, PendingGlitchReadback, RGBA8_BYTES_PER_TEXEL, SceneCensus, extent_3d,
 };
 
 pub(super) fn create_glitch_count_target(
@@ -18,7 +17,7 @@ pub(super) fn create_glitch_count_target(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: SCENE_FORMAT,
+        format: GLITCH_COUNT_FORMAT,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });

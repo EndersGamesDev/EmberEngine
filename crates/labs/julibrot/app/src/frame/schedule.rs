@@ -513,6 +513,18 @@ impl FrameLoop {
         }
     }
 
+    /// Restarts a missing automatic Final and keeps its eventual presentation requested.
+    ///
+    /// A terminal scene refusal still leaves the ladder paused, so it does not arm a frame loop
+    /// that would retry forever. Manual mode records its pending update without starting work.
+    pub(super) const fn request_missing_final(&mut self, generation: u32) {
+        self.scene_changed(generation);
+        if matches!(self.scene_mode, SceneMode::Auto) && self.schedule.pending() {
+            self.requested_run = true;
+            self.completed_run = false;
+        }
+    }
+
     pub(super) const fn scene_input_ready(&mut self, generation: u32) {
         if matches!(self.scene_mode, SceneMode::Auto) || self.manual_rendering {
             self.restart(generation);
@@ -673,13 +685,6 @@ impl FrameLoop {
 
     pub(super) const fn scene_update_pending(&self) -> bool {
         matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
-    }
-
-    pub(super) const fn hold_refused_warp(&self, has_retained_scene: bool) -> bool {
-        if matches!(self.scene_mode, SceneMode::Manual) {
-            return true;
-        }
-        has_retained_scene && self.refinement_pending()
     }
 
     #[cfg(target_arch = "wasm32")]

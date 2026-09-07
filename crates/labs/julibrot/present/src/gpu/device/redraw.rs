@@ -1,58 +1,55 @@
-use crate::{PaletteRecord, PresentDataError, PresentError, SceneUniform};
+use crate::{Pose, PresentDataError, PresentError, SceneUniform};
 
 use super::{
-    GpuState, Presenter, encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices,
-    validate_backdrop, validate_grid_parts, warp_load_color,
+    GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts,
+    warp_load_color,
 };
+
+/// Measured excess-stretch candidate for generalized relief redraws, in destination pixels.
+pub(super) const RELIEF_STRETCH_GUARD_CANDIDATE: f64 = 1.0;
+
+/// Optional excess-stretch allowance for generalized relief redraws, in destination pixels.
+///
+/// `None` leaves the measured candidate guard disabled while its coverage trade-off is decided.
+pub(super) const RELIEF_STRETCH_GUARD: Option<f64> = None;
 
 impl Presenter {
     pub(super) fn prepare_relief_redraw(
         &mut self,
         source: &crate::SceneFrame,
+        destination: &Pose,
         surface_extent: [u32; 2],
-        selected: PaletteRecord,
-    ) -> Result<Option<bool>, PresentError> {
+    ) -> Result<bool, PresentError> {
         let Some(grid) = self.ledger.retained_grid() else {
-            return Ok(None);
+            return Ok(false);
         };
         if validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_err() {
-            return Ok(None);
+            return Ok(false);
         }
-        let Ok(uniform) = relief_scene_uniform(grid, source, selected) else {
-            return Ok(None);
+        let Ok(uniform) = relief_scene_uniform(grid, source, destination, surface_extent) else {
+            return Ok(false);
         };
-        let backdrop = self.main.as_ref().and_then(|main| main.backdrop.as_ref());
-        let backdrop_uniform = backdrop.and_then(|backdrop| {
-            validate_backdrop(backdrop, self.gpu.heap_limits)
-                .ok()
-                .and_then(|()| backdrop_scene_uniform(backdrop, selected).ok())
-        });
-        let backdrop_extent = backdrop_uniform
-            .as_ref()
-            .and_then(|_| backdrop.map(|backdrop| [backdrop.grid.width, backdrop.grid.height]));
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
-        ensure_backdrop_indices(&self.device, &mut self.gpu, backdrop_extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
         self.queue
             .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
-        if let Some(backdrop_uniform) = backdrop_uniform {
-            self.queue.write_buffer(
-                &self.gpu.scene_buffers[1],
-                0,
-                bytemuck::bytes_of(&backdrop_uniform),
-            );
-        }
-        Ok(Some(backdrop_extent.is_some()))
+        Ok(true)
     }
 
     pub(super) fn retained_records_support_relief_redraw(
         &self,
         source: &crate::SceneFrame,
-        selected: PaletteRecord,
+        destination: &Pose,
     ) -> bool {
         self.ledger.retained_grid().is_some_and(|grid| {
             validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_ok()
-                && relief_scene_uniform(grid, source, selected).is_ok()
+                && relief_scene_uniform(
+                    grid,
+                    source,
+                    destination,
+                    [destination.grid_width, destination.grid_height],
+                )
+                .is_ok()
         })
     }
 }
@@ -62,50 +59,46 @@ pub(super) fn encode_relief_redraw(
     gpu: &GpuState,
     surface_view: &wgpu::TextureView,
     hot_offset: u32,
-    selected: PaletteRecord,
-    has_backdrop: bool,
 ) {
     encode_scene_mesh(
         encoder,
         gpu,
         surface_view,
         hot_offset,
-        warp_load_color(selected),
-        has_backdrop,
+        warp_load_color(),
+        false,
         "Julibrot relief redraw pass",
     );
-}
-
-fn backdrop_scene_uniform(
-    backdrop: &crate::PresentBackdrop,
-    selected: PaletteRecord,
-) -> Result<SceneUniform, PresentError> {
-    SceneUniform::new(
-        [backdrop.grid.width, backdrop.grid.height],
-        backdrop.grid.level as u32,
-        backdrop.iteration_cap,
-        backdrop.grid.span.directory_index,
-        backdrop.grid.span.logical_len,
-        backdrop.plane,
-        backdrop.map,
-        selected,
-    )
-    .map_err(|error| match error {
-        PresentDataError::InvalidMap => PresentError::Device {
-            operation: "pack relief redraw backdrop map",
-        },
-        _ => PresentError::InvalidGrid {
-            width: backdrop.grid.width,
-            height: backdrop.grid.height,
-            logical_len: backdrop.grid.span.logical_len,
-        },
-    })
 }
 
 pub(super) fn relief_scene_uniform(
     grid: &ember_julibrot_kernels::EscapeGrid,
     source: &crate::SceneFrame,
-    selected: PaletteRecord,
+    destination: &Pose,
+    surface_extent: [u32; 2],
+) -> Result<SceneUniform, PresentError> {
+    if RELIEF_STRETCH_GUARD
+        .is_some_and(|excess_px| excess_px.to_bits() != RELIEF_STRETCH_GUARD_CANDIDATE.to_bits())
+    {
+        return Err(PresentError::Device {
+            operation: "select relief redraw stretch guard",
+        });
+    }
+    relief_scene_uniform_with_guard(
+        grid,
+        source,
+        destination,
+        surface_extent,
+        RELIEF_STRETCH_GUARD,
+    )
+}
+
+pub(super) fn relief_scene_uniform_with_guard(
+    grid: &ember_julibrot_kernels::EscapeGrid,
+    source: &crate::SceneFrame,
+    destination: &Pose,
+    surface_extent: [u32; 2],
+    stretch_guard: Option<f64>,
 ) -> Result<SceneUniform, PresentError> {
     if [grid.width, grid.height] != source.extent {
         return Err(PresentError::InvalidGrid {
@@ -114,15 +107,19 @@ pub(super) fn relief_scene_uniform(
             logical_len: grid.span.logical_len,
         });
     }
-    SceneUniform::new(
+    let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, destination).ok_or(
+        PresentError::Device {
+            operation: "compose relief redraw source lattice",
+        },
+    )?;
+    let mut uniform = SceneUniform::new(
         source.extent,
         source.level as u32,
         source.iteration_cap,
         grid.span.directory_index,
         grid.span.logical_len,
-        source.pose.plane,
-        source.pose.map,
-        selected,
+        redraw.plane,
+        redraw.map,
     )
     .map_err(|error| match error {
         PresentDataError::InvalidMap => PresentError::Device {
@@ -133,5 +130,40 @@ pub(super) fn relief_scene_uniform(
             height: source.extent[1],
             logical_len: grid.span.logical_len,
         },
-    })
+    })?;
+    if !crate::planner::exact_relief_redraw_family(&source.pose, destination) {
+        let Some(excess_px) = stretch_guard else {
+            return Ok(uniform);
+        };
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "the checked presentation extent is narrowed once into the scene GPU ABI"
+        )]
+        let presentation_extent = [surface_extent[0] as f32, surface_extent[1] as f32];
+        if presentation_extent
+            .into_iter()
+            .any(|value| !value.is_finite() || value <= 0.0)
+        {
+            return Err(PresentError::Device {
+                operation: "pack relief redraw presentation extent",
+            });
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the finite guard allowance is narrowed once into the scene GPU ABI"
+        )]
+        let excess_px = excess_px as f32;
+        if !excess_px.is_finite() || excess_px < 0.0 {
+            return Err(PresentError::Device {
+                operation: "pack relief redraw stretch allowance",
+            });
+        }
+        uniform.reserved_0 = [
+            1.0,
+            presentation_extent[0],
+            presentation_extent[1],
+            excess_px,
+        ];
+    }
+    Ok(uniform)
 }

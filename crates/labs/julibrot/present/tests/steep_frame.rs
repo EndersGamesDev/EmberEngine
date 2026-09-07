@@ -35,11 +35,12 @@
 
 use ember_julibrot_kernels::{EscapeParams, escape_shallow_point};
 use ember_julibrot_math::{
-    BigCentre, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px,
+    BigCentre, Homography, ObjectAngles, Pose, PoseMap, ViewControls, centre_from_reference_px,
     construct_plane, pixel_scale, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, SceneUniform, exterior_zero, grid_screen, shade_escape_record,
+    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SceneUniform, exterior_zero, grid_screen,
+    relief_redraw_source_pose, shade_escape_record,
 };
 
 const EXTENT: [u32; 2] = [960, 540];
@@ -129,6 +130,152 @@ fn zoom_pose(height_scale: f64) -> Pose {
         centre_from_reference_px(&centre, &reference, &pose.plane, ZOOM_LOG2, EXTENT[0])
             .expect("the row's centre lies in the row's own plane");
     pose
+}
+
+/// Reproduces the browser's screen-centred zoom against the retained frame's reference.
+///
+/// # Panics
+///
+/// Panics only if the measured relief zoom row loses its finite screen-centre map, which the saved
+/// browser pose cannot arrange.
+fn screen_centred_zoom_destination(from: &Pose, zoom_delta: f64) -> Pose {
+    anchored_zoom_destination(from, zoom_delta, [0.0; 2])
+}
+
+fn anchored_zoom_destination(from: &Pose, zoom_delta: f64, anchor_screen: [f64; 2]) -> Pose {
+    let anchor = map_plane_offset(from, anchor_screen)
+        .expect("the measured relief zoom row contains the requested zoom anchor");
+    let displacement_scale = zoom_delta.exp2() - 1.0;
+    let mut to = *from;
+    to.zoom_log2 += zoom_delta;
+    to.centre_from_reference_px = anchor.map(|value| value * displacement_scale);
+    to
+}
+
+/// Carries the saved row's absolute sampling centre through the requested anchored zoom.
+fn zoomed_sampling_pose(from: &Pose, destination: &Pose, zoom_delta: f64) -> Pose {
+    let zoom_scale = zoom_delta.exp2();
+    let mut to = *from;
+    to.zoom_log2 += zoom_delta;
+    to.centre_from_reference_px = core::array::from_fn(|axis| {
+        zoom_scale.mul_add(
+            from.centre_from_reference_px[axis],
+            destination.centre_from_reference_px[axis],
+        )
+    });
+    to
+}
+
+fn multiply_3x3(left: [f64; 9], right: [f64; 9]) -> [f64; 9] {
+    core::array::from_fn(|index| {
+        let row = index / 3;
+        let column = index % 3;
+        (0..3).fold(0.0, |sum, inner| {
+            left[row * 3 + inner].mul_add(right[inner * 3 + column], sum)
+        })
+    })
+}
+
+fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
+    let determinant = matrix[2].mul_add(
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
+        matrix[0].mul_add(
+            matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
+            -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
+        ),
+    );
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return None;
+    }
+    let inverse = [
+        matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]) / determinant,
+        matrix[2].mul_add(matrix[7], -matrix[1] * matrix[8]) / determinant,
+        matrix[1].mul_add(matrix[5], -matrix[2] * matrix[4]) / determinant,
+        matrix[5].mul_add(matrix[6], -matrix[3] * matrix[8]) / determinant,
+        matrix[0].mul_add(matrix[8], -matrix[2] * matrix[6]) / determinant,
+        matrix[2].mul_add(matrix[3], -matrix[0] * matrix[5]) / determinant,
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]) / determinant,
+        matrix[1].mul_add(matrix[6], -matrix[0] * matrix[7]) / determinant,
+        matrix[0].mul_add(matrix[4], -matrix[1] * matrix[3]) / determinant,
+    ];
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
+}
+
+/// Builds the source-lattice map whose output is expressed in destination chart pixels.
+///
+/// # Panics
+///
+/// Panics only if either accepted measured pose loses its map or scale, or if their plane relation
+/// is singular, none of which the fixed zoom pair can arrange.
+fn relief_redraw_pose(from: &Pose, to: &Pose) -> Pose {
+    let PoseMap::Mapped(from_map) = from.map else {
+        panic!("the retained measured relief zoom pose has a finite map");
+    };
+    let PoseMap::Mapped(to_map) = to.map else {
+        panic!("the destination measured relief zoom pose has a finite map");
+    };
+    let from_scale = pixel_scale(from.zoom_log2, from.grid_width)
+        .expect("the retained measured relief zoom pose has a finite scale");
+    let to_scale = pixel_scale(to.zoom_log2, to.grid_width)
+        .expect("the destination measured relief zoom pose has a finite scale");
+    let scale = from_scale / to_scale;
+    let origin_delta: [f64; 4] =
+        core::array::from_fn(|axis| from.plane_origin[axis] - to.plane_origin[axis]);
+    let basis = [to.plane.basis_u, to.plane.basis_v];
+    let source_basis = [from.plane.basis_u, from.plane.basis_v];
+    let relation: [[f64; 2]; 2] = core::array::from_fn(|to_axis| {
+        core::array::from_fn(|from_axis| {
+            source_basis[from_axis]
+                .into_iter()
+                .zip(basis[to_axis])
+                .fold(0.0, |sum, (source, destination)| {
+                    f64::from(source).mul_add(f64::from(destination), sum)
+                })
+                * scale
+        })
+    });
+    let shift: [f64; 2] = core::array::from_fn(|axis| {
+        let origin = origin_delta
+            .into_iter()
+            .zip(basis[axis])
+            .fold(0.0, |sum, (value, destination)| {
+                value.mul_add(f64::from(destination), sum)
+            })
+            / to_scale;
+        relation[axis][0].mul_add(
+            from.centre_from_reference_px[0],
+            relation[axis][1].mul_add(
+                from.centre_from_reference_px[1],
+                origin - to.centre_from_reference_px[axis],
+            ),
+        )
+    });
+    let source_to_destination = [
+        relation[0][0],
+        relation[0][1],
+        shift[0],
+        relation[1][0],
+        relation[1][1],
+        shift[1],
+        0.0,
+        0.0,
+        1.0,
+    ];
+    let rows = multiply_3x3(source_to_destination, from_map.rows);
+    let inverse = invert_3x3(rows).expect("the relief redraw chart map is invertible");
+    let mut redraw = *to;
+    redraw.grid_width = from.grid_width;
+    redraw.grid_height = from.grid_height;
+    redraw.map = PoseMap::Mapped(Homography {
+        rows,
+        inverse,
+        condition_number: from_map.condition_number,
+        apron_scale: to_map.apron_scale * f64::from(from.grid_width) / f64::from(to.grid_width),
+    });
+    redraw
 }
 
 fn pixel_screen(column: u32, row: u32) -> [f64; 2] {
@@ -255,7 +402,9 @@ struct Vertex {
     depth: f64,
     reciprocal_w: f64,
     grid: [f64; 2],
+    chart: [f64; 2],
     world: [f64; 3],
+    expected_stretch: f64,
     valid: bool,
     clamped: bool,
     reason: Reason,
@@ -265,6 +414,16 @@ struct Vertex {
 enum Rule {
     Base,
     Fixed,
+    Guarded { excess_px: f64 },
+}
+
+impl Rule {
+    const fn excess_px(self) -> Option<f64> {
+        match self {
+            Self::Guarded { excess_px } => Some(excess_px),
+            Self::Base | Self::Fixed => None,
+        }
+    }
 }
 
 fn ambient_camera(mut point: [f64; 5], view: &ViewControls) -> [f64; 5] {
@@ -292,13 +451,33 @@ fn scene_vertex(
     mapping: Mapping,
 ) -> Vertex {
     let screen = draw_screen(column, row);
+    scene_vertex_at_screen(
+        pose,
+        screen,
+        [f64::from(column), f64::from(row)],
+        record,
+        rule,
+        mapping,
+    )
+}
+
+fn scene_vertex_at_screen(
+    pose: &Pose,
+    screen: [f64; 2],
+    grid: [f64; 2],
+    record: [f32; 4],
+    rule: Rule,
+    mapping: Mapping,
+) -> Vertex {
     let flat = Vertex {
         x: screen[0],
         y: screen[1],
         depth: 0.0,
         reciprocal_w: 1.0,
-        grid: [f64::from(column), f64::from(row)],
+        grid,
+        chart: [f64::NAN; 2],
         world: [0.0; 3],
+        expected_stretch: 0.0,
         valid: true,
         clamped: false,
         reason: Reason::Flat,
@@ -311,6 +490,25 @@ fn scene_vertex(
         return flat;
     };
     if pose.view.height_scale == 0.0 {
+        let mut flat = flat;
+        if rule.excess_px().is_some() {
+            let column = grid[0] as u32;
+            let row = grid[1] as u32;
+            let neighbour_column = if column + 1 < EXTENT[0] {
+                column + 1
+            } else {
+                column - 1
+            };
+            let neighbour_row = if row + 1 < EXTENT[1] {
+                row + 1
+            } else {
+                row - 1
+            };
+            let right = draw_screen(neighbour_column, row);
+            let above = draw_screen(column, neighbour_row);
+            flat.expected_stretch =
+                maximum_singular_stretch([right[0] - screen[0], 0.0], [0.0, above[1] - screen[1]]);
+        }
         return flat;
     }
     if record[3] == 2.0 {
@@ -415,17 +613,46 @@ fn scene_vertex(
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
     let perspective_scale = aspect * d4 * 0.5;
     let clip_w = -view_point[2];
-    Vertex {
+    let mut vertex = Vertex {
         x: perspective_scale * view_point[0] / aspect / clip_w * 0.5 * f64::from(pose.grid_width),
         y: perspective_scale * view_point[1] / clip_w * 0.5 * f64::from(pose.grid_height),
         depth: clip_depth / clip_w,
         reciprocal_w: clip_w.recip(),
-        grid: [f64::from(column), f64::from(row)],
+        grid,
+        chart: offset,
         world,
+        expected_stretch: 0.0,
         valid: true,
         clamped,
         reason: Reason::Drawn,
+    };
+    if rule.excess_px().is_some() {
+        let column = grid[0] as u32;
+        let row = grid[1] as u32;
+        let neighbour_column = if column + 1 < EXTENT[0] {
+            column + 1
+        } else {
+            column - 1
+        };
+        let neighbour_row = if row + 1 < EXTENT[1] {
+            row + 1
+        } else {
+            row - 1
+        };
+        let right_screen = [draw_screen(neighbour_column, row)[0], screen[1]];
+        let above_screen = [screen[0], draw_screen(column, neighbour_row)[1]];
+        let right = scene_vertex_at_screen(pose, right_screen, grid, record, Rule::Fixed, mapping);
+        let above = scene_vertex_at_screen(pose, above_screen, grid, record, Rule::Fixed, mapping);
+        vertex.expected_stretch = if right.valid && above.valid {
+            maximum_singular_stretch(
+                [right.x - vertex.x, right.y - vertex.y],
+                [above.x - vertex.x, above.y - vertex.y],
+            )
+        } else {
+            f64::NAN
+        };
     }
+    vertex
 }
 
 fn srgb(value: f64) -> u8 {
@@ -505,6 +732,10 @@ struct Frame {
     colour: Vec<[u8; 3]>,
     covered: Vec<bool>,
     cause: Vec<Cause>,
+    record: Vec<Option<[f32; 4]>>,
+    chart: Vec<Option<[f64; 2]>>,
+    /// Pixels at which a projected source cell was rejected as over-stretched.
+    stretch_discarded: Vec<bool>,
     /// Pixels painted with a record belonging to no corner of the primitive that covered them.
     foreign: u64,
 }
@@ -535,6 +766,9 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
     let mut depth = vec![f64::INFINITY; pixels];
     let mut covered = vec![false; pixels];
     let mut cause = vec![Cause::Sky; pixels];
+    let mut sampled_record = vec![None; pixels];
+    let mut sampled_chart = vec![None; pixels];
+    let mut stretch_discarded = vec![false; pixels];
     let mut foreign = 0_u64;
     let half_w = 0.5 * f64::from(width);
     let half_h = 0.5 * f64::from(height);
@@ -642,6 +876,28 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
                             }) / reciprocal
                         });
+                        if let Some(excess_px) = rule.excess_px() {
+                            let expected_stretch =
+                                weights.iter().zip(tri).fold(0.0, |sum, (weight, vertex)| {
+                                    (weight * vertex.reciprocal_w)
+                                        .mul_add(vertex.expected_stretch, sum)
+                                }) / reciprocal;
+                            let stretched = fragment_maximum_stretch(&tri, weights, area)
+                                .is_none_or(|actual| {
+                                    !expected_stretch.is_finite()
+                                        || expected_stretch <= 0.0
+                                        || actual > expected_stretch + excess_px + 1.0e-9
+                                });
+                            if stretched {
+                                stretch_discarded[index] = true;
+                                continue;
+                            }
+                        }
+                        let chart: [f64; 2] = core::array::from_fn(|axis| {
+                            weights.iter().zip(tri).fold(0.0, |sum, (weight, vertex)| {
+                                (weight * vertex.reciprocal_w).mul_add(vertex.chart[axis], sum)
+                            }) / reciprocal
+                        });
                         let sample_column =
                             (grid[0] + 0.5).floor().clamp(0.0, f64::from(width) - 1.0) as u32;
                         let sample_row =
@@ -663,6 +919,8 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                         depth[index] = fragment_depth;
                         covered[index] = true;
                         cause[index] = cause_of(record, FLOOR_FRACTION);
+                        sampled_record[index] = Some(record);
+                        sampled_chart[index] = Some(chart);
                         colour[index] = [srgb(linear[0]), srgb(linear[1]), srgb(linear[2])];
                     }
                 }
@@ -673,8 +931,76 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
         colour,
         covered,
         cause,
+        record: sampled_record,
+        chart: sampled_chart,
+        stretch_discarded,
         foreign,
     }
+}
+
+fn maximum_singular_stretch(dx: [f64; 2], dy: [f64; 2]) -> f64 {
+    let trace = dx[0] * dx[0] + dx[1] * dx[1] + dy[0] * dy[0] + dy[1] * dy[1];
+    let determinant = dx[0].mul_add(dy[1], -dx[1] * dy[0]);
+    let discriminant = trace
+        .mul_add(trace, -4.0 * determinant * determinant)
+        .max(0.0);
+    trace.midpoint(discriminant.sqrt()).max(0.0).sqrt()
+}
+
+fn fragment_maximum_stretch(tri: &[Vertex; 3], weights: [f64; 3], area: f64) -> Option<f64> {
+    let derivative_x = [
+        (tri[1].y - tri[2].y) / area,
+        (tri[2].y - tri[0].y) / area,
+        (tri[0].y - tri[1].y) / area,
+    ];
+    let derivative_y = [
+        (tri[2].x - tri[1].x) / area,
+        (tri[0].x - tri[2].x) / area,
+        (tri[1].x - tri[0].x) / area,
+    ];
+    let reciprocal = weights
+        .into_iter()
+        .zip(tri.iter().copied())
+        .fold(0.0, |sum, (weight, vertex)| {
+            weight.mul_add(vertex.reciprocal_w, sum)
+        });
+    if !reciprocal.is_finite() || reciprocal <= 0.0 {
+        return None;
+    }
+    let derivative = |axis: usize, weight_derivatives: [f64; 3]| {
+        let numerator = weights
+            .into_iter()
+            .zip(tri.iter().copied())
+            .fold(0.0, |sum, (weight, vertex)| {
+                (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
+            });
+        let numerator_derivative = weight_derivatives
+            .into_iter()
+            .zip(tri.iter().copied())
+            .fold(0.0, |sum, (weight, vertex)| {
+                (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
+            });
+        let reciprocal_derivative = weight_derivatives
+            .into_iter()
+            .zip(tri.iter().copied())
+            .fold(0.0, |sum, (weight, vertex)| {
+                weight.mul_add(vertex.reciprocal_w, sum)
+            });
+        numerator_derivative.mul_add(reciprocal, -numerator * reciprocal_derivative)
+            / (reciprocal * reciprocal)
+    };
+    let dx = [derivative(0, derivative_x), derivative(1, derivative_x)];
+    let dy = [derivative(0, derivative_y), derivative(1, derivative_y)];
+    let trace = dx[0] * dx[0] + dx[1] * dx[1] + dy[0] * dy[0] + dy[1] * dy[1];
+    let determinant = dx[0].mul_add(dy[1], -dx[1] * dy[0]);
+    let discriminant = trace
+        .mul_add(trace, -4.0 * determinant * determinant)
+        .max(0.0);
+    let minimum_eigenvalue = (0.5 * (trace - discriminant.sqrt())).max(0.0);
+    if !minimum_eigenvalue.is_finite() || minimum_eigenvalue <= 0.0 {
+        return None;
+    }
+    Some(minimum_eigenvalue.sqrt().recip())
 }
 
 /// The browser's own classifier, over the canvas readback of the served frame.
@@ -744,6 +1070,644 @@ fn steep_records(pose: &Pose) -> Vec<[f32; 4]> {
             (0..EXTENT[0]).map(move |column| sample_pose(pose, pixel_screen(column, row)))
         })
         .collect()
+}
+
+fn render_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
+    render_frame(
+        &relief_redraw_pose(from, to),
+        records,
+        Rule::Fixed,
+        Mapping::InteriorAtFloor,
+    )
+}
+
+const REDRAW_STRETCH_EXCESS_PX: f64 = 1.0;
+
+fn render_guarded_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
+    render_frame(
+        &relief_redraw_pose(from, to),
+        records,
+        Rule::Guarded {
+            excess_px: REDRAW_STRETCH_EXCESS_PX,
+        },
+        Mapping::InteriorAtFloor,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordClass {
+    Interior,
+    Escape(i64),
+    Horizon,
+    Uncertain,
+    Malformed,
+}
+
+fn record_class(cause: Cause, record: [f32; 4]) -> RecordClass {
+    match cause {
+        Cause::Interior => RecordClass::Interior,
+        Cause::ExteriorFloor | Cause::LiftedEscape => {
+            RecordClass::Escape(f64::from(record[0]).floor() as i64)
+        }
+        Cause::Horizon => RecordClass::Horizon,
+        Cause::Uncertain => RecordClass::Uncertain,
+        Cause::Malformed | Cause::Sky => RecordClass::Malformed,
+    }
+}
+
+fn classes_agree(left: RecordClass, right: RecordClass) -> bool {
+    match (left, right) {
+        (RecordClass::Escape(left), RecordClass::Escape(right)) => left.abs_diff(right) <= 1,
+        _ => left == right,
+    }
+}
+
+fn broad_classes_agree(left: RecordClass, right: RecordClass) -> bool {
+    matches!(
+        (left, right),
+        (RecordClass::Escape(_), RecordClass::Escape(_))
+    ) || left == right
+}
+
+fn records_equal(left: [f32; 4], right: [f32; 4]) -> bool {
+    left.into_iter()
+        .zip(right)
+        .all(|(left, right)| left.to_bits() == right.to_bits())
+}
+
+#[derive(Debug, PartialEq)]
+struct ReliefRedrawMeasurement {
+    zoom_delta: f64,
+    agree: u64,
+    hole: u64,
+    clear_over_truth_surface: u64,
+    occluded_wrong: u64,
+    resolution_only: u64,
+    agree_record_changed: u64,
+    resolution_same_broad_class: u64,
+    resolution_class_changed: u64,
+    largest_connected_hole: u64,
+    maximum_same_pixel_chart_separation_px: f64,
+    source_texel_reach_px: f64,
+    agree_fraction: f64,
+    hole_fraction: f64,
+    clear_over_truth_surface_fraction: f64,
+    occluded_wrong_fraction: f64,
+    resolution_only_fraction: f64,
+    exposed_fraction: f64,
+    requested_centre_truth_px: [f64; 2],
+    requested_centre_redraw_px: [f64; 2],
+    requested_centre_error_px: f64,
+    requested_anchor_truth_px: [f64; 2],
+    requested_anchor_redraw_px: [f64; 2],
+    requested_anchor_error_px: f64,
+}
+
+impl ReliefRedrawMeasurement {
+    fn assert_pinned(&self, expected: &Self) {
+        const FRACTION_TOLERANCE: f64 = 5.0e-13;
+        const CHART_TOLERANCE_PX: f64 = 5.0e-9;
+        const PLACEMENT_TOLERANCE_PX: f64 = 1.0e-9;
+
+        assert_eq!(self.zoom_delta, expected.zoom_delta);
+        assert_eq!(self.agree, expected.agree);
+        assert_eq!(self.hole, expected.hole);
+        assert_eq!(
+            self.clear_over_truth_surface,
+            expected.clear_over_truth_surface
+        );
+        assert_eq!(self.occluded_wrong, expected.occluded_wrong);
+        assert_eq!(self.resolution_only, expected.resolution_only);
+        assert_eq!(self.agree_record_changed, expected.agree_record_changed);
+        assert_eq!(
+            self.resolution_same_broad_class,
+            expected.resolution_same_broad_class
+        );
+        assert_eq!(
+            self.resolution_class_changed,
+            expected.resolution_class_changed
+        );
+        assert_eq!(self.largest_connected_hole, expected.largest_connected_hole);
+        assert!(
+            (self.maximum_same_pixel_chart_separation_px
+                - expected.maximum_same_pixel_chart_separation_px)
+                .abs()
+                <= CHART_TOLERANCE_PX
+        );
+        assert!(
+            (self.source_texel_reach_px - expected.source_texel_reach_px).abs()
+                <= CHART_TOLERANCE_PX
+        );
+        for (actual, expected) in [
+            (self.agree_fraction, expected.agree_fraction),
+            (self.hole_fraction, expected.hole_fraction),
+            (
+                self.clear_over_truth_surface_fraction,
+                expected.clear_over_truth_surface_fraction,
+            ),
+            (
+                self.occluded_wrong_fraction,
+                expected.occluded_wrong_fraction,
+            ),
+            (
+                self.resolution_only_fraction,
+                expected.resolution_only_fraction,
+            ),
+            (self.exposed_fraction, expected.exposed_fraction),
+        ] {
+            assert!((actual - expected).abs() <= FRACTION_TOLERANCE);
+        }
+        assert_eq!(
+            self.requested_centre_truth_px,
+            expected.requested_centre_truth_px
+        );
+        assert_eq!(
+            self.requested_anchor_truth_px,
+            expected.requested_anchor_truth_px
+        );
+        for (actual, expected) in self
+            .requested_centre_redraw_px
+            .into_iter()
+            .zip(expected.requested_centre_redraw_px)
+            .chain(
+                self.requested_anchor_redraw_px
+                    .into_iter()
+                    .zip(expected.requested_anchor_redraw_px),
+            )
+        {
+            assert!((actual - expected).abs() <= PLACEMENT_TOLERANCE_PX);
+        }
+        assert!(self.requested_centre_error_px <= PLACEMENT_TOLERANCE_PX);
+        assert!(self.requested_anchor_error_px <= PLACEMENT_TOLERANCE_PX);
+    }
+
+    fn assert_partition(&self, expected: ReliefRedrawPartition) {
+        let total = u64::from(EXTENT[0]) * u64::from(EXTENT[1]);
+        assert_eq!(self.agree, expected.agree);
+        assert_eq!(self.hole, expected.hole);
+        assert_eq!(
+            self.clear_over_truth_surface,
+            expected.clear_over_truth_surface
+        );
+        assert_eq!(self.occluded_wrong, expected.occluded_wrong);
+        assert_eq!(self.resolution_only, expected.resolution_only);
+        assert_eq!(self.largest_connected_hole, expected.largest_connected_hole);
+        assert_eq!(
+            self.exposed_fraction,
+            (expected.hole + expected.occluded_wrong) as f64 / total as f64
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReliefRedrawPartition {
+    agree: u64,
+    hole: u64,
+    clear_over_truth_surface: u64,
+    occluded_wrong: u64,
+    resolution_only: u64,
+    largest_connected_hole: u64,
+}
+
+fn largest_connected_region(mask: &[bool]) -> u64 {
+    let [width, height] = EXTENT.map(|value| value as usize);
+    let mut visited = vec![false; mask.len()];
+    let mut largest = 0_u64;
+    for seed in 0..mask.len() {
+        if visited[seed] || !mask[seed] {
+            continue;
+        }
+        let mut size = 0_u64;
+        let mut pending = std::collections::VecDeque::from([seed]);
+        visited[seed] = true;
+        while let Some(index) = pending.pop_front() {
+            size = size.saturating_add(1);
+            let column = index % width;
+            let row = index / width;
+            let neighbours = [
+                if column > 0 { Some(index - 1) } else { None },
+                (column + 1 < width).then_some(index + 1),
+                if row > 0 { Some(index - width) } else { None },
+                (row + 1 < height).then_some(index + width),
+            ];
+            for neighbour in neighbours.into_iter().flatten() {
+                if !visited[neighbour] && mask[neighbour] {
+                    visited[neighbour] = true;
+                    pending.push_back(neighbour);
+                }
+            }
+        }
+        largest = largest.max(size);
+    }
+    largest
+}
+
+fn presented_pixel(screen: [f64; 2]) -> [f64; 2] {
+    [
+        screen[0] + 0.5 * f64::from(EXTENT[0]),
+        0.5 * f64::from(EXTENT[1]) - screen[1],
+    ]
+}
+
+fn relief_redraw_position(from: &Pose, to: &Pose, target: [f64; 2]) -> [f64; 2] {
+    let redraw = relief_redraw_pose(from, to);
+    let PoseMap::Mapped(redraw_map) = redraw.map else {
+        panic!("the relief redraw map is finite");
+    };
+    let PoseMap::Mapped(to_map) = to.map else {
+        panic!("the destination map is finite");
+    };
+    let target_chart = map_plane_offset(to, target).expect("the requested point reaches the chart");
+    let source_screen = plane_to_screen(&redraw_map, target_chart)
+        .expect("the requested point reaches the source lattice");
+    assert!(
+        source_screen[0].abs() <= 0.5 * f64::from(from.grid_width) + 1.0e-9
+            && source_screen[1].abs() <= 0.5 * f64::from(from.grid_height) + 1.0e-9,
+        "the requested point {target:?} is outside the retained lattice at {source_screen:?}"
+    );
+    let redrawn_chart =
+        map_plane_offset(&redraw, source_screen).expect("the redraw preserves the chart point");
+    plane_to_screen(&to_map, redrawn_chart).expect("the redraw chart point projects to the surface")
+}
+
+fn placement(from: &Pose, to: &Pose, target: [f64; 2]) -> ([f64; 2], [f64; 2], f64) {
+    let truth = presented_pixel(target);
+    let redraw = presented_pixel(relief_redraw_position(from, to, target));
+    let error = (redraw[0] - truth[0]).hypot(redraw[1] - truth[1]);
+    (truth, redraw, error)
+}
+
+fn measure_relief_redraw(
+    from: &Pose,
+    to: &Pose,
+    redraw: &Frame,
+    truth: &Frame,
+    zoom_delta: f64,
+) -> ReliefRedrawMeasurement {
+    let total = u64::from(EXTENT[0]) * u64::from(EXTENT[1]);
+    let source_step = zoom_delta.exp2();
+    let source_texel_reach_px = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
+    let mut agree = 0_u64;
+    let mut hole = 0_u64;
+    let mut clear_over_truth_surface = 0_u64;
+    let mut occluded_wrong = 0_u64;
+    let mut resolution_only = 0_u64;
+    let mut agree_record_changed = 0_u64;
+    let mut resolution_same_broad_class = 0_u64;
+    let mut resolution_class_changed = 0_u64;
+    let mut maximum_same_pixel_chart_separation_px = 0.0_f64;
+    let mut hole_mask = vec![false; redraw.covered.len()];
+    for index in 0..redraw.covered.len() {
+        match (redraw.covered[index], truth.covered[index]) {
+            (false, false) if redraw.stretch_discarded[index] => {
+                hole = hole.saturating_add(1);
+                hole_mask[index] = true;
+            }
+            (false, false) => agree = agree.saturating_add(1),
+            (false, true) => {
+                hole = hole.saturating_add(1);
+                clear_over_truth_surface = clear_over_truth_surface.saturating_add(1);
+                hole_mask[index] = true;
+            }
+            (true, false) => occluded_wrong = occluded_wrong.saturating_add(1),
+            (true, true) => {
+                let redrawn_chart =
+                    redraw.chart[index].expect("a redrawn fragment has a chart point");
+                let true_chart = truth.chart[index].expect("a true fragment has a chart point");
+                let separation =
+                    (redrawn_chart[0] - true_chart[0]).hypot(redrawn_chart[1] - true_chart[1]);
+                maximum_same_pixel_chart_separation_px =
+                    maximum_same_pixel_chart_separation_px.max(separation);
+                if separation > source_texel_reach_px + 1.0e-9 {
+                    occluded_wrong = occluded_wrong.saturating_add(1);
+                    continue;
+                }
+                let redrawn_record =
+                    redraw.record[index].expect("a redrawn fragment resolves a record");
+                let true_record = truth.record[index].expect("a true fragment resolves a record");
+                let redrawn_class = record_class(redraw.cause[index], redrawn_record);
+                let true_class = record_class(truth.cause[index], true_record);
+                if classes_agree(redrawn_class, true_class) {
+                    agree = agree.saturating_add(1);
+                    agree_record_changed = agree_record_changed
+                        .saturating_add(u64::from(!records_equal(redrawn_record, true_record)));
+                } else {
+                    resolution_only = resolution_only.saturating_add(1);
+                    if broad_classes_agree(redrawn_class, true_class) {
+                        resolution_same_broad_class = resolution_same_broad_class.saturating_add(1);
+                    } else {
+                        resolution_class_changed = resolution_class_changed.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        agree + hole + occluded_wrong + resolution_only,
+        total,
+        "the pixel classes partition the destination"
+    );
+    assert_eq!(
+        resolution_same_broad_class + resolution_class_changed,
+        resolution_only,
+        "the resolution subclasses partition their class"
+    );
+    let centre = placement(from, to, [0.0; 2]);
+    let anchor = placement(
+        from,
+        to,
+        [
+            -0.5 * f64::from(to.grid_width),
+            0.5 * f64::from(to.grid_height),
+        ],
+    );
+    ReliefRedrawMeasurement {
+        zoom_delta,
+        agree,
+        hole,
+        clear_over_truth_surface,
+        occluded_wrong,
+        resolution_only,
+        agree_record_changed,
+        resolution_same_broad_class,
+        resolution_class_changed,
+        largest_connected_hole: largest_connected_region(&hole_mask),
+        maximum_same_pixel_chart_separation_px,
+        source_texel_reach_px,
+        agree_fraction: agree as f64 / total as f64,
+        hole_fraction: hole as f64 / total as f64,
+        clear_over_truth_surface_fraction: clear_over_truth_surface as f64 / total as f64,
+        occluded_wrong_fraction: occluded_wrong as f64 / total as f64,
+        resolution_only_fraction: resolution_only as f64 / total as f64,
+        exposed_fraction: (hole + occluded_wrong) as f64 / total as f64,
+        requested_centre_truth_px: centre.0,
+        requested_centre_redraw_px: centre.1,
+        requested_centre_error_px: centre.2,
+        requested_anchor_truth_px: anchor.0,
+        requested_anchor_redraw_px: anchor.1,
+        requested_anchor_error_px: anchor.2,
+    }
+}
+
+#[test]
+fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
+    let sampling_from = zoom_pose(3.565);
+    let source_records = steep_records(&sampling_from);
+    let mut from = sampling_from;
+    from.centre_from_reference_px = [0.0; 2];
+    let mut reports = Vec::new();
+    let mut guarded_reports = Vec::new();
+    for zoom_delta in [0.1, 0.5] {
+        let to = screen_centred_zoom_destination(&from, zoom_delta);
+        if zoom_delta == 0.1 {
+            for ((actual, full_grid), coverage_grid) in to
+                .centre_from_reference_px
+                .into_iter()
+                .zip([33.309_466, -6.635_800])
+                .zip([16.654_733, -3.317_900])
+            {
+                assert!(
+                    (actual - full_grid).abs() < 1.0e-6,
+                    "the 960 by 540 displacement changed: {actual} != {full_grid}"
+                );
+                assert!(
+                    (actual * 0.5 - coverage_grid).abs() < 1.0e-6,
+                    "the 480 by 270 coverage displacement changed: {} != {coverage_grid}",
+                    actual * 0.5
+                );
+            }
+        }
+        let sampling_to = zoomed_sampling_pose(&sampling_from, &to, zoom_delta);
+        assert_eq!(
+            sample_pose(&sampling_from, [0.0; 2]),
+            sample_pose(&sampling_to, [0.0; 2]),
+            "screen-centred zoom {zoom_delta} must preserve the point under the centre"
+        );
+        let true_records = steep_records(&sampling_to);
+        let redraw = render_relief_redraw(&from, &to, &source_records);
+        let guarded = render_guarded_relief_redraw(&from, &to, &source_records);
+        let device_pose = relief_redraw_source_pose(&from, EXTENT, &to)
+            .expect("the device path composes the measured source and destination poses");
+        let device_redraw = render_frame(
+            &device_pose,
+            &source_records,
+            Rule::Fixed,
+            Mapping::InteriorAtFloor,
+        );
+        assert_eq!(
+            device_redraw.covered, redraw.covered,
+            "the device source-map split changes coverage at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_redraw.cause, redraw.cause,
+            "the device source-map split changes the visible record at zoom delta {zoom_delta}"
+        );
+        let device_guarded = render_frame(
+            &device_pose,
+            &source_records,
+            Rule::Guarded {
+                excess_px: REDRAW_STRETCH_EXCESS_PX,
+            },
+            Mapping::InteriorAtFloor,
+        );
+        assert_eq!(
+            device_guarded.covered, guarded.covered,
+            "the guarded device source-map split changes coverage at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_guarded.cause, guarded.cause,
+            "the guarded device source-map split changes the visible record at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_guarded.stretch_discarded, guarded.stretch_discarded,
+            "the guarded device source-map split changes discarded cells at zoom delta {zoom_delta}"
+        );
+        let truth = render_frame(&to, &true_records, Rule::Fixed, Mapping::InteriorAtFloor);
+        reports.push(measure_relief_redraw(
+            &from, &to, &redraw, &truth, zoom_delta,
+        ));
+        guarded_reports.push(measure_relief_redraw(
+            &from, &to, &guarded, &truth, zoom_delta,
+        ));
+    }
+    let expected = [
+        ReliefRedrawMeasurement {
+            zoom_delta: 0.1,
+            agree: 476_107,
+            hole: 438,
+            clear_over_truth_surface: 438,
+            occluded_wrong: 36_862,
+            resolution_only: 4_993,
+            agree_record_changed: 274_214,
+            resolution_same_broad_class: 1_961,
+            resolution_class_changed: 3_032,
+            largest_connected_hole: 108,
+            maximum_same_pixel_chart_separation_px: 5_529.504_350_957_549,
+            source_texel_reach_px: 1.464_965_064_442,
+            agree_fraction: 0.918_416_280_864,
+            hole_fraction: 0.000_844_907_407,
+            clear_over_truth_surface_fraction: 0.000_844_907_407,
+            occluded_wrong_fraction: 0.071_107_253_086,
+            resolution_only_fraction: 0.009_631_558_642,
+            exposed_fraction: 0.071_952_160_494,
+            requested_centre_truth_px: [480.0, 270.0],
+            requested_centre_redraw_px: [480.0, 270.0],
+            requested_centre_error_px: 0.0,
+            requested_anchor_truth_px: [0.0, 0.0],
+            requested_anchor_redraw_px: [0.0, 0.0],
+            requested_anchor_error_px: 0.0,
+        },
+        ReliefRedrawMeasurement {
+            zoom_delta: 0.5,
+            agree: 486_977,
+            hole: 173,
+            clear_over_truth_surface: 173,
+            occluded_wrong: 27_611,
+            resolution_only: 3_639,
+            agree_record_changed: 363_622,
+            resolution_same_broad_class: 1_618,
+            resolution_class_changed: 2_021,
+            largest_connected_hole: 4,
+            maximum_same_pixel_chart_separation_px: 295.800_968_280_872,
+            source_texel_reach_px: 1.707_106_781_187,
+            agree_fraction: 0.939_384_645_062,
+            hole_fraction: 0.000_333_719_136,
+            clear_over_truth_surface_fraction: 0.000_333_719_136,
+            occluded_wrong_fraction: 0.053_261_959_877,
+            resolution_only_fraction: 0.007_019_675_926,
+            exposed_fraction: 0.053_595_679_012,
+            requested_centre_truth_px: [480.0, 270.0],
+            requested_centre_redraw_px: [480.0, 270.0],
+            requested_centre_error_px: 0.0,
+            requested_anchor_truth_px: [0.0, 0.0],
+            requested_anchor_redraw_px: [0.0, 0.0],
+            requested_anchor_error_px: 0.0,
+        },
+    ];
+    assert_eq!(reports.len(), expected.len(), "both zoom deltas are pinned");
+    for (actual, expected) in reports.iter().zip(&expected) {
+        actual.assert_pinned(expected);
+    }
+
+    // Eight percent is the smallest round policy boundary with useful headroom over the measured
+    // worst case: +0.1 is 7.1952%, leaving 0.8048 percentage point before a redraw becomes a hold.
+    assert_eq!(RELIEF_REDRAW_MAX_EXPOSED_FRACTION, 0.08);
+    assert!(
+        reports
+            .iter()
+            .all(|report| report.exposed_fraction < RELIEF_REDRAW_MAX_EXPOSED_FRACTION)
+    );
+
+    // The browser's `(300,150)-(600,350)` box on 960 by 540 is 300 by 200, centred at
+    // `(-30,+20)` in render-grid coordinates. Height is limiting, so it magnifies by 540/200.
+    let box_anchor = [-30.0, 20.0];
+    let box_zoom_delta = 2.7_f64.log2();
+    let box_to = anchored_zoom_destination(&from, box_zoom_delta, box_anchor);
+    let box_sampling_to = zoomed_sampling_pose(&sampling_from, &box_to, box_zoom_delta);
+    for (before, after) in sample_pose(&sampling_from, box_anchor)
+        .into_iter()
+        .zip(sample_pose(&box_sampling_to, box_anchor))
+    {
+        assert!(
+            (before - after).abs() < 1.0e-9,
+            "the 300 by 200 selection moved its off-centre anchor"
+        );
+    }
+    let box_true_records = steep_records(&box_sampling_to);
+    let box_truth = render_frame(
+        &box_to,
+        &box_true_records,
+        Rule::Fixed,
+        Mapping::InteriorAtFloor,
+    );
+    let box_before = measure_relief_redraw(
+        &from,
+        &box_to,
+        &render_relief_redraw(&from, &box_to, &source_records),
+        &box_truth,
+        box_zoom_delta,
+    );
+    let box_after = measure_relief_redraw(
+        &from,
+        &box_to,
+        &render_guarded_relief_redraw(&from, &box_to, &source_records),
+        &box_truth,
+        box_zoom_delta,
+    );
+    println!(
+        "guarded relief redraw measurement\nexcess_px={REDRAW_STRETCH_EXCESS_PX}\nbefore={reports:#?}\nafter={guarded_reports:#?}\nbox_before={box_before:#?}\nbox_after={box_after:#?}"
+    );
+
+    let guarded_expected = [
+        ReliefRedrawPartition {
+            agree: 469_453,
+            hole: 30_691,
+            clear_over_truth_surface: 28_795,
+            occluded_wrong: 18_256,
+            resolution_only: 0,
+            largest_connected_hole: 28_573,
+        },
+        ReliefRedrawPartition {
+            agree: 479_066,
+            hole: 24_941,
+            clear_over_truth_surface: 20_953,
+            occluded_wrong: 14_393,
+            resolution_only: 0,
+            largest_connected_hole: 24_768,
+        },
+    ];
+    assert_eq!(guarded_reports.len(), guarded_expected.len());
+    for (actual, expected) in guarded_reports.iter().zip(guarded_expected) {
+        actual.assert_partition(expected);
+    }
+
+    assert_eq!(
+        box_before, box_after,
+        "uniform magnification must not discard"
+    );
+    box_before.assert_partition(ReliefRedrawPartition {
+        agree: 506_479,
+        hole: 55,
+        clear_over_truth_surface: 55,
+        occluded_wrong: 11_866,
+        resolution_only: 0,
+        largest_connected_hole: 3,
+    });
+}
+
+/// Pending decision: enabling or removing the candidate stretch guard remains open.
+///
+/// The measured candidate fails both requirements below: its residual wrong pixels exceed the
+/// resolution-only tolerance, and its `+0.1` hole-plus-wrong exposure exceeds eight percent.
+#[test]
+#[ignore = "open decision: keep the relief stretch guard disabled or remove it"]
+fn candidate_relief_stretch_guard_meets_the_moving_frame_acceptance_bar() {
+    let guarded = [
+        ReliefRedrawPartition {
+            agree: 469_453,
+            hole: 30_691,
+            clear_over_truth_surface: 28_795,
+            occluded_wrong: 18_256,
+            resolution_only: 0,
+            largest_connected_hole: 28_573,
+        },
+        ReliefRedrawPartition {
+            agree: 479_066,
+            hole: 24_941,
+            clear_over_truth_surface: 20_953,
+            occluded_wrong: 14_393,
+            resolution_only: 0,
+            largest_connected_hole: 24_768,
+        },
+    ];
+    let total = f64::from(EXTENT[0]) * f64::from(EXTENT[1]);
+    for report in guarded {
+        assert!(report.occluded_wrong <= report.resolution_only);
+        assert!(
+            (report.hole + report.occluded_wrong) as f64 / total
+                <= RELIEF_REDRAW_MAX_EXPOSED_FRACTION
+        );
+    }
 }
 
 /// This render lands in the band the browser read back, which is a calibration, not a proof.
@@ -1789,7 +2753,6 @@ fn the_zoomed_row_uploads_the_steep_row_s_scene_payload_unchanged() {
             pose.grid_width * pose.grid_height,
             pose.plane,
             pose.map,
-            CLASSIC_PALETTE,
         )
         .expect("the row's map packs into the scene payload")
     };

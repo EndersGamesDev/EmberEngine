@@ -266,7 +266,9 @@ pub struct PageFacts<'a> {
     pub scene_callback_observation_wall_ms: Option<f64>,
     pub scene_fence_callback_observation_wait_ms: Option<f64>,
     pub scene_polls: Option<u32>,
+    /// Submission-to-completion wall for the latest warp, including callback observation delay.
     pub warp_wall_ms: Option<f64>,
+    /// Portion of that wall spent from the first fence poll through callback observation.
     pub warp_fence_wait_ms: Option<f64>,
     pub warp_callback_observation_wall_ms: Option<f64>,
     pub warp_fence_callback_observation_wait_ms: Option<f64>,
@@ -447,8 +449,8 @@ impl<'a> PageFacts<'a> {
                 .last_scene
                 .map(|sample| sample.fence_wait_ms),
             scene_polls: present.last_scene.map(|sample| sample.polls),
-            warp_wall_ms: None,
-            warp_fence_wait_ms: None,
+            warp_wall_ms: present.last_warp.map(|sample| sample.wall_ms),
+            warp_fence_wait_ms: present.last_warp.map(|sample| sample.fence_wait_ms),
             warp_callback_observation_wall_ms: present.last_warp.map(|sample| sample.wall_ms),
             warp_fence_callback_observation_wait_ms: present
                 .last_warp
@@ -571,6 +573,18 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&fact).expect("the refusal fact serializes"),
             "\"ErrorCeiling(max_px=392.09,p95_px=240.88)\""
+        );
+    }
+
+    #[test]
+    fn relief_exposure_refusal_serializes_its_prediction_and_limit() {
+        let fact = WarpRefusalFact(WarpRefusalReason::ReliefExposure {
+            predicted_fraction: 0.125,
+            limit: 0.08,
+        });
+        assert_eq!(
+            serde_json::to_string(&fact).expect("the relief refusal fact serializes"),
+            "\"ReliefExposure(predicted_fraction=0.1250,limit=0.0800)\""
         );
     }
 

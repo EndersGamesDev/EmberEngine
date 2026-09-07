@@ -1208,6 +1208,7 @@ dependencies = [
  "ember-julibrot-worker",
  "ember-lab-heap",
  "naga",
+ "pollster",
  "thiserror 2.0.20",
  "wgpu",
 ]

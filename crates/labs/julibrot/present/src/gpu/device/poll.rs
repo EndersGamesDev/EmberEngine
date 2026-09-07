@@ -200,7 +200,6 @@ impl Presenter {
         } else {
             None
         };
-        self.facts.palette = frame.palette;
         self.facts.view = frame.pose.view;
         self.facts.status = PresentStatus::ShowingCompletedScene;
     }

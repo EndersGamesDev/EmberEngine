@@ -4,15 +4,17 @@ use ember_julibrot_math::{
     pixel_scale, scene_footprint, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, grid_screen,
-    height_for_record, project_scene_point, project_scene_vertex, shade_lit_escape_record,
+    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame, SubmissionKind,
+    SubmissionMeasurement, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpPlan, WarpRefusalReason,
+    WarpValidation, apply_homography, grid_screen, height_for_record, presentation_value,
+    project_scene_point, project_scene_vertex, relief_redraw_source_pose, shade_presentation_value,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
 const BASE_ORIGIN: [f64; 4] = [0.0, 0.0, -0.75, 0.1];
 const ESCAPE: EscapeParams = EscapeParams::new(128);
 const LIGHT: f32 = 0.7;
+const RELIEF_EXPOSURE_TOTAL: u32 = 65 * 65;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Expected {
@@ -26,16 +28,21 @@ enum Expected {
         compared: u32,
         uncertain: u32,
         disoccluded: u32,
-        maximum_millipixels: u32,
+    },
+    /// Source records are deliberately stale in resolution but are placed by their source chart.
+    ReliefApprox,
+    /// The retained source footprint exceeds the relief-redraw admission ceiling.
+    ReliefRefused {
+        exposed_samples: u32,
+        total_samples: u32,
     },
 }
 
-const fn expected_relief(maximum_millipixels: u32) -> Expected {
+const fn expected_relief() -> Expected {
     Expected::Relief {
         compared: 181,
         uncertain: 0,
         disoccluded: 0,
-        maximum_millipixels,
     }
 }
 
@@ -86,7 +93,6 @@ const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
         pose: *pose,
-        palette: PaletteId::Classic,
         iteration_cap: ESCAPE.max_iter,
         level: RefinementLevel::Final,
         extent: [pose.grid_width, pose.grid_height],
@@ -223,8 +229,10 @@ fn same_terminal_and_index(left: KernelSample, right: KernelSample) -> bool {
 }
 
 fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
-    let left = shade_lit_escape_record(record(left), CLASSIC_PALETTE, LIGHT).rgba;
-    let right = shade_lit_escape_record(record(right), CLASSIC_PALETTE, LIGHT).rgba;
+    let left =
+        shade_presentation_value(presentation_value(record(left), LIGHT), CLASSIC_PALETTE).rgba;
+    let right =
+        shade_presentation_value(presentation_value(record(right), LIGHT), CLASSIC_PALETTE).rgba;
     left.into_iter()
         .zip(right)
         .all(|(left, right)| (left - right).abs() <= 1.0 / 255.0 + f32::EPSILON)
@@ -411,12 +419,8 @@ fn barycentric(point: [f64; 2], triangle: [RedrawVertex; 3]) -> Option<[f64; 3]>
 }
 
 fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Option<RedrawVertex>> {
-    let mut redraw_pose = *to;
-    redraw_pose.plane = from.plane;
-    redraw_pose.object = from.object;
-    redraw_pose.map = from.map;
-    redraw_pose.grid_width = from.grid_width;
-    redraw_pose.grid_height = from.grid_height;
+    let redraw_pose = relief_redraw_source_pose(from, [from.grid_width, from.grid_height], to)
+        .expect("the oracle's relief pair composes a source-lattice pose");
     retained
         .iter()
         .enumerate()
@@ -571,11 +575,38 @@ fn compare_redraw(name: &str, from: &Pose, to: &Pose) -> (u32, u32, u32) {
     (compared, disoccluded, uncertain)
 }
 
+fn exposure_count(plan: &WarpPlan) -> Option<(u32, u32)> {
+    let Some(WarpRefusalReason::ReliefExposure {
+        predicted_fraction, ..
+    }) = plan.refusal_reason
+    else {
+        return None;
+    };
+    let exposed = (0..=RELIEF_EXPOSURE_TOTAL).min_by(|left, right| {
+        let fraction = |value| f64::from(value) / f64::from(RELIEF_EXPOSURE_TOTAL);
+        (predicted_fraction - fraction(*left))
+            .abs()
+            .total_cmp(&(predicted_fraction - fraction(*right)).abs())
+    })?;
+    Some((exposed, RELIEF_EXPOSURE_TOTAL))
+}
+
+fn fixture_assertion(condition: bool, failure: &'static str) -> Result<(), &'static str> {
+    condition.then_some(()).ok_or(failure)
+}
+
 #[allow(
     clippy::print_stderr,
-    reason = "the oracle emits the requested per-fixture verdict table"
+    clippy::too_many_lines,
+    reason = "the oracle emits and checks the complete requested per-fixture verdict table"
 )]
-fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Expected) {
+fn check_fixture(
+    name: &str,
+    from: &Pose,
+    to: &Pose,
+    height: f64,
+    expected: Expected,
+) -> Option<String> {
     let plan = Warp::reproject(
         &frame(from),
         from,
@@ -583,70 +614,149 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         PrecisionMode::PictureFast,
         WarpValidation::Ordinary,
     );
-    if plan.kind == WarpKind::ReliefRedraw {
-        assert!(
-            matches!(expected, Expected::Relief { .. }),
-            "{name}: unexpectedly selected a relief redraw"
-        );
-        assert!(
-            plan.source_valid,
-            "{name}: relief redraw lost its record source"
-        );
-        assert!(
-            plan.exposed,
-            "{name}: relief redraw must expose its fallback"
-        );
-        assert_eq!(plan.source_scene_id, Some(7), "{name}");
-        assert_eq!(plan.source_texture_index, Some(1), "{name}");
-        let maximum = plan
-            .approx_max_error_px
-            .expect("a relief redraw is measured, never unmeasurable");
-        assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
-        let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
-        let Expected::Relief {
-            compared: expected_compared,
-            uncertain: expected_uncertain,
-            disoccluded: expected_disoccluded,
-            maximum_millipixels,
-        } = expected
-        else {
-            unreachable!("the relief branch checked its expected kind")
-        };
-        assert_eq!(
-            (compared, uncertain, disoccluded),
-            (expected_compared, expected_uncertain, expected_disoccluded,),
-            "{name}: relief coverage tuple"
-        );
-        let expected_maximum = f64::from(maximum_millipixels) / 1_000.0;
-        assert!(
-            (maximum - expected_maximum).abs() < 0.0005,
-            "{name}: measured {maximum} px, expected {expected_maximum} px"
-        );
-        eprintln!(
-            "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
-        );
-        return;
-    }
-    if plan.kind == WarpKind::ClearOnly {
-        assert_eq!(expected, Expected::Clear, "{name}: unexpectedly cleared");
-        assert!(!plan.source_valid, "{name}: clear plan retained a source");
-        if let Some(maximum) = plan.approx_max_error_px {
-            eprintln!("oracle fixture | {name} | cleared | homography={maximum:.6} px");
+    let measured_exposure = exposure_count(&plan);
+    let verdict = (|| -> Result<(), &'static str> {
+        if plan.kind == WarpKind::ReliefRedraw {
+            let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
+            eprintln!(
+                "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded}"
+            );
+            fixture_assertion(
+                matches!(expected, Expected::Relief { .. } | Expected::ReliefApprox),
+                "unexpectedly selected a relief redraw",
+            )?;
+            fixture_assertion(plan.source_valid, "relief redraw lost its record source")?;
+            fixture_assertion(plan.exposed, "relief redraw must expose its fallback")?;
+            fixture_assertion(plan.source_scene_id == Some(7), "wrong source scene")?;
+            fixture_assertion(plan.source_texture_index == Some(1), "wrong source texture")?;
+            fixture_assertion(
+                plan.approx_max_error_px.is_none(),
+                "relief redraw retained a maximum",
+            )?;
+            fixture_assertion(
+                plan.approx_p95_error_px.is_none(),
+                "relief redraw retained a p95",
+            )?;
+            fixture_assertion(
+                plan.refusal_reason.is_none(),
+                "relief redraw retained a refusal",
+            )?;
+            fixture_assertion(
+                plan.destination_pose == Some(*to),
+                "relief redraw lost its destination pose",
+            )?;
+            fixture_assertion(
+                plan.predicted_exposed_fraction
+                    .is_some_and(|fraction| fraction <= RELIEF_REDRAW_MAX_EXPOSED_FRACTION),
+                "relief exposure was not admitted",
+            )?;
+            if let Expected::Relief {
+                compared: expected_compared,
+                uncertain: expected_uncertain,
+                disoccluded: expected_disoccluded,
+            } = expected
+            {
+                fixture_assertion(
+                    (compared, uncertain, disoccluded)
+                        == (expected_compared, expected_uncertain, expected_disoccluded),
+                    "relief coverage tuple changed",
+                )?;
+            }
+        } else if plan.kind == WarpKind::ClearOnly {
+            if let Some(
+                reason @ WarpRefusalReason::ReliefExposure {
+                    predicted_fraction, ..
+                },
+            ) = plan.refusal_reason
+            {
+                let exposure = measured_exposure.map_or_else(
+                    || "unavailable".to_owned(),
+                    |(exposed, total)| format!("{exposed}/{total}"),
+                );
+                eprintln!(
+                    "oracle fixture | {name} | cleared | reason={reason} | exposed={exposure} | predicted={predicted_fraction:.12}"
+                );
+            } else if let Some(maximum) = plan.approx_max_error_px {
+                eprintln!("oracle fixture | {name} | cleared | homography={maximum:.6} px");
+            } else {
+                eprintln!(
+                    "oracle fixture | {name} | cleared | reason={:?} | exposure={measured_exposure:?}",
+                    plan.refusal_reason
+                );
+            }
+            fixture_assertion(!plan.source_valid, "clear plan retained a source")?;
+            if let Expected::ReliefRefused {
+                exposed_samples,
+                total_samples,
+            } = expected
+            {
+                fixture_assertion(total_samples != 0, "expected exposure denominator was zero")?;
+                let Some(WarpRefusalReason::ReliefExposure {
+                    predicted_fraction,
+                    limit,
+                }) = plan.refusal_reason
+                else {
+                    return Err("expected a measured relief exposure refusal");
+                };
+                let expected_fraction = f64::from(exposed_samples) / f64::from(total_samples);
+                fixture_assertion(
+                    predicted_fraction.to_bits() == expected_fraction.to_bits(),
+                    "predicted relief exposure changed",
+                )?;
+                fixture_assertion(
+                    limit.to_bits() == RELIEF_REDRAW_MAX_EXPOSED_FRACTION.to_bits(),
+                    "relief exposure limit changed",
+                )?;
+            } else {
+                fixture_assertion(expected == Expected::Clear, "unexpectedly cleared")?;
+            }
+        } else if plan.kind == WarpKind::AnchorHomography {
+            let Some(maximum) = plan.approx_max_error_px else {
+                eprintln!("oracle fixture | {name} | agree | missing error measurement");
+                return Err("displayable plan did not publish its measured maximum");
+            };
+            let compared = compare_accepted(name, from, to, plan.rows, maximum, height);
+            eprintln!("oracle fixture | {name} | agree | samples={compared} | bound={maximum:.6}");
+            fixture_assertion(expected == Expected::Agree, "unexpectedly displayed")?;
+            fixture_assertion(plan.source_valid, "display plan lost its source")?;
+            fixture_assertion(plan.source_scene_id == Some(7), "wrong source scene")?;
+            fixture_assertion(plan.source_texture_index == Some(1), "wrong source texture")?;
+            fixture_assertion(
+                maximum <= WARP_MAX_ERROR_PX,
+                "display error exceeded its ceiling",
+            )?;
         } else {
-            eprintln!("oracle fixture | {name} | cleared | unmeasurable");
+            eprintln!("oracle fixture | {name} | unexpected HoldStale");
+            return Err("planner returned HoldStale from Warp::reproject");
         }
-        return;
+        Ok(())
+    })();
+    verdict
+        .err()
+        .map(|check| fixture_mismatch(name, expected, &plan, measured_exposure, check))
+}
+
+fn fixture_mismatch(
+    name: &str,
+    expected: Expected,
+    plan: &WarpPlan,
+    measured_exposure: Option<(u32, u32)>,
+    check: &str,
+) -> String {
+    let exposure = measured_exposure.map_or_else(
+        || "unavailable".to_owned(),
+        |(exposed, total)| format!("{exposed}/{total}"),
+    );
+    format!(
+        "{name}: expected={expected:?}; actual_kind={:?}; refusal_reason={:?}; measured_exposure={exposure}; checks={}",
+        plan.kind, plan.refusal_reason, check
+    )
+}
+
+fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Expected) {
+    if let Some(mismatch) = check_fixture(name, from, to, height, expected) {
+        panic!("reprojection oracle fixture mismatch:\n{mismatch}");
     }
-    assert_eq!(expected, Expected::Agree, "{name}: unexpectedly displayed");
-    assert!(plan.source_valid, "{name}");
-    assert_eq!(plan.source_scene_id, Some(7), "{name}");
-    assert_eq!(plan.source_texture_index, Some(1), "{name}");
-    let maximum = plan
-        .approx_max_error_px
-        .expect("every displayable plan publishes its measured maximum");
-    assert!(maximum <= WARP_MAX_ERROR_PX, "{name}: {maximum}");
-    let compared = compare_accepted(name, from, to, plan.rows, maximum, height);
-    eprintln!("oracle fixture | {name} | agree | samples={compared} | bound={maximum:.6}");
 }
 
 fn flat() -> Pose {
@@ -690,6 +800,13 @@ fn object_angle(mut object: ObjectAngles, index: usize, delta: f64) -> ObjectAng
     reason = "one independent oracle keeps every required reprojection degree of freedom visible"
 )]
 fn retained_warp_matches_independent_fresh_scenes() {
+    let mut mismatches = Vec::new();
+    let mut assert_fixture =
+        |name: &str, from: &Pose, to: &Pose, height: f64, expected: Expected| {
+            if let Some(mismatch) = check_fixture(name, from, to, height, expected) {
+                mismatches.push(mismatch);
+            }
+        };
     let base = flat();
 
     let mut pan = base;
@@ -835,44 +952,44 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &retained_relief,
         &relief_rotation,
         1.0,
-        expected_relief(9_179),
+        expected_relief(),
     );
 
-    let owner_height = ViewControls {
+    let measured_height = ViewControls {
         height_scale: 2.165,
         distance_five: 8.0,
         ..ViewControls::NEUTRAL
     };
-    let owner_height_to = pose(
+    let measured_height_to = pose(
         ObjectAngles::JULIA,
-        owner_height,
+        measured_height,
         BASE_ORIGIN,
         0.0,
         [0.0; 2],
     );
-    let footprint = scene_footprint(&ObjectAngles::JULIA, &owner_height, EXTENT[0], EXTENT[1])
-        .expect("owner height has a finite backdrop footprint");
+    let footprint = scene_footprint(&ObjectAngles::JULIA, &measured_height, EXTENT[0], EXTENT[1])
+        .expect("the measured height has a finite backdrop footprint");
     assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
     assert_eq!(footprint.uncovered_fraction, 0.0);
     assert_fixture(
         "height 0 -> 2.165 at the floor",
         &base,
-        &owner_height_to,
+        &measured_height_to,
         1.0,
-        expected_relief(64_977),
+        expected_relief(),
     );
 
     let lifted_camera_expectations = [
         Expected::Agree,
-        Expected::Clear,
+        Expected::ReliefApprox,
         Expected::Agree,
-        Expected::Clear,
+        Expected::ReliefApprox,
         Expected::Agree,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
-        Expected::Clear,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
+        Expected::ReliefApprox,
     ];
     for (index, lifted_expected) in lifted_camera_expectations.into_iter().enumerate() {
         let mut flat_view = ViewControls::NEUTRAL;
@@ -921,7 +1038,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &observer_relief,
         1.0,
-        Expected::Clear,
+        Expected::ReliefRefused {
+            exposed_samples: 359,
+            total_samples: 4_225,
+        },
     );
 
     for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
@@ -941,9 +1061,9 @@ fn retained_warp_matches_independent_fresh_scenes() {
         }
         let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         let lifted_expected = if field == 5 {
-            expected_relief(5_433)
+            expected_relief()
         } else {
-            Expected::Clear
+            Expected::ReliefApprox
         };
         assert_fixture(
             &format!("{name} h1"),
@@ -962,7 +1082,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &height_to,
         1.0,
-        expected_relief(8_203),
+        expected_relief(),
     );
 
     let mut translated_view = relief();
@@ -1035,15 +1155,20 @@ fn retained_warp_matches_independent_fresh_scenes() {
         [6.0, -4.0],
     );
     assert_ne!(pole, pole_moved);
+    // The six-by-four-pixel move exposes four right-edge columns and five bottom rows of the
+    // 65-by-65 coverage census. Their overlap is counted once: 4*65 + 5*65 - 4*5 = 565.
     assert_fixture(
         "pole inside frame",
         &pole,
         &pole_moved,
         1.0,
-        Expected::Clear,
+        Expected::ReliefRefused {
+            exposed_samples: 565,
+            total_samples: 4_225,
+        },
     );
 
-    observer_bars();
+    observer_bars(&mut assert_fixture);
 
     let mut cross_view = relief();
     cross_view.camera[0] += 0.08;
@@ -1058,7 +1183,19 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.03,
         [0.2, -0.15],
     );
-    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Clear);
+    assert_fixture(
+        "cross terms",
+        &relief_from,
+        &cross,
+        1.0,
+        Expected::ReliefApprox,
+    );
+
+    assert!(
+        mismatches.is_empty(),
+        "reprojection oracle fixture mismatches:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 /// The Mandelbrot preset row's own plane origin, where the canonical flat pair is exact.
@@ -1202,7 +1339,7 @@ type ObserverCase = (
 /// At height zero the fifth-space distance and the four-space distance are inert by construction:
 /// every record projects at its chart position, so the map is the identity and the retained image
 /// is displayed unchanged.
-fn observer_bars() {
+fn observer_bars(assert_fixture: &mut impl FnMut(&str, &Pose, &Pose, f64, Expected)) {
     let flat_view = ViewControls::NEUTRAL;
     let lifted_view = ViewControls {
         height_scale: 1.0,
@@ -1237,7 +1374,7 @@ fn observer_bars() {
                 view
             },
             Expected::Agree,
-            expected_relief(9_179),
+            expected_relief(),
         ),
         (
             "distance four",
@@ -1285,7 +1422,7 @@ fn observer_bars() {
         &flat_from,
         &lifted_from,
         1.0,
-        expected_relief(18_358),
+        expected_relief(),
     );
     let half = pose(
         ObjectAngles::JULIA,
@@ -1302,7 +1439,7 @@ fn observer_bars() {
         &lifted_from,
         &half,
         1.0,
-        expected_relief(10_490),
+        expected_relief(),
     );
 }
 
@@ -1311,7 +1448,7 @@ fn observer_bars() {
     clippy::print_stderr,
     reason = "the requested two-row oracle reports its exact planner classification table"
 )]
-fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family() {
+fn thirty_hertz_height_drag_keeps_both_measured_rows_inside_the_exact_redraw_family() {
     const DRAG_FRAMES: u32 = 90;
     const ANGLE: f64 = -1.316_653_720_171_549_4;
     const CAMERA_ANGLE: f64 = -0.254_142_606_623_347_1;
@@ -1330,7 +1467,7 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
     assert_eq!(camera[8], 0.0, "q35");
 
     for (distance_five, expected_clear_only, expected_relief_redraws, expected_homographies) in
-        [(8.0, 24, 65, 1), (2.0, 81, 9, 0)]
+        [(8.0, 0, 89, 1), (2.0, 0, 90, 0)]
     {
         let flat_view = ViewControls {
             camera,

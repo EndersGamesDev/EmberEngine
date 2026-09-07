@@ -14,12 +14,11 @@
 //! ANGLE over Mesa Intel, so a lab that only had this route would answer a typed refusal to every
 //! request on the device class it is for.
 //!
-//! The fallback route draws the presentation pass a second time into an offscreen colour target
-//! that is a copy source, and copies from that. It is pixel-identical by construction rather than
-//! by hope: the second encode is the same call, with the same pipeline, the same bind groups, the
-//! same uniforms and the same clear, appended to the same command encoder as the first, before that
-//! encoder is submitted. The pass is deterministic over its inputs, and nothing writes to those
-//! inputs between the two encodes because there is no gap between them to write in. The one thing
+//! The fallback route draws the shade pass a second time into an offscreen colour target that is a
+//! copy source, and copies from that. It is pixel-identical by construction rather than by hope:
+//! the second encode is the same call over the already reprojected value target, with the same
+//! pipeline, bind groups and palette, appended to the same command encoder as the first before that
+//! encoder is submitted. Nothing writes those inputs between the two encodes. The one thing
 //! that could separate them is an extent disagreement between the surface the pass was drawn at and
 //! the target the copy is taken from, and that is refused with a reason rather than resized.
 //!
@@ -29,10 +28,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::{HotSlot, PaletteRecord, PresentError};
+use crate::PresentError;
 
-use super::warp::{encode_image_warp, warp_load_color};
-use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL, encode_scene_mesh};
+use super::shade::encode_shade;
+use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL};
 
 /// Which of the two routes produced, or will produce, a frame copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,7 +48,7 @@ impl FrameReadbackRoute {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Surface => "copied from the surface",
-            Self::OffscreenRerender => "copied from an offscreen re-render of the presented pass",
+            Self::OffscreenRerender => "copied from an offscreen re-render of the shade pass",
         }
     }
 }
@@ -143,19 +142,6 @@ pub(super) struct ReadbackTarget {
     extent: [u32; 2],
 }
 
-/// Everything the presentation pass was drawn with, so the capture draw is the same call.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct OffscreenCapturePlan {
-    pub(super) relief_redraw: bool,
-    pub(super) has_backdrop: bool,
-    pub(super) texture_index: usize,
-    /// The opaque HOT slot the presentation pass was drawn from; the capture asks it for its own
-    /// dynamic offset rather than being handed a number, so the two draws cannot be given
-    /// different ones.
-    pub(super) hot_slot: HotSlot,
-    pub(super) selected: PaletteRecord,
-}
-
 impl Presenter {
     /// Copies one presented frame texture into a mapped buffer, on request only.
     ///
@@ -197,7 +183,7 @@ impl Presenter {
         Ok(())
     }
 
-    /// Arms one copy taken by drawing the presentation pass a second time into a copy source.
+    /// Arms one copy taken by drawing the shade pass a second time into a copy source.
     ///
     /// This is the fallback route, for a surface that is not itself a copy source. Arming is not a
     /// copy: the second draw is appended to the presentation pass's own command encoder on the next
@@ -285,7 +271,7 @@ impl Presenter {
         }
     }
 
-    /// Draws the presentation pass once more into a copy source and encodes the copy.
+    /// Draws the shade pass once more into a copy source and encodes the copy.
     ///
     /// Called from the warp submission, after the pass has been encoded into the surface view and
     /// before that encoder is submitted, so the second draw reads exactly the state the first one
@@ -301,7 +287,6 @@ impl Presenter {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         extent: [u32; 2],
-        plan: OffscreenCapturePlan,
     ) -> Result<EncodedFrameReadback, PresentError> {
         if self.frame_readback.is_some() {
             return Err(PresentError::Device {
@@ -328,27 +313,7 @@ impl Presenter {
                 operation: "copy a frame whose target extent is not the presented extent",
             });
         }
-        let hot_offset = plan.hot_slot.dynamic_offset();
-        if plan.relief_redraw {
-            encode_scene_mesh(
-                encoder,
-                &self.gpu,
-                &target.view,
-                hot_offset,
-                warp_load_color(plan.selected),
-                plan.has_backdrop,
-                "Julibrot relief redraw capture pass",
-            );
-        } else {
-            encode_image_warp(
-                encoder,
-                &self.gpu,
-                &target.view,
-                plan.texture_index,
-                hot_offset,
-                plan.selected,
-            );
-        }
+        encode_shade(encoder, &self.gpu, &target.view);
         encode_copy(
             &self.device,
             encoder,
@@ -626,7 +591,7 @@ mod tests {
         );
         assert_eq!(
             FrameReadbackRoute::OffscreenRerender.as_str(),
-            "copied from an offscreen re-render of the presented pass"
+            "copied from an offscreen re-render of the shade pass"
         );
     }
 }

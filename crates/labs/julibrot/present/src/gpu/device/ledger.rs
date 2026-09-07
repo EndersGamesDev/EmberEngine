@@ -1,7 +1,7 @@
 use super::{EXPOSURE_FACT_STEPS, Pose, PoseMap, WarpKind};
 use crate::{
-    LatticePair, PresentationLedgerEntry, SceneFrame, apply_homography, identity_warp_rows,
-    solve_homography,
+    LatticePair, PresentationLedgerEntry, SceneFrame, WarpRefusalReason, apply_homography,
+    identity_warp_rows, solve_homography,
 };
 use ember_julibrot_math::warp_matrix;
 
@@ -16,17 +16,9 @@ pub(super) fn presentation_ledger_entry(
     let level = source.map(|frame| frame.level);
     let destination = plan.lattice.map(LatticePair::destination);
     let points = match (plan.kind, destination) {
-        (WarpKind::ReliefRedraw, Some(destination)) => Some([
-            presented_pixel([0.0, 0.0], destination, presented_extent),
-            presented_pixel(
-                [
-                    -f64::from(destination[0]) * 0.5,
-                    f64::from(destination[1]) * 0.5,
-                ],
-                destination,
-                presented_extent,
-            ),
-        ]),
+        (WarpKind::ReliefRedraw, Some(_)) => {
+            source.and_then(|source| relief_requested_points(plan, source, presented_extent))
+        }
         (WarpKind::AnchorHomography | WarpKind::HoldStale, Some(_)) => source
             .and_then(|source| mapped_requested_points(plan, requested, source, presented_extent)),
         (WarpKind::ClearOnly, _) | (_, None) => None,
@@ -38,6 +30,49 @@ pub(super) fn presentation_ledger_entry(
         requested_centre_px: points.map(|points| points[0]),
         anchor_px: points.map(|points| points[1]),
     }
+}
+
+fn relief_requested_points(
+    plan: &crate::WarpPlan,
+    source: &SceneFrame,
+    presented_extent: [u32; 2],
+) -> Option<[[f64; 2]; 2]> {
+    let lattice = plan.lattice?;
+    let destination = plan.destination_pose?;
+    if lattice.destination() != [destination.grid_width, destination.grid_height] {
+        return None;
+    }
+    let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)?;
+    let PoseMap::Mapped(destination_map) = destination.map else {
+        return None;
+    };
+    let PoseMap::Mapped(redraw_map) = redraw.map else {
+        return None;
+    };
+    let redraw_chart_scale = f64::from(source.extent[0]) / f64::from(destination.grid_width);
+    let half_source = source.extent.map(|extent| f64::from(extent) * 0.5);
+    let requested_points = [
+        [0.0, 0.0],
+        [
+            -f64::from(lattice.destination()[0]) * 0.5,
+            f64::from(lattice.destination()[1]) * 0.5,
+        ],
+    ];
+    let mapped = requested_points.map(|requested_point| {
+        apply_homography(destination_map.rows, requested_point)
+            .map(|chart| chart.map(|coordinate| coordinate * redraw_chart_scale))
+            .and_then(|redraw_chart| apply_homography(redraw_map.inverse, redraw_chart))
+            .filter(|source_point| {
+                source_point[0].abs() <= half_source[0] && source_point[1].abs() <= half_source[1]
+            })
+            .and_then(|source_point| apply_homography(redraw_map.rows, source_point))
+            .map(|redraw_chart| redraw_chart.map(|coordinate| coordinate / redraw_chart_scale))
+            .and_then(|chart| apply_homography(destination_map.inverse, chart))
+            .map(|actual_destination| {
+                presented_pixel(actual_destination, lattice.destination(), presented_extent)
+            })
+    });
+    Some([mapped[0]?, mapped[1]?])
 }
 
 fn mapped_requested_points(
@@ -218,9 +253,11 @@ pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::Warp
         lattice: None,
         source_scene_id: None,
         source_texture_index: None,
+        destination_pose: None,
         source_valid: false,
         edge_on,
         exposed,
+        predicted_exposed_fraction: None,
         kind: WarpKind::ClearOnly,
         refusal_reason: if edge_on {
             Some(crate::WarpRefusalReason::EdgeOn)
@@ -231,6 +268,35 @@ pub(super) const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::Warp
         approx_max_error_px: None,
         approx_p95_error_px: None,
     }
+}
+
+/// Proves that a redraw fallback may keep the retained picture over the whole destination.
+///
+/// Coverage is a relation between the requested and retained record-chart rectangles. The plan's
+/// image rows and texture lattice answer a different question — where an image warp samples — and
+/// a reduced delivery extent must not shrink the chart its records cover. Only refusal classes
+/// reached from the relief error corpus are eligible; slice, chart, matrix, and edge-on refusals
+/// deliberately remain ineligible for a hold.
+pub(super) fn redraw_source_covers_destination(
+    plan: &crate::WarpPlan,
+    source: &SceneFrame,
+    requested: &Pose,
+) -> bool {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return plan.source_valid
+            && crate::relief_redraw_source_covers_destination(source, requested);
+    }
+    if !matches!(
+        plan.refusal_reason,
+        Some(
+            WarpRefusalReason::ErrorCeiling { .. }
+                | WarpRefusalReason::ErrorCorpus { .. }
+                | WarpRefusalReason::ReliefExposure { .. }
+        )
+    ) {
+        return false;
+    }
+    crate::relief_redraw_source_covers_destination(source, requested)
 }
 
 pub(super) fn apply_hold_policy(
@@ -310,11 +376,11 @@ impl LatticeRefusal {
 /// exposure and does not sample the source texture at all; it draws the retained records as a
 /// mesh, so its rows are not read by the warp fragment.
 pub(super) fn enforce_lattice(
-    plan: crate::WarpPlan,
+    plan: &crate::WarpPlan,
     destination_extent: [u32; 2],
 ) -> (crate::WarpPlan, Option<LatticeRefusal>) {
     if !plan.source_valid {
-        return (plan, None);
+        return (*plan, None);
     }
     let refusal = match plan.lattice {
         None => Some(LatticeRefusal::Unstated),
@@ -326,7 +392,7 @@ pub(super) fn enforce_lattice(
         }
         Some(_) => None,
     };
-    refusal.map_or((plan, None), |refusal| {
+    refusal.map_or((*plan, None), |refusal| {
         (clear_warp_plan(plan.edge_on, true), Some(refusal))
     })
 }

@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use ember_julibrot_math::{Plane, PoseMap};
 use thiserror::Error;
 
-use crate::{PaletteRecord, pack_homography_rows};
+use crate::pack_homography_rows;
 
 /// Number of payload bytes in one HOT ring slot.
 pub const HOT_PAYLOAD_BYTES: u32 = 288;
@@ -33,7 +33,7 @@ pub struct HotUniform {
     pub camera_translation_1: [f32; 4],
     /// Cosine and sine of the observer yaw, then of its pitch.
     pub observer_rotation: [f32; 4],
-    /// Height amplitude, both perspective distances, and one reserved zero.
+    /// Height amplitude, both perspective distances, and the destination aspect ratio.
     pub view_scale: [f32; 4],
     /// First padded row of the inverse-sampling homography.
     pub homography_row_0: [f32; 4],
@@ -47,10 +47,10 @@ pub struct HotUniform {
     pub screen_to_plane_row_1: [f32; 4],
     /// Third padded row of the current screen-to-plane map.
     pub screen_to_plane_row_2: [f32; 4],
-    /// Palette exterior colour at zero smooth iterations.
-    pub exterior_zero_rgba: [f32; 4],
-    /// Honest clear and disocclusion colour.
-    pub clear_rgba: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_0: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_1: [f32; 4],
     /// Epoch low/high words, source validity, and edge-on state.
     pub flags: [u32; 4],
 }
@@ -73,12 +73,12 @@ pub struct SceneUniform {
     pub screen_to_plane_row_1: [f32; 4],
     /// Third padded row of the map; its fourth lane carries the applied sampling apron.
     pub screen_to_plane_row_2: [f32; 4],
-    /// Palette period, phase, colour mix, and value.
-    pub palette_map: [f32; 4],
-    /// Exact interior colour.
-    pub interior_rgba: [f32; 4],
-    /// Exact clear colour.
-    pub clear_rgba: [f32; 4],
+    /// Redraw guard, presentation extent, and one-pixel excess allowance; zero disables the guard.
+    pub reserved_0: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_1: [f32; 4],
+    /// Reserved value-pipeline lane; always zero.
+    pub reserved_2: [f32; 4],
 }
 
 /// Refusal from checked presentation-data construction.
@@ -209,7 +209,6 @@ impl SceneUniform {
         logical_len: u32,
         plane: Plane,
         map: PoseMap,
-        selected: PaletteRecord,
     ) -> Result<Self, PresentDataError> {
         let [width, height] = extent;
         let active_len = width
@@ -251,9 +250,9 @@ impl SceneUniform {
             screen_to_plane_row_0: rows[0],
             screen_to_plane_row_1: rows[1],
             screen_to_plane_row_2: rows[2],
-            palette_map: selected.map,
-            interior_rgba: selected.interior_rgba,
-            clear_rgba: selected.clear_rgba,
+            reserved_0: [0.0; 4],
+            reserved_1: [0.0; 4],
+            reserved_2: [0.0; 4],
         })
     }
 }
@@ -263,8 +262,6 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::*;
-    use crate::CLASSIC_PALETTE;
-
     #[test]
     fn gpu_layouts_match_the_exact_byte_contract() {
         assert_eq!(size_of::<HotUniform>(), 288);
@@ -279,8 +276,8 @@ mod tests {
         assert_eq!(offset_of!(HotUniform, homography_row_2), 176);
         assert_eq!(offset_of!(HotUniform, screen_to_plane_row_0), 192);
         assert_eq!(offset_of!(HotUniform, screen_to_plane_row_2), 224);
-        assert_eq!(offset_of!(HotUniform, exterior_zero_rgba), 240);
-        assert_eq!(offset_of!(HotUniform, clear_rgba), 256);
+        assert_eq!(offset_of!(HotUniform, reserved_0), 240);
+        assert_eq!(offset_of!(HotUniform, reserved_1), 256);
         assert_eq!(offset_of!(HotUniform, flags), 272);
         assert_eq!(size_of::<SceneUniform>(), 160);
         assert_eq!(align_of::<SceneUniform>(), 16);
@@ -290,9 +287,9 @@ mod tests {
         assert_eq!(offset_of!(SceneUniform, basis_v), 48);
         assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_0), 64);
         assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_2), 96);
-        assert_eq!(offset_of!(SceneUniform, palette_map), 112);
-        assert_eq!(offset_of!(SceneUniform, interior_rgba), 128);
-        assert_eq!(offset_of!(SceneUniform, clear_rgba), 144);
+        assert_eq!(offset_of!(SceneUniform, reserved_0), 112);
+        assert_eq!(offset_of!(SceneUniform, reserved_1), 128);
+        assert_eq!(offset_of!(SceneUniform, reserved_2), 144);
     }
 
     #[test]
@@ -303,6 +300,8 @@ mod tests {
         use crate::{camera_rotation, camera_rotation_pairs, camera_translation, view_scale};
         let ambient = camera_rotation_pairs([0.0; 10]).expect("neutral ambient camera");
         let translation = camera_translation([0.0; 5]).expect("neutral camera translation");
+        let mut neutral_scale = view_scale(0.0, 8.0, 8.0).expect("neutral distances");
+        neutral_scale[3] = 16.0 / 9.0;
         let uniform = HotUniform {
             camera_rotation_pairs_0: ambient[0],
             camera_rotation_pairs_1: ambient[1],
@@ -312,15 +311,15 @@ mod tests {
             camera_translation_0: translation[0],
             camera_translation_1: translation[1],
             observer_rotation: camera_rotation(0.0, 0.0).expect("neutral observer"),
-            view_scale: view_scale(0.0, 8.0, 8.0).expect("neutral distances"),
+            view_scale: neutral_scale,
             homography_row_0: [1.0, 0.0, 0.0, 0.0],
             homography_row_1: [0.0, 1.0, 0.0, 0.0],
             homography_row_2: [0.0, 0.0, 1.0, 0.0],
             screen_to_plane_row_0: [1.0, 0.0, 0.0, 0.0],
             screen_to_plane_row_1: [0.0, 1.0, 0.0, 0.0],
             screen_to_plane_row_2: [0.0, 0.0, 1.0, 0.0],
-            exterior_zero_rgba: [1.0; 4],
-            clear_rgba: [0.0; 4],
+            reserved_0: [0.0; 4],
+            reserved_1: [0.0; 4],
             flags: [7, 0, 1, 0],
         };
         let bytes = bytemuck::bytes_of(&uniform);
@@ -343,15 +342,18 @@ mod tests {
         assert_eq!(lane(96), [0.0; 4]);
         // Byte 112 is the observer yaw followed by pitch.
         assert_eq!(lane(112), [1.0, 0.0, 1.0, 0.0]);
-        // Byte 128 is [h, d5, d4, reserved]: the vertex reads .x as the height amplitude, .y as the
-        // five-to-four pole, and .z as both the four-to-three pole and the observer distance.
-        assert_eq!(lane(128), [0.0, 8.0, 8.0, 0.0]);
+        // Byte 128 is [h, d5, d4, aspect]: the vertex reads .x as the height amplitude, .y as the
+        // five-to-four pole, .z as both the four-to-three pole and observer distance, and .w as the
+        // destination aspect even when a relief redraw's source grid has another aspect.
+        assert_eq!(lane(128), [0.0, 8.0, 8.0, 16.0 / 9.0]);
         assert_eq!(&bytes[284..288], &0_u32.to_le_bytes());
+        let mut moved_scale = view_scale(1.5, 2.0, 40.0).expect("moved distances");
+        moved_scale[3] = 16.0 / 9.0;
         let moved = HotUniform {
-            view_scale: view_scale(1.5, 2.0, 40.0).expect("moved distances"),
+            view_scale: moved_scale,
             ..uniform
         };
-        assert_eq!(lane_of(&moved, 128), [1.5, 2.0, 40.0, 0.0]);
+        assert_eq!(lane_of(&moved, 128), [1.5, 2.0, 40.0, 16.0 / 9.0]);
     }
 
     fn lane_of(uniform: &HotUniform, offset: usize) -> [f32; 4] {
@@ -391,7 +393,7 @@ mod tests {
             basis_v: [0.0, 1.0, 0.0, 0.0],
         };
         let map = PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY);
-        let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, map, CLASSIC_PALETTE)
+        let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, map)
             .expect("six active records fit twelve-record capacity");
         assert_eq!(uniform.grid, [3, 2, 1, 64]);
         assert_eq!(uniform.span, [7, 6, 0, 0]);
@@ -400,28 +402,19 @@ mod tests {
             apron_scale: 1.5,
             ..ember_julibrot_math::Homography::IDENTITY
         });
-        let apron = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map, CLASSIC_PALETTE)
-            .expect("apron map packs");
+        let apron =
+            SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map).expect("apron map packs");
         assert_eq!(apron.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.5]);
         assert_eq!(
-            SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map, CLASSIC_PALETTE),
+            SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map),
             Err(PresentDataError::InvalidGrid {
                 width: 4,
                 height: 4,
                 logical_len: 12,
             })
         );
-        let sky = SceneUniform::new(
-            [3, 2],
-            1,
-            64,
-            7,
-            12,
-            plane,
-            PoseMap::EdgeOn,
-            CLASSIC_PALETTE,
-        )
-        .expect("edge-on scene uses finite map placeholders");
+        let sky = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, PoseMap::EdgeOn)
+            .expect("edge-on scene uses finite map placeholders");
         assert_eq!(sky.span, [7, 6, 1, 0]);
         assert_eq!(sky.screen_to_plane_row_2[3], 1.0);
     }

@@ -1,13 +1,17 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
 use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_plane};
-use ember_julibrot_worker::MainState;
+use ember_julibrot_worker::{HotState, MainState};
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
-use super::ledger::{LatticeRefusal, presentation_ledger_entry};
+use super::ledger::{LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination};
+use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
-use crate::{PresentFacts, SubmissionKind, SubmissionMeasurement};
+use crate::{
+    FrameReceipt, FrameState, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
+    WarpValidation,
+};
 
 #[test]
 fn glitch_census_sums_red_counts_and_ignores_row_padding() {
@@ -209,7 +213,6 @@ fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::Scen
             Ok(PendingScene {
                 scene_id,
                 pose: binding_pose(),
-                palette: PaletteId::Classic,
                 iteration_cap: 64,
                 level: RefinementLevel::Final,
                 extent: [64, 36],
@@ -251,6 +254,226 @@ fn binding_main() -> PresentMain {
         map: PoseMap::EdgeOn,
         backdrop: None,
     }
+}
+
+fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter,
+    };
+    let adapter = pollster::block_on(instance.request_adapter(&request(true)))
+        .or_else(|| pollster::block_on(instance.request_adapter(&request(false))))
+        .expect("a native GPU or software adapter is available for the presentation test");
+    let required = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
+    assert!(
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba32Float)
+            .allowed_usages
+            .contains(required),
+        "the native test adapter supports the WebGL2 value-target contract"
+    );
+    let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("Julibrot native presentation test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+        },
+        None,
+    ))
+    .expect("the native presentation test device is created");
+    // `Arc::new` makes Clippy's `arc_with_non_send_sync` probe recurse through wgpu's backend
+    // dispatch graph on this nightly. `Presenter` requires these shared handles, and conversion
+    // constructs the same concrete Arc without asking that unrelated lint to solve the graph.
+    (Arc::from(device), Arc::from(queue))
+}
+
+fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native presentation test heap"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let data_view = Arc::from(texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    }));
+    let buffer = |label, size| {
+        Arc::from(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        }))
+    };
+    HeapPresentResources {
+        data_view,
+        descriptor_buffer: buffer("Julibrot native test heap descriptors", 16),
+        span_directory_buffer: buffer("Julibrot native test heap directory", 32),
+        descriptor_capacity: 1,
+        span_capacity: 1,
+        handle_capacity: 4,
+    }
+}
+
+fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
+    let (device, queue) = native_test_device();
+    let config = PresentConfig {
+        surface_format: wgpu::TextureFormat::Rgba8Unorm,
+        min_uniform_buffer_offset_alignment: device.limits().min_uniform_buffer_offset_alignment,
+        fence_deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
+        max_fence_polls: PresentConfig::V1_MAX_FENCE_POLLS,
+    };
+    let mut presenter = Presenter::new(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        native_test_heap(&device),
+        config,
+    )
+    .expect("the native palette presenter is created");
+    let mut main = binding_main();
+    main.state.generation_applied = 1;
+    main.state.centre_revision = 1;
+    main.state.precision_mode = PrecisionMode::PictureFast as u32;
+    presenter.set_main(main);
+    let completed = promote_binding_scene(&mut presenter.ledger, 37);
+    presenter.facts.completed_scene_id = Some(completed.scene_id);
+    let texture_index = usize::try_from(completed.texture_index)
+        .expect("the retained texture index fits this process");
+    ensure_scene_texture(&device, &mut presenter.gpu, texture_index, completed.extent)
+        .expect("the retained value texture is allocated");
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Julibrot native retained-value encoder"),
+    });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot native retained-value clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &presenter.gpu.scene_textures[texture_index].view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 12.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 0.7,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+    queue.submit([encoder.finish()]);
+    (presenter, device)
+}
+
+fn capture_native_palette(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    palette_id: PaletteId,
+    refresh_id: u64,
+) -> (FrameReceipt, FrameReadback) {
+    let mut main = presenter.main.clone().expect("the test MAIN is installed");
+    main.epoch = refresh_id;
+    main.state.palette_id = palette_id as u32;
+    presenter.set_main(main);
+    let pose = binding_pose();
+    let hot = PresentHot {
+        epoch: refresh_id,
+        state: HotState::default(),
+        plane: pose.plane,
+        object: pose.object,
+        view: pose.view,
+        map: pose.map,
+    };
+    let stride = crate::hot_stride(device.limits().min_uniform_buffer_offset_alignment)
+        .expect("the device admits the HOT stride");
+    let slot = HotSlot::for_refresh(refresh_id, stride, hot.epoch)
+        .expect("the refresh selects a HOT slot");
+    presenter.write_hot(slot, hot, WarpValidation::Ordinary, false);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native palette presentation target"),
+        size: extent_3d(BINDING_EXTENT),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    presenter.arm_offscreen_frame_readback();
+    let now_ms = f64::from(
+        u32::try_from(refresh_id).expect("the native test refresh fits the exact f64 range"),
+    );
+    let receipt = presenter
+        .frame(
+            FrameState {
+                surface_view: &view,
+                canvas_width: BINDING_EXTENT[0],
+                canvas_height: BINDING_EXTENT[1],
+                refresh_id,
+                now_ms,
+            },
+            slot,
+        )
+        .expect("the palette presentation is submitted");
+    device.poll(wgpu::Maintain::Wait);
+    assert!(presenter.poll_fixed(now_ms + 1.0).into_iter().any(
+        |event| matches!(event, crate::PresentEvent::WarpCompleted { measurement } if measurement.id == receipt.warp_id)
+    ));
+    presenter.record_presented(receipt.warp_id);
+    device.poll(wgpu::Maintain::Wait);
+    let readback = presenter
+        .take_frame_readback()
+        .expect("the offscreen palette copy maps")
+        .expect("the offscreen palette copy is ready");
+    (receipt, readback)
+}
+
+#[test]
+fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
+    let (mut presenter, device) = native_palette_presenter();
+    let next_scene_id = presenter.next_scene_id;
+    let (classic_receipt, classic) =
+        capture_native_palette(&mut presenter, &device, PaletteId::Classic, 101);
+    let (ice_receipt, ice) = capture_native_palette(&mut presenter, &device, PaletteId::Ice, 102);
+
+    assert_eq!(classic_receipt.source_scene_id, Some(37));
+    assert_eq!(ice_receipt.source_scene_id, classic_receipt.source_scene_id);
+    assert_eq!(classic.scene_id, Some(37));
+    assert_eq!(ice.scene_id, classic.scene_id);
+    assert_eq!(presenter.facts().completed_scene_id, Some(37));
+    assert_eq!(presenter.next_scene_id, next_scene_id);
+    assert_eq!(classic.route, FrameReadbackRoute::OffscreenRerender);
+    assert_eq!(ice.route, FrameReadbackRoute::OffscreenRerender);
+    assert_eq!(classic.rgba.len(), ice.rgba.len());
+    let (classic_pixels, classic_remainder) = classic.rgba.as_chunks::<4>();
+    let (ice_pixels, ice_remainder) = ice.rgba.as_chunks::<4>();
+    assert_eq!(classic_remainder, &[]);
+    assert_eq!(ice_remainder, &[]);
+    assert!(
+        classic_pixels
+            .iter()
+            .zip(ice_pixels)
+            .any(|(classic, ice)| classic != ice),
+        "the present-time palette changes pixels without a new scene"
+    );
 }
 
 #[test]
@@ -496,7 +719,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let retained_grid = ledger
         .retained_grid()
         .expect("retained frame owns its record grid");
-    let uniform = relief_scene_uniform(retained_grid, &sampled, crate::CLASSIC_PALETTE)
+    let uniform = relief_scene_uniform(retained_grid, &sampled, &sampled.pose, sampled.extent)
         .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
@@ -504,9 +727,9 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
     assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.0]);
-    let load = scene_load_color(crate::CLASSIC_PALETTE);
-    let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
-    assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    assert_eq!(uniform.reserved_0, [0.0; 4]);
+    let load = scene_load_color();
+    assert_eq!([load.r, load.g, load.b, load.a], [0.0, 0.0, 4.0, 1.0]);
 }
 
 /// What one pixel of the scene attachment holds when the pass is over.
@@ -703,17 +926,45 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
         .find("self.main = Some(main);")
         .expect("the main publication ends");
     let body = &body[..end];
-    assert_eq!(
-        body.matches("backdrop").count(),
-        2,
-        "the backdrop may reach set_main only as the selection comparison"
-    );
-    assert!(body.contains("previous.backdrop != main.backdrop"));
+    assert!(body.contains("scene_selection_replaced(previous, &main)"));
     assert!(
-        body.find("previous.backdrop != main.backdrop")
+        body.find("scene_selection_replaced(previous, &main)")
             < body.find("self.ledger.invalidate_incompatible("),
         "the backdrop comparison belongs to the selection test, never to the clear"
     );
+    assert!(source.contains("previous.backdrop != current.backdrop"));
+}
+
+#[test]
+fn palette_is_not_a_scene_selection_key_and_is_uploaded_before_shade() {
+    let previous = binding_main();
+    let mut current = previous.clone();
+    current.state.palette_id = PaletteId::Ice as u32;
+    assert!(!scene_selection_replaced(&previous, &current));
+
+    let warp = include_str!("warp.rs");
+    let palette_write = warp
+        .find("write_palette(&self.queue, &self.gpu, selected.1);")
+        .expect("the current palette is uploaded for each present");
+    let shade = warp
+        .find("encode_shade(&mut encoder, &self.gpu, state.surface_view);")
+        .expect("every present runs the sole shade pass");
+    let submit = warp
+        .find("self.queue.submit(")
+        .expect("the presentation submission exists");
+    assert!(palette_write < shade && shade < submit);
+
+    let scene = crate::scene_shader(ember_lab_heap::DialectLimits {
+        descriptor_capacity: 2,
+        span_capacity: 2,
+        handle_capacity: 4,
+    });
+    for source in [scene.as_str(), crate::warp_shader()] {
+        assert!(!source.contains("PaletteUniform"));
+        assert!(!source.contains("palette."));
+    }
+    assert!(crate::shade_shader().contains("palette."));
+    assert!(!include_str!("scene/submit.rs").contains("selected_palette"));
 }
 
 /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.
@@ -725,10 +976,8 @@ fn the_scene_depth_target_carries_a_stencil_aspect() {
 }
 
 #[test]
-fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
-    let disocclusion = warp_load_color(crate::CLASSIC_PALETTE);
-    let clear = crate::CLASSIC_PALETTE.clear_rgba.map(f64::from);
-    let exterior = crate::exterior_zero(crate::CLASSIC_PALETTE).map(f64::from);
+fn relief_redraw_disocclusion_is_a_clear_value() {
+    let disocclusion = warp_load_color();
     assert_eq!(
         [
             disocclusion.r,
@@ -736,9 +985,38 @@ fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
             disocclusion.b,
             disocclusion.a
         ],
-        clear
+        [0.0, 0.0, 4.0, 1.0]
     );
-    assert_ne!(clear, exterior);
+}
+
+#[test]
+fn a_presented_relief_plan_survives_only_while_final_leases_its_records() {
+    use super::warp::retain_relief_plan_during_scene;
+
+    assert!(retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        true,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        true,
+        true,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        false,
+        Some(WarpKind::ReliefRedraw),
+    ));
+    assert!(!retain_relief_plan_during_scene(
+        WarpKind::ReliefRedraw,
+        false,
+        true,
+        Some(WarpKind::AnchorHomography),
+    ));
 }
 
 #[test]
@@ -751,7 +1029,7 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
         .clone();
     retained_grid.width /= 2;
     retained_grid.height /= 2;
-    assert!(relief_scene_uniform(&retained_grid, &sampled, crate::CLASSIC_PALETTE).is_err());
+    assert!(relief_scene_uniform(&retained_grid, &sampled, &sampled.pose, sampled.extent).is_err());
 }
 
 #[test]
@@ -767,82 +1045,31 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
             .directory_index,
         main.grid.span.directory_index
     );
-    assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
+    assert!(relief_scene_uniform(&main.grid, &sampled, &sampled.pose, sampled.extent).is_ok());
 }
 
 #[test]
-fn refused_backdrop_coverage_is_absent_until_main_only_submit_measurement() {
-    let angle = -1.316_653_720_171_549_4;
-    let object = ObjectAngles {
-        rho_13: angle,
-        rho_24: angle,
-        ..ObjectAngles::IDENTITY
-    };
-    let camera_angle = -0.254_142_606_623_347_1;
-    let mut camera = [0.0; 10];
-    camera[1] = camera_angle;
-    camera[4] = camera_angle;
-    let view = ViewControls {
-        camera,
-        camera_yaw: 0.960_422_302_787_256,
-        camera_pitch: core::f64::consts::PI,
-        height_scale: 4.0,
-        distance_five: 2.0,
-        distance_four: 2.0,
-        ..ViewControls::NEUTRAL
-    };
-    let mut pose = binding_pose();
-    pose.object = object;
-    pose.plane = construct_plane(object).expect("coverage fixture plane constructs");
-    pose.view = view;
-    pose.grid_width = 960;
-    pose.grid_height = 540;
-    let mut main = binding_main();
-    let mut invalid_grid = main.grid.clone();
-    invalid_grid.width = 0;
-    let backdrop_map = ember_julibrot_math::Homography {
-        apron_scale: 2.0,
-        ..ember_julibrot_math::Homography::IDENTITY
-    };
-    main.backdrop = Some(crate::PresentBackdrop {
-        grid: invalid_grid,
-        iteration_cap: 64,
-        plane: pose.plane,
-        map: PoseMap::Mapped(backdrop_map),
-    });
-    assert!(
-        validate_backdrop(
-            main.backdrop.as_ref().expect("candidate backdrop exists"),
-            ember_lab_heap::DialectLimits {
-                descriptor_capacity: u32::MAX,
-                span_capacity: u32::MAX,
-                handle_capacity: u32::MAX,
-            },
-        )
-        .is_err(),
-        "the submit path refuses this candidate before publishing its coverage"
-    );
+fn relief_redraw_publishes_the_planned_fraction_without_filling_from_a_backdrop() {
+    let pose = binding_pose();
     let relief = crate::WarpPlan {
         kind: WarpKind::ReliefRedraw,
         source_valid: true,
         exposed: true,
+        predicted_exposed_fraction: Some(0.071_952_160_494),
         ..clear_warp_plan(false, true)
     };
     assert_eq!(
         planned_exposed_fraction(&relief, Some(&pose), None),
-        None,
-        "HOT publication cannot assume the candidate backdrop will validate"
+        relief.predicted_exposed_fraction
     );
-    let main_only = relief_redraw_clear_fraction(&pose, Some(&main), false)
-        .expect("the main-only coverage mirror is finite");
-    let candidate_backdrop = relief_redraw_clear_fraction(&pose, Some(&main), true)
-        .expect("the unvalidated candidate coverage mirror is finite");
-    assert!(main_only > candidate_backdrop);
     let mut facts = PresentFacts::default();
-    facts.record_warp_plan(&relief, None);
-    assert_eq!(facts.warp_exposed_fraction, None);
-    facts.record_relief_coverage(Some(main_only));
-    assert_eq!(facts.warp_exposed_fraction, Some(main_only));
+    facts.record_warp_plan(&relief, relief.predicted_exposed_fraction);
+    assert_eq!(
+        facts.warp_exposed_fraction,
+        relief.predicted_exposed_fraction
+    );
+    assert_eq!(facts.warp_max_error_px, None);
+    assert_eq!(facts.warp_p95_error_px, None);
 }
 
 #[test]
@@ -867,7 +1094,6 @@ fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
     crate::SceneFrame {
         scene_id,
         pose,
-        palette: PaletteId::Classic,
         iteration_cap: 64,
         level: RefinementLevel::Preview,
         extent,
@@ -1115,6 +1341,84 @@ fn frame_on(scene_id: u64, source_extent: [u32; 2], pose_extent: [u32; 2]) -> cr
     frame
 }
 
+#[test]
+fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() {
+    let mut grid = binding_main().grid;
+    grid.width = 8;
+    grid.height = 5;
+    grid.level = RefinementLevel::Preview;
+    let source = frame_on(90, [8, 5], [64, 36]);
+    let mut destination = pose_on([64, 36]);
+    destination.zoom_log2 = 1.0;
+    destination.centre_from_reference_px = [4.0, -2.0];
+    destination.view.height_scale = 2.0;
+    let uniform = relief_scene_uniform(&grid, &source, &destination, [960, 540])
+        .expect("the reduced retained grid composes into the destination chart");
+
+    assert_eq!(uniform.grid[..2], [8, 5]);
+    let rows = [
+        f64::from(uniform.screen_to_plane_row_0[0]),
+        f64::from(uniform.screen_to_plane_row_0[1]),
+        f64::from(uniform.screen_to_plane_row_0[2]),
+        f64::from(uniform.screen_to_plane_row_1[0]),
+        f64::from(uniform.screen_to_plane_row_1[1]),
+        f64::from(uniform.screen_to_plane_row_1[2]),
+        f64::from(uniform.screen_to_plane_row_2[0]),
+        f64::from(uniform.screen_to_plane_row_2[1]),
+        f64::from(uniform.screen_to_plane_row_2[2]),
+    ];
+    let uniform_chart = crate::apply_homography(rows, [1.0, -1.0])
+        .expect("the known source vertex reaches the destination chart");
+    assert!((uniform_chart[0] - 1.5).abs() < 1.0e-6);
+    assert!((uniform_chart[1] + 1.55).abs() < 1.0e-6);
+    let chart_scale =
+        4.0 * f64::from(uniform.screen_to_plane_row_2[3]) / f64::from(uniform.grid[0]);
+    let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
+    assert!((display[0] - 0.75).abs() < 1.0e-6);
+    assert!((display[1] + 0.775).abs() < 1.0e-6);
+    assert_eq!(super::redraw::RELIEF_STRETCH_GUARD, None);
+    assert_eq!(uniform.reserved_0, [0.0; 4]);
+    assert_eq!(super::redraw::RELIEF_STRETCH_GUARD_CANDIDATE, 1.0);
+    let guarded = relief_scene_uniform_with_guard(
+        &grid,
+        &source,
+        &destination,
+        [960, 540],
+        Some(super::redraw::RELIEF_STRETCH_GUARD_CANDIDATE),
+    )
+    .expect("the measured candidate packs its enabled guard lane");
+    assert_eq!(guarded.reserved_0, [1.0, 960.0, 540.0, 1.0]);
+
+    let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
+        .expect("the source delivery lattice composes into the destination pose");
+    let record = [12.0, 1.0, 0.0, 0.0];
+    let actual = crate::project_scene_record_vertex(
+        &redraw,
+        [1.0, -1.0],
+        record,
+        source.iteration_cap,
+        crate::CLASSIC_PALETTE,
+    )
+    .expect("the record height is valid")
+    .expect("the redraw vertex projects");
+    let destination_pixel_scale = f64::from(destination.grid_width) / f64::from(source.extent[0]);
+    let actual_destination_px = actual
+        .0
+        .map(|coordinate| coordinate * destination_pixel_scale);
+    let expected = crate::project_scene_record_vertex(
+        &destination,
+        [12.0, -12.4],
+        record,
+        source.iteration_cap,
+        crate::CLASSIC_PALETTE,
+    )
+    .expect("the record height is valid")
+    .expect("the destination vertex projects");
+    assert!((actual_destination_px[0] - expected.0[0]).abs() < 1.0e-9);
+    assert!((actual_destination_px[1] - expected.0[1]).abs() < 1.0e-9);
+    assert!((actual.1 - expected.1).abs() < 1.0e-9);
+}
+
 /// Reprojects `frame` onto `to_pose` the way the presenter does, with no validation demand.
 fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan {
     crate::Warp::reproject(
@@ -1124,6 +1428,198 @@ fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan 
         PrecisionMode::PictureFast,
         crate::WarpValidation::Ordinary,
     )
+}
+
+/// Independently reproduces record-chart containment so fixture decisions cannot drift silently.
+fn reproduced_source_covers_destination(
+    plan: &crate::WarpPlan,
+    source: &crate::SceneFrame,
+    requested: &Pose,
+) -> bool {
+    if plan.kind == WarpKind::ReliefRedraw {
+        return plan.source_valid && reproduced_chart_covers_destination(source, requested);
+    }
+    if !matches!(
+        plan.refusal_reason,
+        Some(
+            crate::WarpRefusalReason::ErrorCeiling { .. }
+                | crate::WarpRefusalReason::ErrorCorpus { .. }
+                | crate::WarpRefusalReason::ReliefExposure { .. }
+        )
+    ) {
+        return false;
+    }
+    reproduced_chart_covers_destination(source, requested)
+}
+
+fn reproduced_chart_covers_destination(source: &crate::SceneFrame, requested: &Pose) -> bool {
+    if source.extent.contains(&0) {
+        return false;
+    }
+    let Some(chart) = crate::planner::source_to_destination_chart(&source.pose, requested) else {
+        return false;
+    };
+    let determinant = chart[0].mul_add(chart[4], -chart[1] * chart[3]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return false;
+    }
+    let source_width = f64::from(source.pose.grid_width);
+    let source_height = f64::from(source.pose.grid_height);
+    let source_half = [
+        crate::SOURCE_TEXEL_REACH_PX.mul_add(
+            source_width / f64::from(source.extent[0]),
+            source_width * 0.5,
+        ),
+        crate::SOURCE_TEXEL_REACH_PX.mul_add(
+            source_height / f64::from(source.extent[1]),
+            source_height * 0.5,
+        ),
+    ];
+    let destination_half = [
+        f64::from(requested.grid_width) * 0.5,
+        f64::from(requested.grid_height) * 0.5,
+    ];
+    [
+        [-destination_half[0], -destination_half[1]],
+        [destination_half[0], -destination_half[1]],
+        [-destination_half[0], destination_half[1]],
+        [destination_half[0], destination_half[1]],
+    ]
+    .into_iter()
+    .all(|destination| {
+        let translated = [destination[0] - chart[2], destination[1] - chart[5]];
+        let retained = [
+            chart[4].mul_add(translated[0], -chart[1] * translated[1]) / determinant,
+            (-chart[3]).mul_add(translated[0], chart[0] * translated[1]) / determinant,
+        ];
+        retained
+            .iter()
+            .zip(source_half)
+            .all(|(value, half)| value.is_finite() && (-half..=half).contains(value))
+    })
+}
+
+fn assert_coverage_decision(
+    name: &str,
+    plan: &crate::WarpPlan,
+    source: &crate::SceneFrame,
+    requested: &Pose,
+    expected: bool,
+) {
+    let reproduced = reproduced_source_covers_destination(plan, source, requested);
+    assert_eq!(
+        redraw_source_covers_destination(plan, source, requested),
+        reproduced,
+        "production coverage drifted from the app reproduction for {name}"
+    );
+    assert_eq!(reproduced, expected, "the reproduced {name} decision moved");
+}
+
+#[test]
+fn production_redraw_coverage_matches_the_reproduction_oracle() {
+    let extent = [960, 540];
+    let final_source = frame_on(93, extent, extent);
+    let mut preview_source = frame_on(94, [120, 68], extent);
+    preview_source.level = RefinementLevel::Preview;
+
+    let mut covered = pose_on(extent);
+    covered.zoom_log2 = 1.0;
+    let mut in_bounds = covered;
+    // At this two-times zoom the inverse map sends the frame to x=0..480 and y=-270..0: its right
+    // and lower edges reach the retained boundary without crossing it.
+    in_bounds.centre_from_reference_px = [480.0, -270.0];
+    let mut outside = covered;
+    // Sixty more source pixels of translation cross both retained boundaries.
+    outside.centre_from_reference_px = [600.0, -360.0];
+
+    let admitted_final_covered = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(covered),
+        ..reproject_onto(&final_source, &covered)
+    };
+    let admitted_final_outside = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(outside),
+        ..reproject_onto(&final_source, &outside)
+    };
+    let admitted_final_in_bounds = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(in_bounds),
+        ..reproject_onto(&final_source, &in_bounds)
+    };
+    let admitted_preview_covered = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(covered),
+        ..reproject_onto(&preview_source, &covered)
+    };
+    let refused_covered = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::ErrorCeiling {
+            max_px: 2.0,
+            p95_px: 1.5,
+        }),
+        ..clear_warp_plan(false, true)
+    };
+    let refused_outside = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::ReliefExposure {
+            predicted_fraction: 0.09,
+            limit: 0.08,
+        }),
+        ..clear_warp_plan(false, true)
+    };
+    let hard_refusal = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::Matrix),
+        ..clear_warp_plan(false, true)
+    };
+
+    assert_coverage_decision(
+        "Final admitted covered zoom",
+        &admitted_final_covered,
+        &final_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Final admitted in-bounds translation",
+        &admitted_final_in_bounds,
+        &final_source,
+        &in_bounds,
+        true,
+    );
+    assert_coverage_decision(
+        "Final admitted exposed translation",
+        &admitted_final_outside,
+        &final_source,
+        &outside,
+        false,
+    );
+    assert_coverage_decision(
+        "Preview admitted covered zoom",
+        &admitted_preview_covered,
+        &preview_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Final corpus refusal covered zoom",
+        &refused_covered,
+        &final_source,
+        &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Preview exposure refusal exposed translation",
+        &refused_outside,
+        &preview_source,
+        &outside,
+        false,
+    );
+    assert_coverage_decision(
+        "hard matrix refusal",
+        &hard_refusal,
+        &final_source,
+        &covered,
+        false,
+    );
 }
 
 #[test]
@@ -1160,6 +1656,42 @@ fn preview_and_final_put_one_requested_pose_at_the_same_presented_pixels() {
     assert_eq!(final_entry.anchor_px, preview_entry.anchor_px);
     assert_eq!(preview_entry.level, Some(RefinementLevel::Preview));
     assert_eq!(final_entry.level, Some(RefinementLevel::Final));
+}
+
+#[test]
+fn relief_ledger_maps_preview_records_instead_of_asserting_requested_positions() {
+    let presented_extent = [960, 540];
+    let mut source = frame_on(91, [120, 68], presented_extent);
+    source.level = RefinementLevel::Preview;
+    let mut requested = pose_on(presented_extent);
+    requested.zoom_log2 = 0.1;
+    let plan = crate::WarpPlan {
+        lattice: crate::LatticePair::new(source.extent, presented_extent),
+        source_scene_id: Some(source.scene_id),
+        source_texture_index: Some(source.texture_index),
+        destination_pose: Some(requested),
+        source_valid: true,
+        exposed: true,
+        predicted_exposed_fraction: Some(0.071_952_160_494),
+        kind: WarpKind::ReliefRedraw,
+        ..clear_warp_plan(false, true)
+    };
+    let entry = presentation_ledger_entry(&plan, &requested, Some(&source), presented_extent);
+    assert_eq!(entry.requested_centre_px, Some([480.0, 270.0]));
+    assert_eq!(entry.anchor_px, Some([0.0, 0.0]));
+
+    let unstated_destination = crate::WarpPlan {
+        destination_pose: None,
+        ..plan
+    };
+    let entry = presentation_ledger_entry(
+        &unstated_destination,
+        &requested,
+        Some(&source),
+        presented_extent,
+    );
+    assert_eq!(entry.requested_centre_px, None);
+    assert_eq!(entry.anchor_px, None);
 }
 
 #[test]
@@ -1312,7 +1844,7 @@ fn every_sampling_plan_kind_covers_its_destination_on_every_ladder_pairing() {
         ];
         for plan in plans {
             assert_eq!(
-                enforce_lattice(plan, destination_extent).1,
+                enforce_lattice(&plan, destination_extent).1,
                 None,
                 "a plan that states its pair is refused on {source_extent:?} to \
                  {destination_extent:?}"
@@ -1327,10 +1859,10 @@ fn a_clear_plan_names_no_lattice_pair_and_is_never_refused_for_one() {
     for (_, destination_extent) in ladder_pairs() {
         let plan = clear_warp_plan(false, true);
         assert_eq!(plan.lattice, None);
-        assert_eq!(enforce_lattice(plan, destination_extent).1, None);
+        assert_eq!(enforce_lattice(&plan, destination_extent).1, None);
         let edge_on = clear_warp_plan(true, false);
         assert_eq!(edge_on.lattice, None);
-        assert_eq!(enforce_lattice(edge_on, destination_extent).1, None);
+        assert_eq!(enforce_lattice(&edge_on, destination_extent).1, None);
     }
 }
 
@@ -1356,7 +1888,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         lattice: None,
         ..held
     };
-    let (refused, reason) = enforce_lattice(unstated, destination_extent);
+    let (refused, reason) = enforce_lattice(&unstated, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert!(!refused.source_valid);
     assert!(
@@ -1372,7 +1904,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         lattice: crate::LatticePair::new(source_extent, [480, 270]),
         ..held
     };
-    let (refused, reason) = enforce_lattice(elsewhere, destination_extent);
+    let (refused, reason) = enforce_lattice(&elsewhere, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert_eq!(
         reason.map(LatticeRefusal::as_str),
@@ -1385,7 +1917,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         rows: crate::identity_warp_rows(),
         ..held
     };
-    let (refused, reason) = enforce_lattice(thumbnail, destination_extent);
+    let (refused, reason) = enforce_lattice(&thumbnail, destination_extent);
     assert_eq!(refused.kind, WarpKind::ClearOnly);
     assert_eq!(
         reason.map(LatticeRefusal::as_str),
@@ -1399,7 +1931,7 @@ fn a_plan_that_cannot_state_where_it_puts_the_picture_is_refused_into_a_clear() 
         exposed: true,
         ..held
     };
-    assert_eq!(enforce_lattice(declared, destination_extent).1, None);
+    assert_eq!(enforce_lattice(&declared, destination_extent).1, None);
 }
 
 /// A hold whose scale cannot be stated stays a clear plan rather than placing the picture.

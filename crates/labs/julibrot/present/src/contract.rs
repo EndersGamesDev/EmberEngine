@@ -165,8 +165,6 @@ pub struct SceneFrame {
     pub scene_id: u64,
     /// Immutable pose captured at submission and rebased on accepted references.
     pub pose: Pose,
-    /// Palette captured by the scene pass.
-    pub palette: PaletteId,
     /// Delivered iteration cap.
     pub iteration_cap: u32,
     /// Delivered kernels refinement level.
@@ -234,12 +232,16 @@ pub struct WarpPlan {
     pub source_scene_id: Option<u64>,
     /// Retained texture identity against which the plan was solved.
     pub source_texture_index: Option<u32>,
-    /// Whether sampling the retained texture is honest.
+    /// Destination pose used to project retained records, present only for a relief redraw.
+    pub destination_pose: Option<Pose>,
+    /// Whether using the named retained image or record source is honest.
     pub source_valid: bool,
     /// Whether the destination pose is the physical edge-on all-sky state.
     pub edge_on: bool,
     /// Whether any destination surface region has no retained source sample.
     pub exposed: bool,
+    /// Conservative share of destination pixels at hole or residual-disagreement risk.
+    pub predicted_exposed_fraction: Option<f64>,
     /// Exact, approximate, or clear-only plan kind.
     pub kind: WarpKind,
     /// Planner branch that refused the image warp, absent when the plan was accepted.
@@ -278,6 +280,13 @@ pub enum WarpRefusalReason {
         /// Number of non-horizon height samples refused by either pose.
         refused_samples: u16,
     },
+    /// The retained source footprint exceeds the measured relief-redraw admission ceiling.
+    ReliefExposure {
+        /// Conservative predicted share at hole or residual-disagreement risk.
+        predicted_fraction: f64,
+        /// Maximum admitted share.
+        limit: f64,
+    },
     /// The destination is the physical all-sky edge-on state.
     EdgeOn,
 }
@@ -296,6 +305,13 @@ impl std::fmt::Display for WarpRefusalReason {
             Self::ErrorCorpus { refused_samples } => {
                 write!(formatter, "ErrorCorpus(refused_samples={refused_samples})")
             }
+            Self::ReliefExposure {
+                predicted_fraction,
+                limit,
+            } => write!(
+                formatter,
+                "ReliefExposure(predicted_fraction={predicted_fraction:.4},limit={limit:.4})"
+            ),
             Self::EdgeOn => formatter.write_str("EdgeOn"),
         }
     }
@@ -574,7 +590,7 @@ pub struct PresentFacts {
     pub iteration_cap: Option<u32>,
     /// Exact status-one record count for the delivered Final scene.
     pub glitch_pixel_count: Option<u32>,
-    /// Latest MAIN palette selection.
+    /// Palette control applied by the latest presentation.
     pub palette: PaletteId,
     /// Latest VIEW controls carried by a HOT write.
     pub view: ViewControls,
@@ -590,7 +606,7 @@ pub struct PresentFacts {
     pub reprojected_per_scene: Option<u32>,
     /// Retained-record relief redraws submitted as warp work.
     pub relief_redraw_count: u64,
-    /// Refused warps submitted as stale-picture holds while replacement work remains pending.
+    /// Coverage-qualified refused or unavailable redraws submitted as stale-picture holds.
     pub warp_hold_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,
@@ -598,7 +614,7 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
-    /// Share of the destination coverage mirror that the warp or redraw leaves clear.
+    /// Image-warp clear share or relief-redraw hole and residual-disagreement risk.
     pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,
@@ -627,7 +643,7 @@ impl PresentFacts {
         self.warp_hold_count = self.warp_hold_count.saturating_add(1);
     }
 
-    /// Records relief coverage only after the redraw's resident records and backdrop were checked.
+    /// Records planned relief exposure only after the redraw's resident records were checked.
     pub(crate) const fn record_relief_coverage(&mut self, exposed_fraction: Option<f64>) {
         self.warp_exposed_fraction = exposed_fraction;
     }
@@ -635,15 +651,23 @@ impl PresentFacts {
     /// Records the planner and exposure facts from one warp plan.
     ///
     /// Early clear-only and exact-flat plans have no sampled tumbled corpus, so both error facts
-    /// stay absent. An error-ceiling clear keeps the finite subset that caused its refusal.
+    /// stay absent. An error-ceiling clear keeps the finite subset that caused its refusal. A
+    /// relief redraw has no image homography error, so it clears both error facts even when the
+    /// rejected image plan that selected it had measurements.
     pub const fn record_warp_plan(&mut self, plan: &WarpPlan, exposed_fraction: Option<f64>) {
         self.chart_residual = if plan.source_valid {
             Some(plan.chart_residual)
         } else {
             None
         };
-        self.warp_max_error_px = plan.approx_max_error_px;
-        self.warp_p95_error_px = plan.approx_p95_error_px;
+        self.warp_max_error_px = match plan.kind {
+            WarpKind::ReliefRedraw => None,
+            _ => plan.approx_max_error_px,
+        };
+        self.warp_p95_error_px = match plan.kind {
+            WarpKind::ReliefRedraw => None,
+            _ => plan.approx_p95_error_px,
+        };
         self.warp_kind = plan.kind;
         self.warp_refusal_reason = plan.refusal_reason;
         self.warp_exposed = plan.exposed;
@@ -727,8 +751,8 @@ pub enum PresentError {
         /// Published directory index.
         directory_index: u32,
     },
-    /// Fixed LDR scene targets are unsupported.
-    #[error("Rgba8Unorm scene targets are unsupported")]
+    /// The required fixed RGBA32F value-target usages are unsupported.
+    #[error("Rgba32Float value-target usages are unsupported")]
     UnsupportedSceneFormat,
     /// App-selected surface format cannot be rendered.
     #[error("surface format {format:?} is unsupported for warp output")]
@@ -842,9 +866,11 @@ mod tests {
             lattice: crate::LatticePair::new([120, 68], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
+            destination_pose: None,
             source_valid: true,
             edge_on: false,
             exposed: false,
+            predicted_exposed_fraction: None,
             kind: WarpKind::AnchorHomography,
             refusal_reason: None,
             chart_residual: 0.25,
@@ -881,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn relief_coverage_stays_absent_until_submit_validation() {
+    fn relief_facts_publish_planned_coverage_and_no_homography_error() {
         let mut facts = PresentFacts {
             warp_exposed_fraction: Some(0.125),
             ..PresentFacts::default()
@@ -891,17 +917,21 @@ mod tests {
             lattice: crate::LatticePair::new([960, 540], [960, 540]),
             source_scene_id: Some(9),
             source_texture_index: Some(1),
+            destination_pose: None,
             source_valid: true,
             edge_on: false,
             exposed: true,
+            predicted_exposed_fraction: Some(0.25),
             kind: WarpKind::ReliefRedraw,
             refusal_reason: None,
             chart_residual: 0.0,
             approx_max_error_px: Some(2.0),
             approx_p95_error_px: Some(1.0),
         };
-        facts.record_warp_plan(&relief, None);
-        assert_eq!(facts.warp_exposed_fraction, None);
+        facts.record_warp_plan(&relief, relief.predicted_exposed_fraction);
+        assert_eq!(facts.warp_exposed_fraction, Some(0.25));
+        assert_eq!(facts.warp_max_error_px, None);
+        assert_eq!(facts.warp_p95_error_px, None);
         facts.record_relief_coverage(Some(0.25));
         assert_eq!(facts.warp_exposed_fraction, Some(0.25));
     }
