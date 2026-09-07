@@ -712,6 +712,27 @@ enum TraceSurfaceAction {
     Ignore { warp_id: u64 },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum TraceCaptureState {
+    #[default]
+    Idle,
+    Armed,
+    InFlight,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TracePendingState {
+    Idle,
+    Pending,
+}
+
+impl TracePendingState {
+    const fn from_pending(pending: bool) -> Self {
+        if pending { Self::Pending } else { Self::Idle }
+    }
+}
+
 #[derive(Debug, Default)]
 struct FakePresenter {
     next_id: u64,
@@ -739,9 +760,7 @@ struct FakePresenter {
     hot_epoch: u64,
     main_epoch: u64,
     surface: SurfaceState<u64>,
-    capture_armed: bool,
-    capture_in_flight: bool,
-    capture_ready: bool,
+    capture: TraceCaptureState,
     capture_scene: Option<u64>,
 }
 
@@ -807,21 +826,20 @@ impl FakePresenter {
             })
             .expect("the fake warp owns its surface");
         let capture = CaptureArming {
-            armed: self.capture_armed,
+            armed: self.capture == TraceCaptureState::Armed,
             route_matches: true,
-            readback_in_flight: self.capture_in_flight,
+            readback_in_flight: self.capture == TraceCaptureState::InFlight,
             renderer_already_armed: false,
         };
         if capture.surface_due() {
-            self.capture_armed = false;
-            self.capture_in_flight = true;
+            self.capture = TraceCaptureState::InFlight;
         }
         self.warp_submissions.push(self.next_id);
         self.next_id
     }
 
     const fn arm_capture(&mut self) {
-        self.capture_armed = true;
+        self.capture = TraceCaptureState::Armed;
     }
 
     fn fire_completed_callback(&mut self) {
@@ -878,9 +896,8 @@ impl PresenterPoll for FakePresenter {
                     }
                     let presented_scene = self.pending_warp_source.take();
                     self.presented_scene = presented_scene;
-                    if self.capture_in_flight {
-                        self.capture_in_flight = false;
-                        self.capture_ready = true;
+                    if self.capture == TraceCaptureState::InFlight {
+                        self.capture = TraceCaptureState::Ready;
                         self.capture_scene = presented_scene;
                     }
                 }
@@ -1169,21 +1186,18 @@ fn retained_presenter(refuse_warp: bool) -> FakePresenter {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(
     dead_code,
-    clippy::struct_excessive_bools,
     reason = "the oracle preserves each independent frame, capture, and finished-picture fact"
 )]
 struct StableFrameFacts {
     generation: u32,
     due: Option<RefinementLevel>,
-    refinement_pending: bool,
-    scene_update_pending: bool,
-    scene_in_flight: bool,
-    warp_in_flight: bool,
+    refinement: TracePendingState,
+    scene_update: TracePendingState,
+    scene_flight: TracePendingState,
+    warp_flight: TracePendingState,
     retained_scene: Option<u64>,
     presented_scene: Option<u64>,
-    capture_armed: bool,
-    capture_in_flight: bool,
-    capture_ready: bool,
+    capture: TraceCaptureState,
     capture_scene: Option<u64>,
     picture: PictureState,
     picture_finished: bool,
@@ -1236,7 +1250,7 @@ fn traced_turn(
         submitted_scene_id: outcome.scene_id,
         submitted_scene_level: outcome
             .scene_id
-            .and(presenter.pending.map(|scene| scene.level)),
+            .and_then(|_| presenter.pending.map(|scene| scene.level)),
         submitted_warp_id: outcome.warp_id,
         submitted_warp_kind: outcome.warp_id.and(presenter.pending_warp_kind),
         scene_fence_observations: presenter.fence_observations,
@@ -1245,15 +1259,13 @@ fn traced_turn(
         facts: StableFrameFacts {
             generation: frame_loop.generation(),
             due: frame_loop.due(),
-            refinement_pending: frame_loop.refinement_pending(),
-            scene_update_pending: frame_loop.scene_update_pending(),
-            scene_in_flight: presenter.pending.is_some(),
-            warp_in_flight: presenter.pending_warp.is_some(),
+            refinement: TracePendingState::from_pending(frame_loop.refinement_pending()),
+            scene_update: TracePendingState::from_pending(frame_loop.scene_update_pending()),
+            scene_flight: TracePendingState::from_pending(presenter.pending.is_some()),
+            warp_flight: TracePendingState::from_pending(presenter.pending_warp.is_some()),
             retained_scene: presenter.retained_scene,
             presented_scene: presenter.presented_scene,
-            capture_armed: presenter.capture_armed,
-            capture_in_flight: presenter.capture_in_flight,
-            capture_ready: presenter.capture_ready,
+            capture: presenter.capture,
             capture_scene: presenter.capture_scene,
             picture,
             picture_finished: picture.finished(),
@@ -1412,9 +1424,9 @@ fn named_frame_scenarios_return_equal_complete_turn_records() {
         Some(WarpKind::ReliefRedraw)
     );
     let capture = capture_frame_trace();
-    assert!(capture[1].facts.capture_in_flight);
+    assert_eq!(capture[1].facts.capture, TraceCaptureState::InFlight);
     let captured = capture.last().expect("capture completion turn");
-    assert!(captured.facts.capture_ready);
+    assert_eq!(captured.facts.capture, TraceCaptureState::Ready);
     assert_eq!(captured.facts.capture_scene, captured.facts.retained_scene);
     assert!(matches!(
         captured.surface_action,
