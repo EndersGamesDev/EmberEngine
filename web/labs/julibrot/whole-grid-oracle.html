@@ -16,8 +16,8 @@
   <script type="module">
     // This test-only page runs one shipped row through the public lab driver and prints the exact
     // fixture shape used for later whole-grid comparisons. `app_refresh()` both polls GPU fences
-    // and runs presentation turns, so owner epoch, presentation ledger, capture count and GPU poll
-    // counts remain reported load-dependent evidence until R2-04d adds a poll-only boundary.
+    // and runs presentation turns, so owner epoch, presentation ledger, capture count, GPU poll
+    // counts and the probe-selected second-frame policy remain load-dependent evidence until R2-04d.
     // `?generate=1` takes preset zero from the served wasm; without it, the committed fixture
     // supplies the frozen row and comparison.
     import { openLab } from "./lab.js?v=1";
@@ -31,13 +31,14 @@
     // recency makes label convergence load-dependent; each individual attempt remains bounded.
     const MAXIMUM_CAPTURES = 40;
     const LOAD_DEPENDENT_REASON =
-      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls and warp_polls; all remain reported evidence until R2-04d adds a poll-only production boundary";
+      "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls, warp_polls and second_frame_policy; that policy is decided from the measured PolicyProbe wall, and all remain reported evidence until R2-04d adds a poll-only production boundary";
     const LOAD_DEPENDENT_FIELDS = [
       "owner_epoch",
       "presentation_ledger",
       "capture_count",
       "scene_polls",
       "warp_polls",
+      "second_frame_policy",
     ];
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
@@ -82,7 +83,13 @@
       const stable = JSON.parse(JSON.stringify(facts));
       omit(stable, ENVIRONMENT_FIELDS);
       omit(stable, PAGE_WALL_FIELDS);
-      omit(stable, ["owner_epoch", "presentation_ledger", "scene_polls", "warp_polls"]);
+      omit(stable, [
+        "owner_epoch",
+        "presentation_ledger",
+        "scene_polls",
+        "warp_polls",
+        "second_frame_policy",
+      ]);
       if (stable.worker_facts) omit(stable.worker_facts, WORKER_WALL_FIELDS);
       if (Array.isArray(stable.level_timings)) {
         for (const level of stable.level_timings) omit(level, LEVEL_WALL_FIELDS);
@@ -175,6 +182,59 @@
       return exact;
     }
 
+    function printable(value) {
+      return JSON.stringify(value);
+    }
+
+    function exactDifferences(actual, expected, path = "$") {
+      const actualArray = Array.isArray(actual);
+      const expectedArray = Array.isArray(expected);
+      if (actualArray || expectedArray) {
+        if (!actualArray || !expectedArray) {
+          return [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+        }
+        const differences = [];
+        if (actual.length !== expected.length) {
+          differences.push(`${path}.length: actual=${actual.length}, expected=${expected.length}`);
+        }
+        for (let index = 0; index < Math.max(actual.length, expected.length); index += 1) {
+          if (index >= actual.length) {
+            differences.push(`${path}[${index}]: actual=<missing>, expected=${printable(expected[index])}`);
+          } else if (index >= expected.length) {
+            differences.push(`${path}[${index}]: actual=${printable(actual[index])}, expected=<missing>`);
+          } else {
+            differences.push(...exactDifferences(actual[index], expected[index], `${path}[${index}]`));
+          }
+        }
+        return differences;
+      }
+
+      const actualRecord = actual !== null && typeof actual === "object";
+      const expectedRecord = expected !== null && typeof expected === "object";
+      if (actualRecord || expectedRecord) {
+        if (!actualRecord || !expectedRecord) {
+          return [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+        }
+        const differences = [];
+        const keys = [...new Set([...Object.keys(actual), ...Object.keys(expected)])].sort();
+        for (const key of keys) {
+          const childPath = `${path}.${key}`;
+          if (!Object.hasOwn(actual, key)) {
+            differences.push(`${childPath}: actual=<missing>, expected=${printable(expected[key])}`);
+          } else if (!Object.hasOwn(expected, key)) {
+            differences.push(`${childPath}: actual=${printable(actual[key])}, expected=<missing>`);
+          } else {
+            differences.push(...exactDifferences(actual[key], expected[key], childPath));
+          }
+        }
+        return differences;
+      }
+
+      return Object.is(actual, expected)
+        ? []
+        : [`${path}: actual=${printable(actual)}, expected=${printable(expected)}`];
+    }
+
     function loadDependentReport(actual, expected) {
       const report = {};
       for (const field of LOAD_DEPENDENT_FIELDS) {
@@ -228,6 +288,7 @@
             capture_count: measured.captureCount,
             scene_polls: facts.scene_polls,
             warp_polls: facts.warp_polls,
+            second_frame_policy: facts.second_frame_policy,
           },
           rgba: {
             byte_length: frame.rgba.length,
@@ -243,9 +304,10 @@
         };
         const text = JSON.stringify(actual, null, 2);
         if (expected) {
+          const differences = exactDifferences(exactRecord(actual), exactRecord(expected));
           assert(
-            JSON.stringify(exactRecord(actual)) === JSON.stringify(exactRecord(expected)),
-            "served whole-grid fixture differs",
+            differences.length === 0,
+            `served whole-grid fixture differs:\n${differences.join("\n")}`,
           );
           const loadReport = loadDependentReport(actual, expected);
           REPORT.textContent = `PASS ${FIXTURE_URL}\n\nload-dependent comparison\n${loadReport}\n\n${text}`;
