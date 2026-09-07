@@ -207,6 +207,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-math-kernels
 
+- Round two shipped the paired planner and native/served whole-grid parity oracles around the retained kernels path; it left kernel arithmetic, ABI-3 bytes, the whole-grid arm, and the math-kernels debts below unchanged.
 - `forward_homography` maps the plane basis with a camera row against the ambient basis (`crates/labs/julibrot/math/src/screen.rs:86`), the transpose of what `apply_camera_rotation` applies (`crates/labs/julibrot/math/src/reprojection.rs:286`), and the fail-safe reconstruction absorbs it; the recorded round trip reaches 6.4e-7 px and never builds the flat-object configuration the 3.96 px claim names, so reproduce that figure there or strike it. needs: a browser check at a nonzero ambient camera rotation.
 - The kernel's horizon test is the denominator's sign alone (`crates/labs/julibrot/math/src/screen.rs`), which misses the band where two sign flips cancel and the flat map and the relief pass disagree; no second horizon test exists on the 2D path and the decision is unrecorded.
 - The Interactive refinement level is built unconditionally for both precision modes (`crates/labs/julibrot/kernels/src/refinement.rs:129`) and still ranked by the scheduler (`crates/labs/julibrot/app/src/frame/schedule.rs:448`), though the fast picture policy asks to omit it.
@@ -224,6 +225,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-present
 
+- Round two shipped replayable present-event and surface-resolution transactions, fixed-capacity event polling, structural uniform offsets, and the frozen planner and pixel corpora; it left the poll-only browser boundary and the presentation debts below.
 - Present GPU tests can deadlock intermittently under parallel execution on the software Vulkan driver; serialize this shard until shared device and lock isolation is corrected. At c95fba62 the crate's test binary sat 43 minutes at 0.4% CPU with four gpu::device::tests threads blocked on futex and rt_mutex beside lavapipe threads, while the serialized run passes in 46 s.
 - No check relates a scene's submitted extent to the pose it is submitted against: the pose comes from the hot slot and the extent from the grid in `crates/labs/julibrot/present/src/gpu/device/scene/submit.rs`, and the two validators check each alone.
 - The scale invariant is skipped whenever a plan declares exposure (`crates/labs/julibrot/present/src/gpu/device/ledger.rs:221`, the flag decided by `crates/labs/julibrot/present/src/planner.rs:305`), so any pan past half a pose pixel leaves the coverage check; the decision belongs in `docs/julibrot/present.md` and is recorded nowhere.
@@ -255,6 +257,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
+- Round two shipped the narrowed viewer integration, ordered replayable worker/kernel/present/surface transactions, structural retired-grid absence, shared frame fixtures, and removal of the unreferenced present-facts clone; it left the wasm facts-reader reach-through, load-dependent served timing fields, and the app-web debts below.
 - R2-01b now asserts the refresh submission order: both drivers run one ordered refresh executor whose typed stages the scene and warp effects consume. The browser-mode `BROWSER_ACTION_TRACE_FIXTURE` asserts scene-before-warp and fence-observation order per turn for the short, zoom, height, capture, and finished-picture scenarios. The R2-01b frame trace is byte-unchanged, so R2-04a–c may start.
 - The browser-model fixture emits one `HotWritten` per turn while production keeps three conditional `presenter.write_hot` sites around the arrival and accepted-warp branches; browser-model cases covering those branches and freezing every conditional `HotWritten { slot_order }` action are follow-up work.
 - R2-02 must reconcile or deliberately preserve the worker transport divergence: the same logical ownership scenario dispatches and returns request slot 0 on the same-thread queue versus slot 1 on the browser stack, and same-thread credit return advances the final fact epoch to 7 versus 6 in the browser owner core.
