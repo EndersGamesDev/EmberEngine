@@ -220,38 +220,7 @@ pub enum S2C {
     },
 }
 
-/// Windows `ERROR_IO_PENDING` / `WSA_IO_PENDING`.
-///
-/// A socket with `SO_RCVTIMEO` set does not always report a timed-out read as
-/// `WSAETIMEDOUT`. When the read times out part-way through an overlapped
-/// operation Windows returns 997 instead, and Rust has no `ErrorKind` for it —
-/// `kind()` is `Uncategorized`, so it matches neither `WouldBlock` nor
-/// `TimedOut`.
-const WINDOWS_IO_PENDING: i32 = 997;
-
-/// True when a read error means "nothing to read yet", not "this connection is
-/// finished".
-///
-/// Every read loop in this game is a short-timeout poll: read for a few
-/// milliseconds, do other work, read again. Getting this predicate wrong is
-/// not a cosmetic error — the loops treat anything else as fatal and exit, so
-/// a misclassified transient error kills the reader permanently and the peer
-/// goes silently deaf for the rest of its life. That is exactly what 997 did:
-/// roughly one connection in ten on Windows stopped receiving, which showed up
-/// as a joining player never appearing, a race that never went green, and
-/// remote cars frozen at the grid — three unrelated-looking symptoms, one
-/// cause.
-#[must_use]
-pub fn is_transient_read(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-    ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
-}
-
-pub use ember_net::sanitize;
+pub use ember_net::{is_transient_read, sanitize};
 
 #[must_use]
 pub fn sanitize_handle(s: &str) -> String {
@@ -417,7 +386,7 @@ mod tests {
         // out inside an overlapped operation. The whole reason it slipped
         // through is that Rust gives it no useful `ErrorKind` — so assert
         // exactly that, which is what makes the raw-os-error check necessary.
-        let pending = Error::from_raw_os_error(WINDOWS_IO_PENDING);
+        let pending = Error::from_raw_os_error(997);
         assert!(
             !matches!(
                 pending.kind(),
