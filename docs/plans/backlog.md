@@ -258,7 +258,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
-- A target click or scale move at a centre far from the accepted reference shows the clear colour for the whole reference round trip; nothing in `crates/labs/julibrot/app/src/frame/loop.rs` re-projects the retained picture across a legitimate wait.
+- The retained-source coverage hold invariant is implemented in the app/present boundary; its `docs/julibrot/app.md` paragraph follows the relief-warp rebase.
 - A clear-only present stamps the requested view as presented (`crates/labs/julibrot/app/src/frame/loop.rs:466`), so the finished-picture reading can be true over a blank surface; the companion restart rule is settled and this stamp is not.
 - `retire_main_grid_pair` frees a span and leaves the field naming it (`crates/labs/julibrot/app/src/frame/loop/browser/submit.rs:270` against the bare field at `crates/labs/julibrot/app/src/frame/loop.rs:745`); an optional grid would make the recovery invariant structural.
 - The backdrop replan's early return keys on requested extent, cap and precision mode (`crates/labs/julibrot/app/src/frame/loop/browser/backdrop.rs:72`), so a replan is skipped when the executor would derive a different delivered extent.

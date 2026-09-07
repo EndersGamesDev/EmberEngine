@@ -1203,9 +1203,9 @@ mod browser {
             } else {
                 WarpValidation::Ordinary
             };
-            let hold_refused_warp = self
-                .loop_state
-                .hold_refused_warp(self.presenter.facts().completed_scene_id.is_some());
+            // Scheduler idleness cannot disarm a covering retained picture. The presenter proves
+            // geometric coverage before it turns this authorization into a hold.
+            let hold_refused_warp = self.presenter.facts().completed_scene_id.is_some();
             self.presenter.write_hot(
                 slot,
                 PresentHot {

@@ -1,4 +1,6 @@
-use super::ledger::{LatticeRefusal, presentation_ledger_entry};
+use super::ledger::{
+    LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination,
+};
 use super::shade::{encode_shade, ensure_value_target, write_palette};
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
@@ -29,9 +31,9 @@ pub(super) const fn retain_relief_plan_during_scene(
 impl Presenter {
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
     ///
-    /// When `hold_refused_warp` is true, a clear-only plan with a retained picture becomes a
-    /// `HoldStale` plan whose rows carry the ratio between the held picture's extent and the
-    /// destination lattice, so the app cannot replace that picture with a disallowed clear.
+    /// `hold_refused_warp` authorizes a covering retained source. The presenter independently
+    /// proves that coverage before a refused or unavailable redraw may become a `HoldStale` plan,
+    /// whose rows carry the held picture from its delivered extent to the destination lattice.
     #[allow(
         clippy::too_many_lines,
         reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
@@ -82,6 +84,14 @@ impl Presenter {
                 }
             },
         );
+        let hold_refused_warp = hold_refused_warp
+            && self
+                .ledger
+                .retained()
+                .zip(pose.as_ref())
+                .is_some_and(|(source, requested)| {
+                    redraw_source_covers_destination(&plan, source, requested)
+                });
         let relief_records_ready = self.ledger.retained().is_some_and(|source| {
             plan.destination_pose.is_some_and(|destination| {
                 self.retained_records_support_relief_redraw(source, &destination)
