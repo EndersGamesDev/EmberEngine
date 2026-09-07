@@ -540,7 +540,7 @@ fn optional_backdrop_plan(
 /// sequence without also changing the baseline driver that records each stage's concrete facts.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, Default)]
-struct BrowserRefreshOrder<const STEP: u8>;
+pub(crate) struct BrowserRefreshOrder<const STEP: u8>;
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<0> {
@@ -580,19 +580,17 @@ impl BrowserRefreshOrder<3> {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<4> {
-    #[inline]
-    fn run_scene<T>(self, run: impl FnOnce() -> T) -> (BrowserRefreshOrder<5>, T) {
+    const fn scene_considered(self) -> BrowserRefreshOrder<5> {
         let Self = self;
-        (BrowserRefreshOrder, run())
+        BrowserRefreshOrder
     }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<5> {
-    #[inline]
-    fn run_warp<T>(self, run: impl FnOnce() -> T) -> (BrowserRefreshOrder<6>, T) {
+    const fn warp_considered(self) -> BrowserRefreshOrder<6> {
         let Self = self;
-        (BrowserRefreshOrder, run())
+        BrowserRefreshOrder
     }
 }
 
@@ -1345,11 +1343,12 @@ mod browser {
                 relief_redraw,
                 self.presented_view_is_stale(viewer),
             );
-            let (refresh_order, scene_id) = refresh_order.run_scene(|| {
+            let (refresh_order, scene_id) =
                 if defer_scene_for_redraw && self.active_backdrop_map.is_none() {
-                    Ok(None)
+                    (refresh_order.scene_considered(), None)
                 } else {
                     self.submit_due_scene(
+                        refresh_order,
                         viewer,
                         hot.pose.object,
                         hot.plane,
@@ -1358,10 +1357,8 @@ mod browser {
                         slot,
                         hot.state.epoch,
                         now_ms,
-                    )
-                }
-            });
-            let scene_id = scene_id?;
+                    )?
+                };
 
             let mut warp_id = None;
             // A redraw that defers the replacement scene is itself required progress. Stale-view
@@ -1375,85 +1372,78 @@ mod browser {
                 relief_redraw,
                 self.presenter.facts().in_flight_scene_id.is_some(),
             );
-            let (_refresh_order, result) = refresh_order.run_warp(|| {
-                if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
-                    match runtime.acquire_for_warp(self.loop_state.generation()) {
-                        Ok(frame) => {
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            let receipt = match self.presenter.frame(
-                                FrameState {
-                                    surface_view: &view,
-                                    canvas_width: runtime.facts().width,
-                                    canvas_height: runtime.facts().height,
-                                    refresh_id: self.refresh_id,
-                                    now_ms,
-                                },
-                                slot,
-                            ) {
-                                Ok(receipt) => receipt,
-                                Err(error) => {
-                                    let released = runtime
-                                        .release_unsubmitted_warp(self.loop_state.generation());
-                                    debug_assert!(
-                                        released,
-                                        "failed warp must release surface token"
-                                    );
-                                    return Err(present_error(error));
-                                }
-                            };
-                            warp_id = Some(receipt.warp_id);
-                            self.last_warp_source = receipt.source_scene_id;
-                            if super::schedule_exposure_fill(
-                                &mut self.loop_state,
-                                receipt.exposed,
-                                self.main.generation_applied,
-                            ) {
-                                self.prepared_level = None;
-                            }
-                            if let Err(error) = runtime.retain_for_warp(
-                                receipt.warp_id,
-                                self.loop_state.generation(),
-                                receipt.precision_mode,
-                                frame,
-                            ) {
-                                let _released =
+            if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
+                match runtime.acquire_for_warp(refresh_order, self.loop_state.generation()) {
+                    Ok((_refresh_order, frame)) => {
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        let receipt = match self.presenter.frame(
+                            FrameState {
+                                surface_view: &view,
+                                canvas_width: runtime.facts().width,
+                                canvas_height: runtime.facts().height,
+                                refresh_id: self.refresh_id,
+                                now_ms,
+                            },
+                            slot,
+                        ) {
+                            Ok(receipt) => receipt,
+                            Err(error) => {
+                                let released =
                                     runtime.release_unsubmitted_warp(self.loop_state.generation());
-                                return Err(error);
+                                debug_assert!(released, "failed warp must release surface token");
+                                return Err(present_error(error));
                             }
-                            if super::warp_presents_requested_view(self.presenter.facts().warp_kind)
-                            {
-                                self.pending_warp_view =
-                                    Some((receipt.warp_id, self.view_stamp(viewer)));
-                            }
-                            self.loop_state.warp_submitted();
+                        };
+                        warp_id = Some(receipt.warp_id);
+                        self.last_warp_source = receipt.source_scene_id;
+                        if super::schedule_exposure_fill(
+                            &mut self.loop_state,
+                            receipt.exposed,
+                            self.main.generation_applied,
+                        ) {
+                            self.prepared_level = None;
                         }
-                        Err(AppError::SurfaceSkipped { .. }) => {
-                            return Ok(self.outcome(
-                                None,
-                                scene_id,
-                                false,
-                                RefreshStatus::SkippedTimeout,
-                            ));
+                        if let Err(error) = runtime.retain_for_warp(
+                            receipt.warp_id,
+                            self.loop_state.generation(),
+                            receipt.precision_mode,
+                            frame,
+                        ) {
+                            let _released =
+                                runtime.release_unsubmitted_warp(self.loop_state.generation());
+                            return Err(error);
                         }
-                        Err(error) => return Err(error),
+                        if super::warp_presents_requested_view(self.presenter.facts().warp_kind) {
+                            self.pending_warp_view =
+                                Some((receipt.warp_id, self.view_stamp(viewer)));
+                        }
+                        self.loop_state.warp_submitted();
                     }
+                    Err(AppError::SurfaceSkipped { .. }) => {
+                        return Ok(self.outcome(
+                            None,
+                            scene_id,
+                            false,
+                            RefreshStatus::SkippedTimeout,
+                        ));
+                    }
+                    Err(error) => return Err(error),
                 }
-                let status = if presented {
-                    RefreshStatus::Presented
-                } else if warp_id.is_some() || scene_id.is_some() {
-                    RefreshStatus::Submitted
-                } else if observed.cancelled {
-                    RefreshStatus::Cancelled
-                } else if observed.refused {
-                    RefreshStatus::Refused
-                } else {
-                    RefreshStatus::Waiting
-                };
-                Ok(self.outcome(warp_id, scene_id, presented, status))
-            });
-            result
+            }
+            let status = if presented {
+                RefreshStatus::Presented
+            } else if warp_id.is_some() || scene_id.is_some() {
+                RefreshStatus::Submitted
+            } else if observed.cancelled {
+                RefreshStatus::Cancelled
+            } else if observed.refused {
+                RefreshStatus::Refused
+            } else {
+                RefreshStatus::Waiting
+            };
+            Ok(self.outcome(warp_id, scene_id, presented, status))
         }
 
         fn outcome(

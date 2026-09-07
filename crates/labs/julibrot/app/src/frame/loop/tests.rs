@@ -441,7 +441,7 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
         source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
     );
     assert!(source.contains(concat!(
-        "let (refresh_order, scene_id) = refresh_order.run_scene(|| {\n",
+        "let (refresh_order, scene_id) =\n",
         "                if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
     )));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
@@ -813,7 +813,12 @@ struct FakePresenter {
 }
 
 impl FakePresenter {
-    fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
+    fn submit(
+        &mut self,
+        order: BrowserRefreshOrder<4>,
+        generation: u32,
+        level: RefinementLevel,
+    ) -> (BrowserRefreshOrder<5>, u64) {
         self.next_id += 1;
         let scene = PendingFakeScene {
             id: self.next_id,
@@ -822,7 +827,7 @@ impl FakePresenter {
         };
         self.pending = Some(scene);
         self.submissions.push(level);
-        scene.id
+        (order.scene_considered(), scene.id)
     }
 
     fn write_hot_for_slot(&mut self, hold_refused_warp: bool, slot_order: u32) {
@@ -856,7 +861,11 @@ impl FakePresenter {
         });
     }
 
-    fn submit_warp(&mut self, generation: u32) -> u64 {
+    fn submit_warp(
+        &mut self,
+        order: BrowserRefreshOrder<5>,
+        generation: u32,
+    ) -> (BrowserRefreshOrder<6>, u64) {
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
         self.pending_warp_kind = self.warp_kind;
@@ -888,7 +897,7 @@ impl FakePresenter {
             self.capture = TraceCaptureState::InFlight;
         }
         self.warp_submissions.push(self.next_id);
-        self.next_id
+        (order.warp_considered(), self.next_id)
     }
 
     const fn arm_capture(&mut self) {
@@ -1267,33 +1276,32 @@ fn drive_turn(
     let has_retained_scene = presenter.retained_scene.is_some();
     presenter.write_hot_for_slot(has_retained_scene, 0);
     let refresh_order = refresh_order.hot_written();
-    let (refresh_order, scene_id) = refresh_order.run_scene(|| {
-        if !outcome.refused
-            && let Some(level) = frame_loop.due()
-        {
-            let id = presenter.submit(frame_loop.generation(), level);
-            frame_loop.submitted(id, level);
-            outcome
-                .submission_actions
-                .push(TraceSubmissionAction::Scene { id });
-            Some(id)
-        } else {
-            None
-        }
-    });
+    let (refresh_order, scene_id) = if !outcome.refused
+        && let Some(level) = frame_loop.due()
+    {
+        let (refresh_order, id) =
+            presenter.submit(refresh_order, frame_loop.generation(), level);
+        frame_loop.submitted(id, level);
+        outcome
+            .submission_actions
+            .push(TraceSubmissionAction::Scene { id });
+        (refresh_order, Some(id))
+    } else {
+        (refresh_order.scene_considered(), None)
+    };
     outcome.scene_id = scene_id;
-    let (_refresh_order, warp_id) = refresh_order.run_warp(|| {
+    let (_refresh_order, warp_id) =
         if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-            let id = presenter.submit_warp(frame_loop.generation());
+            let (refresh_order, id) =
+                presenter.submit_warp(refresh_order, frame_loop.generation());
             frame_loop.warp_submitted();
             outcome
                 .submission_actions
                 .push(TraceSubmissionAction::Warp { id });
-            Some(id)
+            (refresh_order, Some(id))
         } else {
-            None
-        }
-    });
+            (refresh_order.warp_considered(), None)
+        };
     outcome.warp_id = warp_id;
     outcome
 }
@@ -2566,7 +2574,13 @@ fn edge_on_final_completes_once_then_stays_idle_in_both_scene_modes() {
         stamp_scene_level(&mut grid, &plan, scheduled);
 
         let mut presenter = FakePresenter::default();
-        let scene_id = presenter.submit(frame_loop.generation(), grid.level);
+        let refresh_order = BrowserRefreshOrder::begin()
+            .capture_drained()
+            .capture_staged()
+            .fences_observed()
+            .hot_written();
+        let (_refresh_order, scene_id) =
+            presenter.submit(refresh_order, frame_loop.generation(), grid.level);
         frame_loop.submitted(scene_id, scheduled);
         presenter.fire_completed_callback();
         let mut clock = FakeClock::default();
