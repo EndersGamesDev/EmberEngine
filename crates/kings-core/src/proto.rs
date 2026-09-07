@@ -419,31 +419,7 @@ pub enum S2C {
     },
 }
 
-/// Windows `ERROR_IO_PENDING` / `WSA_IO_PENDING`.
-///
-/// A socket with `SO_RCVTIMEO` set does not always report a timed-out read as
-/// `WSAETIMEDOUT`. When the read times out part-way through an overlapped
-/// operation Windows returns 997 instead, and Rust has no `ErrorKind` for it:
-/// `kind()` is `Uncategorized`, so it matches neither `WouldBlock` nor
-/// `TimedOut`.
-const WINDOWS_IO_PENDING: i32 = 997;
-
-/// True when a read error means "nothing to read yet", not "this connection is
-/// finished".
-///
-/// Copied from `fire-core`, where the doc comment records the three
-/// unrelated-looking symptoms a wrong answer produced. Every read loop in
-/// these games is a short-timeout poll, and the loops treat anything else as
-/// fatal, so a misclassified transient error kills the reader permanently.
-#[must_use]
-pub fn is_transient_read(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-    ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
-}
+pub use ember_net::is_transient_read;
 
 /// Names and handles arrive from the network.
 ///
@@ -873,7 +849,7 @@ mod tests {
     }
 
     /// The three symptoms this predicate caused when it was wrong are in
-    /// `fire-core`'s doc comment; this is the test that keeps the copy right.
+    /// `fire-core`'s history; this keeps the shared predicate wired here.
     #[test]
     fn a_timed_out_read_is_not_a_dead_connection() {
         use std::io::{Error, ErrorKind};
@@ -887,7 +863,7 @@ mod tests {
                 "{kind:?} must be transient"
             );
         }
-        let pending = Error::from_raw_os_error(WINDOWS_IO_PENDING);
+        let pending = Error::from_raw_os_error(997);
         assert!(
             is_transient_read(&pending),
             "os error 997 must be transient"
