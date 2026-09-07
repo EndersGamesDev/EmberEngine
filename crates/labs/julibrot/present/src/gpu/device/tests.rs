@@ -174,8 +174,13 @@ fn census_failure_or_delay_never_refuses_or_delays_the_scene() {
 
 /// The pixel lattice every binding fixture samples and presents on.
 const BINDING_EXTENT: [u32; 2] = [64, 36];
+const NON_UNIFORM_CAPTURE_EXTENT: [u32; 2] = [256, 144];
 
 fn binding_pose() -> Pose {
+    binding_pose_on(BINDING_EXTENT)
+}
+
+fn binding_pose_on(extent: [u32; 2]) -> Pose {
     Pose {
         epoch: 1,
         orbit_generation: 1,
@@ -187,8 +192,8 @@ fn binding_pose() -> Pose {
         plane_origin: [0.0; 4],
         zoom_log2: 0.0,
         view: ViewControls::NEUTRAL,
-        grid_width: 64,
-        grid_height: 36,
+        grid_width: extent[0],
+        grid_height: extent[1],
         map: PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY),
         centre_from_reference_px: [0.0; 2],
     }
@@ -208,15 +213,23 @@ fn binding_measurement(id: u64) -> SubmissionMeasurement {
 }
 
 fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::SceneFrame {
+    promote_binding_scene_on(ledger, scene_id, BINDING_EXTENT)
+}
+
+fn promote_binding_scene_on(
+    ledger: &mut SceneLedger,
+    scene_id: u64,
+    extent: [u32; 2],
+) -> crate::SceneFrame {
     ledger
         .begin(|texture_index| {
             Ok(PendingScene {
                 scene_id,
-                pose: binding_pose(),
+                pose: binding_pose_on(extent),
                 iteration_cap: 64,
                 level: RefinementLevel::Final,
-                extent: [64, 36],
-                grid: binding_main().grid,
+                extent,
+                grid: binding_main_on(extent).grid,
                 texture_index,
                 centre_revision: 1,
                 plane_origin_f64: [0.0; 4],
@@ -232,10 +245,16 @@ fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::Scen
 }
 
 fn binding_main() -> PresentMain {
-    let mut arena = ember_lab_heap::SpanArena::new(64, 1, 64, 4_096, 64)
+    binding_main_on(BINDING_EXTENT)
+}
+
+fn binding_main_on(extent: [u32; 2]) -> PresentMain {
+    let side = u16::try_from(extent[0].max(extent[1]).next_power_of_two())
+        .expect("the native fixture extent fits the heap side");
+    let mut arena = ember_lab_heap::SpanArena::new(side, 1, 64, 4_096, 64)
         .expect("relief fixture arena is valid");
     let span = arena
-        .allocate_span(64 * 36, 64)
+        .allocate_span(extent[0] * extent[1], 64)
         .expect("relief fixture grid fits");
     PresentMain {
         epoch: 1,
@@ -245,12 +264,12 @@ fn binding_main() -> PresentMain {
         },
         grid: EscapeGrid {
             span,
-            width: 64,
-            height: 36,
+            width: extent[0],
+            height: extent[1],
             level: RefinementLevel::Final,
         },
         object: ember_julibrot_math::ObjectAngles::JULIA,
-        plane: binding_pose().plane,
+        plane: binding_pose_on(extent).plane,
         map: PoseMap::EdgeOn,
         backdrop: None,
     }
@@ -328,7 +347,68 @@ fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NativeValuePattern {
+    Uniform,
+    Split,
+}
+
+fn native_split_value_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+    const SOURCE: &str = r"
+        @vertex
+        fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+            var positions = array<vec2<f32>, 3>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(3.0, -1.0),
+                vec2<f32>(-1.0, 3.0),
+            );
+            return vec4<f32>(positions[index], 0.0, 1.0);
+        }
+
+        @fragment
+        fn fragment() -> @location(0) vec4<f32> {
+            return vec4<f32>(3.0, 1.0, 0.0, 0.2);
+        }
+    ";
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Julibrot native split-value shader"),
+        source: wgpu::ShaderSource::Wgsl(SOURCE.into()),
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Julibrot native split-value pipeline"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vertex"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fragment"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba32Float,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
+    native_palette_presenter_on(BINDING_EXTENT, NativeValuePattern::Uniform)
+}
+
+fn native_palette_presenter_on(
+    extent: [u32; 2],
+    pattern: NativeValuePattern,
+) -> (Presenter, Arc<wgpu::Device>) {
     let (device, queue) = native_test_device();
     let config = PresentConfig {
         surface_format: wgpu::TextureFormat::Rgba8Unorm,
@@ -343,12 +423,12 @@ fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
         config,
     )
     .expect("the native palette presenter is created");
-    let mut main = binding_main();
+    let mut main = binding_main_on(extent);
     main.state.generation_applied = 1;
     main.state.centre_revision = 1;
     main.state.precision_mode = PrecisionMode::PictureFast as u32;
     presenter.set_main(main);
-    let completed = promote_binding_scene(&mut presenter.ledger, 37);
+    let completed = promote_binding_scene_on(&mut presenter.ledger, 37, extent);
     presenter.facts.completed_scene_id = Some(completed.scene_id);
     let texture_index = usize::try_from(completed.texture_index)
         .expect("the retained texture index fits this process");
@@ -357,8 +437,10 @@ fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Julibrot native retained-value encoder"),
     });
+    let split_pipeline =
+        (pattern == NativeValuePattern::Split).then(|| native_split_value_pipeline(&device));
     {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Julibrot native retained-value clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &presenter.gpu.scene_textures[texture_index].view,
@@ -377,6 +459,12 @@ fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
+        if let Some(pipeline) = split_pipeline.as_ref() {
+            let split = extent[0] / 2;
+            pass.set_pipeline(pipeline);
+            pass.set_scissor_rect(split, 0, extent[0] - split, extent[1]);
+            pass.draw(0..3, 0..1);
+        }
     }
     queue.submit([encoder.finish()]);
     (presenter, device)
@@ -388,11 +476,27 @@ fn capture_native_palette(
     palette_id: PaletteId,
     refresh_id: u64,
 ) -> (FrameReceipt, FrameReadback) {
+    capture_native_palette_on(
+        presenter,
+        device,
+        palette_id,
+        refresh_id,
+        BINDING_EXTENT,
+    )
+}
+
+fn capture_native_palette_on(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    palette_id: PaletteId,
+    refresh_id: u64,
+    extent: [u32; 2],
+) -> (FrameReceipt, FrameReadback) {
     let mut main = presenter.main.clone().expect("the test MAIN is installed");
     main.epoch = refresh_id;
     main.state.palette_id = palette_id as u32;
     presenter.set_main(main);
-    let pose = binding_pose();
+    let pose = binding_pose_on(extent);
     let hot = PresentHot {
         epoch: refresh_id,
         state: HotState::default(),
@@ -408,7 +512,7 @@ fn capture_native_palette(
     presenter.write_hot(slot, hot, WarpValidation::Ordinary, false);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Julibrot native palette presentation target"),
-        size: extent_3d(BINDING_EXTENT),
+        size: extent_3d(extent),
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -425,8 +529,8 @@ fn capture_native_palette(
         .frame(
             FrameState {
                 surface_view: &view,
-                canvas_width: BINDING_EXTENT[0],
-                canvas_height: BINDING_EXTENT[1],
+                canvas_width: extent[0],
+                canvas_height: extent[1],
                 refresh_id,
                 now_ms,
             },
@@ -503,9 +607,25 @@ fn rgba_runs(rgba: &[u8]) -> Vec<RgbaRun> {
 }
 
 fn native_whole_grid_capture() -> NativeWholeGridCapture {
-    let (mut presenter, device) = native_palette_presenter();
-    let (receipt, readback) =
-        capture_native_palette(&mut presenter, &device, PaletteId::Classic, 101);
+    native_whole_grid_capture_on(BINDING_EXTENT, NativeValuePattern::Uniform)
+}
+
+fn non_uniform_native_whole_grid_capture() -> NativeWholeGridCapture {
+    native_whole_grid_capture_on(NON_UNIFORM_CAPTURE_EXTENT, NativeValuePattern::Split)
+}
+
+fn native_whole_grid_capture_on(
+    extent: [u32; 2],
+    pattern: NativeValuePattern,
+) -> NativeWholeGridCapture {
+    let (mut presenter, device) = native_palette_presenter_on(extent, pattern);
+    let (receipt, readback) = capture_native_palette_on(
+        &mut presenter,
+        &device,
+        PaletteId::Classic,
+        101,
+        extent,
+    );
     let stable_facts = stable_present_facts(presenter.facts_ref());
     let extent = [readback.width, readback.height];
     let copied_scene_id = readback.scene_id;
@@ -513,6 +633,13 @@ fn native_whole_grid_capture() -> NativeWholeGridCapture {
         .expect("the native whole-grid byte count fits this process");
     assert_eq!(readback.rgba.len(), expected_bytes);
     assert_eq!(copied_scene_id, stable_facts.completed_scene_id);
+    let rgba_runs = rgba_runs(&readback.rgba);
+    if pattern == NativeValuePattern::Split {
+        assert!(
+            rgba_runs.len() > 1,
+            "the larger native oracle must retain spatial variation"
+        );
+    }
     NativeWholeGridCapture {
         route: readback.route,
         extent,
@@ -520,7 +647,7 @@ fn native_whole_grid_capture() -> NativeWholeGridCapture {
         completed_scene_id: stable_facts.completed_scene_id,
         receipt,
         rgba_fnv1a64: format!("{:016x}", rgba_fnv1a64(&readback.rgba)),
-        rgba_runs: rgba_runs(&readback.rgba),
+        rgba_runs,
         stable_facts,
     }
 }
@@ -541,6 +668,30 @@ fn print_native_whole_grid_capture_fixture() {
 fn native_whole_grid_capture_matches_fixture() {
     let capture = native_whole_grid_capture();
     assert_eq!(format!("{capture:#?}"), NATIVE_WHOLE_GRID_FIXTURE);
+}
+
+const NON_UNIFORM_NATIVE_WHOLE_GRID_FIXTURE: &str = "";
+
+#[test]
+#[ignore = "enable after the server-rendered non-uniform fixture is committed"]
+fn non_uniform_native_whole_grid_capture_matches_fixture() {
+    let capture = non_uniform_native_whole_grid_capture();
+    assert_eq!(
+        format!("{capture:#?}"),
+        NON_UNIFORM_NATIVE_WHOLE_GRID_FIXTURE
+    );
+}
+
+#[test]
+#[ignore = "prints the non-uniform server-rendered fixture for review and verbatim commit"]
+#[allow(
+    clippy::print_stdout,
+    reason = "the ignored generator emits its reviewed fixture"
+)]
+fn print_non_uniform_native_whole_grid_capture_fixture() {
+    let capture = non_uniform_native_whole_grid_capture();
+    let fixture = format!("{capture:#?}");
+    println!("const NON_UNIFORM_NATIVE_WHOLE_GRID_FIXTURE: &str = {fixture:?};");
 }
 
 const NATIVE_WHOLE_GRID_FIXTURE: &str = "NativeWholeGridCapture {\n    route: OffscreenRerender,\n    extent: [\n        64,\n        36,\n    ],\n    copied_scene_id: Some(\n        37,\n    ),\n    completed_scene_id: Some(\n        37,\n    ),\n    receipt: FrameReceipt {\n        refresh_id: 101,\n        warp_id: 1,\n        source_scene_id: Some(\n            37,\n        ),\n        precision_mode: \"PictureFast\",\n        exposed: false,\n        status: ShowingCompletedScene,\n    },\n    stable_facts: PresentFacts {\n        completed_scene_id: Some(\n            37,\n        ),\n        in_flight_scene_id: None,\n        source_generation: None,\n        held_frame_partition: None,\n        held_since_scene_id: None,\n        precision_mode: \"PictureFast\",\n        delivered_width: 0,\n        delivered_height: 0,\n        destination_width: 64,\n        destination_height: 36,\n        warp_source_width: 64,\n        warp_source_height: 36,\n        warp_lattice_refusal: None,\n        delivered_level: None,\n        iteration_cap: None,\n        glitch_pixel_count: None,\n        palette: Classic,\n        view: ViewControls {\n            camera: [\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n            ],\n            camera_translation: [\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n                0.0,\n            ],\n            camera_yaw: 0.0,\n            camera_pitch: 0.0,\n            height_scale: 0.0,\n            distance_five: 8.0,\n            distance_four: 8.0,\n        },\n        centre_from_reference_px: [\n            0.0,\n            0.0,\n        ],\n        reference_shift_px: [\n            0.0,\n            0.0,\n        ],\n        last_scene: None,\n        last_warp: Some(\n            SubmissionMeasurement {\n                kind: Warp,\n                id: 1,\n                source_scene_id: Some(\n                    37,\n                ),\n                sample_class: ColdWarmUp,\n                precision_mode: \"PictureFast\",\n                wall_ms: 0.0,\n                fence_wait_ms: 0.0,\n                polls: 1,\n            },\n        ),\n        reprojected_per_scene: None,\n        relief_redraw_count: 0,\n        warp_hold_count: 0,\n        refreshes_without_scene: 0,\n        texture_reallocations: 0,\n        warp_exposed: false,\n        warp_exposed_fraction: Some(\n            0.0,\n        ),\n        scene_fill_due: false,\n        chart_residual: Some(\n            0.0,\n        ),\n        warp_max_error_px: Some(\n            0.0,\n        ),\n        warp_p95_error_px: Some(\n            0.0,\n        ),\n        warp_kind: AnchorHomography,\n        warp_refusal_reason: None,\n        presentation_ledger: PresentationLedger {\n            entries: [\n                Some(\n                    PresentationLedgerEntry {\n                        scene_id: Some(\n                            37,\n                        ),\n                        level: Some(\n                            Final,\n                        ),\n                        warp_kind: AnchorHomography,\n                        requested_centre_px: Some(\n                            [\n                                32.0,\n                                18.0,\n                            ],\n                        ),\n                        anchor_px: Some(\n                            [\n                                0.0,\n                                0.0,\n                            ],\n                        ),\n                    },\n                ),\n                None,\n                None,\n                None,\n                None,\n                None,\n                None,\n                None,\n            ],\n            next: 1,\n            len: 1,\n        },\n        status: ShowingCompletedScene,\n    },\n    rgba_fnv1a64: \"27e4f088d4b3c925\",\n    rgba_runs: [\n        RgbaRun {\n            length: 2304,\n            rgba: [\n                161,\n                178,\n                39,\n                255,\n            ],\n        },\n    ],\n}";
@@ -627,6 +778,135 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
         Some(37)
     );
     assert_eq!(hot.accepted_frame(ledger.retained(), ledger.held()), None);
+}
+
+#[derive(Clone, Debug)]
+struct HoldPolicyCorpusCase {
+    name: &'static str,
+    plan: crate::WarpPlan,
+    retained: Option<crate::SceneFrame>,
+    enabled: bool,
+    extent: [u32; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HoldPolicyCorpusResult {
+    name: &'static str,
+    plan: crate::WarpPlan,
+}
+
+type HoldPolicyEntry = fn(
+    &crate::WarpPlan,
+    Option<&crate::SceneFrame>,
+    bool,
+    [u32; 2],
+) -> crate::WarpPlan;
+
+fn current_hold_policy_entry(
+    plan: &crate::WarpPlan,
+    retained: Option<&crate::SceneFrame>,
+    enabled: bool,
+    extent: [u32; 2],
+) -> crate::WarpPlan {
+    apply_hold_policy(*plan, retained, enabled, extent)
+}
+
+fn extracted_hold_policy_entry(
+    plan: &crate::WarpPlan,
+    retained: Option<&crate::SceneFrame>,
+    enabled: bool,
+    extent: [u32; 2],
+) -> crate::WarpPlan {
+    apply_hold_policy(*plan, retained, enabled, extent)
+}
+
+fn named_hold_policy_corpus() -> Vec<HoldPolicyCorpusCase> {
+    let mut ledger = SceneLedger::default();
+    let retained = promote_binding_scene(&mut ledger, 37);
+    let refused = crate::WarpPlan {
+        refusal_reason: Some(crate::WarpRefusalReason::ErrorCeiling {
+            max_px: 2.0,
+            p95_px: 1.5,
+        }),
+        ..clear_warp_plan(false, true)
+    };
+    let mut accepted = clear_warp_plan(false, false);
+    accepted.kind = WarpKind::AnchorHomography;
+    accepted.source_scene_id = Some(retained.scene_id);
+    accepted.source_texture_index = Some(retained.texture_index);
+    accepted.source_valid = true;
+    vec![
+        HoldPolicyCorpusCase {
+            name: "disabled-refusal",
+            plan: refused,
+            retained: Some(retained),
+            enabled: false,
+            extent: BINDING_EXTENT,
+        },
+        HoldPolicyCorpusCase {
+            name: "missing-retained-frame",
+            plan: refused,
+            retained: None,
+            enabled: true,
+            extent: BINDING_EXTENT,
+        },
+        HoldPolicyCorpusCase {
+            name: "accepted-geometric-plan",
+            plan: accepted,
+            retained: Some(retained),
+            enabled: true,
+            extent: BINDING_EXTENT,
+        },
+        HoldPolicyCorpusCase {
+            name: "eligible-refusal-held",
+            plan: refused,
+            retained: Some(retained),
+            enabled: true,
+            extent: BINDING_EXTENT,
+        },
+        HoldPolicyCorpusCase {
+            name: "invalid-destination-extent",
+            plan: refused,
+            retained: Some(retained),
+            enabled: true,
+            extent: [0, BINDING_EXTENT[1]],
+        },
+    ]
+}
+
+fn run_hold_policy_corpus(entry: HoldPolicyEntry) -> Vec<HoldPolicyCorpusResult> {
+    let corpus = named_hold_policy_corpus();
+    corpus
+        .iter()
+        .map(|case| HoldPolicyCorpusResult {
+            name: case.name,
+            plan: entry(
+                &case.plan,
+                case.retained.as_ref(),
+                case.enabled,
+                case.extent,
+            ),
+        })
+        .collect()
+}
+
+#[test]
+fn named_paired_hold_policy_corpus_matches_complete_warp_plans() {
+    let current = run_hold_policy_corpus(current_hold_policy_entry);
+    let extracted = run_hold_policy_corpus(extracted_hold_policy_entry);
+    assert_eq!(current, extracted);
+    assert_eq!(
+        current.iter().map(|result| result.name).collect::<Vec<_>>(),
+        [
+            "disabled-refusal",
+            "missing-retained-frame",
+            "accepted-geometric-plan",
+            "eligible-refusal-held",
+            "invalid-destination-extent",
+        ]
+    );
+    assert_eq!(current[3].plan.kind, WarpKind::HoldStale);
+    assert_eq!(current[4].plan.kind, WarpKind::ClearOnly);
 }
 
 #[test]
