@@ -22,7 +22,7 @@ pub use contract::{
     PRESENTATION_LEDGER_CAPACITY, PresentBackdrop, PresentConfig, PresentError, PresentEvent,
     PresentEvents, PresentFacts, PresentHot, PresentMain, PresentStatus, PresentationLedger,
     PresentationLedgerEntry, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WarpKind, WarpPlan, WarpRefusalReason, WarpValidation,
+    WarpKind, WarpPlan, WarpRefusalReason,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};

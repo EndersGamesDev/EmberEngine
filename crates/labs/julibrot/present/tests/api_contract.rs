@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ember_julibrot_present::{
     FrameReceipt, FrameState, HotSlot, PresentConfig, PresentError, PresentEvent, PresentEvents,
-    PresentFacts, PresentHot, PresentMain, Presenter, Warp, WarpPlan, WarpValidation,
+    PresentFacts, PresentHot, PresentMain, Presenter, Warp, WarpPlan,
 };
 use ember_lab_heap::HeapPresentResources;
 
@@ -18,8 +18,7 @@ type NewPresenter = fn(
 fn app_facing_callable_surface_has_the_pinned_signatures() {
     let new: NewPresenter = Presenter::new;
     let set_main: fn(&mut Presenter, PresentMain) = Presenter::set_main;
-    let write_hot: fn(&mut Presenter, HotSlot, PresentHot, WarpValidation, bool) =
-        Presenter::write_hot;
+    let write_hot: fn(&mut Presenter, HotSlot, PresentHot, bool) = Presenter::write_hot;
     let submit_scene: fn(&mut Presenter, HotSlot, f64) -> Result<u64, PresentError> =
         Presenter::submit_scene;
     let frame: for<'a> fn(
@@ -27,7 +26,6 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
         FrameState<'a>,
         HotSlot,
     ) -> Result<FrameReceipt, PresentError> = Presenter::frame;
-    let poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
     let poll_fixed: fn(&mut Presenter, f64) -> PresentEvents = Presenter::poll_fixed;
     let facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
     let record_presented: fn(&mut Presenter, u64) = Presenter::record_presented;
@@ -35,15 +33,12 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
         &ember_julibrot_present::SceneFrame,
         &ember_julibrot_present::Pose,
         &ember_julibrot_present::Pose,
-        ember_julibrot_math::PrecisionMode,
-        WarpValidation,
     ) -> WarpPlan = Warp::reproject;
     std::hint::black_box(new);
     std::hint::black_box(set_main);
     std::hint::black_box(write_hot);
     std::hint::black_box(submit_scene);
     std::hint::black_box(frame);
-    std::hint::black_box(poll);
     std::hint::black_box(poll_fixed);
     std::hint::black_box(facts);
     std::hint::black_box(record_presented);

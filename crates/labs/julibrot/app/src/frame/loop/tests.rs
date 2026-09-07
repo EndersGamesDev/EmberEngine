@@ -45,8 +45,8 @@ use crate::{
     SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
-    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentStatus, SampleClass,
-    SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason, WarpValidation,
+    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentEvents, PresentStatus,
+    SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
     relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
@@ -1980,27 +1980,35 @@ impl ReplayPresentEvents<'_> {
 impl PresentEventPort for ReplayPresentEvents<'_> {
     type Error = TurnOutcome;
 
-    fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
+    fn poll(&mut self, now_ms: f64) -> PresentEvents {
         if let Some(replay) = self.presenter.replay_present_poll.take() {
             self.presenter.retained_scene = replay.retained_scene_id;
             self.presenter.presented_scene = replay.presented_scene_id;
-            return replay.events;
+            let mut events = replay.events.into_iter();
+            let result = PresentEvents::new(events.next(), events.next());
+            assert!(
+                events.next().is_none(),
+                "present replay exceeds the presenter's two-event poll capacity"
+            );
+            return result;
         }
         let events = self.presenter.poll_once(now_ms);
         let mut completion_sequence = self.presenter.next_completion_sequence;
-        let events = events
-            .into_iter()
-            .map(|event| {
-                let completes_fence = event.completes_fence();
-                let event = event.into_present_event(completion_sequence);
-                if completes_fence {
-                    completion_sequence = completion_sequence.saturating_add(1);
-                }
-                event
-            })
-            .collect();
+        let mut events = events.into_iter().map(|event| {
+            let completes_fence = event.completes_fence();
+            let event = event.into_present_event(completion_sequence);
+            if completes_fence {
+                completion_sequence = completion_sequence.saturating_add(1);
+            }
+            event
+        });
+        let result = PresentEvents::new(events.next(), events.next());
+        assert!(
+            events.next().is_none(),
+            "native presenter exceeds its two-event poll capacity"
+        );
         self.presenter.next_completion_sequence = completion_sequence;
-        events
+        result
     }
 
     fn scene_completed(
@@ -4103,20 +4111,38 @@ fn browser_and_native_refresh_share_present_event_transaction_order() {
     assert!(owner_body.contains("let receipt = view"));
     assert!(owner_body.contains("receipt.matches(view)"));
 
-    let browser = owner
+    let refresh = owner
         .split_once("impl OrderedRefresh for BrowserRefreshTurn")
         .unwrap_or_else(|| unreachable!("browser refresh lowering exists"))
         .1
         .split_once("impl BrowserFrameLoop")
         .unwrap_or_else(|| unreachable!("browser refresh lowering ends"))
         .0;
-    let browser_events = browser
+    let browser_events = refresh
         .find("PresentEventOwner::observe(&mut port, self.now_ms)")
         .unwrap_or_else(|| unreachable!("browser refresh calls the present-event owner"));
-    let browser_hot = browser
+    let browser_hot = refresh
         .find("frame_loop.synchronize_precision_mode(viewer)")
         .unwrap_or_else(|| unreachable!("browser refresh writes HOT after events"));
     assert!(browser_events < browser_hot);
+
+    let arrivals = refresh
+        .find("frame_loop.service_arrivals")
+        .expect("worker arrivals");
+    let writes: Vec<_> = refresh
+        .match_indices("frame_loop.presenter.write_hot")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(writes.len(), 3);
+    let accepted = refresh
+        .find("skip_drafts_for_accepted_warp")
+        .expect("accepted-warp rewrite");
+    assert!(
+        writes[0] < arrivals
+            && arrivals < writes[1]
+            && writes[1] < accepted
+            && accepted < writes[2]
+    );
 
     let native = include_str!("tests.rs")
         .split_once("impl OrderedRefresh for NativeRefreshTurn")
@@ -6246,13 +6272,7 @@ fn measured_relief_plan(
     retained: &SceneFrame,
     requested: &Pose,
 ) -> ember_julibrot_present::WarpPlan {
-    Warp::reproject(
-        retained,
-        &retained.pose,
-        requested,
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
-    )
+    Warp::reproject(retained, &retained.pose, requested)
 }
 
 fn measured_relief_source_covers_destination(
@@ -6852,8 +6872,6 @@ fn measured_height_drag_plan(
         &frame,
         &retained,
         &measured_height_drag_pose(row, requested_height_scale),
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
     )
     .kind
 }

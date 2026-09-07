@@ -915,7 +915,7 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     assert!(!FRAME.contains("FrameLoop::refresh"));
     assert!(!refresh.contains("presenter.poll"));
     assert!(FRAME.contains("KernelMode::for_zoom"));
-    assert!(FRAME.contains("self.frame_loop.presenter.poll(now_ms)"));
+    assert!(FRAME.contains("self.frame_loop.presenter.poll_fixed(now_ms)"));
     assert!(LAB.contains("requestAnimationFrame"));
     assert!(LAB.contains("return this.#api.app_needs_refresh();"));
     assert_eq!(

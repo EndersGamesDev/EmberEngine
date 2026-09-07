@@ -125,18 +125,6 @@ pub enum SampleClass {
     Measured,
 }
 
-/// Why the caller needs the sampled warp-error corpus on this refresh.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum WarpValidation {
-    /// Ordinary display refresh.
-    #[default]
-    Ordinary,
-    /// Explicit user-requested measurement.
-    Measure,
-    /// Newly prepared Final-level validation.
-    Final,
-}
-
 /// Completed four-byte-fence measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubmissionMeasurement {

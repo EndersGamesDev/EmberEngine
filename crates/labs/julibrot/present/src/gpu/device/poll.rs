@@ -8,15 +8,6 @@ use super::census::{census_if_ready, mapped_census, observe_fence, take_glitch_r
 use super::{Presenter, SceneCensus};
 
 impl Presenter {
-    /// Observes every pending fence once without waiting and returns terminal events.
-    ///
-    /// This compatibility entry point preserves the app's existing `Vec` contract. New callers
-    /// can use [`Self::poll_fixed`] to avoid the result allocation.
-    #[must_use]
-    pub fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
-        self.poll_fixed(now_ms).into_iter().collect()
-    }
-
     /// Observes every pending fence once and returns its at-most-two events in fixed storage.
     #[must_use]
     pub fn poll_fixed(&mut self, now_ms: f64) -> PresentEvents {
