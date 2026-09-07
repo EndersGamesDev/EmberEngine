@@ -1680,13 +1680,7 @@ mod tests {
         plan: WarpPlan,
     }
 
-    type PlannerEntry = fn(
-        &SceneFrame,
-        &Pose,
-        &Pose,
-        PrecisionMode,
-        WarpValidation,
-    ) -> WarpPlan;
+    type PlannerEntry = fn(&SceneFrame, &Pose, &Pose, PrecisionMode, WarpValidation) -> WarpPlan;
 
     fn current_planner_entry(
         frame: &SceneFrame,

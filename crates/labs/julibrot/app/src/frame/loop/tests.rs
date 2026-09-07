@@ -707,9 +707,15 @@ enum FakeEvent {
 enum TraceSurfaceAction {
     #[default]
     None,
-    Present { warp_id: u64 },
-    Drop { warp_id: u64 },
-    Ignore { warp_id: u64 },
+    Present {
+        warp_id: u64,
+    },
+    Drop {
+        warp_id: u64,
+    },
+    Ignore {
+        warp_id: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1419,10 +1425,7 @@ fn named_frame_scenarios_return_equal_complete_turn_records() {
         Some(WarpKind::AnchorHomography)
     );
     let height = height_frame_trace();
-    assert_eq!(
-        height[0].submitted_warp_kind,
-        Some(WarpKind::ReliefRedraw)
-    );
+    assert_eq!(height[0].submitted_warp_kind, Some(WarpKind::ReliefRedraw));
     let capture = capture_frame_trace();
     assert_eq!(capture[1].facts.capture, TraceCaptureState::InFlight);
     let captured = capture.last().expect("capture completion turn");
