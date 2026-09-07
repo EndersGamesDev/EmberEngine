@@ -89,6 +89,32 @@ fn rejected(messages: &[S2C]) -> bool {
 }
 
 #[test]
+fn start_match_sends_roster_phase_and_state_in_order() {
+    let mut hub = Hub::default();
+    hub.connect(1, Some(proto::PROTO_VERSION));
+    hub.connect(2, Some(proto::PROTO_VERSION));
+    hub.create(1, "duel", 1);
+    hub.join(2, "duel");
+    hub.pick(1, 0);
+    hub.pick(2, 0);
+    drop(hub.drain(1));
+
+    let replies = hub.msg(1, C2S::StartMatch);
+
+    assert!(matches!(
+        replies.as_slice(),
+        [
+            S2C::Roster { .. },
+            S2C::Phase {
+                phase: Phase::Live,
+                ..
+            },
+            S2C::State { .. },
+        ]
+    ));
+}
+
+#[test]
 fn protocol_gate_allows_listing_but_requires_one_compatible_hello_to_join() {
     let mut hub = Hub::default();
     hub.connect(1, None);
