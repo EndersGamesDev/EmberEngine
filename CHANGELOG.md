@@ -300,6 +300,16 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## UltimateLegue (league)
 
+### v4 — 2026-09-07
+
+proto ? · stamp — · source ? · tag league-v4
+
+Crystalforge readability pass for lane and goal silhouettes, V4 feedback overlay and authoring polish built from existing gameplay.
+
+This release is protocol-preserving and does not change movement, damage, healing, cooldown, economy or match mode rules.
+
+No publication, stamp or source commit is recorded yet; this section is a release checkpoint.
+
 ### v2 — 2026-09-06
 
 proto 1 · stamp r1592 · source `2bc7dc98` · tag `league-v2` · published `b01bd38d` (release stamp)
