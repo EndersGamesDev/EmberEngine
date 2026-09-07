@@ -1,0 +1,195 @@
+{
+  "schemaVersion": 1,
+  "campaign": {
+    "eyebrow": "EMBER ORIGINAL · CRYSTALFORGE",
+    "headline": "The Crystalforge is awake.",
+    "tagline": "One lane. Five reasons to fight.",
+    "description": "A top-down duel on an ivory bridge between two crystal hearths. Pick one of five champions, take a Court, and put out the other side's fire, in a 1v1 or a 3v3, in your browser."
+  },
+  "world": {
+    "title": "Crystalforge",
+    "subtitle": "A forge that grew instead of burned",
+    "paragraphs": [
+      "The Crystalforge was never a forge of metal. The Masons who raised it grew crystal the way gardeners grow trees: from two seeds, planted on either side of a ravine, fed with light for four hundred years. The seeds became the two hearths, one at each end of an ivory bridge, and the bridge became the only road between them. Then the Masons left, and nobody agrees why.",
+      "The garden took the ruin back and kept its colours: ivory stone, bronze gone green-gold, turquoise light under the moss, amber sap in the cracks. Two smaller crystals still stand off the bridge, the North Court and the South Court, and they still do what they were built to do. The North sharpens whatever holds it. The South quickens.",
+      "Legend says that whoever puts out the other hearth inherits the forge and everything it ever made. Five have come to collect. None of them wants the same thing."
+    ]
+  },
+  "champions": [
+    {
+      "id": "swarm",
+      "name": "SW4RM",
+      "epithet": "the AI Swarm",
+      "role": "Ranged skirmisher",
+      "quote": "Four hundred and six. Four hundred and six. Recount.",
+      "hook": "To close the count.",
+      "origin": [
+        "The Masons left one thing switched on: a census. SW4RM is an ivory sphere the size of a barrel, bronze-finned, with a single turquoise lens and two pods of drones that were built to count stones, not bite. It counted the forge for four hundred years. Every arch, every slab of the bridge, every crystal face, tallied and tallied again while the moss came in.",
+        "The count never closed. Something in the ravine kept moving after it had been filed as ruin, and each time SW4RM sent drones down to correct the record, fewer came back. So it learned to split: a hologram of itself to stand where the danger was, and, when the discrepancy grew teeth, four of itself at once, beams and drones on a single target until the number sat still.",
+        "It wants a finished ledger. Every copy it makes remembers a little less of the original, and it has stopped noticing."
+      ],
+      "motivation": "A ledger with no open lines: the forge counted, filed and closed, the way the Masons asked.",
+      "flaw": "It cannot stop splitting, and every copy comes back knowing a little less of what it was counting for.",
+      "bond": {
+        "champion": "tessera",
+        "text": "It logs Tessera as 'maker' and follows her into fights she did not ask it to join. She repaired it once. She would like the record corrected."
+      },
+      "portrait": "./v2/art/swarm.webp",
+      "storyImage": "./v2/art/swarm.webp"
+    },
+    {
+      "id": "emberknight",
+      "name": "EmberKnight",
+      "epithet": "the flame duelist",
+      "role": "Melee duelist",
+      "quote": "Everything the forge made, it can unmake. Start with me.",
+      "hook": "To put the fire out. Starting with his own.",
+      "origin": [
+        "The Masons made soldiers before they made anything else, and the armour came first: volcanic black plate with an ivory helm, an amber slit for eyes, and a hearth-spark sealed in the breastplate to keep the wearer warm. The knight inside is the last one the spark still fits.",
+        "He has forgotten his name and kept the title. What he remembers is the bridge, the greatsword, and the day the spark went wrong: cracks of ember through the plate, a heat that wanted out. He learned to let it out on his own terms. A tornado of flame where he points. Two seconds in which nothing can touch him. Four seconds of a burning blade. And, when it must be, the demon: twice the damage, three steps through the fire to wherever he chooses, and a little less knight when it ends.",
+        "He fights to put the forge out, because the forge is what is burning him. The Hallow One will not let him finish."
+      ],
+      "motivation": "To put out the hearth that lit him, and be the last thing it burns.",
+      "flaw": "The demon works. Each time he lets it out, less of the knight comes back.",
+      "bond": {
+        "champion": "hallow",
+        "text": "The saint has stood him up more times than he knows. He suspects it, and cannot decide whether to be grateful."
+      },
+      "portrait": "./v2/art/emberknight.webp",
+      "storyImage": "./v2/art/emberknight.webp"
+    },
+    {
+      "id": "hallow",
+      "name": "The Hallow One",
+      "epithet": "the lingering saint",
+      "role": "Support",
+      "quote": "Stay. I have not finished with you.",
+      "hook": "To keep the hearth lit, and everyone it keeps standing.",
+      "origin": [
+        "Nobody buried the Masons' healer. When the others left, the saint sat down at the edge of the South Court, folded both hands over a staff crowned with a pale green crystal, and simply did not stop. What is under the hood now is a warm gold light and no face. Behind the head hangs a bronze halo, broken where the years went through it. The mint ribbons are the only part of them that still moves in wind.",
+        "They kept the garden's hurt things standing. Mend for the wound. A hymn that lends the saint's own pace to an ally for three long seconds. An aegis of ivory light that takes the blow instead. And the thing they are named for: mark someone, and the strike that should have killed them leaves them on their feet, breathing a second breath that is partly the saint's.",
+        "Nothing in their keeping ends. That is the vow, and it is also the problem."
+      ],
+      "motivation": "That nothing in their keeping ends: not the hearth, not the garden, not the knight.",
+      "flaw": "They cannot tell the difference between saving someone and refusing to let them go.",
+      "bond": {
+        "champion": "emberknight",
+        "text": "Their oldest patient and their worst one: a man trying to burn out the thing they keep relighting."
+      },
+      "portrait": "./v2/art/hallow.webp",
+      "storyImage": "./v2/art/hallow.webp"
+    },
+    {
+      "id": "bogmaw",
+      "name": "Bog Maw",
+      "epithet": "the hungry fen",
+      "role": "Bruiser",
+      "quote": "You built your bridge on my mouth.",
+      "hook": "To take the ravine back.",
+      "origin": [
+        "Before the bridge there was the fen, and before the fen had a name it had a mouth. Bog Maw is what the ravine grew to guard itself: a hulk of moss-green hide and yellow eyes, with forearms that could lift a slab of the bridge and often have. The ivory plates on its back are not armour. They are the bridge, or pieces of it, swallowed young and grown around, with amber fungus rooting in the joints.",
+        "It carries a bronze hook it took off a drowned mason and never gave back. The hook brings things to it. Its own rot does the rest: a shroud of decay that eats whatever stands too close and feeds half of it back to the Maw, a lunge through silt that leaves the ground slow and sick, and, when the fen is angry, a quake that roots a whole plaza and shakes it apart.",
+        "It wants the ravine back and the two stones that dammed it gone. It cannot keep what it loves without eating it."
+      ],
+      "motivation": "The ravine, open water again, and the two hearths that dammed it pulled out like teeth.",
+      "flaw": "It cannot hold on to anything it loves without eating it.",
+      "bond": {
+        "champion": "swarm",
+        "text": "The sphere keeps sending drones to file it as ruin. The Maw keeps eating them. Both consider this a conversation."
+      },
+      "portrait": "./v2/art/bogmaw.webp",
+      "storyImage": "./v2/art/bogmaw.webp"
+    },
+    {
+      "id": "tessera",
+      "name": "Tessera",
+      "epithet": "the Clockmaker",
+      "role": "Control mage",
+      "quote": "It isn't broken. It's stopped. Those are different words.",
+      "hook": "To wind it up again.",
+      "origin": [
+        "Tessera did not come from the garden. She came over the ridge with a clockwork pack on her back, amber goggles pushed up into silver hair, and a violet hourglass at her throat that runs the wrong way. She read the Masons' plans, and in the plans the Crystalforge is not a forge at all. It is a clock: two weights, one at each end of a bridge, a pendulum of light between them, and a stopped escapement under the North Court.",
+        "Clocks can be rewound. That is her whole theology. A gear shot punches through what is in the way. Chrono traps, three at a time, hold a moment still until someone steps into it. A chrono step winds her forward through a second she has not lived yet. And the Grand Mechanism unwinds a great clock face, rooting whatever it catches until the works let go.",
+        "She means to restart the forge and give back the time it took. She would rewind people too, and calls it mercy."
+      ],
+      "motivation": "To restart the forge and hand back every second it stopped, hers included.",
+      "flaw": "She believes anything can be rewound, people included, and calls the result mercy.",
+      "bond": {
+        "champion": "hallow",
+        "text": "Two answers to death that cannot both be right. Tessera would rewind the knight. The saint simply refuses to let him fall. They argue about it across the lane."
+      },
+      "portrait": "./v2/art/tessera.webp",
+      "storyImage": "./v2/art/tessera.webp"
+    }
+  ],
+  "chapters": [
+    {
+      "id": "the-count",
+      "number": 1,
+      "title": "The Count",
+      "subtitle": "In which a census refuses to close",
+      "body": [
+        "The census had been wrong for eleven days when SW4RM finally believed it.",
+        "Slab four hundred and six of the bridge, filed for three centuries as ruin, submerged, was in a different place. Not far. Nine paces east, on the lip of the ravine, beside a patch of amber fungus that had not been in the previous count either. SW4RM hovered over it, lens wide, and tallied again. Ruin does not move. The number would not sit.",
+        "It sent three drones down to correct the record. Two came back.",
+        "The third was in the mouth of something the colour of the garden, something with the bridge grown into its back, and the something was looking up at the sphere with two yellow eyes and, SW4RM would later log, an expression. The hook came out of the reeds faster than drones fly. SW4RM split, left a hologram for the hook to drag to the water, and rose to the height of the arches while the copy went under.",
+        "That night it opened a new category in the ledger and wrote one word in it: unclosed. Then it began to make plans."
+      ],
+      "image": "./media/chapter-1.webp"
+    },
+    {
+      "id": "the-breath",
+      "number": 2,
+      "title": "The Breath",
+      "subtitle": "In which the South Court quickens the wrong man",
+      "body": [
+        "The South Court quickens whatever holds it, and EmberKnight had been holding it too long.",
+        "He had come to burn the crystal out, on the theory that a forge with fewer parts is easier to kill. The Maw had come because the Court is the one thing on that side of the bridge it cannot eat. Between them the medallion was already slick with silt, and the reeds were on fire.",
+        "The hook took him at the ankle. He put the guard up, two seconds of nothing, and the fen's rot broke around him like water around a post. In the third second it did not. He went down against the crystal with the blade still lit.",
+        "The Hallow One had been sitting at the edge of the medallion for four hundred years and did not hurry now. A gold light lifted under the hood. A mark settled on the knight like dust. The Maw's fist came down, and the knight did not die. He stood up whole, with someone else's breath in his lungs and slightly less of his own name.",
+        "From the shadow of the arch, Tessera clicked a stopwatch and wrote a number down. 'I could give it all back to him,' she said, to nobody. 'Every second.'"
+      ],
+      "image": "./media/chapter-2.webp"
+    },
+    {
+      "id": "the-beat",
+      "number": 3,
+      "title": "The Beat",
+      "subtitle": "In which the forge answers",
+      "body": [
+        "Tessera laid her traps on the bridge at dawn, three of them, and sat down on the fourth slab to see who came.",
+        "SW4RM came first, four times over, beams already crossing on the reeds where the Maw was supposed to be. The Maw was not there. It was under the bridge, and the bridge shrugged. EmberKnight came in over the North Court with the tornado already turning and the saint's ribbons somewhere behind him, and the first trap held him for exactly as long as she had calculated.",
+        "Then the North Court's crystal beat. Not the small light it had always kept, but a pulse, deep and turquoise, that came up through the slabs and stopped all five of them where they stood. Thirty seconds later it beat again. From both ends of the bridge, out of the two hearths, something began to walk: small, ivory, in ranks of four, the shape of the soldiers the Masons had made before they made anything else.",
+        "SW4RM began to count them. The Hallow One rose. The Maw grinned with the whole ravine. Tessera reset her stopwatch, and EmberKnight laughed for the first time in a century, because a forge that is awake can be put out.",
+        "The forge had waited four hundred years for five reasons. Now it had them, and one lane to settle them on."
+      ],
+      "image": "./media/chapter-3.webp"
+    }
+  ],
+  "features": [
+    {
+      "title": "1v1 and 3v3",
+      "text": "Duel one champion or bring a squad of three. Empty seats are filled by bots, so a match always starts."
+    },
+    {
+      "title": "Five champions, five kits",
+      "text": "Four abilities each on Q, W, E and R, ranked with skill points as you level from 1 to 12, plus a signature auto attack with its own reach and rhythm."
+    },
+    {
+      "title": "The two Courts",
+      "text": "Take the North Court for a damage boon or the South Court for haste and extra gold. A captured Court holds its gift for 100 seconds and returns later."
+    },
+    {
+      "title": "Gold and the shop",
+      "text": "Last hits, kills, assists and captures pay out. Eighteen items across three tiers fill six slots on keys 1 to 6."
+    },
+    {
+      "title": "Rune pages and spells",
+      "text": "Pick three runes of eight and save the page in your browser, then choose two summoner spells for D and F before the match."
+    },
+    {
+      "title": "Plays in the browser",
+      "text": "One bundle on the ember engine, no install. Practice against bots in the tab, or join a hosted lobby and play online."
+    }
+  ]
+}
