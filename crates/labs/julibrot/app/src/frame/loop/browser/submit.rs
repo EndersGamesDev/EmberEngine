@@ -308,12 +308,9 @@ impl BrowserFrameLoop {
         target: KernelGridTarget,
         grid: &EscapeGrid,
     ) -> Result<(), AppError> {
-        let retirement = self
-            .kernel_submission
+        self.kernel_submission
             .retire(&mut self.executor, target, grid.clone())
             .map_err(kernel_error)?;
-        debug_assert_eq!(retirement.target, target);
-        debug_assert_eq!(retirement.span, grid.span_generation());
         self.presenter.forget_retained_grid(grid);
         Ok(())
     }
@@ -365,31 +362,30 @@ impl BrowserFrameLoop {
                         self.plan.level(level).extent.width,
                     )
                     .map_err(math_error)?;
+                    let job = KernelJob::WholeGrid(WholeGridJob {
+                        target: KernelGridTarget::Main,
+                        owner_epoch,
+                        precision_mode: viewer.requested().precision_mode,
+                        level,
+                        requested_extent: self.plan.requested_extent,
+                        plane,
+                        screen_to_plane,
+                        params,
+                        mode: WholeGridMode::Shallow {
+                            centre: split,
+                            pixel_scale: scale,
+                        },
+                    });
                     self.kernel_submission
                         .submit(
                             BrowserKernelDispatch {
                                 executor: &self.executor,
                                 device: &self.device,
                                 queue: &self.queue,
-                                plane: &plane,
-                                screen_to_plane: &screen_to_plane,
-                                params,
-                                mode: BrowserKernelMode::Shallow {
-                                    centre: &split,
-                                    pixel_scale: scale,
-                                },
+                                reference_span: None,
                             },
                             &mut self.grid,
-                            KernelJob {
-                                target: KernelGridTarget::Main,
-                                owner_epoch,
-                                precision_mode: viewer.requested().precision_mode,
-                                mode,
-                                level,
-                                requested_extent: self.plan.requested_extent,
-                                requested_max_iter: viewer.requested().iteration_cap,
-                                orbit_generation: None,
-                            },
+                            &job,
                         )
                         .map_err(kernel_error)?
                 }
@@ -403,38 +399,38 @@ impl BrowserFrameLoop {
                         self.plan.level(level).extent.width,
                     )
                     .map_err(math_error)?;
+                    let reference = self.kernel_submission.reference_identity(
+                        &orbit.span,
+                        handle.generation,
+                        orbit.length,
+                        orbit.precision_bits,
+                        orbit.precision_mode,
+                    );
+                    let job = KernelJob::WholeGrid(WholeGridJob {
+                        target: KernelGridTarget::Main,
+                        owner_epoch,
+                        precision_mode: viewer.requested().precision_mode,
+                        level,
+                        requested_extent: self.plan.requested_extent,
+                        plane,
+                        screen_to_plane,
+                        params,
+                        mode: WholeGridMode::Perturbation {
+                            centre_from_reference_px,
+                            scale,
+                            reference,
+                        },
+                    });
                     self.kernel_submission
                         .submit(
                             BrowserKernelDispatch {
                                 executor: &self.executor,
                                 device: &self.device,
                                 queue: &self.queue,
-                                plane: &plane,
-                                screen_to_plane: &screen_to_plane,
-                                params,
-                                mode: BrowserKernelMode::Perturbation {
-                                    centre_from_reference_px,
-                                    scale,
-                                    reference: ReferenceOrbitInput {
-                                        span: &orbit.span,
-                                        generation: handle.generation,
-                                        length: orbit.length,
-                                        precision_bits: orbit.precision_bits,
-                                        precision_mode: orbit.precision_mode,
-                                    },
-                                },
+                                reference_span: Some(&orbit.span),
                             },
                             &mut self.grid,
-                            KernelJob {
-                                target: KernelGridTarget::Main,
-                                owner_epoch,
-                                precision_mode: viewer.requested().precision_mode,
-                                mode,
-                                level,
-                                requested_extent: self.plan.requested_extent,
-                                requested_max_iter: viewer.requested().iteration_cap,
-                                orbit_generation: Some(handle.generation),
-                            },
+                            &job,
                         )
                         .map_err(kernel_error)?
                 }

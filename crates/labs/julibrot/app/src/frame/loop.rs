@@ -17,9 +17,13 @@ use ember_julibrot_kernels::{
     DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, RefinementLevel, RefinementPlan,
 };
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_math::{Plane, PoseMap, PrecisionMode};
+use ember_julibrot_math::{
+    CentreSplit, EscapeParams, Homography, Plane, PoseMap, PrecisionMode, ScaleSplit,
+};
 #[cfg(test)]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_lab_heap::DataSpan;
 
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::AppError;
@@ -620,6 +624,29 @@ struct KernelSpanGeneration {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+impl KernelSpanGeneration {
+    fn from_span(span: &DataSpan) -> Self {
+        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut handle_fingerprint = OFFSET_BASIS;
+        for handle in span.handles() {
+            handle_fingerprint ^= u64::from(handle.raw());
+            handle_fingerprint = handle_fingerprint.wrapping_mul(PRIME);
+        }
+        Self {
+            directory_index: span.directory_index,
+            page_count: span.page_count,
+            first_generation: span
+                .handles()
+                .first()
+                .map_or(0, |handle| handle.generation()),
+            handle_fingerprint,
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 trait KernelGridIdentity {
     fn span_generation(&self) -> KernelSpanGeneration;
 }
@@ -627,24 +654,7 @@ trait KernelGridIdentity {
 #[cfg(any(target_arch = "wasm32", test))]
 impl KernelGridIdentity for EscapeGrid {
     fn span_generation(&self) -> KernelSpanGeneration {
-        const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-        const PRIME: u64 = 0x0000_0100_0000_01b3;
-
-        let mut handle_fingerprint = OFFSET_BASIS;
-        for handle in self.span.handles() {
-            handle_fingerprint ^= u64::from(handle.raw());
-            handle_fingerprint = handle_fingerprint.wrapping_mul(PRIME);
-        }
-        KernelSpanGeneration {
-            directory_index: self.span.directory_index,
-            page_count: self.span.page_count,
-            first_generation: self
-                .span
-                .handles()
-                .first()
-                .map_or(0, |handle| handle.generation()),
-            handle_fingerprint,
-        }
+        KernelSpanGeneration::from_span(&self.span)
     }
 }
 
@@ -696,23 +706,91 @@ struct KernelRetirement {
     span: KernelSpanGeneration,
 }
 
-/// Plain input to one mapped whole-grid kernel publication.
+/// Plain identity bound to one borrowed reference span during a deep dispatch.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct KernelJob {
+struct KernelReferenceIdentity {
+    span: KernelSpanGeneration,
+    generation: u32,
+    length: u32,
+    precision_bits: u32,
+    precision_mode: &'static str,
+}
+
+/// Plain whole-grid kernel variant carrying every semantic encoding argument by value.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum WholeGridMode {
+    Shallow {
+        centre: CentreSplit,
+        pixel_scale: f32,
+    },
+    Perturbation {
+        centre_from_reference_px: [f64; 2],
+        scale: ScaleSplit,
+        reference: KernelReferenceIdentity,
+    },
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl WholeGridMode {
+    const fn kernel_mode(&self) -> KernelMode {
+        match self {
+            Self::Shallow { .. } => KernelMode::Shallow,
+            Self::Perturbation { .. } => KernelMode::Perturbation,
+        }
+    }
+
+    const fn orbit_generation(&self) -> Option<u32> {
+        match self {
+            Self::Shallow { .. } => None,
+            Self::Perturbation { reference, .. } => Some(reference.generation),
+        }
+    }
+
+    #[cfg(test)]
+    const fn orbit_length(&self) -> u32 {
+        match self {
+            Self::Shallow { .. } => 0,
+            Self::Perturbation { reference, .. } => reference.length,
+        }
+    }
+}
+
+/// Every value argument to one mapped whole-grid kernel publication.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WholeGridJob {
     target: KernelGridTarget,
     owner_epoch: u64,
     precision_mode: PrecisionMode,
-    mode: KernelMode,
     level: RefinementLevel,
     requested_extent: GridExtent,
-    requested_max_iter: u32,
-    orbit_generation: Option<u32>,
+    plane: Plane,
+    screen_to_plane: Homography,
+    params: EscapeParams,
+    mode: WholeGridMode,
+}
+
+/// Plain input to one kernel publication.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum KernelJob {
+    WholeGrid(WholeGridJob),
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl KernelJob {
+    const fn whole_grid(&self) -> &WholeGridJob {
+        match self {
+            Self::WholeGrid(job) => job,
+        }
+    }
 }
 
 /// Plain result after encoded kernel work has been submitted to its queue.
 #[cfg(any(target_arch = "wasm32", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct KernelPublication {
     #[cfg(test)]
     job: KernelJob,
@@ -761,13 +839,17 @@ trait KernelSubmissionPort {
     fn retire(
         &mut self,
         context: Self::AllocationContext<'_>,
+        target: KernelGridTarget,
+        expected_span: KernelSpanGeneration,
         grid: Self::Grid,
     ) -> Result<(), Self::Error>;
+    #[cfg(target_arch = "wasm32")]
+    fn reference_span_generation(&self, span: &DataSpan) -> KernelSpanGeneration;
     fn submit(
         &mut self,
         context: Self::SubmissionContext<'_>,
         grid: &mut Self::Grid,
-        job: KernelJob,
+        job: &KernelJob,
     ) -> Result<DispatchFacts, Self::Error>;
 }
 
@@ -853,22 +935,41 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
             target,
             span: grid.span_generation(),
         };
-        self.port.retire(context, grid)?;
+        self.port
+            .retire(context, transaction.target, transaction.span, grid)?;
         Ok(transaction)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn reference_identity(
+        &self,
+        span: &DataSpan,
+        generation: u32,
+        length: u32,
+        precision_bits: u32,
+        precision_mode: &'static str,
+    ) -> KernelReferenceIdentity {
+        KernelReferenceIdentity {
+            span: self.port.reference_span_generation(span),
+            generation,
+            length,
+            precision_bits,
+            precision_mode,
+        }
     }
 
     fn submit(
         &mut self,
         context: P::SubmissionContext<'_>,
         grid: &mut P::Grid,
-        job: KernelJob,
+        job: &KernelJob,
     ) -> Result<KernelPublication, P::Error> {
         #[cfg(test)]
         let span = grid.span_generation();
         let facts = self.port.submit(context, grid, job)?;
         Ok(KernelPublication {
             #[cfg(test)]
-            job,
+            job: *job,
             #[cfg(test)]
             span,
             facts,
@@ -1034,9 +1135,8 @@ mod browser {
         KernelMode, OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, CentreSplit, EscapeParams, Homography, ObjectAngles, Plane, PoseMap,
-        PrecisionMode, ScaleSplit, pixel_scale, precision_for, reference_shift_px, scale_split,
-        shallow_pixel_scale, split_centre,
+        BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,
+        precision_for, reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent, PresentHot, PresentMain,
@@ -1052,11 +1152,12 @@ mod browser {
     use super::{
         BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
         FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob, KernelPlan,
-        KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh, PAGE_MAX_ITERATION_CAP,
-        RefusalClass, SceneConsidered, SceneMode, WorkerAcceptance, WorkerApplication,
-        WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
-        coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
-        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
+        KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh,
+        PAGE_MAX_ITERATION_CAP, RefusalClass, SceneConsidered, SceneMode, WholeGridJob,
+        WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner,
+        WorkerServicePort, WorkerSubmission, backdrop_extent, coverage_pre_empts,
+        execute_ordered_refresh, horizon_facts, main_for_grid, published_iteration_cap,
+        sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{
@@ -1116,22 +1217,7 @@ mod browser {
         executor: &'a GpuKernelExecutor,
         device: &'a wgpu::Device,
         queue: &'a wgpu::Queue,
-        plane: &'a Plane,
-        screen_to_plane: &'a Homography,
-        params: EscapeParams,
-        mode: BrowserKernelMode<'a>,
-    }
-
-    enum BrowserKernelMode<'a> {
-        Shallow {
-            centre: &'a CentreSplit,
-            pixel_scale: f32,
-        },
-        Perturbation {
-            centre_from_reference_px: [f64; 2],
-            scale: ScaleSplit,
-            reference: ReferenceOrbitInput<'a>,
-        },
+        reference_span: Option<&'a DataSpan>,
     }
 
     impl KernelSubmissionPort for BrowserKernelSubmission {
@@ -1185,17 +1271,25 @@ mod browser {
         fn retire(
             &mut self,
             executor: Self::AllocationContext<'_>,
+            _target: KernelGridTarget,
+            expected_span: KernelSpanGeneration,
             grid: Self::Grid,
         ) -> Result<(), Self::Error> {
+            debug_assert_eq!(expected_span, grid.span_generation());
             self.kernels.free_grid(executor, grid)
+        }
+
+        fn reference_span_generation(&self, span: &DataSpan) -> KernelSpanGeneration {
+            KernelSpanGeneration::from_span(span)
         }
 
         fn submit(
             &mut self,
             dispatch: Self::SubmissionContext<'_>,
             grid: &mut Self::Grid,
-            job: KernelJob,
+            job: &KernelJob,
         ) -> Result<DispatchFacts, Self::Error> {
+            let job = job.whole_grid();
             let label = match job.target {
                 KernelGridTarget::Main => "Julibrot kernels SCRATCH and DATA copy",
                 KernelGridTarget::Backdrop => "Julibrot backdrop kernels SCRATCH and DATA copy",
@@ -1203,8 +1297,8 @@ mod browser {
             let mut encoder = dispatch
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-            let facts = match dispatch.mode {
-                BrowserKernelMode::Shallow {
+            let facts = match job.mode {
+                WholeGridMode::Shallow {
                     centre,
                     pixel_scale,
                 } => self.kernels.encode_shallow(
@@ -1214,35 +1308,49 @@ mod browser {
                     job.owner_epoch,
                     job.precision_mode,
                     job.level,
-                    dispatch.plane,
-                    dispatch.screen_to_plane,
-                    centre,
+                    &job.plane,
+                    &job.screen_to_plane,
+                    &centre,
                     pixel_scale,
-                    dispatch.params,
+                    job.params,
                 )?,
-                BrowserKernelMode::Perturbation {
+                WholeGridMode::Perturbation {
                     centre_from_reference_px,
                     scale,
                     reference,
-                } => self.kernels.encode_perturbation(
-                    dispatch.executor,
-                    &mut encoder,
-                    grid,
-                    job.owner_epoch,
-                    job.precision_mode,
-                    job.level,
-                    dispatch.plane,
-                    dispatch.screen_to_plane,
-                    centre_from_reference_px,
-                    scale,
-                    dispatch.params,
-                    reference,
-                )?,
+                } => {
+                    let span = dispatch
+                        .reference_span
+                        .ok_or(KernelError::MissingReference)?;
+                    if reference.span != KernelSpanGeneration::from_span(span) {
+                        return Err(KernelError::StaleReference);
+                    }
+                    self.kernels.encode_perturbation(
+                        dispatch.executor,
+                        &mut encoder,
+                        grid,
+                        job.owner_epoch,
+                        job.precision_mode,
+                        job.level,
+                        &job.plane,
+                        &job.screen_to_plane,
+                        centre_from_reference_px,
+                        scale,
+                        job.params,
+                        ReferenceOrbitInput {
+                            span,
+                            generation: reference.generation,
+                            length: reference.length,
+                            precision_bits: reference.precision_bits,
+                            precision_mode: reference.precision_mode,
+                        },
+                    )?
+                }
             };
-            debug_assert_eq!(facts.mode, job.mode);
+            debug_assert_eq!(facts.mode, job.mode.kernel_mode());
             debug_assert_eq!(facts.requested_extent, job.requested_extent);
-            debug_assert_eq!(facts.requested_max_iter, job.requested_max_iter);
-            debug_assert_eq!(facts.orbit_generation, job.orbit_generation);
+            debug_assert_eq!(facts.requested_max_iter, job.params.max_iter);
+            debug_assert_eq!(facts.orbit_generation, job.mode.orbit_generation());
             dispatch.queue.submit([encoder.finish()]);
             Ok(facts)
         }
