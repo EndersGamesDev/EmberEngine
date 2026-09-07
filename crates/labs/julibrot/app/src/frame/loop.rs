@@ -580,7 +580,7 @@ impl BrowserRefreshOrder<3> {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<4> {
-    #[inline(always)]
+    #[inline]
     fn run_scene<T>(self, run: impl FnOnce() -> T) -> (BrowserRefreshOrder<5>, T) {
         let Self = self;
         (BrowserRefreshOrder, run())
@@ -589,7 +589,7 @@ impl BrowserRefreshOrder<4> {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<5> {
-    #[inline(always)]
+    #[inline]
     fn run_warp<T>(self, run: impl FnOnce() -> T) -> (BrowserRefreshOrder<6>, T) {
         let Self = self;
         (BrowserRefreshOrder, run())
