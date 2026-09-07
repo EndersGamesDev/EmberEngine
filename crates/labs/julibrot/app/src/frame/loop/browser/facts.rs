@@ -26,7 +26,7 @@ impl BrowserFrameLoop {
     /// Returns current worker ownership and credit facts.
     #[must_use]
     pub fn worker_facts(&self) -> WorkerFacts {
-        self.owner_endpoint.facts()
+        self.worker_service().facts()
     }
 
     /// Returns whether cooperative refresh work remains.
@@ -36,7 +36,7 @@ impl BrowserFrameLoop {
         self.loop_state.needs_refresh(
             present.in_flight_scene_id.is_some(),
             runtime.has_pending_surface(),
-            self.owner_endpoint.pending_request_depth() != 0
+            self.worker_service().pending_request_depth() != 0
                 || !self.submitted_references.is_empty()
                 || present.scene_fill_due,
             self.presented_view_is_stale(viewer),
@@ -153,7 +153,7 @@ impl BrowserFrameLoop {
     /// refresh loop keeps turning.
     #[must_use]
     pub fn worker_request_depth(&self) -> u32 {
-        self.owner_endpoint.pending_request_depth()
+        self.worker_service().pending_request_depth()
     }
 
     /// Returns how many submitted references the app is still waiting on.

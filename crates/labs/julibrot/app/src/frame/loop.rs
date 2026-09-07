@@ -573,6 +573,157 @@ fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Outpu
     refresh.consider_warp(SceneConsidered)
 }
 
+/// Plain result of handing one orbit request to the worker service.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerSubmission {
+    generation: u32,
+    outcome: ember_julibrot_worker::SubmitOutcome,
+}
+
+/// Plain metadata observed when one worker arrival is drained.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WorkerArrival {
+    generation: u32,
+    centre_revision: u32,
+    length: u32,
+    compute_us: u32,
+    precision_bits: u32,
+    admission_credit_us: u32,
+    reference_verification: ember_julibrot_worker::ReferenceVerification,
+    max_consumed_word_error_ulps: Option<u32>,
+    precision_escalations: u32,
+    cancelled: bool,
+    records: Result<Vec<u8>, String>,
+    response_observed_us: Option<u64>,
+    upload_started_us: Option<u64>,
+}
+
+/// Plain result of applying one drained arrival and returning its credit.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerApplication {
+    generation: u32,
+    centre_revision: u32,
+    disposition: ember_julibrot_worker::OrbitDisposition,
+    reference_applied: bool,
+}
+
+/// Applies one plain arrival to app-owned reference state.
+#[cfg(any(target_arch = "wasm32", test))]
+trait WorkerAcceptance<R> {
+    type Submission;
+
+    fn accept(
+        &mut self,
+        arrival: &WorkerArrival,
+        response: &R,
+        submitted: Option<Self::Submission>,
+        latest_generation: u32,
+    ) -> Result<WorkerApplication, AppError>;
+    fn finish_reference_submission(&mut self, generation: u32);
+}
+
+/// App-local lowering used by the replayable worker-service transaction owner.
+#[cfg(any(target_arch = "wasm32", test))]
+trait WorkerServicePort {
+    type Response;
+
+    fn submit(&mut self, request: ember_julibrot_worker::OrbitRequest) -> WorkerSubmission;
+    fn drain(&mut self) -> Option<WorkerArrival>;
+    fn response(&self, generation: u32) -> Option<&Self::Response>;
+    fn apply(
+        &mut self,
+        arrival: WorkerArrival,
+        application: WorkerApplication,
+        owner_now_us: u64,
+    ) -> Result<WorkerApplication, AppError>;
+    fn facts(&self) -> ember_julibrot_worker::WorkerFacts;
+    fn take_error(&mut self) -> Option<AppError>;
+    fn latest_generation(&self) -> u32;
+    fn pending_request_depth(&self) -> u32;
+    #[cfg(target_arch = "wasm32")]
+    fn reserve_reference_upload(&mut self, required: usize) -> Result<(), AppError>;
+}
+
+/// Owns worker service transactions independently of their browser or replay lowering.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default)]
+struct WorkerServiceOwner<P> {
+    port: P,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<P: WorkerServicePort> WorkerServiceOwner<P> {
+    const fn new(port: P) -> Self {
+        Self { port }
+    }
+
+    fn submit(&mut self, request: ember_julibrot_worker::OrbitRequest) -> WorkerSubmission {
+        self.port.submit(request)
+    }
+
+    fn drain(&mut self) -> Option<WorkerArrival> {
+        self.port.drain()
+    }
+
+    fn apply<A: WorkerAcceptance<P::Response>>(
+        &mut self,
+        acceptance: &mut A,
+        arrival: WorkerArrival,
+        submitted: Option<A::Submission>,
+        owner_now_us: u64,
+    ) -> Result<WorkerApplication, AppError> {
+        let generation = arrival.generation;
+        let centre_revision = arrival.centre_revision;
+        let latest_generation = self.latest_generation();
+        let processed = self.port.response(generation).map_or_else(
+            || {
+                Err(AppError::Worker(
+                    "worker service lost its drained response".to_string(),
+                ))
+            },
+            |response| acceptance.accept(&arrival, response, submitted, latest_generation),
+        );
+        acceptance.finish_reference_submission(generation);
+        let application = processed.as_ref().map_or(
+            WorkerApplication {
+                generation,
+                centre_revision,
+                disposition: ember_julibrot_worker::OrbitDisposition::Stale,
+                reference_applied: false,
+            },
+            |application| *application,
+        );
+        let credited = self.port.apply(arrival, application, owner_now_us);
+        let application = processed?;
+        credited?;
+        Ok(application)
+    }
+
+    fn facts(&self) -> ember_julibrot_worker::WorkerFacts {
+        self.port.facts()
+    }
+
+    fn take_error(&mut self) -> Option<AppError> {
+        self.port.take_error()
+    }
+
+    fn latest_generation(&self) -> u32 {
+        self.port.latest_generation()
+    }
+
+    fn pending_request_depth(&self) -> u32 {
+        self.port.pending_request_depth()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn reserve_reference_upload(&mut self, required: usize) -> Result<(), AppError> {
+        self.port.reserve_reference_upload(required)
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
@@ -597,9 +748,10 @@ mod browser {
     use super::{
         BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
         FrameLoop, HotWritten, OrderedRefresh, PAGE_MAX_ITERATION_CAP, RefusalClass,
-        SceneConsidered, SceneMode, backdrop_extent, coverage_pre_empts, execute_ordered_refresh,
-        horizon_facts, main_for_grid, published_iteration_cap, sampling_zoom_log2,
-        stamp_scene_level, stamped_screen_map,
+        SceneConsidered, SceneMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
+        WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
+        coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
+        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{
@@ -649,6 +801,133 @@ mod browser {
         verification: ember_julibrot_worker::ReferenceVerification,
         max_consumed_word_error_ulps: Option<u32>,
         precision_escalations: u32,
+    }
+
+    struct ChannelWorkerService {
+        owner_endpoint: OwnerEndpoint,
+        _producer_endpoint: ProducerEndpoint,
+        pending_response: Option<ember_julibrot_worker::OrbitResponseView>,
+        reference_upload: Vec<u8>,
+    }
+
+    impl WorkerServicePort for ChannelWorkerService {
+        type Response = ember_julibrot_worker::OrbitResponseView;
+
+        fn submit(&mut self, request: OrbitRequest) -> WorkerSubmission {
+            let generation = request.generation();
+            let outcome = self.owner_endpoint.submit(request);
+            WorkerSubmission {
+                generation,
+                outcome,
+            }
+        }
+
+        fn drain(&mut self) -> Option<WorkerArrival> {
+            debug_assert!(self.pending_response.is_none());
+            let response = self.owner_endpoint.next_arrival()?;
+            let response_observed_us = reference::monotonic_now_us();
+            let upload_started_us = reference::monotonic_now_us();
+            let records = if response.cancelled() {
+                self.reference_upload.clear();
+                Ok(std::mem::take(&mut self.reference_upload))
+            } else {
+                response
+                    .records
+                    .transfer_record_bytes()
+                    .map_err(|error| error.to_string())
+                    .and_then(|records| {
+                        reference::expand_reference_texels_from_array(
+                            &records,
+                            response.length(),
+                            &mut self.reference_upload,
+                        )
+                    })
+                    .map(|()| std::mem::take(&mut self.reference_upload))
+            };
+            let arrival = WorkerArrival {
+                generation: response.generation(),
+                centre_revision: response.centre_revision(),
+                length: response.length(),
+                compute_us: response.compute_us(),
+                precision_bits: response.precision_bits(),
+                admission_credit_us: response.admission_credit_us(),
+                reference_verification: response.reference_verification(),
+                max_consumed_word_error_ulps: response.max_consumed_word_error_ulps(),
+                precision_escalations: response.precision_escalations(),
+                cancelled: response.cancelled(),
+                records,
+                response_observed_us,
+                upload_started_us,
+            };
+            self.pending_response = Some(response);
+            Some(arrival)
+        }
+
+        fn response(&self, generation: u32) -> Option<&Self::Response> {
+            self.pending_response
+                .as_ref()
+                .filter(|response| response.generation() == generation)
+        }
+
+        fn apply(
+            &mut self,
+            arrival: WorkerArrival,
+            application: WorkerApplication,
+            owner_now_us: u64,
+        ) -> Result<WorkerApplication, AppError> {
+            let mut response = self.pending_response.take().ok_or_else(|| {
+                AppError::Worker("worker service has no response to apply".to_string())
+            })?;
+            let generation_matches = response.generation() == application.generation;
+            let disposition = if generation_matches {
+                application.disposition
+            } else {
+                OrbitDisposition::Stale
+            };
+            let credited = self
+                .owner_endpoint
+                .return_credit(&mut response, disposition, owner_now_us)
+                .map_err(worker_error);
+            if let Ok(mut records) = arrival.records {
+                records.clear();
+                self.reference_upload = records;
+            }
+            credited?;
+            if !generation_matches {
+                return Err(AppError::Worker(
+                    "worker service applied a different generation".to_string(),
+                ));
+            }
+            Ok(application)
+        }
+
+        fn facts(&self) -> WorkerFacts {
+            self.owner_endpoint.facts()
+        }
+
+        fn take_error(&mut self) -> Option<AppError> {
+            self.owner_endpoint.take_error().map(worker_error)
+        }
+
+        fn latest_generation(&self) -> u32 {
+            self.owner_endpoint.latest_generation()
+        }
+
+        fn pending_request_depth(&self) -> u32 {
+            self.owner_endpoint.pending_request_depth()
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        fn reserve_reference_upload(&mut self, required: usize) -> Result<(), AppError> {
+            if self.reference_upload.capacity() < required {
+                self.reference_upload
+                    .try_reserve_exact(required.saturating_sub(self.reference_upload.len()))
+                    .map_err(|error| {
+                        AppError::Worker(format!("reference upload reserve failed: {error}"))
+                    })?;
+            }
+            Ok(())
+        }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -743,8 +1022,7 @@ mod browser {
         executor: GpuKernelExecutor,
         kernels: JulibrotKernels,
         presenter: Presenter,
-        owner_endpoint: OwnerEndpoint,
-        _producer_endpoint: ProducerEndpoint,
+        worker_service: Option<WorkerServiceOwner<ChannelWorkerService>>,
         orbits: OrbitRegistry<RegisteredOrbit>,
         current_orbit: Option<OrbitHandle>,
         accepted_reference: Option<BigCentre>,
@@ -761,7 +1039,6 @@ mod browser {
         sampled_reference_refusal: Option<&'static str>,
         sampled_resume_level: Option<RefinementLevel>,
         submitted_references: Vec<SubmittedReference>,
-        reference_upload: Vec<u8>,
         plan: RefinementPlan,
         grid: EscapeGrid,
         spare_grid: Option<EscapeGrid>,
@@ -875,9 +1152,9 @@ mod browser {
                     .request_scene_update(frame_loop.main.generation_applied);
                 frame_loop.prepared_level = None;
             }
-            if let Some(error) = frame_loop.owner_endpoint.take_error() {
+            if let Some(error) = frame_loop.worker_service_mut().take_error() {
                 frame_loop.abandon_submitted_references(viewer);
-                return Err(worker_error(error));
+                return Err(error);
             }
 
             if KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Shallow {
@@ -1168,6 +1445,18 @@ mod browser {
     }
 
     impl BrowserFrameLoop {
+        fn worker_service(&self) -> &WorkerServiceOwner<ChannelWorkerService> {
+            self.worker_service
+                .as_ref()
+                .unwrap_or_else(|| unreachable!("worker service is present outside arrival apply"))
+        }
+
+        fn worker_service_mut(&mut self) -> &mut WorkerServiceOwner<ChannelWorkerService> {
+            self.worker_service
+                .as_mut()
+                .unwrap_or_else(|| unreachable!("worker service is present outside arrival apply"))
+        }
+
         /// Constructs every fixed GPU resource and starts the initial worker request.
         ///
         /// # Errors
@@ -1285,8 +1574,12 @@ mod browser {
                 executor,
                 kernels,
                 presenter,
-                owner_endpoint,
-                _producer_endpoint: producer_endpoint,
+                worker_service: Some(WorkerServiceOwner::new(ChannelWorkerService {
+                    owner_endpoint,
+                    _producer_endpoint: producer_endpoint,
+                    pending_response: None,
+                    reference_upload,
+                })),
                 orbits: OrbitRegistry::new(),
                 current_orbit: None,
                 accepted_reference: Some(accepted_reference),
@@ -1302,7 +1595,6 @@ mod browser {
                 sampled_reference_refusal: None,
                 sampled_resume_level: None,
                 submitted_references: Vec::with_capacity(2),
-                reference_upload,
                 plan,
                 grid,
                 spare_grid: Some(spare_grid),
