@@ -903,12 +903,11 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     let kernels = refresh
         .find("frame_loop.submit_due_scene")
         .expect("kernel scene");
-    let surface = refresh.find("acquire_for_warp").expect("surface acquire");
-    let warp = refresh
-        .find("frame_loop.presenter.frame")
-        .expect("warp submit");
+    let surface = refresh
+        .find("self.surface_resolution.submit(&mut port, job)")
+        .expect("surface transaction");
     assert!(poll < drain && drain < write && write < arrivals);
-    assert!(arrivals < kernels && kernels < surface && surface < warp);
+    assert!(arrivals < kernels && kernels < surface);
     assert_eq!(
         refresh.matches("observe(&mut port, self.now_ms)").count(),
         1
@@ -935,6 +934,28 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     );
     assert!(refresh.contains("PresentEventOwner::observe(&mut port, self.now_ms)"));
     assert!(FRAME.contains("let presented = self.complete_warp(event.measurement)?;"));
+
+    let surface_owner = FRAME
+        .split_once("impl SurfaceResolutionOwner")
+        .expect("surface-resolution owner exists")
+        .1
+        .split_once("enum PresentEventKind")
+        .expect("surface-resolution owner ends before present events")
+        .0;
+    let pending = surface_owner.find("port.pending()").expect("pending check");
+    let acquire = surface_owner
+        .find("port.acquire(")
+        .expect("surface acquire");
+    let submit = surface_owner.find("port.submit(").expect("warp submit");
+    let retain = surface_owner.find("port.retain(").expect("surface retain");
+    let resolve = surface_owner
+        .find("port.resolve(")
+        .expect("surface resolve");
+    let present = surface_owner
+        .find("port.present(")
+        .expect("surface present");
+    assert!(pending < acquire && acquire < submit && submit < retain);
+    assert!(resolve < present);
 }
 
 #[test]
@@ -1129,20 +1150,28 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
     }
     // The copy happens where the frame texture exists and nowhere else: between the acquisition of
     // the surface image and its presentation.
+    let surface_lowering = FRAME
+        .split_once("impl SurfacePort for BrowserSurfaceResolution<'_>")
+        .expect("the browser surface lowering exists")
+        .1;
+    let capture = surface_lowering
+        .find("BrowserRuntime::present_surface_capturing(frame, |texture| {")
+        .expect("the copy is offered at present time");
+    let present = surface_lowering
+        .find("presenter.record_presented(measurement.id);")
+        .expect("the resolved surface is recorded after presentation");
+    assert!(capture < present);
     let present_lowering = FRAME
-        .split_once("impl BrowserPresentEvents<'_>")
+        .split_once("impl PresentEventPort for BrowserPresentEvents<'_>")
         .expect("the browser present-event lowering exists")
         .1;
-    let capture = present_lowering
-        .find(".complete_warp_capturing(measurement.id, |texture| {")
-        .expect("the copy is offered at present time");
     let completion = present_lowering
         .find("let presented = self.complete_warp(event.measurement)?;")
         .expect("warp completion runs the capture-bearing helper");
-    let present = present_lowering
+    let effect = present_lowering
         .find("let effect = Self::event_effect(presented, false, false);")
         .expect("presentation is recorded after the copy is offered");
-    assert!(capture < completion && completion < present);
+    assert!(completion < effect);
     assert!(FRAME.contains("self.presented |= effect.presented;"));
     assert!(RUNTIME.contains("capture(&frame.texture);"));
     assert!(RUNTIME.contains("frame_copy_supported"));
@@ -1199,9 +1228,9 @@ fn the_presented_frame_is_read_back_without_a_context_flag() {
     assert!(LIB.contains("pub fn app_request_frame_capture()"));
     assert!(LIB.contains("pub fn app_take_frame_rgba()"));
     assert!(LIB.contains("pub fn app_frame_capture_json()"));
-    assert!(FRAME.contains("let armed = crate::CaptureArming {"));
-    assert!(FRAME.contains("route_matches: self.frame_capture.route"));
-    assert!(FRAME.contains(".surface_due();"));
+    assert!(FRAME.contains("capture: crate::CaptureArming {"));
+    assert!(FRAME.contains("route_matches: self.frame_loop.frame_capture.route"));
+    assert!(FRAME.contains("if !arming.surface_due() {"));
 }
 
 /// The driver page is a canvas, a report, and nothing a person has to move.
@@ -1414,8 +1443,10 @@ fn a_frame_copy_is_taken_only_where_one_was_armed_and_never_twice() {
         .offscreen_due()
     );
     // The loop asks these and does not restate them.
-    assert!(FRAME.contains("let armed = crate::CaptureArming {"));
+    assert!(FRAME.contains("let arming = crate::CaptureArming {"));
+    assert!(FRAME.contains("capture: crate::CaptureArming {"));
     assert!(FRAME.contains("if !arming.offscreen_due() {"));
+    assert!(FRAME.contains("if !arming.surface_due() {"));
 }
 
 /// A copy whose map never completes is abandoned with a reason rather than held forever.

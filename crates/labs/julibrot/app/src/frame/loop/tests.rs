@@ -27,24 +27,27 @@ use super::{
     PresentEventTransaction, PresentEventTurn, PresentEventView, PresentFenceRefusal,
     PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES,
     REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule,
-    RefusalClass, SceneConsidered, SceneMode, SubmissionKind, WholeGridJob, WholeGridMode,
-    WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort,
-    WorkerSubmission, accepted_reference_facts, apply_precision_mode, arrival_is_current,
-    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
-    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
-    published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
-    sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
-    stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
+    RefusalClass, SceneConsidered, SceneMode, SubmissionKind, SurfacePort, SurfaceResolutionAction,
+    SurfaceResolutionEvent, SurfaceResolutionOutcome, SurfaceResolutionOwner,
+    SurfaceResolutionTransaction, SurfaceResolutionTurn, SurfaceSubmission, SurfaceWarpJob,
+    WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
+    WorkerServiceOwner, WorkerServicePort, WorkerSubmission, accepted_reference_facts,
+    apply_precision_mode, arrival_is_current, backdrop_extent, coverage_pre_empts,
+    defer_scene_until_relief_redraw, execute_ordered_refresh, expand_reference_texels_into,
+    fence_error, hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
+    perturbation_reference_is_current, published_iteration_cap,
+    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
+    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
+    stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
     SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
-    DropReason, LatticePair, PresentEvent, SampleClass, SceneFrame, SubmissionMeasurement, Warp,
-    WarpKind, WarpRefusalReason, WarpValidation, relief_redraw_source_covers_destination,
-    renders_same_picture,
+    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentStatus, SampleClass,
+    SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason, WarpValidation,
+    relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
@@ -456,9 +459,8 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
         "let scene_id = if defer_scene_for_redraw && frame_loop.active_backdrop_map.is_none() {"
     ));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
-    assert!(source.contains(
-        "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"
-    ));
+    assert!(source.contains("if warp_requested && !redraw_scene_in_flight {"));
+    assert!(source.contains("self.surface_resolution.submit(&mut port, job)"));
 }
 
 #[test]
@@ -1273,25 +1275,28 @@ impl FakeRuntime {
             .push(BrowserAction::SurfaceRetained { warp_id });
     }
 
-    fn complete_warp(&mut self, warp_id: u64) -> TraceSurfaceAction {
-        let action = match self.surface.complete(warp_id) {
-            SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
-            SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id },
-        };
-        self.actions
-            .push(BrowserAction::SurfaceReleased { warp_id, action });
-        action
+    fn release_unsubmitted_warp(&mut self, generation: u32) -> bool {
+        self.surface.release_unsubmitted(generation)
     }
 
-    fn refuse_warp(&mut self, warp_id: u64) -> TraceSurfaceAction {
-        let action = match self.surface.refuse(warp_id) {
-            SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+    fn resolve_surface(&mut self, event: crate::surface::SurfaceEvent) -> SurfaceAction<u64> {
+        let warp_id = match event {
+            crate::surface::SurfaceEvent::WarpCompleted { warp_id }
+            | crate::surface::SurfaceEvent::WarpRefused { warp_id } => warp_id,
+            crate::surface::SurfaceEvent::DeviceFailed => {
+                self.surface.pending_warp_id().unwrap_or_default()
+            }
+        };
+        let action = self.surface.resolve_event(event);
+        let trace_action = match &action {
+            SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id: *warp_id },
+            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id: *warp_id },
             SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id },
         };
-        self.actions
-            .push(BrowserAction::SurfaceReleased { warp_id, action });
+        self.actions.push(BrowserAction::SurfaceReleased {
+            warp_id,
+            action: trace_action,
+        });
         action
     }
 }
@@ -1356,6 +1361,8 @@ struct FakePresenter {
     worker_turns: Vec<WorkerTurn>,
     replay_present_poll: Option<ReplayPresentPoll>,
     present_turns: Vec<PresentEventTurn>,
+    surface_receipt_refresh_id: Option<u64>,
+    surface_turns: Vec<SurfaceResolutionTurn>,
     next_completion_sequence: u64,
     runtime: FakeRuntime,
     capture: TraceCaptureState,
@@ -1525,8 +1532,7 @@ impl FakePresenter {
         });
     }
 
-    fn submit_warp(&mut self, generation: u32) -> u64 {
-        self.runtime.acquire_for_warp(generation);
+    fn submit_surface_warp(&mut self, job: &SurfaceWarpJob) -> FrameReceipt {
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
         self.pending_warp_kind = self.warp_kind;
@@ -1539,18 +1545,19 @@ impl FakePresenter {
         }
         self.runtime
             .record_submission(SubmissionKind::Warp, self.next_id);
-        self.runtime.retain_for_warp(self.next_id, generation);
-        let capture = CaptureArming {
-            armed: self.capture == TraceCaptureState::Armed,
-            route_matches: true,
-            readback_in_flight: self.capture == TraceCaptureState::InFlight,
-            renderer_already_armed: false,
-        };
-        if capture.surface_due() {
-            self.capture = TraceCaptureState::InFlight;
-        }
         self.warp_submissions.push(self.next_id);
-        self.next_id
+        FrameReceipt {
+            refresh_id: self.surface_receipt_refresh_id.unwrap_or(job.refresh_id),
+            warp_id: self.next_id,
+            source_scene_id: self.pending_warp_source,
+            precision_mode: PrecisionMode::Deterministic.as_str(),
+            exposed: false,
+            status: if self.retained_scene.is_some() {
+                PresentStatus::ShowingCompletedScene
+            } else {
+                PresentStatus::WaitingForFirstScene
+            },
+        }
     }
 
     const fn arm_capture(&mut self) {
@@ -1880,6 +1887,77 @@ struct NativeRefreshTurn<'a> {
     policy: FramePolicy,
     warps: bool,
     outcome: TurnOutcome,
+    surface_resolution: SurfaceResolutionOwner,
+}
+
+/// Native lowering over the fake runtime, driven by the replay refresh turn.
+struct ReplaySurfaceResolution<'a> {
+    presenter: &'a mut FakePresenter,
+    outcome: &'a mut TurnOutcome,
+}
+
+impl SurfacePort for ReplaySurfaceResolution<'_> {
+    type Error = TurnOutcome;
+    type Frame = u64;
+
+    fn pending(&self) -> bool {
+        self.presenter.runtime.surface.pending_warp_id().is_some()
+    }
+
+    fn acquire(&mut self, generation: u32) -> Result<Self::Frame, Self::Error> {
+        self.presenter.runtime.acquire_for_warp(generation);
+        Ok(u64::from(generation))
+    }
+
+    fn submit(
+        &mut self,
+        _frame: &Self::Frame,
+        job: &SurfaceWarpJob,
+    ) -> Result<FrameReceipt, Self::Error> {
+        Ok(self.presenter.submit_surface_warp(job))
+    }
+
+    fn retain(
+        &mut self,
+        _frame: Self::Frame,
+        generation: u32,
+        receipt: &FrameReceipt,
+    ) -> Result<(), Self::Error> {
+        self.presenter
+            .runtime
+            .retain_for_warp(receipt.warp_id, generation);
+        let capture = CaptureArming {
+            armed: self.presenter.capture == TraceCaptureState::Armed,
+            route_matches: true,
+            readback_in_flight: self.presenter.capture == TraceCaptureState::InFlight,
+            renderer_already_armed: false,
+        };
+        if capture.surface_due() {
+            self.presenter.capture = TraceCaptureState::InFlight;
+        }
+        Ok(())
+    }
+
+    fn release_unsubmitted(&mut self, generation: u32) -> bool {
+        self.presenter.runtime.release_unsubmitted_warp(generation)
+    }
+
+    fn resolve(&mut self, event: crate::surface::SurfaceEvent) -> SurfaceAction<Self::Frame> {
+        self.presenter.runtime.resolve_surface(event)
+    }
+
+    fn present(&mut self, _event: &SurfaceResolutionEvent, frame: Self::Frame) {
+        self.outcome.surface_action = TraceSurfaceAction::Present { warp_id: frame };
+        self.presenter.presented_warps.push(frame);
+    }
+
+    fn drop_frame(&mut self, frame: Self::Frame) {
+        self.outcome.surface_action = TraceSurfaceAction::Drop { warp_id: frame };
+    }
+
+    fn invalid_receipt(&self, _detail: &'static str) -> Self::Error {
+        *self.outcome
+    }
 }
 
 /// Native lowering that applies replayed presenter receipts through the refresh turn.
@@ -1888,6 +1966,7 @@ struct ReplayPresentEvents<'a> {
     presenter: &'a mut FakePresenter,
     outcome: &'a mut TurnOutcome,
     applied_presented_scene_id: Option<u64>,
+    surface_resolution: &'a mut SurfaceResolutionOwner,
 }
 
 impl ReplayPresentEvents<'_> {
@@ -1955,11 +2034,30 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
     ) -> Result<PresentEventEffect, Self::Error> {
         let measurement = event.measurement;
         self.outcome.completed_warp_id = Some(measurement.id);
-        self.presenter.presented_warps.push(measurement.id);
-        self.outcome.presented = true;
-        self.outcome.surface_action = self.presenter.runtime.complete_warp(measurement.id);
+        let transaction = SurfaceResolutionEvent::WarpCompleted {
+            measurement,
+            capture: CaptureArming {
+                armed: self.presenter.capture == TraceCaptureState::Armed,
+                route_matches: true,
+                readback_in_flight: self.presenter.capture == TraceCaptureState::InFlight,
+                renderer_already_armed: false,
+            },
+        };
+        let resolution = {
+            let mut port = ReplaySurfaceResolution {
+                presenter: self.presenter,
+                outcome: self.outcome,
+            };
+            self.surface_resolution.resolve(&mut port, transaction)?
+        };
+        self.outcome.presented = resolution.presented;
+        if resolution.action == SurfaceResolutionAction::Ignore {
+            self.outcome.surface_action = TraceSurfaceAction::Ignore {
+                warp_id: measurement.id,
+            };
+        }
         self.applied_presented_scene_id = measurement.source_scene_id;
-        Ok(self.effect(true, false, false))
+        Ok(self.effect(resolution.presented, false, false))
     }
 
     fn fence_refused(
@@ -1981,7 +2079,24 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
         let cancelled = refusal.class == RefusalClass::Cancelled;
         self.outcome.refused = refusal.class != RefusalClass::Device;
         if matches!(event.kind, SubmissionKind::Warp) {
-            self.outcome.surface_action = self.presenter.runtime.refuse_warp(event.id);
+            let transaction = SurfaceResolutionEvent::WarpRefused {
+                kind: event.kind,
+                id: event.id,
+                reason: event.reason,
+                polls: event.polls,
+                wall_ms: event.wall_ms,
+                precision_mode: event.precision_mode,
+            };
+            let resolution = {
+                let mut port = ReplaySurfaceResolution {
+                    presenter: self.presenter,
+                    outcome: self.outcome,
+                };
+                self.surface_resolution.resolve(&mut port, transaction)?
+            };
+            if resolution.action == SurfaceResolutionAction::Ignore {
+                self.outcome.surface_action = TraceSurfaceAction::Ignore { warp_id: event.id };
+            }
         }
         Ok(self.effect(false, refused, cancelled))
     }
@@ -2022,6 +2137,7 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
             presenter: self.presenter,
             outcome: &mut self.outcome,
             applied_presented_scene_id,
+            surface_resolution: &mut self.surface_resolution,
         };
         let observation = PresentEventOwner::observe(&mut port, self.clock.now_ms);
         self.presenter.present_turns.push(observation.turn);
@@ -2122,12 +2238,30 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
 
     fn consider_warp(&mut self, stage: SceneConsidered) -> Result<Self::Output, Self::Error> {
         let SceneConsidered = stage;
-        if self.warps
-            && self.presenter.pending_warp.is_none()
-            && self.frame_loop.warp_requested(self.policy)
-        {
-            self.outcome.warp_id = Some(self.presenter.submit_warp(self.frame_loop.generation()));
-            self.frame_loop.warp_submitted();
+        if self.warps && self.frame_loop.warp_requested(self.policy) {
+            let refresh_id = u64::from(self.presenter.hot_writes);
+            let slot_stride = ember_julibrot_present::hot_stride(256)
+                .unwrap_or_else(|error| unreachable!("native HOT stride is valid: {error}"));
+            let slot = HotSlot::for_refresh(refresh_id, slot_stride, self.presenter.hot_epoch)
+                .unwrap_or_else(|error| unreachable!("native HOT slot is valid: {error}"));
+            let job = SurfaceWarpJob {
+                generation: self.frame_loop.generation(),
+                canvas_extent: [64, 32],
+                refresh_id,
+                now_ms: self.clock.now_ms,
+                slot,
+            };
+            let submission = {
+                let mut port = ReplaySurfaceResolution {
+                    presenter: self.presenter,
+                    outcome: &mut self.outcome,
+                };
+                self.surface_resolution.submit(&mut port, job)
+            }?;
+            if let SurfaceSubmission::Submitted(receipt) = submission {
+                self.outcome.warp_id = Some(receipt.warp_id);
+                self.frame_loop.warp_submitted();
+            }
         }
         self.presenter
             .runtime
@@ -2145,15 +2279,19 @@ fn drive_turn(
     policy: FramePolicy,
     warps: bool,
 ) -> TurnOutcome {
-    let turn = NativeRefreshTurn {
+    let mut turn = NativeRefreshTurn {
         frame_loop,
         presenter,
         clock,
         policy,
         warps,
         outcome: TurnOutcome::default(),
+        surface_resolution: SurfaceResolutionOwner::new(clock.now_ms),
     };
-    match execute_ordered_refresh(turn) {
+    let result = execute_ordered_refresh(&mut turn);
+    let surface_turn = turn.surface_resolution.take_turn();
+    turn.presenter.surface_turns.push(surface_turn);
+    match result {
         Ok(outcome) | Err(outcome) => outcome,
     }
 }
@@ -3415,6 +3553,443 @@ fn native_refresh_replays_plain_present_event_transactions() {
         PresentEventView::FenceRefused(event) if event.reason == FenceRefusal::Device
     ));
     assert_eq!(recorded[2].outcome.refused_warp_id, Some(62));
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SurfaceTurnInput {
+    name: &'static str,
+    clock: FakeClock,
+    generation: u32,
+    pending_warp: Option<u64>,
+    retained_scene_id: Option<u64>,
+    presented_scene_id: Option<u64>,
+    capture_armed: bool,
+    policy: FramePolicy,
+    warps: bool,
+    receipt_refresh_id: Option<u64>,
+    next_id: u64,
+    terminal: Option<Box<PresentEvent>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct RecordedSurfaceTurn {
+    input: SurfaceTurnInput,
+    surface: SurfaceResolutionTurn,
+    outcome: TurnOutcome,
+    capture: TraceCaptureState,
+    capture_scene: Option<u64>,
+}
+
+fn surface_completion(warp_id: u64) -> PresentEvent {
+    PresentEvent::WarpCompleted {
+        measurement: replay_present_measurement(ReplayMeasurement {
+            kind: SubmissionKind::Warp,
+            id: warp_id,
+            completion_sequence: 20,
+            source_scene_id: Some(41),
+            sample_class: SampleClass::Measured,
+            wall_ms: 5.0,
+            fence_wait_ms: 2.5,
+            polls: 4,
+        }),
+    }
+}
+
+fn surface_refusal(warp_id: u64) -> PresentEvent {
+    PresentEvent::FenceRefused {
+        kind: SubmissionKind::Warp,
+        id: warp_id,
+        reason: FenceRefusal::Deadline,
+        polls: 5,
+        wall_ms: 6.0,
+        precision_mode: PrecisionMode::Deterministic.as_str(),
+    }
+}
+
+fn surface_turn_inputs() -> [SurfaceTurnInput; 5] {
+    [
+        SurfaceTurnInput {
+            name: "submit",
+            clock: FakeClock { now_ms: 1.0 },
+            generation: 7,
+            pending_warp: None,
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+            capture_armed: false,
+            policy: FramePolicy::Continuous,
+            warps: true,
+            receipt_refresh_id: None,
+            next_id: 70,
+            terminal: None,
+        },
+        SurfaceTurnInput {
+            name: "present",
+            clock: FakeClock { now_ms: 2.0 },
+            generation: 8,
+            pending_warp: Some(72),
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(37),
+            capture_armed: true,
+            policy: FramePolicy::Continuous,
+            warps: true,
+            receipt_refresh_id: None,
+            next_id: 72,
+            terminal: Some(Box::new(surface_completion(72))),
+        },
+        SurfaceTurnInput {
+            name: "drop",
+            clock: FakeClock { now_ms: 3.0 },
+            generation: 9,
+            pending_warp: Some(73),
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+            capture_armed: false,
+            policy: FramePolicy::SingleFrameOnDemand,
+            warps: false,
+            receipt_refresh_id: None,
+            next_id: 73,
+            terminal: Some(Box::new(surface_refusal(73))),
+        },
+        SurfaceTurnInput {
+            name: "occupied",
+            clock: FakeClock { now_ms: 4.0 },
+            generation: 10,
+            pending_warp: Some(74),
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(41),
+            capture_armed: false,
+            policy: FramePolicy::Continuous,
+            warps: true,
+            receipt_refresh_id: None,
+            next_id: 74,
+            terminal: None,
+        },
+        SurfaceTurnInput {
+            name: "invalid-receipt",
+            clock: FakeClock { now_ms: 5.0 },
+            generation: 11,
+            pending_warp: None,
+            retained_scene_id: None,
+            presented_scene_id: None,
+            capture_armed: false,
+            policy: FramePolicy::Continuous,
+            warps: true,
+            receipt_refresh_id: Some(999),
+            next_id: 80,
+            terminal: None,
+        },
+    ]
+}
+
+fn record_surface_turn(input: SurfaceTurnInput) -> RecordedSurfaceTurn {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.restart(input.generation);
+    frame_loop.refuse_scene("surface replay has no scene work");
+    let mut presenter = FakePresenter {
+        next_id: input.next_id,
+        retained_scene: input.retained_scene_id,
+        presented_scene: input.presented_scene_id,
+        capture: if input.capture_armed {
+            TraceCaptureState::Armed
+        } else {
+            TraceCaptureState::Idle
+        },
+        surface_receipt_refresh_id: input.receipt_refresh_id,
+        replay_present_poll: input.terminal.clone().map(|terminal| ReplayPresentPoll {
+            events: vec![*terminal],
+            retained_scene_id: input.retained_scene_id,
+            presented_scene_id: input.presented_scene_id,
+        }),
+        ..FakePresenter::default()
+    };
+    if let Some(warp_id) = input.pending_warp {
+        presenter.runtime.acquire_for_warp(input.generation);
+        presenter.runtime.retain_for_warp(warp_id, input.generation);
+    }
+    let outcome = drive_turn(
+        &mut frame_loop,
+        &mut presenter,
+        input.clock,
+        input.policy,
+        input.warps,
+    );
+    let capture = presenter.capture;
+    let capture_scene = presenter.capture_scene;
+    let surface = presenter
+        .surface_turns
+        .pop()
+        .unwrap_or_else(|| unreachable!("the native refresh records its surface turn"));
+    RecordedSurfaceTurn {
+        input,
+        surface,
+        outcome,
+        capture,
+        capture_scene,
+    }
+}
+
+fn append_surface_resolution_event(output: &mut String, event: SurfaceResolutionEvent) {
+    match event {
+        SurfaceResolutionEvent::WarpCompleted {
+            measurement,
+            capture,
+        } => {
+            let _written = writeln!(
+                output,
+                "transaction=WarpCompleted capture={}/{}/{}/{}",
+                capture.armed,
+                capture.route_matches,
+                capture.readback_in_flight,
+                capture.renderer_already_armed,
+            );
+            append_present_measurement(output, measurement);
+        }
+        SurfaceResolutionEvent::WarpRefused {
+            kind,
+            id,
+            reason,
+            polls,
+            wall_ms,
+            precision_mode,
+        } => {
+            let _written = writeln!(
+                output,
+                "transaction=WarpRefused kind={kind:?} id={id} reason={reason:?} polls={polls} wall_bits={:016x} precision={precision_mode}",
+                wall_ms.to_bits(),
+            );
+        }
+        SurfaceResolutionEvent::DeviceFailed => {
+            let _written = writeln!(output, "transaction=DeviceFailed");
+        }
+    }
+}
+
+fn append_surface_record(output: &mut String, record: &super::SurfaceResolutionRecord) {
+    match &record.transaction {
+        SurfaceResolutionTransaction::Submit(job) => {
+            let _written = writeln!(
+                output,
+                "transaction=Submit generation={} extent={}x{} refresh={} now_bits={:016x} slot={}/{}/{}",
+                job.generation,
+                job.canvas_extent[0],
+                job.canvas_extent[1],
+                job.refresh_id,
+                job.now_ms.to_bits(),
+                job.slot.index(),
+                job.slot.dynamic_offset(),
+                job.slot.epoch(),
+            );
+        }
+        SurfaceResolutionTransaction::Resolve(event) => {
+            append_surface_resolution_event(output, *event);
+        }
+    }
+    match &record.outcome {
+        SurfaceResolutionOutcome::Occupied => {
+            let _written = writeln!(output, "resolution=Occupied");
+        }
+        SurfaceResolutionOutcome::Submitted(receipt) => {
+            let _written = writeln!(
+                output,
+                "resolution=Submitted refresh={} warp={} source={:?} precision={} exposed={} status={:?}",
+                receipt.refresh_id,
+                receipt.warp_id,
+                receipt.source_scene_id,
+                receipt.precision_mode,
+                receipt.exposed,
+                receipt.status,
+            );
+        }
+        SurfaceResolutionOutcome::Presented { warp_id } => {
+            let _written = writeln!(output, "resolution=Present warp={warp_id}");
+        }
+        SurfaceResolutionOutcome::Dropped { warp_id } => {
+            let _written = writeln!(output, "resolution=Drop warp={warp_id:?}");
+        }
+        SurfaceResolutionOutcome::Ignored { warp_id } => {
+            let _written = writeln!(output, "resolution=Ignore warp={warp_id:?}");
+        }
+        SurfaceResolutionOutcome::Failed(failure) => {
+            let _written = writeln!(output, "resolution=Failed stage={failure:?}");
+        }
+    }
+}
+
+fn append_surface_turn(output: &mut String, turn: &RecordedSurfaceTurn) {
+    let input = &turn.input;
+    let terminal = match input.terminal.as_deref() {
+        Some(PresentEvent::WarpCompleted { .. }) => "WarpCompleted",
+        Some(PresentEvent::FenceRefused { .. }) => "FenceRefused",
+        Some(PresentEvent::SceneCompleted { .. } | PresentEvent::SceneDropped { .. }) => "Scene",
+        None => "None",
+    };
+    let _written = writeln!(output, "turn={}", input.name);
+    let _written = writeln!(
+        output,
+        "input now_bits={:016x} generation={} pending={:?} retained={:?} presented={:?} capture={} policy={:?} warps={} receipt_refresh={:?} next_id={} terminal={terminal}",
+        input.clock.now_ms.to_bits(),
+        input.generation,
+        input.pending_warp,
+        input.retained_scene_id,
+        input.presented_scene_id,
+        input.capture_armed,
+        input.policy,
+        input.warps,
+        input.receipt_refresh_id,
+        input.next_id,
+    );
+    let _written = writeln!(
+        output,
+        "record now_bits={:016x} operations={}",
+        turn.surface.now_ms_bits,
+        turn.surface.records.len(),
+    );
+    for record in &turn.surface.records {
+        append_surface_record(output, record);
+    }
+    let outcome = turn.outcome;
+    let _written = writeln!(
+        output,
+        "outcome scene={:?} warp={:?} presented={} refused={} completed_scene={:?} completed_warp={:?} refused_scene={:?} refused_warp={:?} surface={:?} capture={:?} capture_scene={:?}",
+        outcome.scene_id,
+        outcome.warp_id,
+        outcome.presented,
+        outcome.refused,
+        outcome.completed_scene_id,
+        outcome.completed_warp_id,
+        outcome.refused_scene_id,
+        outcome.refused_warp_id,
+        outcome.surface_action,
+        turn.capture,
+        turn.capture_scene,
+    );
+}
+
+const SURFACE_RESOLUTION_REPLAY_FIXTURE: &str = "\
+turn=submit
+input now_bits=3ff0000000000000 generation=7 pending=None retained=Some(41) presented=Some(41) capture=false policy=Continuous warps=true receipt_refresh=None next_id=70 terminal=None
+record now_bits=3ff0000000000000 operations=1
+transaction=Submit generation=7 extent=64x32 refresh=1 now_bits=3ff0000000000000 slot=1/512/1
+resolution=Submitted refresh=1 warp=71 source=Some(41) precision=Deterministic exposed=false status=ShowingCompletedScene
+outcome scene=None warp=Some(71) presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
+turn=present
+input now_bits=4000000000000000 generation=8 pending=Some(72) retained=Some(41) presented=Some(37) capture=true policy=Continuous warps=true receipt_refresh=None next_id=72 terminal=WarpCompleted
+record now_bits=4000000000000000 operations=2
+transaction=WarpCompleted capture=true/true/false/false
+  measurement kind=Warp id=72 sequence=20 source=Some(41) sample=Measured precision=PictureFast wall_bits=4014000000000000 fence_bits=4004000000000000 polls=4
+resolution=Present warp=72
+transaction=Submit generation=8 extent=64x32 refresh=1 now_bits=4000000000000000 slot=1/512/1
+resolution=Submitted refresh=1 warp=73 source=Some(41) precision=Deterministic exposed=false status=ShowingCompletedScene
+outcome scene=None warp=Some(73) presented=true refused=false completed_scene=None completed_warp=Some(72) refused_scene=None refused_warp=None surface=Present { warp_id: 72 } capture=InFlight capture_scene=None
+turn=drop
+input now_bits=4008000000000000 generation=9 pending=Some(73) retained=Some(41) presented=Some(41) capture=false policy=SingleFrameOnDemand warps=false receipt_refresh=None next_id=73 terminal=FenceRefused
+record now_bits=4008000000000000 operations=1
+transaction=WarpRefused kind=Warp id=73 reason=Deadline polls=5 wall_bits=4018000000000000 precision=Deterministic
+resolution=Drop warp=Some(73)
+outcome scene=None warp=None presented=false refused=true completed_scene=None completed_warp=None refused_scene=None refused_warp=Some(73) surface=Drop { warp_id: 73 } capture=Idle capture_scene=None
+turn=occupied
+input now_bits=4010000000000000 generation=10 pending=Some(74) retained=Some(41) presented=Some(41) capture=false policy=Continuous warps=true receipt_refresh=None next_id=74 terminal=None
+record now_bits=4010000000000000 operations=1
+transaction=Submit generation=10 extent=64x32 refresh=1 now_bits=4010000000000000 slot=1/512/1
+resolution=Occupied
+outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
+turn=invalid-receipt
+input now_bits=4014000000000000 generation=11 pending=None retained=None presented=None capture=false policy=Continuous warps=true receipt_refresh=Some(999) next_id=80 terminal=None
+record now_bits=4014000000000000 operations=1
+transaction=Submit generation=11 extent=64x32 refresh=1 now_bits=4014000000000000 slot=1/512/1
+resolution=Failed stage=InvalidReceipt
+outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
+";
+
+#[test]
+fn native_refresh_replays_plain_surface_resolution_transactions() {
+    assert_eq!(
+        SurfaceResolutionEvent::DeviceFailed.surface_event(),
+        crate::surface::SurfaceEvent::DeviceFailed
+    );
+    let recorded = surface_turn_inputs().map(record_surface_turn);
+    for turn in &recorded {
+        assert_eq!(turn.surface.now_ms_bits, turn.input.clock.now_ms.to_bits());
+        let replayed = record_surface_turn(turn.input.clone());
+        assert_eq!(&replayed, turn);
+    }
+    let mut fixture = String::new();
+    for turn in &recorded {
+        append_surface_turn(&mut fixture, turn);
+    }
+    assert_eq!(fixture, SURFACE_RESOLUTION_REPLAY_FIXTURE);
+    assert_eq!(
+        recorded[1].outcome.surface_action,
+        TraceSurfaceAction::Present { warp_id: 72 }
+    );
+    assert_eq!(recorded[1].capture, TraceCaptureState::InFlight);
+    assert_eq!(recorded[1].capture_scene, None);
+    assert_eq!(
+        recorded[2].outcome.surface_action,
+        TraceSurfaceAction::Drop { warp_id: 73 }
+    );
+    assert!(matches!(
+        recorded[4].surface.records.last(),
+        Some(super::SurfaceResolutionRecord {
+            outcome: SurfaceResolutionOutcome::Failed(
+                super::SurfaceResolutionFailure::InvalidReceipt
+            ),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn browser_and_native_refresh_share_surface_resolution_order() {
+    let production = include_str!("../loop.rs");
+    let owner = production
+        .split_once("impl SurfaceResolutionOwner")
+        .unwrap_or_else(|| unreachable!("surface-resolution owner exists"))
+        .1
+        .split_once("enum PresentEventKind")
+        .unwrap_or_else(|| unreachable!("surface-resolution owner ends before present events"))
+        .0;
+    let pending = owner
+        .find("port.pending()")
+        .unwrap_or_else(|| unreachable!("owner checks the pending surface"));
+    let acquire = owner
+        .find("port.acquire(job.generation)")
+        .unwrap_or_else(|| unreachable!("owner acquires the surface"));
+    let submit = owner
+        .find("port.submit(&frame, &job)")
+        .unwrap_or_else(|| unreachable!("owner submits the warp"));
+    let retain = owner
+        .find("port.retain(frame, job.generation, &receipt)")
+        .unwrap_or_else(|| unreachable!("owner retains the submitted surface"));
+    let resolve = owner
+        .find("port.resolve(transaction.surface_event())")
+        .unwrap_or_else(|| unreachable!("owner matches the terminal surface event"));
+    let present = owner
+        .find("port.present(&transaction, frame)")
+        .unwrap_or_else(|| unreachable!("owner presents only the matching completion"));
+    assert!(pending < acquire && acquire < submit && submit < retain);
+    assert!(resolve < present);
+
+    let browser = production
+        .split_once("impl OrderedRefresh for BrowserRefreshTurn")
+        .unwrap_or_else(|| unreachable!("browser refresh lowering exists"))
+        .1
+        .split_once("impl BrowserFrameLoop")
+        .unwrap_or_else(|| unreachable!("browser refresh lowering ends"))
+        .0;
+    let observe = browser
+        .find("PresentEventOwner::observe(&mut port, self.now_ms)")
+        .unwrap_or_else(|| unreachable!("browser observes fences"));
+    let submit = browser
+        .find("self.surface_resolution.submit(&mut port, job)")
+        .unwrap_or_else(|| unreachable!("browser submits through the surface owner"));
+    assert!(observe < submit);
+    assert!(production.contains("impl SurfacePort for BrowserSurfaceResolution<'_>"));
+
+    let replay = include_str!("tests.rs");
+    assert!(replay.contains("impl SurfacePort for ReplaySurfaceResolution<'_>"));
+    assert!(replay.contains("self.surface_resolution.resolve(&mut port, transaction)?"));
+    assert!(replay.contains("self.surface_resolution.submit(&mut port, job)"));
 }
 
 #[test]

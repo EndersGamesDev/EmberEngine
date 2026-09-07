@@ -7,6 +7,7 @@ use ember_julibrot_present::{CLASSIC_PALETTE, FrameReadbackRoute, frame_readback
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
+use crate::surface::SurfaceEvent;
 use crate::{AppError, PendingSurface, SurfaceAction, SurfaceState};
 
 const STATUS_ID: &str = "status";
@@ -287,42 +288,28 @@ impl BrowserRuntime {
         self.surfaces.release_unsubmitted(generation)
     }
 
-    /// Presents a matching completed warp after its measured fence region has ended, offering its
-    /// frame texture to one caller first.
+    /// Resolves one terminal event against the sole pending surface image.
+    #[must_use]
+    pub(crate) fn resolve_surface(
+        &mut self,
+        event: SurfaceEvent,
+    ) -> SurfaceAction<wgpu::SurfaceTexture> {
+        self.surfaces.resolve_event(event)
+    }
+
+    /// Presents a resolved warp after its measured fence region has ended, offering its frame
+    /// texture to one caller first.
     ///
     /// The offer is the whole of the readback path: the surface image exists only between its
     /// acquisition and its presentation, so a copy of what the page shows has to be taken inside
     /// that window and nowhere else. The closure runs once, immediately before the present, and
     /// only for a warp that is actually being presented.
-    #[must_use]
-    pub(crate) fn complete_warp_capturing(
-        &mut self,
-        warp_id: u64,
+    pub(crate) fn present_surface_capturing(
+        frame: wgpu::SurfaceTexture,
         capture: impl FnOnce(&wgpu::Texture),
-    ) -> bool {
-        match self.surfaces.complete(warp_id) {
-            SurfaceAction::Present(frame) => {
-                capture(&frame.texture);
-                frame.present();
-                true
-            }
-            SurfaceAction::Drop(_) | SurfaceAction::Ignore => false,
-        }
-    }
-
-    /// Drops a matching refused warp without presenting it.
-    #[must_use]
-    pub(crate) fn refuse_warp(&mut self, warp_id: u64) -> bool {
-        matches!(self.surfaces.refuse(warp_id), SurfaceAction::Drop(_))
-    }
-
-    /// Drops whichever surface image is pending after a device-level terminal failure.
-    #[must_use]
-    pub(crate) fn drop_pending_surface(&mut self) -> bool {
-        let Some(warp_id) = self.surfaces.pending_warp_id() else {
-            return false;
-        };
-        self.refuse_warp(warp_id)
+    ) {
+        capture(&frame.texture);
+        frame.present();
     }
 
     /// Returns whether one acquired image remains keyed to a pending warp fence.

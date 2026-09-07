@@ -569,13 +569,361 @@ trait OrderedRefresh {
 
 /// Performs the externally visible stages of one refresh in their required order.
 #[cfg(any(target_arch = "wasm32", test))]
-fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Output, R::Error> {
+fn execute_ordered_refresh<R: OrderedRefresh>(refresh: &mut R) -> Result<R::Output, R::Error> {
     refresh.drain_capture()?;
     refresh.stage_capture(CaptureDrained)?;
     refresh.observe_fences(CaptureStaged)?;
     refresh.write_hot(FencesObserved)?;
     refresh.consider_scene(HotWritten)?;
     refresh.consider_warp(SceneConsidered)
+}
+
+/// Every value argument to one acquired surface warp submission.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceWarpJob {
+    generation: u32,
+    canvas_extent: [u32; 2],
+    refresh_id: u64,
+    now_ms: f64,
+    slot: ember_julibrot_present::HotSlot,
+}
+
+/// Every value argument to one terminal surface resolution.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SurfaceResolutionEvent {
+    WarpCompleted {
+        measurement: ember_julibrot_present::SubmissionMeasurement,
+        capture: crate::CaptureArming,
+    },
+    WarpRefused {
+        kind: SubmissionKind,
+        id: u64,
+        reason: FenceRefusal,
+        polls: u32,
+        wall_ms: f64,
+        precision_mode: &'static str,
+    },
+    DeviceFailed,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl SurfaceResolutionEvent {
+    const fn surface_event(self) -> crate::surface::SurfaceEvent {
+        match self {
+            Self::WarpCompleted { measurement, .. } => {
+                crate::surface::SurfaceEvent::WarpCompleted {
+                    warp_id: measurement.id,
+                }
+            }
+            Self::WarpRefused {
+                id,
+                reason,
+                polls,
+                wall_ms,
+                precision_mode,
+                ..
+            } => {
+                let _ = (reason, polls, wall_ms.to_bits(), precision_mode);
+                crate::surface::SurfaceEvent::WarpRefused { warp_id: id }
+            }
+            Self::DeviceFailed => crate::surface::SurfaceEvent::DeviceFailed,
+        }
+    }
+
+    #[cfg(test)]
+    const fn warp_id(self) -> Option<u64> {
+        match self {
+            Self::WarpCompleted { measurement, .. } => Some(measurement.id),
+            Self::WarpRefused { id, .. } => Some(id),
+            Self::DeviceFailed => None,
+        }
+    }
+
+    const fn expects_present(self) -> bool {
+        matches!(self, Self::WarpCompleted { .. })
+    }
+
+    const fn valid(self) -> bool {
+        !matches!(self, Self::WarpRefused { kind, .. } if !matches!(kind, SubmissionKind::Warp))
+    }
+}
+
+/// Result of considering one surface-backed warp submission.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SurfaceSubmission {
+    Occupied,
+    Submitted(ember_julibrot_present::FrameReceipt),
+}
+
+/// Terminal surface action independent of its concrete frame value.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum SurfaceResolutionAction {
+    Present,
+    Drop,
+    #[default]
+    Ignore,
+}
+
+/// Stable effect of resolving one terminal surface event.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SurfaceResolutionEffect {
+    #[cfg(test)]
+    action: SurfaceResolutionAction,
+    presented: bool,
+}
+
+/// App-local lowering used by the replayable surface-resolution transaction owner.
+#[cfg(any(target_arch = "wasm32", test))]
+trait SurfacePort {
+    type Error;
+    type Frame;
+
+    fn pending(&self) -> bool;
+    fn acquire(&mut self, generation: u32) -> Result<Self::Frame, Self::Error>;
+    fn submit(
+        &mut self,
+        frame: &Self::Frame,
+        job: &SurfaceWarpJob,
+    ) -> Result<ember_julibrot_present::FrameReceipt, Self::Error>;
+    fn retain(
+        &mut self,
+        frame: Self::Frame,
+        generation: u32,
+        receipt: &ember_julibrot_present::FrameReceipt,
+    ) -> Result<(), Self::Error>;
+    fn release_unsubmitted(&mut self, generation: u32) -> bool;
+    fn resolve(&mut self, event: crate::surface::SurfaceEvent)
+    -> crate::SurfaceAction<Self::Frame>;
+    fn present(&mut self, event: &SurfaceResolutionEvent, frame: Self::Frame);
+    fn drop_frame(&mut self, frame: Self::Frame);
+    fn invalid_receipt(&self, detail: &'static str) -> Self::Error;
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SurfaceResolutionFailure {
+    Acquire,
+    Submit,
+    Retain,
+    InvalidReceipt,
+    InvalidAction,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SurfaceResolutionOutcome {
+    Occupied,
+    Submitted(Box<ember_julibrot_present::FrameReceipt>),
+    Presented { warp_id: u64 },
+    Dropped { warp_id: Option<u64> },
+    Ignored { warp_id: Option<u64> },
+    Failed(SurfaceResolutionFailure),
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+enum SurfaceResolutionTransaction {
+    Submit(SurfaceWarpJob),
+    Resolve(SurfaceResolutionEvent),
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+struct SurfaceResolutionRecord {
+    transaction: SurfaceResolutionTransaction,
+    outcome: SurfaceResolutionOutcome,
+}
+
+/// Chronological surface-resolution record for one refresh turn.
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SurfaceResolutionTurn {
+    now_ms_bits: u64,
+    records: Vec<SurfaceResolutionRecord>,
+}
+
+/// Owns surface acquisition, warp publication, terminal matching, and present/drop order.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default)]
+struct SurfaceResolutionOwner {
+    #[cfg(test)]
+    turn: SurfaceResolutionTurn,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl SurfaceResolutionOwner {
+    const fn new(now_ms: f64) -> Self {
+        #[cfg(not(test))]
+        let _ = now_ms;
+        Self {
+            #[cfg(test)]
+            turn: SurfaceResolutionTurn {
+                now_ms_bits: now_ms.to_bits(),
+                records: Vec::new(),
+            },
+        }
+    }
+
+    fn submit<P: SurfacePort>(
+        &mut self,
+        port: &mut P,
+        job: SurfaceWarpJob,
+    ) -> Result<SurfaceSubmission, P::Error> {
+        if port.pending() {
+            #[cfg(test)]
+            self.record(
+                SurfaceResolutionTransaction::Submit(job),
+                SurfaceResolutionOutcome::Occupied,
+            );
+            return Ok(SurfaceSubmission::Occupied);
+        }
+        let frame = match port.acquire(job.generation) {
+            Ok(frame) => frame,
+            Err(error) => {
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Submit(job),
+                    SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::Acquire),
+                );
+                return Err(error);
+            }
+        };
+        let receipt = match port.submit(&frame, &job) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let released = port.release_unsubmitted(job.generation);
+                debug_assert!(released, "failed warp must release surface token");
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Submit(job),
+                    SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::Submit),
+                );
+                return Err(error);
+            }
+        };
+        if receipt.refresh_id != job.refresh_id || receipt.warp_id == 0 {
+            let released = port.release_unsubmitted(job.generation);
+            debug_assert!(released, "invalid warp receipt must release surface token");
+            #[cfg(test)]
+            self.record(
+                SurfaceResolutionTransaction::Submit(job),
+                SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::InvalidReceipt),
+            );
+            return Err(port.invalid_receipt(
+                "surface warp receipt does not preserve its transaction identity",
+            ));
+        }
+        if let Err(error) = port.retain(frame, job.generation, &receipt) {
+            let released = port.release_unsubmitted(job.generation);
+            debug_assert!(released, "failed retain must release surface token");
+            #[cfg(test)]
+            self.record(
+                SurfaceResolutionTransaction::Submit(job),
+                SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::Retain),
+            );
+            return Err(error);
+        }
+        #[cfg(test)]
+        self.record(
+            SurfaceResolutionTransaction::Submit(job),
+            SurfaceResolutionOutcome::Submitted(Box::new(receipt.clone())),
+        );
+        Ok(SurfaceSubmission::Submitted(receipt))
+    }
+
+    fn resolve<P: SurfacePort>(
+        &mut self,
+        port: &mut P,
+        transaction: SurfaceResolutionEvent,
+    ) -> Result<SurfaceResolutionEffect, P::Error> {
+        if !transaction.valid() {
+            #[cfg(test)]
+            self.record(
+                SurfaceResolutionTransaction::Resolve(transaction),
+                SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::InvalidReceipt),
+            );
+            return Err(port.invalid_receipt("surface refusal receipt has a non-warp kind"));
+        }
+        #[cfg(test)]
+        let warp_id = transaction.warp_id();
+        let action = port.resolve(transaction.surface_event());
+        let effect = match action {
+            crate::SurfaceAction::Present(frame) if transaction.expects_present() => {
+                port.present(&transaction, frame);
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Resolve(transaction),
+                    SurfaceResolutionOutcome::Presented {
+                        warp_id: warp_id.unwrap_or_default(),
+                    },
+                );
+                SurfaceResolutionEffect {
+                    #[cfg(test)]
+                    action: SurfaceResolutionAction::Present,
+                    presented: true,
+                }
+            }
+            crate::SurfaceAction::Drop(frame) if !transaction.expects_present() => {
+                port.drop_frame(frame);
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Resolve(transaction),
+                    SurfaceResolutionOutcome::Dropped { warp_id },
+                );
+                SurfaceResolutionEffect {
+                    #[cfg(test)]
+                    action: SurfaceResolutionAction::Drop,
+                    presented: false,
+                }
+            }
+            crate::SurfaceAction::Ignore => {
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Resolve(transaction),
+                    SurfaceResolutionOutcome::Ignored { warp_id },
+                );
+                SurfaceResolutionEffect {
+                    #[cfg(test)]
+                    action: SurfaceResolutionAction::Ignore,
+                    presented: false,
+                }
+            }
+            crate::SurfaceAction::Present(frame) | crate::SurfaceAction::Drop(frame) => {
+                port.drop_frame(frame);
+                #[cfg(test)]
+                self.record(
+                    SurfaceResolutionTransaction::Resolve(transaction),
+                    SurfaceResolutionOutcome::Failed(SurfaceResolutionFailure::InvalidAction),
+                );
+                return Err(
+                    port.invalid_receipt("surface action does not match its terminal transaction")
+                );
+            }
+        };
+        Ok(effect)
+    }
+
+    #[cfg(test)]
+    fn record(
+        &mut self,
+        transaction: SurfaceResolutionTransaction,
+        outcome: SurfaceResolutionOutcome,
+    ) {
+        self.turn.records.push(SurfaceResolutionRecord {
+            transaction,
+            outcome,
+        });
+    }
+
+    #[cfg(test)]
+    fn take_turn(&mut self) -> SurfaceResolutionTurn {
+        std::mem::take(&mut self.turn)
+    }
 }
 
 /// Variant tag for one app-owned presenter transaction.
@@ -1584,11 +1932,12 @@ mod browser {
         KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh,
         PAGE_MAX_ITERATION_CAP, PresentEventEffect, PresentEventFacts, PresentEventOwner,
         PresentEventPort, PresentFenceRefusal, PresentSceneCompletion, PresentSceneDrop,
-        PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode, WholeGridJob,
-        WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner,
-        WorkerServicePort, WorkerSubmission, backdrop_extent, coverage_pre_empts,
-        execute_ordered_refresh, horizon_facts, main_for_grid, published_iteration_cap,
-        sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
+        PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode, SurfacePort,
+        SurfaceResolutionEvent, SurfaceResolutionOwner, SurfaceSubmission, SurfaceWarpJob,
+        WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
+        WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
+        coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
+        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{
@@ -2064,6 +2413,7 @@ mod browser {
         relief_redraw: bool,
         defer_scene_for_redraw: bool,
         scene_id: Option<u64>,
+        surface_resolution: SurfaceResolutionOwner,
     }
 
     /// Production lowering from the presenter's event source into app-owned state.
@@ -2071,7 +2421,100 @@ mod browser {
         frame_loop: &'a mut BrowserFrameLoop,
         runtime: &'a mut BrowserRuntime,
         viewer: &'a mut ViewerController,
+        surface_resolution: &'a mut SurfaceResolutionOwner,
         refusal: Option<AppError>,
+    }
+
+    /// Browser lowering over the runtime-owned surface and presenter's warp encoder.
+    struct BrowserSurfaceResolution<'a> {
+        runtime: &'a mut BrowserRuntime,
+        presenter: &'a mut Presenter,
+        frame_capture: &'a mut FrameCapture,
+    }
+
+    impl SurfacePort for BrowserSurfaceResolution<'_> {
+        type Error = AppError;
+        type Frame = wgpu::SurfaceTexture;
+
+        fn pending(&self) -> bool {
+            self.runtime.has_pending_surface()
+        }
+
+        fn acquire(&mut self, generation: u32) -> Result<Self::Frame, Self::Error> {
+            self.runtime.acquire_for_warp(generation)
+        }
+
+        fn submit(
+            &mut self,
+            frame: &Self::Frame,
+            job: &SurfaceWarpJob,
+        ) -> Result<ember_julibrot_present::FrameReceipt, Self::Error> {
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.presenter
+                .frame(
+                    FrameState {
+                        surface_view: &view,
+                        canvas_width: job.canvas_extent[0],
+                        canvas_height: job.canvas_extent[1],
+                        refresh_id: job.refresh_id,
+                        now_ms: job.now_ms,
+                    },
+                    job.slot,
+                )
+                .map_err(present_error)
+        }
+
+        fn retain(
+            &mut self,
+            frame: Self::Frame,
+            generation: u32,
+            receipt: &ember_julibrot_present::FrameReceipt,
+        ) -> Result<(), Self::Error> {
+            self.runtime
+                .retain_for_warp(receipt.warp_id, generation, receipt.precision_mode, frame)
+        }
+
+        fn release_unsubmitted(&mut self, generation: u32) -> bool {
+            self.runtime.release_unsubmitted_warp(generation)
+        }
+
+        fn resolve(
+            &mut self,
+            event: crate::surface::SurfaceEvent,
+        ) -> crate::SurfaceAction<Self::Frame> {
+            self.runtime.resolve_surface(event)
+        }
+
+        fn present(&mut self, event: &SurfaceResolutionEvent, frame: Self::Frame) {
+            let SurfaceResolutionEvent::WarpCompleted {
+                measurement,
+                capture: arming,
+            } = *event
+            else {
+                return;
+            };
+            let presenter = &mut *self.presenter;
+            let capture = &mut *self.frame_capture;
+            BrowserRuntime::present_surface_capturing(frame, |texture| {
+                if !arming.surface_due() {
+                    return;
+                }
+                capture.armed = false;
+                match presenter.request_frame_readback(texture) {
+                    Ok(()) => capture.refusal = None,
+                    Err(error) => capture.refusal = Some(error.to_string()),
+                }
+            });
+            presenter.record_presented(measurement.id);
+        }
+
+        fn drop_frame(&mut self, _frame: Self::Frame) {}
+
+        fn invalid_receipt(&self, detail: &'static str) -> Self::Error {
+            AppError::Present(detail.to_string())
+        }
     }
 
     impl OrderedRefresh for BrowserRefreshTurn<'_> {
@@ -2086,7 +2529,13 @@ mod browser {
                 });
             }
             if let Err(error) = self.runtime.check_device("Julibrot refresh") {
-                let _dropped = self.runtime.drop_pending_surface();
+                let mut port = BrowserSurfaceResolution {
+                    runtime: self.runtime,
+                    presenter: &mut self.frame_loop.presenter,
+                    frame_capture: &mut self.frame_loop.frame_capture,
+                };
+                self.surface_resolution
+                    .resolve(&mut port, SurfaceResolutionEvent::DeviceFailed)?;
                 return Err(error);
             }
             self.frame_loop.refresh_id = self
@@ -2110,6 +2559,7 @@ mod browser {
                 frame_loop: self.frame_loop,
                 runtime: self.runtime,
                 viewer: self.viewer,
+                surface_resolution: &mut self.surface_resolution,
                 refusal: None,
             };
             let observation = PresentEventOwner::observe(&mut port, self.now_ms);
@@ -2356,30 +2806,26 @@ mod browser {
                 self.relief_redraw,
                 frame_loop.presenter.facts().in_flight_scene_id.is_some(),
             );
-            if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
-                match runtime.acquire_for_warp(frame_loop.loop_state.generation()) {
-                    Ok(frame) => {
-                        let view = frame
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-                        let receipt = match frame_loop.presenter.frame(
-                            FrameState {
-                                surface_view: &view,
-                                canvas_width: runtime.facts().width,
-                                canvas_height: runtime.facts().height,
-                                refresh_id: frame_loop.refresh_id,
-                                now_ms: self.now_ms,
-                            },
-                            slot,
-                        ) {
-                            Ok(receipt) => receipt,
-                            Err(error) => {
-                                let released = runtime
-                                    .release_unsubmitted_warp(frame_loop.loop_state.generation());
-                                debug_assert!(released, "failed warp must release surface token");
-                                return Err(present_error(error));
-                            }
-                        };
+            if warp_requested && !redraw_scene_in_flight {
+                let generation = frame_loop.loop_state.generation();
+                let dimensions = runtime.facts();
+                let job = SurfaceWarpJob {
+                    generation,
+                    canvas_extent: [dimensions.width, dimensions.height],
+                    refresh_id: frame_loop.refresh_id,
+                    now_ms: self.now_ms,
+                    slot,
+                };
+                let submission = {
+                    let mut port = BrowserSurfaceResolution {
+                        runtime,
+                        presenter: &mut frame_loop.presenter,
+                        frame_capture: &mut frame_loop.frame_capture,
+                    };
+                    self.surface_resolution.submit(&mut port, job)
+                };
+                match submission {
+                    Ok(SurfaceSubmission::Submitted(receipt)) => {
                         warp_id = Some(receipt.warp_id);
                         frame_loop.last_warp_source = receipt.source_scene_id;
                         if super::schedule_exposure_fill(
@@ -2389,16 +2835,6 @@ mod browser {
                         ) {
                             frame_loop.prepared_level = None;
                         }
-                        if let Err(error) = runtime.retain_for_warp(
-                            receipt.warp_id,
-                            frame_loop.loop_state.generation(),
-                            receipt.precision_mode,
-                            frame,
-                        ) {
-                            let _released = runtime
-                                .release_unsubmitted_warp(frame_loop.loop_state.generation());
-                            return Err(error);
-                        }
                         if super::warp_presents_requested_view(
                             frame_loop.presenter.facts().warp_kind,
                         ) {
@@ -2407,6 +2843,7 @@ mod browser {
                         }
                         frame_loop.loop_state.warp_submitted();
                     }
+                    Ok(SurfaceSubmission::Occupied) => {}
                     Err(AppError::SurfaceSkipped { .. }) => {
                         return Ok(frame_loop.outcome(
                             None,
@@ -2801,7 +3238,7 @@ mod browser {
             requests: &mut RunRequests,
             now_ms: f64,
         ) -> Result<RefreshOutcome, AppError> {
-            execute_ordered_refresh(BrowserRefreshTurn {
+            let mut turn = BrowserRefreshTurn {
                 frame_loop: self,
                 runtime,
                 viewer,
@@ -2813,7 +3250,9 @@ mod browser {
                 relief_redraw: false,
                 defer_scene_for_redraw: false,
                 scene_id: None,
-            })
+                surface_resolution: SurfaceResolutionOwner::new(now_ms),
+            };
+            execute_ordered_refresh(&mut turn)
         }
         fn outcome(
             &self,
@@ -2943,32 +3382,26 @@ mod browser {
                 .frame_policy
                 .record(measurement.wall_ms)
                 .map_err(|error| AppError::Present(error.to_string()))?;
-            // The copy is taken here or nowhere: this is the one moment the frame the page is
-            // about to show exists as a texture the renderer can read.
-            let armed = crate::CaptureArming {
-                armed: self.frame_loop.frame_capture.armed,
-                route_matches: self.frame_loop.frame_capture.route
-                    == ember_julibrot_present::FrameReadbackRoute::Surface,
-                readback_in_flight: self.frame_loop.presenter.frame_readback_pending(),
-                renderer_already_armed: false,
-            }
-            .surface_due();
-            let presenter = &mut self.frame_loop.presenter;
-            let capture = &mut self.frame_loop.frame_capture;
-            let presented = self
-                .runtime
-                .complete_warp_capturing(measurement.id, |texture| {
-                    if !armed {
-                        return;
-                    }
-                    capture.armed = false;
-                    match presenter.request_frame_readback(texture) {
-                        Ok(()) => capture.refusal = None,
-                        Err(error) => capture.refusal = Some(error.to_string()),
-                    }
-                });
+            let transaction = SurfaceResolutionEvent::WarpCompleted {
+                measurement,
+                capture: crate::CaptureArming {
+                    armed: self.frame_loop.frame_capture.armed,
+                    route_matches: self.frame_loop.frame_capture.route
+                        == ember_julibrot_present::FrameReadbackRoute::Surface,
+                    readback_in_flight: self.frame_loop.presenter.frame_readback_pending(),
+                    renderer_already_armed: false,
+                },
+            };
+            let effect = {
+                let mut port = BrowserSurfaceResolution {
+                    runtime: self.runtime,
+                    presenter: &mut self.frame_loop.presenter,
+                    frame_capture: &mut self.frame_loop.frame_capture,
+                };
+                self.surface_resolution.resolve(&mut port, transaction)
+            }?;
+            let presented = effect.presented;
             if presented {
-                presenter.record_presented(measurement.id);
                 // What is now on the canvas, as opposed to what was last submitted.
                 self.frame_loop.presented_scene_id = measurement.source_scene_id;
                 if let Some((warp_id, stamp)) = self.frame_loop.pending_warp_view
@@ -2988,7 +3421,8 @@ mod browser {
             reason: FenceRefusal,
             polls: u32,
             wall_ms: f64,
-        ) -> (bool, bool) {
+            precision_mode: &'static str,
+        ) -> Result<(bool, bool), AppError> {
             if matches!(kind, SubmissionKind::Scene) {
                 self.frame_loop.level_timings.drop_scene(id, None);
             }
@@ -3015,7 +3449,20 @@ mod browser {
                 self.frame_loop.prepared_level = None;
             }
             if matches!(kind, SubmissionKind::Warp) {
-                let _dropped = self.runtime.refuse_warp(id);
+                let transaction = SurfaceResolutionEvent::WarpRefused {
+                    kind,
+                    id,
+                    reason,
+                    polls,
+                    wall_ms,
+                    precision_mode,
+                };
+                let mut port = BrowserSurfaceResolution {
+                    runtime: self.runtime,
+                    presenter: &mut self.frame_loop.presenter,
+                    frame_capture: &mut self.frame_loop.frame_capture,
+                };
+                self.surface_resolution.resolve(&mut port, transaction)?;
                 if self
                     .frame_loop
                     .pending_warp_view
@@ -3029,10 +3476,10 @@ mod browser {
                     if self.refusal.is_none() {
                         self.refusal = Some(super::fence_error(kind, reason, polls, wall_ms));
                     }
-                    (false, false)
+                    Ok((false, false))
                 }
-                RefusalClass::Cancelled => (false, true),
-                RefusalClass::Transient => (true, false),
+                RefusalClass::Cancelled => Ok((false, true)),
+                RefusalClass::Transient => Ok((true, false)),
             }
         }
     }
@@ -3090,7 +3537,8 @@ mod browser {
                 event.reason,
                 event.polls,
                 event.wall_ms,
-            );
+                event.precision_mode,
+            )?;
             #[cfg(test)]
             let effect = self.event_effect(false, refused, cancelled);
             #[cfg(not(test))]
