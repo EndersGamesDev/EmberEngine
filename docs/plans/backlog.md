@@ -76,7 +76,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## infrastructure-servers
 
-- `crates/ember-server/src/connection.rs:427` decides a transient read from two error kinds alone with no raw-os-error arm, so the read loop exits permanently on the first Windows 997; the predicate is now written four independent times (`crates/fire-core/src/proto.rs:245`, `crates/arena-server/src/lib.rs:432`, `crates/arena/src/online.rs:4947`, `crates/kings-core/src/proto.rs:439`), which is the case for lifting it into a shared crate rather than fixing one copy.
+- Two transient-read checks remain outside bite 10 in `crates/arena-server/examples/wsbot.rs` and `crates/ember-client-net/src/transport.rs`; migrate both to `ember_net::is_transient_read`, preserving the wsbot health-check oracle and the client transport close diagnostics.
 - `arena-server` can lose its main event loop while the listener stays up: the failed send at `crates/arena-server/src/lib.rs:361` returns silently and logs nothing. Off-process restart now answers the death, not the silence.
 - Quick tunnels mint a new random hostname on every restart, which is the sole reason republishing and the off-host watchdog exist: `deploy/host.sh:307` records that a fresh one arrives on every restart, scraped at `:316` and started at `:349`, and `deploy/wsl/kings-run-tunnel.sh:14` says the same for the kings pair. A named tunnel per host needs an account, a domain and a browser consent flow, and would make a restart self-healing.
 - `deploy/install-watchdog.sh:101` writes units hardcoded to the ssh-deploy layout — two source directories and two fixed ports — so on a `host.sh`-managed host they start the wrong binaries.
