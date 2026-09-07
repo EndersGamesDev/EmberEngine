@@ -4,7 +4,7 @@
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),os=require('node:os');
 const {spawn}=require('node:child_process');
-const {gameVersion,safePath}=require('./publish.cjs');
+const {gameVersion,safePath,hash}=require('./publish.cjs');
 const selected=gameVersion(process.env.LEAGUE_GAME_VERSION||'v1');
 const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
 const root=process.cwd(),web=path.join(root,'web'),out=path.join(root,selected==='v1'?'target/league-browser':`target/league-browser-${selected}`);
@@ -39,6 +39,7 @@ async function page({holdWasm=false}={}){
     if(!window.qaWasm)throw new Error(document.getElementById('engine-note').textContent);
     window.qaState=()=>JSON.parse(window.qaWasm.state_json());
   });
+  assert.equal(await p.evaluate(()=>window.qaWasm.proto_version()),report.proto,'WASM protocol differs from the selected catalog version');
   if(holdWasm)check((await state(p)).phase==='select','readiness exposes the initialized WASM API after delayed loading');
   return p;
 }
@@ -55,15 +56,15 @@ async function key(p,code){
     await pause(80);
   }
 }
-async function motion(p,xf=.62,yf=.45,clickGround=false){
-  await p.evaluate(({xf,yf,clickGround})=>{
+async function motion(p,xf=.62,yf=.45,clickGround=false,button=2){
+  await p.evaluate(({xf,yf,clickGround,button})=>{
     const c=document.querySelector('#ember-root canvas'),r=c.getBoundingClientRect();
     const init={bubbles:true,cancelable:true,pointerType:'mouse',pointerId:1,isPrimary:true,clientX:r.left+r.width*xf,clientY:r.top+r.height*yf,button:-1,buttons:0};
     const e=new PointerEvent('pointermove',init);Object.defineProperty(e,'getCoalescedEvents',{value:()=>[e]});c.dispatchEvent(e);
-    if(clickGround)c.dispatchEvent(new PointerEvent('pointerdown',{...init,button:2,buttons:2}));
-  },{xf,yf,clickGround});
+    if(clickGround)c.dispatchEvent(new PointerEvent('pointerdown',{...init,button,buttons:button===2?2:1}));
+  },{xf,yf,clickGround,button});
   await pause(100);
-  if(clickGround)await p.evaluate(()=>document.querySelector('#ember-root canvas').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'mouse',pointerId:1,button:2,buttons:0})));
+  if(clickGround)await p.evaluate(button=>document.querySelector('#ember-root canvas').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'mouse',pointerId:1,button,buttons:0})),button);
 }
 async function screenshot(p,name){const f=path.join(out,name+'.png');await p.screenshot({path:f,fullPage:true});report.screenshots.push(f);}
 async function practice(mode,champ){
@@ -116,7 +117,18 @@ async function practice(mode,champ){
   }
   const start=await state(p);await motion(p,.73,.47,true);await pause(300);
   const moved=await state(p);
-  check(Math.hypot(moved.me.x-start.me.x,moved.me.z-start.me.z)>.1,`champion ${champ}: ground click moves the champion`);
+  check(Math.hypot(moved.me.x-start.me.x,moved.me.z-start.me.z)>.1,`champion ${champ}: right-click ground moves the champion`);
+  if(selected==='v3'&&mode===1&&champ===0){
+    const bindings=await p.evaluate(()=>JSON.parse(window.qaWasm.bindings_json()));
+    check(bindings.attackMove==='KeyA','v3 exposes default A attack-move');
+    await key(p,bindings.stop);await pause(150);
+    const stopped=await state(p);await motion(p,.73,.47,true,0);await pause(250);
+    const left=await state(p);
+    check(Math.hypot(left.me.x-stopped.me.x,left.me.z-stopped.me.z)<.05,'v3 left-click ground leaves movement stopped');
+    await motion(p,.73,.47);await key(p,bindings.attackMove);await pause(300);
+    const attacking=await state(p);
+    check(Math.hypot(attacking.me.x-left.me.x,attacking.me.z-left.me.z)>.1,'v3 A attack-move walks toward the cursor in practice');
+  }
   if(mode===3){await motion(p,.55,.5,true);await pause(1000);await screenshot(p,'squad');}
   else if(champ===1)await screenshot(p,'emberknight');
   await p.close();
@@ -142,6 +154,11 @@ async function online(){
   await waitState(b,()=>window.qaState().phase==='live'&&window.qaState().me);
   check(true,'two real browser clients enter an authoritative online match');
   await command(b,{rank:0});await b.waitForFunction(()=>window.qaState().me.rk[0]===1);
+  if(selected==='v3'){
+    const before=await state(b);await motion(b,.35,.47);await key(b,'KeyA');await pause(350);
+    const after=await state(b);
+    check(Math.hypot(after.me.x-before.me.x,after.me.z-before.me.z)>.1,'v3 guest A attack-move reaches the authoritative server');
+  }
   await screenshot(b,'online-guest');
   await a.close();await pause(250);
   check((await state(b)).connected,'guest remains connected after host leaves');
@@ -235,6 +252,10 @@ async function main(){
   const catalog=JSON.parse(fs.readFileSync(path.join(web,'games.json')));
   const proto=catalog.games.find(game=>game.id==='league')?.versions.find(version=>version.v===selected&&version.path===`${entry}/`)?.proto;
   assert(Number.isInteger(proto)&&proto>0,'Selected League version is missing from the local catalog');
+  report.proto=proto;
+  report.wasmSha256=hash(fs.readFileSync(path.join(web,'pkg/league_bg.wasm')));
+  const gameBinary=path.resolve(process.env.LEAGUE_SERVER_EXE||path.join(root,'target/release/league-server.exe'));
+  report.serverBinary=gameBinary;report.serverSha256=hash(fs.readFileSync(gameBinary));
   safePath(web,`${entry}/index.html`);
   server=http.createServer((req,res)=>{
     let url;try{url=new URL(req.url,origin);}catch{res.writeHead(400).end();return;}
@@ -252,7 +273,7 @@ async function main(){
     res.end(fs.readFileSync(f));
   });
   await new Promise((r,j)=>{server.once('error',j);server.listen(8093,'127.0.0.1',r);});
-  game=spawn(path.join(root,'target/release/league-server.exe'),['127.0.0.1:7793','--name','league-qa'],{windowsHide:true});
+  game=spawn(gameBinary,['127.0.0.1:7793','--name','league-qa'],{windowsHide:true});
   game.on('error',e=>report.errors.push(e.message));game.stderr.on('data',()=>{});game.stdout.on('data',()=>{});
   await pause(600);assert(game.exitCode===null,'Private server failed to start');
   browser=await chromium.launch({channel:'msedge',headless:true,args:['--disable-webgpu','--disable-features=WebGPU','--enable-webgl','--ignore-gpu-blocklist']});
