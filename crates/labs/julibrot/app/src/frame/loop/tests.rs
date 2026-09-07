@@ -1916,7 +1916,6 @@ fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
     assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1947,7 +1946,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1972,7 +1970,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::PictureFast);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
@@ -1997,7 +1994,6 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
     assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
     assert_eq!(
         viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,

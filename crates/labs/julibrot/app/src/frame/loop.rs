@@ -886,7 +886,6 @@ mod browser {
                 viewer,
             )?;
             let accepted_reference = viewer
-                .owner()
                 .reference_centre()
                 .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let mut kernels = kernels;
@@ -910,7 +909,7 @@ mod browser {
                 config,
             )
             .map_err(present_error)?;
-            let mut main = viewer.owner().snapshot().main;
+            let mut main = viewer.published_main();
             main.delivered_iter_cap = super::published_iteration_cap(&plan);
             let map = viewer.screen_map([grid.width, grid.height])?;
             let plane = viewer.checked_plane();
