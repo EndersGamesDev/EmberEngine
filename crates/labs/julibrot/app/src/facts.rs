@@ -510,7 +510,7 @@ fn newest_measurement(
     warp: Option<SubmissionMeasurement>,
 ) -> Option<SubmissionMeasurement> {
     match (scene, warp) {
-        (Some(scene), Some(warp)) => Some(if scene.wall_ms >= warp.wall_ms {
+        (Some(scene), Some(warp)) => Some(if scene.completion_sequence >= warp.completion_sequence {
             scene
         } else {
             warp

@@ -61,7 +61,12 @@ impl FenceLedger {
         self.id
     }
 
-    pub fn observe(&mut self, now_ms: f64, callback: Option<Result<(), ()>>) -> FenceDecision {
+    pub fn observe(
+        &mut self,
+        now_ms: f64,
+        callback: Option<Result<(), ()>>,
+        completion_sequence: u64,
+    ) -> FenceDecision {
         let wall_ms = nonnegative_elapsed(self.started_ms, now_ms);
         if self.first_poll_ms.is_none() {
             self.first_poll_ms = Some(now_ms);
@@ -79,6 +84,7 @@ impl FenceLedger {
             return FenceDecision::Complete(SubmissionMeasurement {
                 kind: self.kind,
                 id: self.id,
+                completion_sequence,
                 source_scene_id: self.source_scene_id,
                 sample_class: self.sample_class,
                 precision_mode: self.precision_mode,

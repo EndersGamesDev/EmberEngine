@@ -41,11 +41,13 @@ impl Presenter {
     }
 
     fn poll_scene(&mut self, now_ms: f64) -> Option<PresentEvent> {
+        let completion_sequence = self.next_completion_sequence;
         let pending = self.scene_fence.as_mut()?;
-        let decision = observe_fence(pending, now_ms);
+        let decision = observe_fence(pending, now_ms, completion_sequence);
         match decision {
             FenceDecision::Pending => None,
             FenceDecision::Complete(measurement) => {
+                self.next_completion_sequence = completion_sequence.saturating_add(1);
                 let readback_result = take_glitch_readback_result(pending);
                 let census =
                     census_if_ready(readback_result, || mapped_census(&self.gpu.glitch_readback));
@@ -119,11 +121,13 @@ impl Presenter {
     }
 
     fn poll_warp(&mut self, now_ms: f64) -> Option<PresentEvent> {
+        let completion_sequence = self.next_completion_sequence;
         let pending = self.warp_fence.as_mut()?;
-        let decision = observe_fence(pending, now_ms);
+        let decision = observe_fence(pending, now_ms, completion_sequence);
         match decision {
             FenceDecision::Pending => None,
             FenceDecision::Complete(measurement) => {
+                self.next_completion_sequence = completion_sequence.saturating_add(1);
                 self.gpu.warp_fence.unmap();
                 self.warp_fence = None;
                 self.warp_samples.completed();
