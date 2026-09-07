@@ -13,7 +13,7 @@ use ember_julibrot_math::{
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
     HotState, MIN_MAX_ITER, MainState, NavigationConfig, NavigationSubmission, OrbitReason,
-    ViewerOwner, ViewerState,
+    OrbitDisposition, OrbitHandle, OrbitResponseView, ViewerOwner, ViewerState,
 };
 
 use crate::{AppError, SavedView};
@@ -553,6 +553,105 @@ impl ViewerController {
     #[must_use]
     pub const fn owner_mut(&mut self) -> &mut ViewerOwner {
         &mut self.owner
+    }
+
+    /// Applies the centre-width policy and returns the generation already naming the view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a worker failure for missing navigation state, an invalid budget, or bignum work.
+    pub fn configure_navigation_precision(
+        &mut self,
+        mode: PrecisionMode,
+        edit_budget: u32,
+    ) -> Result<u32, AppError> {
+        self.owner
+            .configure_precision_mode(mode, edit_budget)
+            .map_err(owner_error)?;
+        Ok(self.owner.latest_requested_generation())
+    }
+
+    /// Reports whether one coalesced navigation submission is waiting.
+    #[must_use]
+    pub fn navigation_pending_depth(&self) -> u32 {
+        self.owner.navigation_pending_depth()
+    }
+
+    /// Returns the generation assigned to the latest requested navigation state.
+    #[must_use]
+    pub const fn latest_requested_generation(&self) -> u32 {
+        self.owner.latest_requested_generation()
+    }
+
+    /// Returns the desired authoritative centre without consuming a pending submission.
+    #[must_use]
+    pub fn navigation_centre(&self) -> Option<BigCentre> {
+        self.owner.navigation_centre()
+    }
+
+    /// Returns the plane basis used by authoritative navigation.
+    #[must_use]
+    pub fn navigation_plane(&self) -> Option<Plane> {
+        self.owner.navigation_plane()
+    }
+
+    /// Returns the centre against which the current HOT displacement is expressed.
+    #[must_use]
+    pub fn reference_centre(&self) -> Option<BigCentre> {
+        self.owner.reference_centre()
+    }
+
+    /// Returns the last published MAIN record without advancing its epoch.
+    #[must_use]
+    pub const fn published_main(&self) -> MainState {
+        self.owner.snapshot().main
+    }
+
+    #[cfg(test)]
+    const fn published_hot(&self) -> HotState {
+        self.owner.snapshot().hot
+    }
+
+    /// Accepts the latest navigation selection without installing a reference orbit.
+    #[must_use]
+    pub fn accept_navigation_without_orbit(
+        &mut self,
+        generation: u32,
+        centre_revision: u32,
+    ) -> bool {
+        self.owner
+            .accept_navigation_without_orbit(generation, centre_revision)
+    }
+
+    /// Accepts the latest navigation selection under a compatible reference lease.
+    #[must_use]
+    pub fn accept_navigation_with_orbit(
+        &mut self,
+        generation: u32,
+        centre_revision: u32,
+        orbit_id: u32,
+        orbit_length: u32,
+        precision_bits: u32,
+    ) -> bool {
+        self.owner.accept_navigation_with_orbit(
+            generation,
+            centre_revision,
+            orbit_id,
+            orbit_length,
+            precision_bits,
+        )
+    }
+
+    /// Stages one latest-generation orbit and its accepted-reference displacement.
+    #[must_use]
+    pub fn accept_reference_orbit(
+        &mut self,
+        response: &OrbitResponseView,
+        handle: OrbitHandle,
+        reference_shift_px: [f64; 2],
+    ) -> OrbitDisposition {
+        self.owner
+            .accept_orbit(response, handle, reference_shift_px)
     }
 
     /// Stages a pointer-anchored zoom immediately and returns the edit for bignum navigation.
@@ -1750,7 +1849,6 @@ mod tests {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
         let before_zoom = viewer.requested().zoom_log2;
         let before_centre = viewer
-            .owner()
             .navigation_centre()
             .expect("configured navigation")
             .to_f64_mirror();
@@ -1763,7 +1861,6 @@ mod tests {
         assert!(viewer.crosshair_plane_px().is_some());
         viewer.set_crosshair([120.0, -45.0]).expect("finite click");
         let after_centre = viewer
-            .owner()
             .navigation_centre()
             .expect("configured navigation")
             .to_f64_mirror();
@@ -1807,13 +1904,11 @@ mod tests {
         let mut plain = ViewerController::new(960).expect("canonical viewer");
         plain.clear_crosshair();
         let before = plain
-            .owner()
             .navigation_centre()
             .expect("configured navigation")
             .to_f64_mirror();
         plain.zoom_about_crosshair(4.0).expect("finite zoom");
         let after = plain
-            .owner()
             .navigation_centre()
             .expect("configured navigation")
             .to_f64_mirror();
@@ -1857,11 +1952,9 @@ mod tests {
             .set_object_angles(object)
             .expect("valid in-plane object turn");
         let centre = viewer
-            .owner()
             .navigation_centre()
             .expect("navigation has a centre");
         let plane = viewer
-            .owner()
             .navigation_plane()
             .expect("navigation has a plane");
         let scale = pixel_scale(viewer.requested().zoom_log2, 960).expect("valid scale");
@@ -1879,10 +1972,7 @@ mod tests {
         assert!((projected[0] - 60.0).abs() <= 1.0e-3);
         assert!((projected[1] + 20.0).abs() <= 1.0e-3);
         assert_eq!(viewer.crosshair_centre_f64(), Some(point));
-        assert_eq!(
-            viewer.owner().navigation_plane(),
-            Some(viewer.checked_plane())
-        );
+        assert_eq!(viewer.navigation_plane(), Some(viewer.checked_plane()));
         assert!(viewer.take_reference_submission().is_none());
 
         let mut tilted = viewer.requested().object_angles;
@@ -2476,7 +2566,6 @@ mod tests {
         assert_eq!(
             viewer.navigation_centre_f64(),
             viewer
-                .owner()
                 .navigation_centre()
                 .expect("configured centre")
                 .to_f64_mirror()
@@ -2489,16 +2578,12 @@ mod tests {
         assert_eq!(
             viewer.navigation_centre_f64(),
             viewer
-                .owner()
                 .navigation_centre()
                 .expect("configured centre")
                 .to_f64_mirror()
         );
 
-        let accepted = viewer
-            .owner()
-            .navigation_centre()
-            .expect("configured centre");
+        let accepted = viewer.navigation_centre().expect("configured centre");
         let plane = viewer.checked_plane;
         viewer
             .configure_navigation_context(accepted.clone(), accepted, plane)
@@ -2506,7 +2591,6 @@ mod tests {
         assert_eq!(
             viewer.navigation_centre_f64(),
             viewer
-                .owner()
                 .navigation_centre()
                 .expect("configured centre")
                 .to_f64_mirror()
@@ -2630,7 +2714,7 @@ mod tests {
         let mut viewer = ViewerController::new(800).expect("canonical viewer");
         viewer.wheel_zoom(2.0, [24.0, -12.0]).expect("finite wheel");
         viewer.set_palette(PaletteId::Ice).expect("valid palette");
-        let navigation_hot = viewer.owner().snapshot().hot;
+        let navigation_hot = viewer.published_hot();
         viewer
             .set_plane_angles(PlaneAngles {
                 theta_1: 0.2,
