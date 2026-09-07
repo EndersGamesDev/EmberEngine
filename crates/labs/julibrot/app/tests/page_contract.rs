@@ -786,9 +786,10 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
             < arrivals.find("viewer.finish_reference_submission("),
         "the arrival is processed before its submission is finished"
     );
-    assert!(
-        FRAME.contains("super::warp_presents_requested_view(self.presenter.facts().warp_kind)")
-    );
+    assert!(FRAME.contains(
+        "super::warp_presents_requested_view(
+                            frame_loop.presenter.facts().warp_kind,"
+    ));
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
     assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));
@@ -883,21 +884,29 @@ fn surface_images_are_keyed_by_warp_and_never_presented_by_the_state_model() {
 #[test]
 fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     let refresh = FRAME
-        .split_once("pub fn refresh(")
-        .expect("frame refresh exists")
+        .split_once("impl OrderedRefresh for BrowserRefreshTurn")
+        .expect("ordered browser refresh exists")
         .1
-        .split_once("fn outcome(")
-        .expect("refresh boundary exists")
+        .split_once("impl BrowserFrameLoop {")
+        .expect("ordered refresh boundary exists")
         .0;
     let poll = refresh
-        .find("FrameLoop::refresh(&mut self.presenter, now_ms)")
+        .find("FrameLoop::refresh(&mut self.frame_loop.presenter, self.now_ms)")
         .expect("opening poll");
     let drain = refresh.find("viewer.drain_hot").expect("HOT drain");
-    let write = refresh.find("presenter.write_hot").expect("HOT write");
-    let arrivals = refresh.find("service_arrivals").expect("worker arrivals");
-    let kernels = refresh.find("submit_due_scene").expect("kernel scene");
+    let write = refresh
+        .find("frame_loop.presenter.write_hot")
+        .expect("HOT write");
+    let arrivals = refresh
+        .find("frame_loop.service_arrivals")
+        .expect("worker arrivals");
+    let kernels = refresh
+        .find("frame_loop.submit_due_scene")
+        .expect("kernel scene");
     let surface = refresh.find("acquire_for_warp").expect("surface acquire");
-    let warp = refresh.find("presenter.frame").expect("warp submit");
+    let warp = refresh
+        .find("frame_loop.presenter.frame")
+        .expect("warp submit");
     assert!(poll < drain && drain < write && write < arrivals);
     assert!(arrivals < kernels && kernels < surface && surface < warp);
     assert_eq!(refresh.matches("FrameLoop::refresh").count(), 1);

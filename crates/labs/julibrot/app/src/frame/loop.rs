@@ -533,65 +533,44 @@ fn optional_backdrop_plan(
     }
 }
 
-/// Compile-time protocol for the externally visible stages of one browser refresh.
-///
-/// The browser implementation and its native oracle both consume this token. It carries no
-/// runtime state: its only job is to make the production ordering unavailable in a different
-/// sequence without also changing the baseline driver that records each stage's concrete facts.
 #[cfg(any(target_arch = "wasm32", test))]
-#[derive(Clone, Copy, Debug, Default)]
-struct BrowserRefreshOrder<const STEP: u8>;
+struct CaptureDrained;
 
 #[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<0> {
-    const fn begin() -> Self {
-        Self
-    }
+struct CaptureStaged;
 
-    const fn capture_drained(self) -> BrowserRefreshOrder<1> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
+#[cfg(any(target_arch = "wasm32", test))]
+struct FencesObserved;
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct HotWritten;
+
+#[cfg(any(target_arch = "wasm32", test))]
+struct SceneConsidered;
+
+/// Effects performed by one ordered refresh turn.
+#[cfg(any(target_arch = "wasm32", test))]
+trait OrderedRefresh {
+    type Error;
+    type Output;
+
+    fn drain_capture(&mut self) -> Result<(), Self::Error>;
+    fn stage_capture(&mut self, stage: CaptureDrained) -> Result<(), Self::Error>;
+    fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error>;
+    fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error>;
+    fn consider_scene(&mut self, stage: HotWritten) -> Result<(), Self::Error>;
+    fn consider_warp(&mut self, stage: SceneConsidered) -> Result<Self::Output, Self::Error>;
 }
 
+/// Performs the externally visible stages of one refresh in their required order.
 #[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<1> {
-    const fn capture_staged(self) -> BrowserRefreshOrder<2> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<2> {
-    const fn fences_observed(self) -> BrowserRefreshOrder<3> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<3> {
-    const fn hot_written(self) -> BrowserRefreshOrder<4> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<4> {
-    const fn scene_considered(self) -> BrowserRefreshOrder<5> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-impl BrowserRefreshOrder<5> {
-    const fn warp_considered(self) -> BrowserRefreshOrder<6> {
-        let Self = self;
-        BrowserRefreshOrder
-    }
+fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Output, R::Error> {
+    refresh.drain_capture()?;
+    refresh.stage_capture(CaptureDrained)?;
+    refresh.observe_fences(CaptureStaged)?;
+    refresh.write_hot(FencesObserved)?;
+    refresh.consider_scene(HotWritten)?;
+    refresh.consider_warp(SceneConsidered)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -616,8 +595,9 @@ mod browser {
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
     use super::{
-        BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FrameLoop,
-        PAGE_MAX_ITERATION_CAP, RefusalClass, SceneMode, backdrop_extent, coverage_pre_empts,
+        BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
+        FrameLoop, HotWritten, OrderedRefresh, PAGE_MAX_ITERATION_CAP, RefusalClass,
+        SceneConsidered, SceneMode, backdrop_extent, coverage_pre_empts, execute_ordered_refresh,
         horizon_facts, main_for_grid, published_iteration_cap, sampling_zoom_log2,
         stamp_scene_level, stamped_screen_map,
     };
@@ -817,6 +797,374 @@ mod browser {
         edge_on: bool,
         facts_pose: (PoseMap, [u32; 2]),
         frame_capture: FrameCapture,
+    }
+
+    struct BrowserRefreshTurn<'a> {
+        frame_loop: &'a mut BrowserFrameLoop,
+        runtime: &'a mut BrowserRuntime,
+        viewer: &'a mut ViewerController,
+        requests: &'a mut RunRequests,
+        now_ms: f64,
+        observed: ObservedEvents,
+        hot: Option<crate::HotFrame>,
+        slot: Option<HotSlot>,
+        relief_redraw: bool,
+        defer_scene_for_redraw: bool,
+        scene_id: Option<u64>,
+    }
+
+    impl OrderedRefresh for BrowserRefreshTurn<'_> {
+        type Error = AppError;
+        type Output = RefreshOutcome;
+
+        fn drain_capture(&mut self) -> Result<(), Self::Error> {
+            if !self.now_ms.is_finite() {
+                return Err(AppError::Deadline {
+                    operation: "refresh clock",
+                    deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
+                });
+            }
+            if let Err(error) = self.runtime.check_device("Julibrot refresh") {
+                let _dropped = self.runtime.drop_pending_surface();
+                return Err(error);
+            }
+            self.frame_loop.refresh_id = self
+                .frame_loop
+                .refresh_id
+                .checked_add(1)
+                .ok_or(AppError::GenerationExhausted)?;
+            self.frame_loop.drain_frame_capture(self.now_ms);
+            Ok(())
+        }
+
+        fn stage_capture(&mut self, stage: CaptureDrained) -> Result<(), Self::Error> {
+            let CaptureDrained = stage;
+            self.frame_loop.stage_frame_capture();
+            Ok(())
+        }
+
+        fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error> {
+            let CaptureStaged = stage;
+            let events = FrameLoop::refresh(&mut self.frame_loop.presenter, self.now_ms);
+            self.observed = self
+                .frame_loop
+                .handle_events(self.runtime, self.viewer, events)?;
+            Ok(())
+        }
+
+        fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error> {
+            let FencesObserved = stage;
+            let frame_loop = &mut *self.frame_loop;
+            let viewer = &mut *self.viewer;
+            let requests = &mut *self.requests;
+
+            frame_loop.synchronize_precision_mode(viewer)?;
+            frame_loop.requested_plane = viewer.checked_plane();
+            if requests.frame {
+                let restart_scene = frame_loop.scene_ready(viewer.requested().zoom_log2)
+                    && frame_loop.presented_view_is_stale(viewer);
+                frame_loop
+                    .loop_state
+                    .accept_request(frame_loop.main.generation_applied, restart_scene);
+                requests.frame = false;
+            }
+            if requests.scene_update {
+                requests.scene_update = false;
+                frame_loop
+                    .loop_state
+                    .request_scene_update(frame_loop.main.generation_applied);
+                frame_loop.prepared_level = None;
+            }
+            if let Some(error) = frame_loop.owner_endpoint.take_error() {
+                frame_loop.abandon_submitted_references(viewer);
+                return Err(worker_error(error));
+            }
+
+            if KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Shallow {
+                frame_loop.abandon_submitted_references(viewer);
+            }
+            let backdrop_active = frame_loop.prepare_backdrop(viewer)?;
+            let final_validation = if backdrop_active {
+                false
+            } else {
+                frame_loop.prepare_due_level()
+            };
+            let extent = frame_loop.prepared_extent();
+            let mut hot = viewer.drain_hot(extent)?;
+            frame_loop.owner_epoch = hot.state.epoch;
+            frame_loop.main = hot.state.main;
+            frame_loop.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
+            frame_loop.observe_scene_selection(viewer);
+            let completed_requested_final = frame_loop.presenter.has_completed_requested_final(
+                &hot.pose,
+                published_iteration_cap(&frame_loop.plan),
+                viewer.requested().precision_mode,
+            );
+            if super::stale_view_needs_a_new_scene(
+                frame_loop.loop_state.scene_mode(),
+                frame_loop.loop_state.refinement_pending(),
+                frame_loop.presented_view_is_stale(viewer),
+                completed_requested_final,
+            ) {
+                frame_loop
+                    .loop_state
+                    .request_missing_final(frame_loop.main.generation_applied);
+                frame_loop.prepared_level = None;
+                frame_loop.prepare_due_level();
+                // Re-selecting the level changes the prepared extent, and the drained pose is
+                // expressed in that extent's pixels: the screen map and centre_from_reference_px
+                // both rescale with it, so the first drain no longer describes this scene.
+                hot = viewer.drain_hot(frame_loop.prepared_extent())?;
+                frame_loop.owner_epoch = hot.state.epoch;
+                frame_loop.main = hot.state.main;
+                frame_loop.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
+            }
+            frame_loop.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
+            let mut slot = HotSlot::for_refresh(
+                frame_loop.refresh_id,
+                frame_loop.hot_stride,
+                hot.state.epoch,
+            )
+            .map_err(|error| AppError::Present(error.to_string()))?;
+            let measure_validation =
+                requests.measurement && frame_loop.presenter.facts().completed_scene_id.is_some();
+            let validation = if measure_validation {
+                requests.measurement = false;
+                WarpValidation::Measure
+            } else if final_validation {
+                WarpValidation::Final
+            } else {
+                WarpValidation::Ordinary
+            };
+            // Scheduler idleness cannot disarm a covering retained picture. The presenter proves
+            // geometric coverage before it turns this authorization into a hold.
+            let hold_refused_warp = frame_loop.presenter.facts().completed_scene_id.is_some();
+            frame_loop.presenter.write_hot(
+                slot,
+                PresentHot {
+                    epoch: hot.state.epoch,
+                    state: ember_julibrot_worker::HotState {
+                        centre_from_reference_px: hot.pose.centre_from_reference_px,
+                        ..hot.state.hot
+                    },
+                    object: hot.pose.object,
+                    plane: hot.plane,
+                    view: viewer.requested().view,
+                    map: hot.pose.map,
+                },
+                validation,
+                hold_refused_warp,
+            );
+
+            let main_arrived = frame_loop.service_arrivals(viewer, self.now_ms)?;
+            let shallow_accepted = frame_loop.submit_pending_reference(viewer, hot.plane)?;
+            if main_arrived || shallow_accepted {
+                frame_loop.prepare_backdrop(viewer)?;
+                frame_loop.prepare_due_level();
+                hot = viewer.drain_hot(frame_loop.prepared_extent())?;
+                frame_loop.owner_epoch = hot.state.epoch;
+                frame_loop.main = hot.state.main;
+                frame_loop.observe_scene_selection(viewer);
+                frame_loop.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
+                slot = HotSlot::for_refresh(
+                    frame_loop.refresh_id,
+                    frame_loop.hot_stride,
+                    hot.state.epoch,
+                )
+                .map_err(|error| AppError::Present(error.to_string()))?;
+                frame_loop.presenter.write_hot(
+                    slot,
+                    PresentHot {
+                        epoch: hot.state.epoch,
+                        state: ember_julibrot_worker::HotState {
+                            centre_from_reference_px: hot.pose.centre_from_reference_px,
+                            ..hot.state.hot
+                        },
+                        object: hot.pose.object,
+                        plane: hot.plane,
+                        view: viewer.requested().view,
+                        map: hot.pose.map,
+                    },
+                    WarpValidation::Ordinary,
+                    hold_refused_warp,
+                );
+            }
+            if frame_loop.active_backdrop_map.is_none()
+                && frame_loop
+                    .loop_state
+                    .skip_drafts_for_accepted_warp(frame_loop.presenter.accepted_warp_source(slot))
+            {
+                frame_loop.prepared_level = None;
+                let final_validation = frame_loop.prepare_due_level();
+                debug_assert!(final_validation);
+                hot = viewer.drain_hot(frame_loop.prepared_extent())?;
+                frame_loop.owner_epoch = hot.state.epoch;
+                frame_loop.main = hot.state.main;
+                frame_loop.observe_scene_selection(viewer);
+                frame_loop.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
+                slot = HotSlot::for_refresh(
+                    frame_loop.refresh_id,
+                    frame_loop.hot_stride,
+                    hot.state.epoch,
+                )
+                .map_err(|error| AppError::Present(error.to_string()))?;
+                frame_loop.presenter.write_hot(
+                    slot,
+                    PresentHot {
+                        epoch: hot.state.epoch,
+                        state: ember_julibrot_worker::HotState {
+                            centre_from_reference_px: hot.pose.centre_from_reference_px,
+                            ..hot.state.hot
+                        },
+                        object: hot.pose.object,
+                        plane: hot.plane,
+                        view: viewer.requested().view,
+                        map: hot.pose.map,
+                    },
+                    WarpValidation::Final,
+                    hold_refused_warp,
+                );
+            }
+            self.hot = Some(hot);
+            self.slot = Some(slot);
+            Ok(())
+        }
+
+        fn consider_scene(&mut self, stage: HotWritten) -> Result<(), Self::Error> {
+            let HotWritten = stage;
+            let (Some(hot), Some(slot)) = (self.hot, self.slot) else {
+                return Err(AppError::Present(
+                    "ordered refresh lost its HOT stage".to_string(),
+                ));
+            };
+            let frame_loop = &mut *self.frame_loop;
+            let viewer = &*self.viewer;
+            let relief_redraw = frame_loop.presenter.accepted_relief_redraw(slot);
+            let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(
+                relief_redraw,
+                frame_loop.presented_view_is_stale(viewer),
+            );
+            let scene_id = if defer_scene_for_redraw && frame_loop.active_backdrop_map.is_none() {
+                None
+            } else {
+                frame_loop.submit_due_scene(
+                    viewer,
+                    hot.pose.object,
+                    hot.plane,
+                    hot.pose.map,
+                    hot.pose.centre_from_reference_px,
+                    slot,
+                    hot.state.epoch,
+                    self.now_ms,
+                )?
+            };
+            self.relief_redraw = relief_redraw;
+            self.defer_scene_for_redraw = defer_scene_for_redraw;
+            self.scene_id = scene_id;
+            Ok(())
+        }
+
+        fn consider_warp(&mut self, stage: SceneConsidered) -> Result<Self::Output, Self::Error> {
+            let SceneConsidered = stage;
+            let Some(slot) = self.slot else {
+                return Err(AppError::Present(
+                    "ordered refresh lost its HOT slot".to_string(),
+                ));
+            };
+            let frame_loop = &mut *self.frame_loop;
+            let runtime = &mut *self.runtime;
+            let viewer = &*self.viewer;
+            let scene_id = self.scene_id;
+
+            let mut warp_id = None;
+            // A redraw that defers the replacement scene is itself required progress. Stale-view
+            // recovery may restart refinement without arming a one-shot frame request, so making
+            // the redraw depend only on scheduler demand would leave both submissions waiting.
+            let warp_requested = super::warp_submission_due(
+                frame_loop
+                    .loop_state
+                    .warp_requested(frame_loop.frame_policy.policy()),
+                self.defer_scene_for_redraw,
+            );
+            let redraw_scene_in_flight = super::hold_redraw_during_scene(
+                self.relief_redraw,
+                frame_loop.presenter.facts().in_flight_scene_id.is_some(),
+            );
+            if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
+                match runtime.acquire_for_warp(frame_loop.loop_state.generation()) {
+                    Ok(frame) => {
+                        let view = frame
+                            .texture
+                            .create_view(&wgpu::TextureViewDescriptor::default());
+                        let receipt = match frame_loop.presenter.frame(
+                            FrameState {
+                                surface_view: &view,
+                                canvas_width: runtime.facts().width,
+                                canvas_height: runtime.facts().height,
+                                refresh_id: frame_loop.refresh_id,
+                                now_ms: self.now_ms,
+                            },
+                            slot,
+                        ) {
+                            Ok(receipt) => receipt,
+                            Err(error) => {
+                                let released = runtime
+                                    .release_unsubmitted_warp(frame_loop.loop_state.generation());
+                                debug_assert!(released, "failed warp must release surface token");
+                                return Err(present_error(error));
+                            }
+                        };
+                        warp_id = Some(receipt.warp_id);
+                        frame_loop.last_warp_source = receipt.source_scene_id;
+                        if super::schedule_exposure_fill(
+                            &mut frame_loop.loop_state,
+                            receipt.exposed,
+                            frame_loop.main.generation_applied,
+                        ) {
+                            frame_loop.prepared_level = None;
+                        }
+                        if let Err(error) = runtime.retain_for_warp(
+                            receipt.warp_id,
+                            frame_loop.loop_state.generation(),
+                            receipt.precision_mode,
+                            frame,
+                        ) {
+                            let _released = runtime
+                                .release_unsubmitted_warp(frame_loop.loop_state.generation());
+                            return Err(error);
+                        }
+                        if super::warp_presents_requested_view(
+                            frame_loop.presenter.facts().warp_kind,
+                        ) {
+                            frame_loop.pending_warp_view =
+                                Some((receipt.warp_id, frame_loop.view_stamp(viewer)));
+                        }
+                        frame_loop.loop_state.warp_submitted();
+                    }
+                    Err(AppError::SurfaceSkipped { .. }) => {
+                        return Ok(frame_loop.outcome(
+                            None,
+                            scene_id,
+                            false,
+                            RefreshStatus::SkippedTimeout,
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let status = if self.observed.presented {
+                RefreshStatus::Presented
+            } else if warp_id.is_some() || scene_id.is_some() {
+                RefreshStatus::Submitted
+            } else if self.observed.cancelled {
+                RefreshStatus::Cancelled
+            } else if self.observed.refused {
+                RefreshStatus::Refused
+            } else {
+                RefreshStatus::Waiting
+            };
+            Ok(frame_loop.outcome(warp_id, scene_id, self.observed.presented, status))
+        }
     }
 
     impl BrowserFrameLoop {
@@ -1161,290 +1509,20 @@ mod browser {
             requests: &mut RunRequests,
             now_ms: f64,
         ) -> Result<RefreshOutcome, AppError> {
-            let refresh_order = BrowserRefreshOrder::begin();
-            if !now_ms.is_finite() {
-                return Err(AppError::Deadline {
-                    operation: "refresh clock",
-                    deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
-                });
-            }
-            if let Err(error) = runtime.check_device("Julibrot refresh") {
-                let _dropped = runtime.drop_pending_surface();
-                return Err(error);
-            }
-            self.refresh_id = self
-                .refresh_id
-                .checked_add(1)
-                .ok_or(AppError::GenerationExhausted)?;
-            self.drain_frame_capture(now_ms);
-            let refresh_order = refresh_order.capture_drained();
-            self.stage_frame_capture();
-            let refresh_order = refresh_order.capture_staged();
-            let events = FrameLoop::refresh(&mut self.presenter, now_ms);
-            let observed = self.handle_events(runtime, viewer, events)?;
-            let refresh_order = refresh_order.fences_observed();
-            self.synchronize_precision_mode(viewer)?;
-            self.requested_plane = viewer.checked_plane();
-            let presented = observed.presented;
-            if requests.frame {
-                let restart_scene = self.scene_ready(viewer.requested().zoom_log2)
-                    && self.presented_view_is_stale(viewer);
-                self.loop_state
-                    .accept_request(self.main.generation_applied, restart_scene);
-                requests.frame = false;
-            }
-            if requests.scene_update {
-                requests.scene_update = false;
-                self.loop_state
-                    .request_scene_update(self.main.generation_applied);
-                self.prepared_level = None;
-            }
-            if let Some(error) = self.owner_endpoint.take_error() {
-                self.abandon_submitted_references(viewer);
-                return Err(worker_error(error));
-            }
-
-            if KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Shallow {
-                self.abandon_submitted_references(viewer);
-            }
-            let backdrop_active = self.prepare_backdrop(viewer)?;
-            let final_validation = if backdrop_active {
-                false
-            } else {
-                self.prepare_due_level()
-            };
-            let extent = self.prepared_extent();
-            let mut hot = viewer.drain_hot(extent)?;
-            self.owner_epoch = hot.state.epoch;
-            self.main = hot.state.main;
-            self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
-            self.observe_scene_selection(viewer);
-            let completed_requested_final = self.presenter.has_completed_requested_final(
-                &hot.pose,
-                published_iteration_cap(&self.plan),
-                viewer.requested().precision_mode,
-            );
-            if super::stale_view_needs_a_new_scene(
-                self.loop_state.scene_mode(),
-                self.loop_state.refinement_pending(),
-                self.presented_view_is_stale(viewer),
-                completed_requested_final,
-            ) {
-                self.loop_state
-                    .request_missing_final(self.main.generation_applied);
-                self.prepared_level = None;
-                self.prepare_due_level();
-                // Re-selecting the level changes the prepared extent, and the drained pose is
-                // expressed in that extent's pixels: the screen map and centre_from_reference_px
-                // both rescale with it, so the first drain no longer describes this scene.
-                hot = viewer.drain_hot(self.prepared_extent())?;
-                self.owner_epoch = hot.state.epoch;
-                self.main = hot.state.main;
-                self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
-            }
-            self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
-            let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
-                .map_err(|error| AppError::Present(error.to_string()))?;
-            let measure_validation =
-                requests.measurement && self.presenter.facts().completed_scene_id.is_some();
-            let validation = if measure_validation {
-                requests.measurement = false;
-                WarpValidation::Measure
-            } else if final_validation {
-                WarpValidation::Final
-            } else {
-                WarpValidation::Ordinary
-            };
-            // Scheduler idleness cannot disarm a covering retained picture. The presenter proves
-            // geometric coverage before it turns this authorization into a hold.
-            let hold_refused_warp = self.presenter.facts().completed_scene_id.is_some();
-            self.presenter.write_hot(
-                slot,
-                PresentHot {
-                    epoch: hot.state.epoch,
-                    state: ember_julibrot_worker::HotState {
-                        centre_from_reference_px: hot.pose.centre_from_reference_px,
-                        ..hot.state.hot
-                    },
-                    object: hot.pose.object,
-                    plane: hot.plane,
-                    view: viewer.requested().view,
-                    map: hot.pose.map,
-                },
-                validation,
-                hold_refused_warp,
-            );
-
-            let main_arrived = self.service_arrivals(viewer, now_ms)?;
-            let shallow_accepted = self.submit_pending_reference(viewer, hot.plane)?;
-            if main_arrived || shallow_accepted {
-                self.prepare_backdrop(viewer)?;
-                self.prepare_due_level();
-                hot = viewer.drain_hot(self.prepared_extent())?;
-                self.owner_epoch = hot.state.epoch;
-                self.main = hot.state.main;
-                self.observe_scene_selection(viewer);
-                self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
-                slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
-                    .map_err(|error| AppError::Present(error.to_string()))?;
-                self.presenter.write_hot(
-                    slot,
-                    PresentHot {
-                        epoch: hot.state.epoch,
-                        state: ember_julibrot_worker::HotState {
-                            centre_from_reference_px: hot.pose.centre_from_reference_px,
-                            ..hot.state.hot
-                        },
-                        object: hot.pose.object,
-                        plane: hot.plane,
-                        view: viewer.requested().view,
-                        map: hot.pose.map,
-                    },
-                    WarpValidation::Ordinary,
-                    hold_refused_warp,
-                );
-            }
-            if self.active_backdrop_map.is_none()
-                && self
-                    .loop_state
-                    .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
-            {
-                self.prepared_level = None;
-                let final_validation = self.prepare_due_level();
-                debug_assert!(final_validation);
-                hot = viewer.drain_hot(self.prepared_extent())?;
-                self.owner_epoch = hot.state.epoch;
-                self.main = hot.state.main;
-                self.observe_scene_selection(viewer);
-                self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
-                slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
-                    .map_err(|error| AppError::Present(error.to_string()))?;
-                self.presenter.write_hot(
-                    slot,
-                    PresentHot {
-                        epoch: hot.state.epoch,
-                        state: ember_julibrot_worker::HotState {
-                            centre_from_reference_px: hot.pose.centre_from_reference_px,
-                            ..hot.state.hot
-                        },
-                        object: hot.pose.object,
-                        plane: hot.plane,
-                        view: viewer.requested().view,
-                        map: hot.pose.map,
-                    },
-                    WarpValidation::Final,
-                    hold_refused_warp,
-                );
-            }
-            let refresh_order = refresh_order.hot_written();
-            let relief_redraw = self.presenter.accepted_relief_redraw(slot);
-            let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(
-                relief_redraw,
-                self.presented_view_is_stale(viewer),
-            );
-            let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {
-                None
-            } else {
-                self.submit_due_scene(
-                    viewer,
-                    hot.pose.object,
-                    hot.plane,
-                    hot.pose.map,
-                    hot.pose.centre_from_reference_px,
-                    slot,
-                    hot.state.epoch,
-                    now_ms,
-                )?
-            };
-            let refresh_order = refresh_order.scene_considered();
-
-            let mut warp_id = None;
-            // A redraw that defers the replacement scene is itself required progress. Stale-view
-            // recovery may restart refinement without arming a one-shot frame request, so making
-            // the redraw depend only on scheduler demand would leave both submissions waiting.
-            let warp_requested = super::warp_submission_due(
-                self.loop_state.warp_requested(self.frame_policy.policy()),
-                defer_scene_for_redraw,
-            );
-            let redraw_scene_in_flight = super::hold_redraw_during_scene(
-                relief_redraw,
-                self.presenter.facts().in_flight_scene_id.is_some(),
-            );
-            let _refresh_order = refresh_order.warp_considered();
-            if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
-                match runtime.acquire_for_warp(self.loop_state.generation()) {
-                    Ok(frame) => {
-                        let view = frame
-                            .texture
-                            .create_view(&wgpu::TextureViewDescriptor::default());
-                        let receipt = match self.presenter.frame(
-                            FrameState {
-                                surface_view: &view,
-                                canvas_width: runtime.facts().width,
-                                canvas_height: runtime.facts().height,
-                                refresh_id: self.refresh_id,
-                                now_ms,
-                            },
-                            slot,
-                        ) {
-                            Ok(receipt) => receipt,
-                            Err(error) => {
-                                let released =
-                                    runtime.release_unsubmitted_warp(self.loop_state.generation());
-                                debug_assert!(released, "failed warp must release surface token");
-                                return Err(present_error(error));
-                            }
-                        };
-                        warp_id = Some(receipt.warp_id);
-                        self.last_warp_source = receipt.source_scene_id;
-                        if super::schedule_exposure_fill(
-                            &mut self.loop_state,
-                            receipt.exposed,
-                            self.main.generation_applied,
-                        ) {
-                            self.prepared_level = None;
-                        }
-                        if let Err(error) = runtime.retain_for_warp(
-                            receipt.warp_id,
-                            self.loop_state.generation(),
-                            receipt.precision_mode,
-                            frame,
-                        ) {
-                            let _released =
-                                runtime.release_unsubmitted_warp(self.loop_state.generation());
-                            return Err(error);
-                        }
-                        if super::warp_presents_requested_view(self.presenter.facts().warp_kind) {
-                            self.pending_warp_view =
-                                Some((receipt.warp_id, self.view_stamp(viewer)));
-                        }
-                        self.loop_state.warp_submitted();
-                    }
-                    Err(AppError::SurfaceSkipped { .. }) => {
-                        return Ok(self.outcome(
-                            None,
-                            scene_id,
-                            false,
-                            RefreshStatus::SkippedTimeout,
-                        ));
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            let status = if presented {
-                RefreshStatus::Presented
-            } else if warp_id.is_some() || scene_id.is_some() {
-                RefreshStatus::Submitted
-            } else if observed.cancelled {
-                RefreshStatus::Cancelled
-            } else if observed.refused {
-                RefreshStatus::Refused
-            } else {
-                RefreshStatus::Waiting
-            };
-            Ok(self.outcome(warp_id, scene_id, presented, status))
+            execute_ordered_refresh(BrowserRefreshTurn {
+                frame_loop: self,
+                runtime,
+                viewer,
+                requests,
+                now_ms,
+                observed: ObservedEvents::default(),
+                hot: None,
+                slot: None,
+                relief_redraw: false,
+                defer_scene_for_redraw: false,
+                scene_id: None,
+            })
         }
-
         fn outcome(
             &self,
             warp_id: Option<u64>,

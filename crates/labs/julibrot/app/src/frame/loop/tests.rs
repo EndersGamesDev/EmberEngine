@@ -18,16 +18,17 @@ use super::super::schedule::{
     STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
 use super::{
-    BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FenceRefusal, FrameLoop, LEVELS,
-    PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity,
-    RefinementLevel, RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
+    BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
+    FencesObserved, FrameLoop, HotWritten, LEVELS, OrderedRefresh, PresenterPoll,
+    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
+    RefinementSchedule, RefusalClass, SceneConsidered, SceneMode, SubmissionKind,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
-    coverage_pre_empts, defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
-    hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
-    perturbation_reference_is_current, published_iteration_cap,
-    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed, warp_submission_due,
+    coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
+    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
+    sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
+    stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
@@ -441,7 +442,7 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
         source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
     );
     assert!(source.contains(
-        "let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
+        "let scene_id = if defer_scene_for_redraw && frame_loop.active_backdrop_map.is_none() {"
     ));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
     assert!(source.contains(
@@ -1188,6 +1189,123 @@ struct TurnOutcome {
     surface_action: TraceSurfaceAction,
 }
 
+struct NativeRefreshTurn<'a> {
+    frame_loop: &'a mut FrameLoop,
+    presenter: &'a mut FakePresenter,
+    clock: FakeClock,
+    policy: FramePolicy,
+    warps: bool,
+    outcome: TurnOutcome,
+}
+
+impl OrderedRefresh for NativeRefreshTurn<'_> {
+    type Error = TurnOutcome;
+    type Output = TurnOutcome;
+
+    fn drain_capture(&mut self) -> Result<(), Self::Error> {
+        FakePresenter::drain_frame_capture();
+        Ok(())
+    }
+
+    fn stage_capture(&mut self, stage: CaptureDrained) -> Result<(), Self::Error> {
+        let CaptureDrained = stage;
+        FakePresenter::stage_frame_capture();
+        Ok(())
+    }
+
+    fn observe_fences(&mut self, stage: CaptureStaged) -> Result<(), Self::Error> {
+        let CaptureStaged = stage;
+        for event in FrameLoop::refresh(self.presenter, self.clock.now_ms) {
+            match event {
+                FakeEvent::Completed(scene) => {
+                    self.frame_loop
+                        .completed(scene.id, scene.generation, scene.level);
+                    self.outcome.completed_scene_id = Some(scene.id);
+                }
+                FakeEvent::WarpCompleted(id) => {
+                    self.outcome.completed_warp_id = Some(id);
+                    self.presenter.presented_warps.push(id);
+                    self.outcome.presented = true;
+                    self.outcome.surface_action = match self.presenter.surface.complete(id) {
+                        SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
+                        SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+                        SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
+                    };
+                }
+                FakeEvent::Deadline(id) => {
+                    self.outcome.refused_scene_id = Some(id);
+                    let refusal = self.frame_loop.refused(
+                        SubmissionKind::Scene,
+                        FenceRefusal::Deadline,
+                        id,
+                        SCENE_POLLS,
+                        SCENE_DEADLINE_MS,
+                    );
+                    self.outcome.refused = refusal.class != RefusalClass::Device;
+                }
+                FakeEvent::Refused {
+                    id,
+                    kind,
+                    reason,
+                    polls,
+                    wall_ms,
+                } => {
+                    match kind {
+                        SubmissionKind::Scene => self.outcome.refused_scene_id = Some(id),
+                        SubmissionKind::Warp => self.outcome.refused_warp_id = Some(id),
+                    }
+                    let refusal = self.frame_loop.refused(kind, reason, id, polls, wall_ms);
+                    self.outcome.refused = refusal.class != RefusalClass::Device;
+                    if matches!(kind, SubmissionKind::Warp) {
+                        self.outcome.surface_action = match self.presenter.surface.refuse(id) {
+                            SurfaceAction::Present(warp_id) => {
+                                TraceSurfaceAction::Present { warp_id }
+                            }
+                            SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+                            SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
+                        };
+                    }
+                }
+            }
+        }
+        if self.frame_loop.stopped().is_some() {
+            return Err(self.outcome);
+        }
+        Ok(())
+    }
+
+    fn write_hot(&mut self, stage: FencesObserved) -> Result<(), Self::Error> {
+        let FencesObserved = stage;
+        let has_retained_scene = self.presenter.retained_scene.is_some();
+        self.presenter.write_hot_for_slot(has_retained_scene, 0);
+        Ok(())
+    }
+
+    fn consider_scene(&mut self, stage: HotWritten) -> Result<(), Self::Error> {
+        let HotWritten = stage;
+        if !self.outcome.refused
+            && let Some(level) = self.frame_loop.due()
+        {
+            let id = self.presenter.submit(self.frame_loop.generation(), level);
+            self.frame_loop.submitted(id, level);
+            self.outcome.scene_id = Some(id);
+        }
+        Ok(())
+    }
+
+    fn consider_warp(&mut self, stage: SceneConsidered) -> Result<Self::Output, Self::Error> {
+        let SceneConsidered = stage;
+        if self.warps
+            && self.presenter.pending_warp.is_none()
+            && self.frame_loop.warp_requested(self.policy)
+        {
+            self.outcome.warp_id = Some(self.presenter.submit_warp(self.frame_loop.generation()));
+            self.frame_loop.warp_submitted();
+        }
+        Ok(self.outcome)
+    }
+}
+
 /// Drives the same typed stage protocol consumed by the production browser refresh.
 fn drive_turn(
     frame_loop: &mut FrameLoop,
@@ -1196,83 +1314,17 @@ fn drive_turn(
     policy: FramePolicy,
     warps: bool,
 ) -> TurnOutcome {
-    let refresh_order = BrowserRefreshOrder::begin();
-    let mut outcome = TurnOutcome::default();
-    FakePresenter::drain_frame_capture();
-    let refresh_order = refresh_order.capture_drained();
-    FakePresenter::stage_frame_capture();
-    let refresh_order = refresh_order.capture_staged();
-    for event in FrameLoop::refresh(presenter, clock.now_ms) {
-        match event {
-            FakeEvent::Completed(scene) => {
-                frame_loop.completed(scene.id, scene.generation, scene.level);
-                outcome.completed_scene_id = Some(scene.id);
-            }
-            FakeEvent::WarpCompleted(id) => {
-                outcome.completed_warp_id = Some(id);
-                presenter.presented_warps.push(id);
-                outcome.presented = true;
-                outcome.surface_action = match presenter.surface.complete(id) {
-                    SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-                    SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
-                    SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
-                };
-            }
-            FakeEvent::Deadline(id) => {
-                outcome.refused_scene_id = Some(id);
-                let refusal = frame_loop.refused(
-                    SubmissionKind::Scene,
-                    FenceRefusal::Deadline,
-                    id,
-                    SCENE_POLLS,
-                    SCENE_DEADLINE_MS,
-                );
-                outcome.refused = refusal.class != RefusalClass::Device;
-            }
-            FakeEvent::Refused {
-                id,
-                kind,
-                reason,
-                polls,
-                wall_ms,
-            } => {
-                match kind {
-                    SubmissionKind::Scene => outcome.refused_scene_id = Some(id),
-                    SubmissionKind::Warp => outcome.refused_warp_id = Some(id),
-                }
-                let refusal = frame_loop.refused(kind, reason, id, polls, wall_ms);
-                outcome.refused = refusal.class != RefusalClass::Device;
-                if matches!(kind, SubmissionKind::Warp) {
-                    outcome.surface_action = match presenter.surface.refuse(id) {
-                        SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
-                        SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
-                        SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
-                    };
-                }
-            }
-        }
+    let turn = NativeRefreshTurn {
+        frame_loop,
+        presenter,
+        clock,
+        policy,
+        warps,
+        outcome: TurnOutcome::default(),
+    };
+    match execute_ordered_refresh(turn) {
+        Ok(outcome) | Err(outcome) => outcome,
     }
-    let refresh_order = refresh_order.fences_observed();
-    if frame_loop.stopped().is_some() {
-        return outcome;
-    }
-    let has_retained_scene = presenter.retained_scene.is_some();
-    presenter.write_hot_for_slot(has_retained_scene, 0);
-    let refresh_order = refresh_order.hot_written();
-    if !outcome.refused
-        && let Some(level) = frame_loop.due()
-    {
-        let id = presenter.submit(frame_loop.generation(), level);
-        frame_loop.submitted(id, level);
-        outcome.scene_id = Some(id);
-    }
-    let refresh_order = refresh_order.scene_considered();
-    if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-        outcome.warp_id = Some(presenter.submit_warp(frame_loop.generation()));
-        frame_loop.warp_submitted();
-    }
-    let _refresh_order = refresh_order.warp_considered();
-    outcome
 }
 
 fn drive_refresh(
