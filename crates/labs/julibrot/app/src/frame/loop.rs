@@ -533,6 +533,61 @@ fn optional_backdrop_plan(
     }
 }
 
+/// Compile-time protocol for the externally visible stages of one browser refresh.
+///
+/// The browser implementation and its native oracle both consume this token. It carries no
+/// runtime state: its only job is to make the production ordering unavailable in a different
+/// sequence without also changing the baseline driver that records each stage's concrete facts.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default)]
+struct BrowserRefreshOrder<const STEP: u8>;
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<0> {
+    const fn begin() -> Self {
+        Self
+    }
+
+    const fn capture_drained(self) -> BrowserRefreshOrder<1> {
+        BrowserRefreshOrder
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<1> {
+    const fn capture_staged(self) -> BrowserRefreshOrder<2> {
+        BrowserRefreshOrder
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<2> {
+    const fn fences_observed(self) -> BrowserRefreshOrder<3> {
+        BrowserRefreshOrder
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<3> {
+    const fn hot_written(self) -> BrowserRefreshOrder<4> {
+        BrowserRefreshOrder
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<4> {
+    const fn scene_considered(self) -> BrowserRefreshOrder<5> {
+        BrowserRefreshOrder
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserRefreshOrder<5> {
+    const fn warp_considered(self) -> BrowserRefreshOrder<6> {
+        BrowserRefreshOrder
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
@@ -555,8 +610,9 @@ mod browser {
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
     use super::{
-        BACKDROP_PRESENT_LEVEL, CoverageTurn, FrameLoop, PAGE_MAX_ITERATION_CAP, RefusalClass,
-        SceneMode, backdrop_extent, coverage_pre_empts, horizon_facts, main_for_grid,
+        BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FrameLoop,
+        PAGE_MAX_ITERATION_CAP, RefusalClass, SceneMode, backdrop_extent, coverage_pre_empts,
+        horizon_facts, main_for_grid,
         published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
@@ -1100,6 +1156,7 @@ mod browser {
             requests: &mut RunRequests,
             now_ms: f64,
         ) -> Result<RefreshOutcome, AppError> {
+            let refresh_order = BrowserRefreshOrder::begin();
             if !now_ms.is_finite() {
                 return Err(AppError::Deadline {
                     operation: "refresh clock",
@@ -1115,9 +1172,12 @@ mod browser {
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
             self.drain_frame_capture(now_ms);
+            let refresh_order = refresh_order.capture_drained();
             self.stage_frame_capture();
+            let refresh_order = refresh_order.capture_staged();
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let observed = self.handle_events(runtime, viewer, events)?;
+            let refresh_order = refresh_order.fences_observed();
             self.synchronize_precision_mode(viewer)?;
             self.requested_plane = viewer.checked_plane();
             let presented = observed.presented;
@@ -1271,6 +1331,7 @@ mod browser {
                     hold_refused_warp,
                 );
             }
+            let refresh_order = refresh_order.hot_written();
             let relief_redraw = self.presenter.accepted_relief_redraw(slot);
             let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(
                 relief_redraw,
@@ -1290,6 +1351,7 @@ mod browser {
                     now_ms,
                 )?
             };
+            let refresh_order = refresh_order.scene_considered();
 
             let mut warp_id = None;
             // A redraw that defers the replacement scene is itself required progress. Stale-view
@@ -1303,6 +1365,7 @@ mod browser {
                 relief_redraw,
                 self.presenter.facts().in_flight_scene_id.is_some(),
             );
+            let _refresh_order = refresh_order.warp_considered();
             if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
                 match runtime.acquire_for_warp(self.loop_state.generation()) {
                     Ok(frame) => {
