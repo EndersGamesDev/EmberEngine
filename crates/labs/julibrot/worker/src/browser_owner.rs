@@ -15,7 +15,7 @@ use wasm_bindgen::prelude::JsValue;
 use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use crate::browser::TransferBuffer;
-use crate::endpoint::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot};
+use crate::endpoint::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnerTransport};
 use crate::{
     ChannelError, ErrorCode, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest,
     OrbitResponseView, Pool, SubmitOutcome, WorkerConfig, WorkerFacts,
@@ -73,7 +73,7 @@ impl BrowserOwnerEndpoint {
                 port,
                 config,
                 crate::WorkerMode::WebWorker,
-                [0, 1],
+                OwnerTransport::Browser,
             )?)),
         };
         let weak = Rc::downgrade(&endpoint.core);
@@ -286,11 +286,11 @@ impl OwnerSlot for TransferBuffer {
         Self::validate_message(self)
     }
 
-    fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError> {
+    fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
         Self::write_header(self, header)
     }
 
-    fn encode_request(&self, request: &OrbitRequest) -> Result<(), ChannelError> {
+    fn encode_request(&mut self, request: &OrbitRequest) -> Result<(), ChannelError> {
         crate::encode_transfer_request(self.array(), request)
     }
 
@@ -299,7 +299,7 @@ impl OwnerSlot for TransferBuffer {
     }
 
     fn write_empty(
-        &self,
+        &mut self,
         kind: MessageKind,
         generation: u32,
         compute_us: u32,

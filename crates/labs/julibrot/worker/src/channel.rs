@@ -3,6 +3,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(not(any(test, target_arch = "wasm32")))]
+#[path = "endpoint.rs"]
+#[allow(
+    dead_code,
+    reason = "the shared owner source includes browser-only control and drain entries"
+)]
+mod native_endpoint;
+
 #[cfg(target_arch = "wasm32")]
 use js_sys::{ArrayBuffer, Uint8Array};
 
@@ -10,13 +18,15 @@ use js_sys::{ArrayBuffer, Uint8Array};
 use crate::browser::TransferBuffer;
 #[cfg(target_arch = "wasm32")]
 use crate::browser_owner::BrowserOwnerEndpoint;
-use crate::slots::{FourSlotModel, SlotId};
+#[cfg(any(test, target_arch = "wasm32"))]
+use crate::endpoint::{OwnerCore, OwnerPort, OwnerSlot, OwnerTransport};
 use crate::wire::{HEADER_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, Pool, WireBuffer};
 use crate::{
-    Admission, ChannelError, CreditAccount, ErrorCode, MessageHeader, MessageKind,
-    OrbitDisposition, OrbitRequest, ProducerShaper, ReferenceOrbitRecord, ReferenceVerification,
-    WorkerFacts,
+    Admission, ChannelError, ErrorCode, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest,
+    ProducerShaper, ReferenceOrbitRecord, ReferenceVerification, WorkerFacts,
 };
+#[cfg(not(any(test, target_arch = "wasm32")))]
+use native_endpoint::{OwnerCore, OwnerPort, OwnerSlot, OwnerTransport};
 
 /// Minimum app-requestable orbit length.
 pub const MIN_MAX_ITER: u32 = 64;
@@ -42,6 +52,140 @@ pub enum WorkerMode {
 pub struct WorkerConfig {
     /// Current maximum orbit length and per-buffer record capacity.
     pub max_iter: u32,
+}
+
+#[derive(Debug)]
+struct SameThreadPort {
+    request_to_producer: BoundedQueue<WireBuffer>,
+    orbit_producer: BoundedQueue<WireBuffer>,
+    pending_producer_credits: BoundedQueue<ReturnedCredit>,
+    shaper: ProducerShaper,
+}
+
+impl SameThreadPort {
+    const fn new() -> Self {
+        Self {
+            request_to_producer: BoundedQueue::new(),
+            orbit_producer: BoundedQueue::new(),
+            pending_producer_credits: BoundedQueue::new(),
+            shaper: ProducerShaper::new(),
+        }
+    }
+
+    fn next_request(&mut self) -> Result<Option<RequestLease>, ChannelError> {
+        let Some(buffer) = self.request_to_producer.pop() else {
+            return Ok(None);
+        };
+        let request = OrbitRequest::decode(&buffer)?;
+        Ok(Some(RequestLease { request, buffer }))
+    }
+
+    fn take_orbit(&mut self) -> Result<WireBuffer, ChannelError> {
+        self.orbit_producer
+            .pop()
+            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))
+    }
+
+    fn admit(&mut self, producer_now_us: u64) -> Result<Admission, ChannelError> {
+        while let Some(returned) = self.pending_producer_credits.pop() {
+            self.shaper
+                .observe_return(producer_now_us, returned.credit_us, returned.compute_us)?;
+        }
+        self.shaper.admit(producer_now_us)
+    }
+}
+
+impl OwnerPort for SameThreadPort {
+    type Slot = WireBuffer;
+
+    fn allocate(&self, pool: Pool, slot: u32, max_iter: u32) -> Result<Self::Slot, ChannelError> {
+        let mut buffer = WireBuffer::new(pool, slot, max_iter)?;
+        let initial = match pool {
+            Pool::Request => MessageKind::RequestReturn,
+            Pool::Orbit => MessageKind::CreditStale,
+        };
+        buffer.write_header(MessageHeader::new(initial, 0))?;
+        Ok(buffer)
+    }
+
+    fn post(&mut self, slot: Self::Slot) -> Result<(), ChannelError> {
+        let (pool, slot_id) = slot.identity()?;
+        let header = slot.header()?;
+        let kind = slot.validate_message()?;
+        match (pool, kind) {
+            (Pool::Request, MessageKind::OrbitRequest) => self
+                .request_to_producer
+                .push(slot)
+                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot_id, 0, 0)),
+            (Pool::Orbit, MessageKind::CreditApplied | MessageKind::CreditStale) => {
+                self.orbit_producer
+                    .push(slot)
+                    .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot_id, 0, 0))?;
+                if header.generation == 0 && header.compute_us == 0 && header.credit_us == 0 {
+                    Ok(())
+                } else {
+                    self.pending_producer_credits
+                        .push(ReturnedCredit {
+                            credit_us: header.credit_us,
+                            compute_us: header.compute_us,
+                        })
+                        .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot_id, 0, 0))
+                }
+            }
+            (_, _) => Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0)),
+        }
+    }
+
+    fn probe_abi(&mut self) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    fn restart_producer(&mut self) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    fn terminate_producer(&mut self) {}
+
+    fn now_us(&self) -> Result<u64, ChannelError> {
+        Ok(0)
+    }
+
+    fn reclaim_orbit_pool(&mut self) -> Option<[Self::Slot; 2]> {
+        if !self.producer_reconciled() {
+            return None;
+        }
+        let first = self.orbit_producer.pop()?;
+        let second = self.orbit_producer.pop()?;
+        self.pending_producer_credits = BoundedQueue::new();
+        self.shaper.reset_for_resize();
+        Some([first, second])
+    }
+
+    fn producer_reconciled(&self) -> bool {
+        self.request_to_producer.is_empty() && self.orbit_producer.len() == 2
+    }
+}
+
+impl OwnerSlot for WireBuffer {
+    fn identity(&self) -> Result<(Pool, u32), ChannelError> {
+        Self::identity(self)
+    }
+
+    fn header(&self) -> Result<MessageHeader, ChannelError> {
+        Self::header(self)
+    }
+
+    fn validate_message(&self) -> Result<MessageKind, ChannelError> {
+        Self::validate_message(self)
+    }
+
+    fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
+        Self::write_header(self, header)
+    }
+
+    fn encode_request(&mut self, request: &OrbitRequest) -> Result<(), ChannelError> {
+        request.encode_into(self)
+    }
 }
 
 /// Immediate disposition of a submitted latest-wins request.
@@ -94,41 +238,18 @@ impl WorkerChannel {
                 },
             ));
         }
-        let mut request_main = BoundedQueue::new();
-        let mut orbit_producer = BoundedQueue::new();
-        for slot in 0..=1 {
-            request_main
-                .push(WireBuffer::new(Pool::Request, slot, config.max_iter)?)
-                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot, 0, 0))?;
-            orbit_producer
-                .push(WireBuffer::new(Pool::Orbit, slot, config.max_iter)?)
-                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot, 0, 0))?;
-        }
-        let core = Rc::new(RefCell::new(ChannelCore {
+        let core = Rc::new(RefCell::new(OwnerCore::new(
+            SameThreadPort::new(),
             config,
             mode,
-            slots: FourSlotModel::new(),
-            request_main,
-            request_to_producer: BoundedQueue::new(),
-            orbit_producer,
-            orbit_to_main: BoundedQueue::new(),
-            pending_request: None,
-            latest_generation: 0,
-            latest_centre_revision: 0,
-            last_error: None,
-            closed: false,
-            credit: CreditAccount::new(),
-            shaper: ProducerShaper::new(),
-            pending_producer_credits: BoundedQueue::new(),
-            facts: WorkerFacts::new(mode),
-            orbit_leases: 0,
-        }));
+            OwnerTransport::SameThread,
+        )?));
         Ok((
             OwnerEndpoint {
-                backend: OwnerBackend::Queue(Rc::clone(&core)),
+                backend: OwnerBackend::Core(Rc::clone(&core)),
             },
             ProducerEndpoint {
-                backend: ProducerBackend::Queue(core),
+                backend: ProducerBackend::Core(core),
             },
         ))
     }
@@ -153,7 +274,7 @@ pub struct OwnerEndpoint {
 
 #[derive(Debug)]
 enum OwnerBackend {
-    Queue(Rc<RefCell<ChannelCore>>),
+    Core(Rc<RefCell<OwnerCore<SameThreadPort>>>),
     #[cfg(target_arch = "wasm32")]
     Browser(BrowserOwnerEndpoint),
 }
@@ -162,108 +283,39 @@ impl OwnerEndpoint {
     /// Accepts every newer edit immediately and keeps at most one untransferred request.
     #[must_use]
     pub fn submit(&self, request: OrbitRequest) -> SubmitOutcome {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.submit(request);
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow_mut().submit(request),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.submit(request),
         }
-        let Some(queue) = self.queue_core() else {
-            return SubmitOutcome::GenerationExhausted;
-        };
-        let mut core = queue.borrow_mut();
-        if core.closed || core.latest_generation == u32::MAX {
-            return SubmitOutcome::GenerationExhausted;
-        }
-        if request.generation() <= core.latest_generation {
-            return SubmitOutcome::Coalesced;
-        }
-        core.latest_generation = request.generation();
-        core.latest_centre_revision = request.centre().revision;
-        let outcome = match core.try_dispatch(request) {
-            Ok(None) => SubmitOutcome::Transferred,
-            Ok(Some(pending)) => {
-                core.pending_request = Some(pending);
-                SubmitOutcome::Coalesced
-            }
-            Err(error) => {
-                core.last_error = Some(error);
-                SubmitOutcome::Coalesced
-            }
-        };
-        core.bump_facts();
-        core.refresh_facts();
-        outcome
     }
 
     /// Returns the next completed response without blocking.
-    ///
-    /// # Panics
-    ///
-    /// Panics only in tests if a validated in-process response loses its immutable slot identity,
-    /// which the buffer pool cannot arrange.
     #[must_use]
     pub fn next_arrival(&self) -> Option<OrbitResponseView> {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.next_arrival();
-        }
-        let queue = self.queue_core()?;
-        let mut core = queue.borrow_mut();
-        let buffer = core.orbit_to_main.pop()?;
-        let (header, cancelled) = match buffer.header() {
-            Ok(header) if header.validate() == Ok(MessageKind::OrbitResponse) => (header, false),
-            Ok(header) if header.validate() == Ok(MessageKind::OrbitCancelled) => (header, true),
-            Ok(header) => {
-                core.last_error = Some(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
-                return None;
-            }
-            Err(error) => {
-                core.last_error = Some(error);
-                return None;
-            }
-        };
-        core.orbit_leases += 1;
-        core.bump_facts();
-        core.refresh_facts();
-        #[cfg(test)]
-        core.trace_transition(
-            crate::endpoint::OwnershipPhase::ResponseLeased,
-            crate::endpoint::OwnershipResult::Leased,
-            id_for(&buffer).expect("the validated response retains its pool identity"),
-            crate::endpoint::LogicalOwner::Main,
-            header.generation,
-        );
-        let centre_revision = if header.generation == core.latest_generation {
-            core.latest_centre_revision
-        } else {
-            0
-        };
-        let verification_facts = if cancelled {
-            OrbitVerificationFacts::deferred()
-        } else {
-            match buffer.orbit_facts() {
-                Ok(facts) => facts,
-                Err(error) => {
-                    core.last_error = Some(error);
-                    return None;
+        match &self.backend {
+            OwnerBackend::Core(core) => {
+                let (buffer, centre_revision, pool_epoch) = {
+                    let mut state = core.borrow_mut();
+                    let (buffer, centre_revision) = state.take_arrival()?;
+                    (buffer, centre_revision, state.pool_epoch())
+                };
+                match OrbitResponseView::from_same_thread_parts(
+                    buffer,
+                    Rc::clone(core),
+                    centre_revision,
+                    pool_epoch,
+                ) {
+                    Ok(response) => Some(response),
+                    Err(error) => {
+                        core.borrow_mut().publish_error(error);
+                        None
+                    }
                 }
             }
-        };
-        Some(OrbitResponseView {
-            generation: header.generation,
-            centre_revision,
-            length: header.length,
-            compute_us: header.compute_us,
-            precision_bits: header.precision_bits,
-            admission_credit_us: header.credit_us,
-            verification_facts,
-            cancelled,
-            records: OrbitLease {
-                backend: OrbitLeaseBackend::Queue {
-                    core: Rc::clone(queue),
-                    buffer: Some(buffer),
-                },
-            },
-        })
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.next_arrival(),
+        }
     }
 
     /// Returns one response buffer with applied or stale credit accounting.
@@ -278,20 +330,13 @@ impl OwnerEndpoint {
         disposition: OrbitDisposition,
         owner_now_us: u64,
     ) -> Result<(), ChannelError> {
-        let belongs = match (&self.backend, &response.records.backend) {
-            (OwnerBackend::Queue(owner), OrbitLeaseBackend::Queue { core: response, .. }) => {
-                Rc::ptr_eq(owner, response)
-            }
+        let belongs = match &self.backend {
+            OwnerBackend::Core(owner) => matches!(
+                &response.records.backend,
+                OrbitLeaseBackend::Core { core: response, .. } if Rc::ptr_eq(owner, response)
+            ),
             #[cfg(target_arch = "wasm32")]
-            (
-                OwnerBackend::Browser(owner),
-                OrbitLeaseBackend::Browser {
-                    endpoint: Some(response),
-                    ..
-                },
-            ) => owner.same_channel(response),
-            #[cfg(target_arch = "wasm32")]
-            _ => false,
+            OwnerBackend::Browser(owner) => response.records.belongs_to_browser(owner),
         };
         if !belongs {
             return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
@@ -302,49 +347,41 @@ impl OwnerEndpoint {
     /// Returns and clears the latest typed internal channel refusal.
     #[must_use]
     pub fn take_error(&self) -> Option<ChannelError> {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.take_error();
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow_mut().take_error(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.take_error(),
         }
-        self.queue_core()?.borrow_mut().last_error.take()
     }
 
     /// Reports the latest submitted generation.
     #[must_use]
     pub fn latest_generation(&self) -> u32 {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.latest_generation();
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow().latest_generation(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.latest_generation(),
         }
-        self.queue_core()
-            .map_or(u32::MAX, |queue| queue.borrow().latest_generation)
     }
 
     /// Reports one coalesced request when producer delivery is saturated.
     #[must_use]
     pub fn pending_request_depth(&self) -> u32 {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.pending_request_depth();
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow_mut().pending_request_depth(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.pending_request_depth(),
         }
-        self.queue_core().map_or(0, |queue| {
-            u32::from(queue.borrow().pending_request.is_some())
-        })
     }
 
     /// Returns one coherent copy of the page-visible channel accounting.
     #[must_use]
     pub fn facts(&self) -> WorkerFacts {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.facts();
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow_mut().facts(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.facts(),
         }
-        let Some(queue) = self.queue_core() else {
-            return WorkerFacts::new(WorkerMode::WebWorker);
-        };
-        let mut core = queue.borrow_mut();
-        core.refresh_facts();
-        core.facts
     }
 
     /// Closes a reconciled logical channel without waiting or spinning.
@@ -356,55 +393,20 @@ impl OwnerEndpoint {
     ///
     /// Returns `BufferStarved` while any request or orbit slot remains away from its startup owner.
     pub fn shutdown(&self) -> Result<(), ChannelError> {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.shutdown();
+        match &self.backend {
+            OwnerBackend::Core(core) => core.borrow_mut().shutdown(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.shutdown(),
         }
-        let Some(queue) = self.queue_core() else {
-            return Err(ChannelError::new(
-                ErrorCode::UnexpectedWork,
-                WorkerMode::WebWorker as u32,
-                0,
-                0,
-            ));
-        };
-        let mut core = queue.borrow_mut();
-        if !core.is_reconciled() {
-            return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
-        }
-        core.closed = true;
-        Ok(())
     }
 
     /// Reports completed same-thread closure or browser four-slot acknowledgement.
     #[must_use]
     pub fn shutdown_acknowledged(&self) -> bool {
-        #[cfg(target_arch = "wasm32")]
-        if let OwnerBackend::Browser(browser) = &self.backend {
-            return browser.shutdown_acknowledged();
-        }
-        self.queue_core().is_some_and(|queue| {
-            let core = queue.borrow();
-            core.closed && core.is_reconciled()
-        })
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "the matching wasm accessor can refuse a browser backend without trapping"
-    )]
-    const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
         match &self.backend {
-            OwnerBackend::Queue(core) => Some(core),
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
-        match &self.backend {
-            OwnerBackend::Queue(core) => Some(core),
-            OwnerBackend::Browser(_) => None,
+            OwnerBackend::Core(core) => core.borrow().shutdown_acknowledged(),
+            #[cfg(target_arch = "wasm32")]
+            OwnerBackend::Browser(browser) => browser.shutdown_acknowledged(),
         }
     }
 }
@@ -417,7 +419,7 @@ pub struct ProducerEndpoint {
 
 #[derive(Debug)]
 enum ProducerBackend {
-    Queue(Rc<RefCell<ChannelCore>>),
+    Core(Rc<RefCell<OwnerCore<SameThreadPort>>>),
     #[cfg(target_arch = "wasm32")]
     Browser(BrowserOwnerEndpoint),
 }
@@ -429,15 +431,11 @@ impl ProducerEndpoint {
     ///
     /// Returns a typed wire refusal if the delivered request was corrupted.
     pub fn next_request(&self) -> Result<Option<RequestLease>, ChannelError> {
-        let Some(queue) = self.queue_core() else {
-            return Err(browser_producer_refusal());
-        };
-        let mut core = queue.borrow_mut();
-        let Some(buffer) = core.request_to_producer.pop() else {
-            return Ok(None);
-        };
-        let request = OrbitRequest::decode(&buffer)?;
-        Ok(Some(RequestLease { request, buffer }))
+        match &self.backend {
+            ProducerBackend::Core(core) => core.borrow_mut().port_mut().next_request(),
+            #[cfg(target_arch = "wasm32")]
+            ProducerBackend::Browser(_) => Err(browser_producer_refusal()),
+        }
     }
 
     /// Returns the request slot and transfers one completed orbit buffer to main.
@@ -479,26 +477,27 @@ impl ProducerEndpoint {
         facts: OrbitVerificationFacts,
     ) -> Result<(), ChannelError> {
         let generation = lease.request.generation();
-        let Some(queue) = self.queue_core() else {
-            return Err(browser_producer_refusal());
-        };
-        let mut core = queue.borrow_mut();
-        core.return_request(lease.buffer, generation, MessageKind::RequestReturn)?;
-        let mut orbit = core
-            .orbit_producer
-            .pop()
-            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
-        orbit.write_orbit(
-            generation,
-            delivered_precision_bits,
-            compute_us,
-            admission_credit_us,
-            records,
-            facts,
-        )?;
-        core.send_to_main(orbit, MessageKind::OrbitResponse)?;
-        core.pump_pending();
-        Ok(())
+        match &self.backend {
+            ProducerBackend::Core(core) => {
+                let mut state = core.borrow_mut();
+                let mut request_buffer = lease.buffer;
+                request_buffer
+                    .write_header(MessageHeader::new(MessageKind::RequestReturn, generation))?;
+                state.receive_slot(request_buffer)?;
+                let mut orbit = state.port_mut().take_orbit()?;
+                orbit.write_orbit(
+                    generation,
+                    delivered_precision_bits,
+                    compute_us,
+                    admission_credit_us,
+                    records,
+                    facts,
+                )?;
+                state.receive_slot(orbit)
+            }
+            #[cfg(target_arch = "wasm32")]
+            ProducerBackend::Browser(_) => Err(browser_producer_refusal()),
+        }
     }
 
     /// Returns the request slot and reports measured stale work without an orbit payload.
@@ -513,22 +512,23 @@ impl ProducerEndpoint {
         admission_credit_us: u32,
     ) -> Result<(), ChannelError> {
         let generation = lease.request.generation();
-        let Some(queue) = self.queue_core() else {
-            return Err(browser_producer_refusal());
-        };
-        let mut core = queue.borrow_mut();
-        core.return_request(lease.buffer, generation, MessageKind::RequestReturn)?;
-        let mut orbit = core
-            .orbit_producer
-            .pop()
-            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
-        let mut header = MessageHeader::new(MessageKind::OrbitCancelled, generation);
-        header.compute_us = compute_us;
-        header.credit_us = admission_credit_us;
-        orbit.write_header(header)?;
-        core.send_to_main(orbit, MessageKind::OrbitCancelled)?;
-        core.pump_pending();
-        Ok(())
+        match &self.backend {
+            ProducerBackend::Core(core) => {
+                let mut state = core.borrow_mut();
+                let mut request_buffer = lease.buffer;
+                request_buffer
+                    .write_header(MessageHeader::new(MessageKind::RequestReturn, generation))?;
+                state.receive_slot(request_buffer)?;
+                let mut orbit = state.port_mut().take_orbit()?;
+                let mut header = MessageHeader::new(MessageKind::OrbitCancelled, generation);
+                header.compute_us = compute_us;
+                header.credit_us = admission_credit_us;
+                orbit.write_header(header)?;
+                state.receive_slot(orbit)
+            }
+            #[cfg(target_arch = "wasm32")]
+            ProducerBackend::Browser(_) => Err(browser_producer_refusal()),
+        }
     }
 
     /// Applies producer-side admission shaping at a monotonic producer timestamp.
@@ -537,55 +537,35 @@ impl ProducerEndpoint {
     ///
     /// Returns `TimingOverflow` if producer time moves backwards.
     pub fn admit(&self, producer_now_us: u64) -> Result<Admission, ChannelError> {
-        let Some(queue) = self.queue_core() else {
-            return Err(browser_producer_refusal());
-        };
-        let mut core = queue.borrow_mut();
-        while let Some(returned) = core.pending_producer_credits.pop() {
-            core.shaper
-                .observe_return(producer_now_us, returned.credit_us, returned.compute_us)?;
+        match &self.backend {
+            ProducerBackend::Core(core) => core.borrow_mut().port_mut().admit(producer_now_us),
+            #[cfg(target_arch = "wasm32")]
+            ProducerBackend::Browser(_) => Err(browser_producer_refusal()),
         }
-        core.shaper.admit(producer_now_us)
     }
 
     /// Returns the shared page-visible accounting from the producer endpoint.
     #[must_use]
     pub fn facts(&self) -> WorkerFacts {
-        #[cfg(target_arch = "wasm32")]
-        if let ProducerBackend::Browser(browser) = &self.backend {
-            return browser.facts();
+        match &self.backend {
+            ProducerBackend::Core(core) => core.borrow_mut().facts(),
+            #[cfg(target_arch = "wasm32")]
+            ProducerBackend::Browser(browser) => browser.facts(),
         }
-        let Some(queue) = self.queue_core() else {
-            return WorkerFacts::new(WorkerMode::WebWorker);
-        };
-        let mut core = queue.borrow_mut();
-        core.refresh_facts();
-        core.facts
     }
 
     /// Reports this endpoint's configured lowering.
     #[must_use]
     pub fn mode(&self) -> WorkerMode {
         match &self.backend {
-            ProducerBackend::Queue(core) => core.borrow().mode,
+            ProducerBackend::Core(core) => core.borrow().mode(),
             #[cfg(target_arch = "wasm32")]
             ProducerBackend::Browser(_) => WorkerMode::WebWorker,
         }
     }
-
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "wasm32 has a browser backend with no in-process producer core"
-    )]
-    const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
-        match &self.backend {
-            ProducerBackend::Queue(core) => Some(core),
-            #[cfg(target_arch = "wasm32")]
-            ProducerBackend::Browser(_) => None,
-        }
-    }
 }
 
+#[cfg(target_arch = "wasm32")]
 const fn browser_producer_refusal() -> ChannelError {
     ChannelError::new(ErrorCode::BadKind, WorkerMode::WebWorker as u32, 0, 0)
 }
@@ -621,6 +601,49 @@ pub struct OrbitResponseView {
 }
 
 impl OrbitResponseView {
+    fn from_same_thread_parts(
+        buffer: WireBuffer,
+        core: Rc<RefCell<OwnerCore<SameThreadPort>>>,
+        centre_revision: u32,
+        pool_epoch: u32,
+    ) -> Result<Self, ChannelError> {
+        let kind = buffer.validate_message()?;
+        if !matches!(
+            kind,
+            MessageKind::OrbitResponse | MessageKind::OrbitCancelled
+        ) {
+            return Err(ChannelError::new(
+                ErrorCode::BadKind,
+                buffer.header()?.kind,
+                0,
+                0,
+            ));
+        }
+        let header = buffer.header()?;
+        let verification_facts = if kind == MessageKind::OrbitResponse {
+            buffer.orbit_facts()?
+        } else {
+            OrbitVerificationFacts::deferred()
+        };
+        Ok(Self {
+            generation: header.generation,
+            centre_revision,
+            length: header.length,
+            compute_us: header.compute_us,
+            precision_bits: header.precision_bits,
+            admission_credit_us: header.credit_us,
+            verification_facts,
+            cancelled: kind == MessageKind::OrbitCancelled,
+            records: OrbitLease {
+                backend: OrbitLeaseBackend::Core {
+                    core,
+                    buffer: Some(buffer),
+                    pool_epoch,
+                },
+            },
+        })
+    }
+
     /// Adopts and validates one browser-transferred orbit buffer.
     ///
     /// The standalone view has no owner port; use `BrowserOwnerEndpoint::next_arrival` when the
@@ -766,9 +789,10 @@ pub struct OrbitLease {
 }
 
 enum OrbitLeaseBackend {
-    Queue {
-        core: Rc<RefCell<ChannelCore>>,
+    Core {
+        core: Rc<RefCell<OwnerCore<SameThreadPort>>>,
         buffer: Option<WireBuffer>,
+        pool_epoch: u32,
     },
     #[cfg(target_arch = "wasm32")]
     Browser {
@@ -805,7 +829,7 @@ impl OrbitLease {
     /// owned buffer no longer contains a valid orbit response.
     pub fn record_bytes(&self) -> Result<&[u8], ChannelError> {
         let buffer = match &self.backend {
-            OrbitLeaseBackend::Queue { buffer, .. } => buffer,
+            OrbitLeaseBackend::Core { buffer, .. } => buffer,
             #[cfg(target_arch = "wasm32")]
             OrbitLeaseBackend::Browser { .. } => {
                 return Err(ChannelError::new(
@@ -860,8 +884,15 @@ impl OrbitLease {
         disposition: OrbitDisposition,
         owner_now_us: u64,
     ) -> Result<(), ChannelError> {
-        let (core, buffer) = match &mut self.backend {
-            OrbitLeaseBackend::Queue { core, buffer } => (core, buffer),
+        match &mut self.backend {
+            OrbitLeaseBackend::Core {
+                core,
+                buffer,
+                pool_epoch,
+            } => {
+                core.borrow_mut()
+                    .return_lease_slot(buffer, *pool_epoch, disposition, owner_now_us)
+            }
             #[cfg(target_arch = "wasm32")]
             OrbitLeaseBackend::Browser {
                 endpoint,
@@ -871,36 +902,16 @@ impl OrbitLease {
                 let endpoint = endpoint.as_ref().ok_or_else(|| {
                     ChannelError::new(ErrorCode::BufferStarved, Pool::Orbit as u32, 0, 0)
                 })?;
-                return endpoint.return_transfer(buffer, *pool_epoch, disposition, owner_now_us);
+                endpoint.return_transfer(buffer, *pool_epoch, disposition, owner_now_us)
             }
-        };
-        let old = buffer
-            .as_ref()
-            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?
-            .header()?;
-        let kind = match disposition {
-            OrbitDisposition::Applied => MessageKind::CreditApplied,
-            OrbitDisposition::Stale => MessageKind::CreditStale,
-        };
-        let mut core = core.borrow_mut();
-        let charge = core.credit.charge(owner_now_us, old.compute_us)?;
-        let mut buffer = buffer
-            .take()
-            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
-        let mut header = MessageHeader::new(kind, old.generation);
-        header.precision_bits = old.precision_bits;
-        header.compute_us = old.compute_us;
-        header.credit_us = charge.credit_us;
-        buffer.write_header(header)?;
-        core.record_credit(old, disposition, charge.overfeed_us);
-        core.return_to_producer(buffer, kind)
+        }
     }
 }
 
 impl Drop for OrbitLease {
     fn drop(&mut self) {
         let returned = match &self.backend {
-            OrbitLeaseBackend::Queue { buffer, .. } => buffer.is_none(),
+            OrbitLeaseBackend::Core { buffer, .. } => buffer.is_none(),
             #[cfg(target_arch = "wasm32")]
             OrbitLeaseBackend::Browser {
                 endpoint, buffer, ..
@@ -910,282 +921,10 @@ impl Drop for OrbitLease {
     }
 }
 
-#[derive(Debug)]
-struct ChannelCore {
-    config: WorkerConfig,
-    mode: WorkerMode,
-    slots: FourSlotModel,
-    request_main: BoundedQueue<WireBuffer>,
-    request_to_producer: BoundedQueue<WireBuffer>,
-    orbit_producer: BoundedQueue<WireBuffer>,
-    orbit_to_main: BoundedQueue<WireBuffer>,
-    pending_request: Option<OrbitRequest>,
-    latest_generation: u32,
-    latest_centre_revision: u32,
-    last_error: Option<ChannelError>,
-    closed: bool,
-    credit: CreditAccount,
-    shaper: ProducerShaper,
-    pending_producer_credits: BoundedQueue<ReturnedCredit>,
-    facts: WorkerFacts,
-    orbit_leases: u32,
-}
-
-impl ChannelCore {
-    fn try_dispatch(
-        &mut self,
-        request: OrbitRequest,
-    ) -> Result<Option<OrbitRequest>, ChannelError> {
-        if request.max_iter() > self.config.max_iter {
-            if !self.is_reconciled() {
-                return Ok(Some(request));
-            }
-            self.resize(request.max_iter())?;
-        }
-        if self.request_to_producer.is_full() {
-            return Ok(Some(request));
-        }
-        let Some(mut buffer) = self.request_main.pop() else {
-            return Ok(Some(request));
-        };
-        request.encode_into(&mut buffer)?;
-        let id = id_for(&buffer)?;
-        self.slots.begin(id, MessageKind::OrbitRequest)?;
-        self.slots.deliver(id)?;
-        self.request_to_producer
-            .push(buffer)
-            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.bump_facts();
-        self.refresh_facts();
-        #[cfg(test)]
-        self.trace_transition(
-            crate::endpoint::OwnershipPhase::RequestDispatched,
-            crate::endpoint::OwnershipResult::Transferred,
-            id,
-            crate::endpoint::LogicalOwner::Producer,
-            request.generation(),
-        );
-        Ok(None)
-    }
-
-    /// Returns one request slot without dispatching: the caller still owes main its orbit, and a
-    /// coalesced cap change must not replace the orbit pool underneath that write.
-    fn return_request(
-        &mut self,
-        mut buffer: WireBuffer,
-        generation: u32,
-        kind: MessageKind,
-    ) -> Result<(), ChannelError> {
-        buffer.write_header(MessageHeader::new(kind, generation))?;
-        let id = id_for(&buffer)?;
-        self.slots.begin(id, kind)?;
-        self.slots.deliver(id)?;
-        self.request_main
-            .push(buffer)
-            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.bump_facts();
-        self.refresh_facts();
-        #[cfg(test)]
-        self.trace_transition(
-            crate::endpoint::OwnershipPhase::RequestReturned,
-            crate::endpoint::OwnershipResult::Transferred,
-            id,
-            crate::endpoint::LogicalOwner::Main,
-            generation,
-        );
-        Ok(())
-    }
-
-    fn send_to_main(&mut self, buffer: WireBuffer, kind: MessageKind) -> Result<(), ChannelError> {
-        let id = id_for(&buffer)?;
-        #[cfg(test)]
-        let generation = buffer.header()?.generation;
-        self.slots.begin(id, kind)?;
-        self.slots.deliver(id)?;
-        self.orbit_to_main
-            .push(buffer)
-            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.bump_facts();
-        self.refresh_facts();
-        #[cfg(test)]
-        self.trace_transition(
-            crate::endpoint::OwnershipPhase::ResponseQueued,
-            crate::endpoint::OwnershipResult::Transferred,
-            id,
-            crate::endpoint::LogicalOwner::Main,
-            generation,
-        );
-        Ok(())
-    }
-
-    fn return_to_producer(
-        &mut self,
-        buffer: WireBuffer,
-        kind: MessageKind,
-    ) -> Result<(), ChannelError> {
-        let id = id_for(&buffer)?;
-        let header = buffer.header()?;
-        self.slots.begin(id, kind)?;
-        self.slots.deliver(id)?;
-        self.orbit_producer
-            .push(buffer)
-            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.orbit_leases = self.orbit_leases.saturating_sub(1);
-        self.pending_producer_credits
-            .push(ReturnedCredit {
-                credit_us: header.credit_us,
-                compute_us: header.compute_us,
-            })
-            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.pump_pending();
-        self.bump_facts();
-        self.refresh_facts();
-        #[cfg(test)]
-        self.trace_transition(
-            crate::endpoint::OwnershipPhase::CreditReturned,
-            crate::endpoint::OwnershipResult::Credited(match kind {
-                MessageKind::CreditApplied => OrbitDisposition::Applied,
-                MessageKind::CreditStale => OrbitDisposition::Stale,
-                _ => unreachable!("only credit messages return orbit slots"),
-            }),
-            id,
-            crate::endpoint::LogicalOwner::Producer,
-            header.generation,
-        );
-        Ok(())
-    }
-
-    fn pump_pending(&mut self) {
-        let Some(request) = self.pending_request.take() else {
-            return;
-        };
-        match self.try_dispatch(request) {
-            Ok(None) => {}
-            Ok(Some(request)) => self.pending_request = Some(request),
-            Err(error) => self.last_error = Some(error),
-        }
-    }
-
-    fn is_reconciled(&self) -> bool {
-        self.slots.is_reconciled()
-            && self.request_main.len() == 2
-            && self.orbit_producer.len() == 2
-            && self.request_to_producer.is_empty()
-            && self.orbit_to_main.is_empty()
-    }
-
-    fn resize(&mut self, max_iter: u32) -> Result<(), ChannelError> {
-        if max_iter < MIN_MAX_ITER {
-            return Err(ChannelError::new(
-                ErrorCode::BadLength,
-                max_iter,
-                MIN_MAX_ITER,
-                max_iter,
-            ));
-        }
-        let mut request_main = BoundedQueue::new();
-        let mut orbit_producer = BoundedQueue::new();
-        for slot in 0..=1 {
-            request_main
-                .push(WireBuffer::new(Pool::Request, slot, max_iter)?)
-                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot, 0, 0))?;
-            orbit_producer
-                .push(WireBuffer::new(Pool::Orbit, slot, max_iter)?)
-                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, slot, 0, 0))?;
-        }
-        self.request_main = request_main;
-        self.orbit_producer = orbit_producer;
-        self.config.max_iter = max_iter;
-        self.shaper.reset_for_resize();
-        self.pending_producer_credits = BoundedQueue::new();
-        self.facts.allocation_events = self.facts.allocation_events.saturating_add(1);
-        self.bump_facts();
-        self.refresh_facts();
-        Ok(())
-    }
-
-    const fn record_credit(
-        &mut self,
-        header: MessageHeader,
-        disposition: OrbitDisposition,
-        overfeed_us: u32,
-    ) {
-        self.facts.last_ack_generation = header.generation;
-        self.facts.last_compute_us = header.compute_us;
-        self.facts.last_overfeed_us = overfeed_us;
-        self.facts.credit_us = self.credit.credit_us();
-        if header.kind == MessageKind::OrbitCancelled as u32 {
-            self.facts.cancelled_count = self.facts.cancelled_count.saturating_add(1);
-        } else {
-            match disposition {
-                OrbitDisposition::Applied => {
-                    self.facts.last_applied_generation = header.generation;
-                    self.facts.applied_count = self.facts.applied_count.saturating_add(1);
-                }
-                OrbitDisposition::Stale => {
-                    self.facts.stale_count = self.facts.stale_count.saturating_add(1);
-                }
-            }
-        }
-        self.bump_facts();
-    }
-
-    fn refresh_facts(&mut self) {
-        self.facts.orbit_queue_depth = u32::try_from(self.orbit_to_main.len()).unwrap_or(u32::MAX);
-        self.facts.request_buffers_owned_main =
-            u32::try_from(self.request_main.len()).unwrap_or(u32::MAX);
-        self.facts.orbit_buffers_owned_main = u32::try_from(self.orbit_to_main.len())
-            .unwrap_or(u32::MAX)
-            .saturating_add(self.orbit_leases);
-    }
-
-    const fn bump_facts(&mut self) {
-        if let Some(epoch) = self.facts.epoch.checked_add(1) {
-            self.facts.epoch = epoch;
-        } else {
-            self.last_error = Some(ChannelError::new(ErrorCode::EpochExhausted, 0, 0, 0));
-        }
-    }
-
-    #[cfg(test)]
-    fn trace_transition(
-        &self,
-        phase: crate::endpoint::OwnershipPhase,
-        result: crate::endpoint::OwnershipResult,
-        id: SlotId,
-        logical_owner: crate::endpoint::LogicalOwner,
-        generation: u32,
-    ) {
-        crate::endpoint::record_ownership_event(crate::endpoint::OwnershipEvent {
-            phase,
-            result,
-            pool: id.pool,
-            slot: id.slot,
-            logical_owner,
-            generation,
-            pool_epoch: self.facts.allocation_events.saturating_sub(1),
-            fact_epoch: self.facts.epoch,
-            credit_us: self.credit.credit_us(),
-            orbit_queue_depth: u32::try_from(self.orbit_to_main.len()).unwrap_or(u32::MAX),
-            shutdown_queue_depth: self.facts.shutdown_queue_depth,
-            allocation_events: self.facts.allocation_events,
-            request_buffers_owned_main: u32::try_from(self.request_main.len()).unwrap_or(u32::MAX),
-            orbit_buffers_owned_main: u32::try_from(self.orbit_to_main.len())
-                .unwrap_or(u32::MAX)
-                .saturating_add(self.orbit_leases),
-        });
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct ReturnedCredit {
     credit_us: u32,
     compute_us: u32,
-}
-
-fn id_for(buffer: &WireBuffer) -> Result<SlotId, ChannelError> {
-    let (pool, slot) = buffer.identity()?;
-    SlotId::new(pool, slot)
 }
 
 #[derive(Debug)]
@@ -1222,10 +961,6 @@ impl<T> BoundedQueue<T> {
 
     fn is_empty(&self) -> bool {
         self.entries.iter().all(Option::is_none)
-    }
-
-    fn is_full(&self) -> bool {
-        self.entries.iter().all(Option::is_some)
     }
 }
 
@@ -1268,6 +1003,20 @@ mod tests {
             OrbitReason::INITIAL,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn same_thread_transfers_a_request_below_the_browser_minimum() {
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
+
+        assert_eq!(
+            owner.submit(request_with_cap(1, 1, 16)),
+            SubmitOutcome::Transferred
+        );
+        let receipt = producer.next_request().unwrap().unwrap();
+        assert_eq!(receipt.request().generation(), 1);
+        assert_eq!(receipt.request().max_iter(), 16);
     }
 
     #[test]
@@ -1718,11 +1467,12 @@ mod tests {
     }
 
     #[test]
-    fn browser_binding_uses_the_shared_owner_core() {
+    fn both_transports_bind_the_shared_owner_core() {
         let channel_source = include_str!("channel.rs");
         let browser_source = include_str!("browser_owner.rs");
         let endpoint_source = include_str!("endpoint.rs");
         assert!(channel_source.contains("BrowserOwnerEndpoint::new(config)?"));
+        assert!(channel_source.contains("OwnerCore<SameThreadPort>"));
         assert!(channel_source.contains("endpoint.return_transfer"));
         assert!(browser_source.contains("OrbitResponseView::from_browser_transfer"));
         assert!(browser_source.contains("impl OwnerPort for BrowserPort"));
