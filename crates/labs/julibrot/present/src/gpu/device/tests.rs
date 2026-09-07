@@ -446,6 +446,93 @@ fn capture_native_palette(
     (receipt, readback)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RgbaRun {
+    length: u32,
+    rgba: [u8; 4],
+}
+
+#[derive(Debug, PartialEq)]
+struct NativeWholeGridCapture {
+    route: FrameReadbackRoute,
+    extent: [u32; 2],
+    copied_scene_id: Option<u64>,
+    completed_scene_id: Option<u64>,
+    receipt: FrameReceipt,
+    stable_facts: PresentFacts,
+    rgba_fnv1a64: String,
+    rgba_runs: Vec<RgbaRun>,
+}
+
+fn clear_submission_wall(measurement: &mut Option<SubmissionMeasurement>) {
+    if let Some(measurement) = measurement {
+        measurement.wall_ms = 0.0;
+        measurement.fence_wait_ms = 0.0;
+    }
+}
+
+fn stable_present_facts(facts: &PresentFacts) -> PresentFacts {
+    let mut stable = facts.clone();
+    clear_submission_wall(&mut stable.last_scene);
+    clear_submission_wall(&mut stable.last_warp);
+    stable
+}
+
+fn rgba_fnv1a64(rgba: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    rgba.iter().fold(OFFSET, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
+    })
+}
+
+fn rgba_runs(rgba: &[u8]) -> Vec<RgbaRun> {
+    let (pixels, remainder) = rgba.as_chunks::<4>();
+    assert_eq!(remainder, &[], "the whole-grid copy is packed RGBA");
+    let mut runs: Vec<RgbaRun> = Vec::new();
+    for &rgba in pixels {
+        if let Some(run) = runs.last_mut()
+            && run.rgba == rgba
+        {
+            run.length += 1;
+        } else {
+            runs.push(RgbaRun { length: 1, rgba });
+        }
+    }
+    runs
+}
+
+fn native_whole_grid_capture() -> NativeWholeGridCapture {
+    let (mut presenter, device) = native_palette_presenter();
+    let (receipt, readback) =
+        capture_native_palette(&mut presenter, &device, PaletteId::Classic, 101);
+    let stable_facts = stable_present_facts(presenter.facts_ref());
+    let extent = [readback.width, readback.height];
+    let copied_scene_id = readback.scene_id;
+    let expected_bytes = usize::try_from(readback.width * readback.height * 4)
+        .expect("the native whole-grid byte count fits this process");
+    assert_eq!(readback.rgba.len(), expected_bytes);
+    assert_eq!(copied_scene_id, stable_facts.completed_scene_id);
+    NativeWholeGridCapture {
+        route: readback.route,
+        extent,
+        copied_scene_id,
+        completed_scene_id: stable_facts.completed_scene_id,
+        receipt,
+        rgba_fnv1a64: format!("{:016x}", rgba_fnv1a64(&readback.rgba)),
+        rgba_runs: rgba_runs(&readback.rgba),
+        stable_facts,
+    }
+}
+
+#[test]
+#[ignore = "prints the server-rendered fixture for review and verbatim commit"]
+fn print_native_whole_grid_capture_fixture() {
+    let capture = native_whole_grid_capture();
+    let fixture = format!("{capture:#?}");
+    println!("const NATIVE_WHOLE_GRID_FIXTURE: &str = {fixture:?};");
+}
+
 #[test]
 fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
     let (mut presenter, device) = native_palette_presenter();
@@ -730,6 +817,25 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     assert_eq!(uniform.reserved_0, [0.0; 4]);
     let load = scene_load_color();
     assert_eq!([load.r, load.g, load.b, load.a], [0.0, 0.0, 4.0, 1.0]);
+}
+
+#[test]
+fn scene_encoder_clear_calls_scene_load_color_at_the_render_pass() {
+    const CALL_SITE: &str = "load: wgpu::LoadOp::Clear(scene_load_color()),";
+    let source = include_str!("scene.rs");
+    let encode_scene = source
+        .split_once("pub(super) fn encode_scene(")
+        .expect("the scene encoder entry exists")
+        .1;
+    let render_pass = encode_scene
+        .split_once("pass.set_bind_group")
+        .expect("the scene render pass ends before its bindings")
+        .0;
+    assert_eq!(
+        render_pass.matches(CALL_SITE).count(),
+        1,
+        "the scene attachment clear names the shared load colour at its call site"
+    );
 }
 
 /// What one pixel of the scene attachment holds when the pass is over.

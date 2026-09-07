@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Julibrot whole-grid oracle</title>
+  <style>
+    body { margin: 0; background: #101014; color: #e8e8ea; font: 13px/1.5 ui-monospace, monospace; }
+    canvas { display: block; }
+    pre { margin: 0; padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <canvas id="julibrot" width="960" height="540"></canvas>
+  <pre id="report">opening the served build</pre>
+  <script type="module">
+    // This test-only page runs one shipped row through the public lab driver and prints the exact
+    // fixture shape used for later whole-grid comparisons. `?generate=1` takes preset zero from
+    // the served wasm; without it, the committed fixture supplies the frozen row and comparison.
+    import { openLab } from "./lab.js?v=1";
+
+    const FIXTURE_URL = "./whole-grid-v1.json";
+    const CANVAS = document.getElementById("julibrot");
+    const REPORT = document.getElementById("report");
+    const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
+    const ENVIRONMENT_FIELDS = ["adapter_name", "backend"];
+    const PAGE_WALL_FIELDS = [
+      "worker_compute_us",
+      "worker_overfeed_us",
+      "scene_wall_ms",
+      "scene_fence_wait_ms",
+      "scene_callback_observation_wall_ms",
+      "scene_fence_callback_observation_wait_ms",
+      "warp_wall_ms",
+      "warp_fence_wait_ms",
+      "warp_callback_observation_wall_ms",
+      "warp_fence_callback_observation_wait_ms",
+      "timer_quantum_ms",
+    ];
+    const WORKER_WALL_FIELDS = ["last_compute_us", "last_overfeed_us"];
+    const LEVEL_WALL_FIELDS = [
+      "dispatch_us",
+      "scene_us",
+      "warp_us",
+      "scene_callback_observation_us",
+      "warp_callback_observation_us",
+      "worker_reference_us",
+      "worker_generation_us",
+      "credit_wait_us",
+      "request_transfer_us",
+      "worker_round_trip_callback_observation_us",
+      "acceptance_us",
+      "reference_upload_us",
+    ];
+
+    function omit(record, fields) {
+      for (const field of fields) delete record[field];
+    }
+
+    // S-05 normalization removes only named wall durations and the two adapter strings. Credit,
+    // polls, ids, epochs, modes, extents, byte counts, queue depths and policy results stay exact.
+    function stableFacts(facts) {
+      const stable = JSON.parse(JSON.stringify(facts));
+      omit(stable, ENVIRONMENT_FIELDS);
+      omit(stable, PAGE_WALL_FIELDS);
+      if (stable.worker_facts) omit(stable.worker_facts, WORKER_WALL_FIELDS);
+      if (Array.isArray(stable.level_timings)) {
+        for (const level of stable.level_timings) omit(level, LEVEL_WALL_FIELDS);
+      }
+      return stable;
+    }
+
+    function fnv1a64(bytes) {
+      let hash = 0xcbf29ce484222325n;
+      const prime = 0x100000001b3n;
+      for (const byte of bytes) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * prime);
+      return hash.toString(16).padStart(16, "0");
+    }
+
+    // Base64 is a lossless compact spelling of the raw bytes, not a canvas re-encoding.
+    function base64(bytes) {
+      const chunkSize = 32 * 1024;
+      let binary = "";
+      for (let start = 0; start < bytes.length; start += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(start, start + chunkSize));
+      }
+      return btoa(binary);
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message);
+    }
+
+    async function loadExpected() {
+      const response = await fetch(FIXTURE_URL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`fixture request returned ${response.status}`);
+      return response.json();
+    }
+
+    async function run() {
+      const expected = GENERATING ? null : await loadExpected();
+      const lab = await openLab({ canvas: CANVAS });
+      try {
+        const row = expected ? expected.row.value : JSON.parse(lab.api.app_preset(0));
+        lab.applyRow(row);
+        await lab.settle({ level: "Final" });
+        const frame = await lab.frame();
+        const facts = lab.facts();
+        assert(frame.scene_id === (facts.completed_scene_id ?? null), "copied and completed scene ids differ");
+        assert(frame.rgba.length === frame.width * frame.height * 4, "RGBA byte count does not match the extent");
+        const actual = {
+          schema: 1,
+          row: { id: "preset:0", value: row },
+          route: frame.route,
+          extent: [frame.width, frame.height],
+          copied_scene_id: frame.scene_id,
+          completed_scene_id: facts.completed_scene_id ?? null,
+          stable_facts: stableFacts(facts),
+          rgba: {
+            byte_length: frame.rgba.length,
+            digest: { algorithm: "fnv1a64", hex: fnv1a64(frame.rgba) },
+            encoding: "base64",
+            data: base64(frame.rgba),
+          },
+        };
+        const text = JSON.stringify(actual, null, 2);
+        if (expected) {
+          assert(JSON.stringify(actual) === JSON.stringify(expected), "served whole-grid fixture differs");
+          REPORT.textContent = `PASS ${FIXTURE_URL}\n\n${text}`;
+        } else {
+          REPORT.textContent = text;
+        }
+      } finally {
+        lab.stop();
+      }
+    }
+
+    run().catch(error => {
+      REPORT.textContent = `failed: ${String(error)}`;
+      console.error(error);
+    });
+  </script>
+</body>
+</html>
