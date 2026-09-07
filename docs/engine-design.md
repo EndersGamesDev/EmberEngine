@@ -64,11 +64,13 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 **Verified — EC-02 and EL-03 establish exclusive ownership by transfer, a returned credit header, and a same-thread lowering of the same abstraction.** The Julibrot worker proves four-buffer ownership, nine message kinds, same-thread trace equivalence, and browser Transferables; it deliberately uses no shared memory (`docs/plans/engine-chain-backlog.md:14`, `docs/julibrot/worker.md:79-95`, `docs/julibrot/worker.md:313-349`).
 
-**Proposed — the general boundary is crossbeam-shaped: one bounded edit channel per AST, many producers in aggregate, and exactly one DAG consumer.** “Crossbeam-shaped” specifies exclusive send/receive ownership and bounded queues; it does not require the browser lowering to implement shared-memory queues or a particular Rust channel crate.
+**Proposed — each AST has one producer endpoint exposing two independently bounded edit lanes, PRE-PROJECTION and MAIN, and both lanes terminate at the single DAG owner thread.** Every buffer header carries `graph_kind`; each refresh drains each lane once and swaps its matching graph. Credit, apply wall, budget remaining, applied epoch, suffix age, and guard stops are returned per `(producer_id, graph_kind)`, so MAIN pressure cannot consume PRE-PROJECTION capacity. PRE-PROJECTION refuses or defers a complete transaction before it can cross the hard guard; MAIN retains an unapplied ordered suffix for the next slice.
 
-**Proposed — an edit buffer header carries producer identity, monotonically increasing producer epoch, buffer identity and generation, payload length, and the last consumer credit returned to that producer.** The payload is a sequence of framed transactions whose internal order is authoritative for that producer.
+**Proposed — the dual-lane boundary is crossbeam-shaped: many producer endpoints in aggregate and exactly one DAG consumer.** “Crossbeam-shaped” specifies exclusive send/receive ownership and independently bounded queues; it does not require the browser lowering to implement shared-memory queues or a particular Rust channel crate.
 
-**Proposed — the DAG thread drains each channel atomically at a named boundary.** Atomic drain means ownership of the currently available complete buffers transfers as one snapshot: edits arriving after the boundary wait for the next drain, and no producer can mutate a transferred buffer. It does not mean every drained transaction must fit in one MAIN budget slice.
+**Proposed — an edit buffer header carries producer identity, graph kind, monotonically increasing producer epoch, buffer identity and generation, payload length, and the last consumer credit returned for that lane.** The payload is a sequence of framed transactions whose internal order is authoritative for that producer and graph kind.
+
+**Proposed — the DAG thread drains each lane atomically at a named boundary.** Atomic drain means ownership of the currently available complete buffers transfers as one snapshot: edits arriving after the boundary wait for the next drain, and no producer can mutate a transferred buffer. It does not mean every drained MAIN transaction must fit in one budget slice.
 
 **Proposed — epochs reject ambiguity rather than repair it.** A duplicate epoch is idempotently reported, a skipped epoch is a typed gap requiring producer recovery, and an older epoch is stale. The consumer never invents a missing edit or reorders epochs to improve throughput.
 
@@ -76,9 +78,9 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 **Derived — there is no mutual-exclusion lock in the transfer proof.** The “lock” is the point where an immutable semantic transaction crosses by exclusive buffer ownership. A native mutex around a shared graph would allow producer code to run inside the graph's critical section and would fail this contract even if it happened not to contend.
 
-**Proposed — one producer cannot block another's drain.** Each bounded channel is polled independently in stable producer order with a per-channel maximum accepted byte count learned from credit; a starved or corrupt channel produces facts and refusal for its producer while other channels remain drainable.
+**Proposed — one producer lane cannot block another's drain.** Each bounded lane is polled independently in stable `(producer_id, graph_kind)` order with a lane-local maximum accepted byte count learned from credit; a starved or corrupt lane produces facts and refusal for its identity while other lanes remain drainable.
 
-**Proposed — boundary measurements record queued buffers, queued bytes, drain wall, oldest epoch age, gaps, stale arrivals, returned buffers, and buffer-starvation events by producer.** Reject the boundary if a producer obeying its credit can exhaust the pool, if drain p95 breaks the PRE-PROJECTION guard, or if any interleaving changes the accepted epoch sequence.
+**Proposed — boundary measurements record queued buffers, queued bytes, drain wall, suffix age, gaps, stale arrivals, returned buffers, guard stops, and buffer-starvation events per `(producer_id, graph_kind)`.** Reject the boundary if a producer lane obeying its credit can exhaust the pool, if PRE-PROJECTION drain p95 breaks its hard guard, if MAIN pressure changes PRE-PROJECTION credit, or if any interleaving changes a lane's accepted epoch sequence.
 
 **Verified — EO-08 requires replay from recorded epoch-stamped edit batches before the general DAGs.** Recording the boundary bytes and delivery order therefore supplies P-01's frame-reproduction input without treating a derived graph as authority (`docs/plans/engine-chain-backlog.md:57`).
 
@@ -140,19 +142,19 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 **Verified — the Julibrot channel already returns consumer facts in transferred buffers and leaves shaping at the producer.** Its consumer reports credit but never delays, rejects, or coalesces edits for the producer; the same-thread and worker endpoints expose one transport-independent state machine (`docs/julibrot/worker.md:123-153`, `docs/julibrot/worker.md:313-349`).
 
-**Proposed — every returned edit buffer carries the next credit plus the consumer's apply wall, budget remaining, highest epoch applied, queue depth, and refusal counters for that producer.** These facts describe observed capacity; they are not promises that the next edit has zero cost.
+**Proposed — every returned edit buffer carries the next credit plus the consumer's apply wall, budget remaining, highest epoch applied, suffix age, guard stops, queue depth, and refusal counters for that `(producer_id, graph_kind)` lane.** These facts describe observed lane capacity; they are not promises that the next edit has zero cost.
 
-**Proposed — credit is denominated in estimated consumer work and capped bytes, not message count alone.** Each edit opcode has a conservative learned cost charged by touched nodes, expected forward fan-out, and payload bytes; the return path updates the estimate from measured application without allowing a single underestimated edit to exceed the absolute safety cap.
+**Proposed — credit is denominated per graph kind in estimated consumer work and capped bytes, not message count alone.** Each edit opcode has a conservative learned cost charged by touched nodes, expected forward fan-out, and payload bytes; the return path updates that lane's estimate from measured application without allowing a single underestimated edit to exceed the absolute safety cap.
 
 **Proposed — producers own coalescing.** Before transfer, each AST may replace superseded value edits, collapse create-update chains, combine adjacent regions, or choose a lower semantic rate when its own rules allow. It must preserve transactions, epochs, destroys, cross-object ordering, and any edit whose omission changes truth.
 
-**Proposed — producers size the next batch to returned credit.** Zero credit means retain and coalesce locally; positive credit bounds the next offered work. A correctness transaction that cannot be split and cannot fit the maximum credit is a typed `EditTooLarge` configuration refusal, not permission to overfeed.
+**Proposed — producers size each lane's next batch to that lane's returned credit.** Zero credit means retain and coalesce locally; positive credit bounds the next work offered to the named graph. A correctness transaction that cannot be split and cannot fit the lane's maximum credit is a typed `EditTooLarge` configuration refusal, not permission to overfeed.
 
 **Proposed — the DAG thread performs no coalescing, throttling, sleeps, token-bucket delay, or clock slicing.** It drains the already-shaped buffers, applies complete transactions in order, and stops MAIN only at the safety deadline guard. PRE-PROJECTION rejects or defers a buffer that cannot fit its hard boundary rather than beginning an unsafe transaction.
 
-**Derived — overfeeding is a producer-side bug.** The consumer reports offered work, admitted work, applied wall, guard stops, epoch age, and returned credit under that producer's identity; the engine does not hide a producer's excess by making every other AST wait.
+**Derived — overfeeding is a producer-side bug attributed to one graph lane.** The consumer reports offered work, admitted work, applied wall, guard stops, suffix age, and returned credit under `(producer_id, graph_kind)`; the engine does not hide one lane's excess by making the other graph or another AST wait.
 
-**Proposed — initial credit is deliberately small and calibration is monotone-safe.** A new producer proves cost with bounded batches, credit grows only from sustained margin, and any guard stop cuts its next credit immediately. Reject the API if compliant producers oscillate without converging, if cost prediction systematically understates fan-out, or if consumer-side queueing becomes the normal backpressure mechanism.
+**Proposed — initial credit is deliberately small and calibration is monotone-safe per lane.** A new producer proves each graph kind's cost with bounded batches, credit grows only from sustained margin in that lane, and any guard stop cuts only its next matching credit immediately. Reject the API if compliant lanes oscillate without converging, if cost prediction systematically understates fan-out, if MAIN pressure shrinks PRE-PROJECTION credit, or if consumer-side queueing becomes the normal backpressure mechanism.
 
 ## 7. Hot descriptors at warp rate
 
@@ -177,6 +179,8 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 ## 8. Descriptors, heaps, and kernels
 
 **Verified — EC-04 through EC-07 are paid stages on the WebGL2 floor.** They establish integer descriptors, fixed heaps, dialect-v2 kernels, handle-fetch geometry, and projection as the last nonlinear per-vertex step (`docs/plans/engine-chain-backlog.md:16-19`).
+
+**Derived — sequencing is evidence-gated: the heap-lattice experiment completes first, and engine architecture advances only the bind-once and indirection mechanisms its measurements paid.** The measured throughput and upload reduction justify testing this design on real workloads; they do not predict a Julibrot or arena win.
 
 **Verified — the heap is bind-once integer indirection, explicitly not bindless.** WebGL2 sees a fixed finite DATA texture array, IMAGE texture array, their fixed samplers, and a descriptor UBO; immutable bind-group identity survives allocation and relocation because updates change contents and records rather than bindings (`docs/gpu-resource-heap.md:5-23`, `docs/gpu-resource-heap.md:59-67`).
 
@@ -236,22 +240,24 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 **Derived — the lab is a miniature and evidence source, not a disguised general engine.** Refactoring should expose the contracts already proved, then add the missing DAG and producer plurality around them; turning Julibrot-specific orbit, grid, or pose meaning into engine vocabulary would invert that dependency.
 
+**Derived — the Julibrot is the arena path's first real 4D object, not a test pattern.** Its boundedness set lives in four real coordinates, escape value supplies the fifth display axis, and the viewpoint applies ambient `SO(5)` rotation before `P5`, `P4`, and the 3D camera (`docs/julibrot/math.md:19-29`, `docs/julibrot/math.md:43-55`). Its tile and reprojection work is therefore the first concrete carrier proof for the later arena without importing the arena design.
+
 ### 11.1 Current stage map
 
 **Verified — the following map uses the five current crates under `crates/labs/julibrot/` and the modules named by their slice contracts and implementation maps.** The shortened `julibrot/...` paths below all have that directory as their prefix (`docs/julibrot-lab.md:29-37`; `docs/julibrot/present.md:566-584`; `docs/julibrot/app.md:565-579`).
 
 |Engine stage|Julibrot crate and current modules|What is already the seam|What is still missing|
 |------------|----------------------------------|------------------------|---------------------|
-|ASTs|`julibrot/app`: `state`, `saved`, `runtime`; `julibrot/math`: `types`, `plane`, `screen`, `navigation`|Viewer controls and saved rows own one world's intent; math supplies pure pose and map records|Multiple producers and a general AST adapter|
+|ASTs|julibrot/app: state, saved; julibrot/math: types, plane, screen, navigation|RequestedControls, SavedView, and ViewerController own the lab's requested intent; math supplies pure pose and map records|Multiple producers and a general AST adapter|
 |Lock boundary|`julibrot/worker`: `channel`, `endpoint`, `browser`, `browser_owner`, `slots`, `wire`|`OwnerEndpoint`/`ProducerEndpoint`, four transferred buffers, epochs, typed messages, returned ownership|One edit schema shared by arbitrary AST adapters|
 |DAGs|`julibrot/worker`: `owner`, `registry`; app's HOT and MAIN drains|`ViewerOwner` is a versioned single-consumer cell with two drains|No `StableGraph`, resource/frame nodes, edge admission, double graph copies, or dirty walk|
 |Descriptors|`julibrot/present`: `uniform`, `tile`, `state`; app's `frame`|`HotSlot`, `HotUniform`, `SceneUniform`, tile keys and headers establish value layouts and identities|A general descriptor table emitted from graph nodes|
 |Heaps|`crates/labs/heap`, consumed by `julibrot/kernels` and `julibrot/present`|One DATA heap class, typed spans, immutable presentation identities|IMAGE use in this lab and multiple engine heap classes|
 |Kernels|`julibrot/kernels`: `dialect`, `shallow`, `perturb`, `refinement`, `tile_job`, `gpu`|Dialect-v2 escape and perturbation jobs land grids through scratch copy|Graph-issued jobs rather than app-issued refinement work|
 |Geo|`julibrot/present`: `mesh`, `lattice`, `gpu/device/scene`|The grid mesh fetches GPU-resident escape records by span|General instance records and mesh/material handles|
-|Projection|`julibrot/math`: `reprojection`, `warp`; `julibrot/present`: `homography`, `planner`|Exact plane maps and the bounded pose-to-pose planner|A general projection node vocabulary|
+|Projection|julibrot/present: shader, planner; julibrot/math: screen|scene_shader executes the ambient camera, double perspective, observer, and clip chain; project_scene_vertex_exact is its CPU oracle|A general projection node vocabulary|
 |Scene|`julibrot/present`: `gpu/device/scene`, `gpu/device/scene/submit`, `gpu/device/ledger`; app's `frame/schedule`|Retained plus pending scene identities, one depth composition, progressive levels|A MAIN DAG determining scene work|
-|Re-projection|`julibrot/present`: `planner`, `gpu/device/warp`, `gpu/device/redraw`; app's `frame/warp`|Measured homography, relief redraw, honest hold/clear, HOT consumption|Tile-resolved source selection and composition|
+|Re-projection|`julibrot/math`: `reprojection`, `warp`; `julibrot/present`: `homography`, `planner`, `gpu/device/warp`, `gpu/device/redraw`; app's `frame/warp`|Measured homography, relief redraw, honest hold/clear, HOT consumption|Tile-resolved source selection and composition|
 |Surface|`julibrot/app`: `surface`, `frame/loop`, `frame/loop/browser/submit`, `measurement`|Single surface token, separate scene/warp fences, post-fence present|Only extraction into the engine surface contract|
 
 **Verified — these module boundaries agree with the five slice contracts.** Math owns pure algebra and oracles, kernels own GPU computation, worker owns scheduling/transfer/credit/publication, present owns scene textures/HOT/planning/submission, and app owns device, surface, schedule, controls, facts, and integration (`docs/julibrot/math.md:5-13`; `docs/julibrot/kernels.md:319-355`; `docs/julibrot/worker.md:313-373`; `docs/julibrot/present.md:417-437`; `docs/julibrot/app.md:147-175`).
@@ -273,11 +279,15 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 |Pose-stamped tile descriptor|Descriptors|It names content identity, source pose, sampled rectangle, quality, heap spans, and validity consumed by later stages|
 |Descriptor map|Descriptors → heaps|It is the integer indirection from logical tile/cell identity to resident value and reconstruction spans|
 |Chart pyramid as an index|DAGs|It finds overlapping candidate descriptors and drives dirtiness/demand; it is not rendered geometry or authority|
+|Protected backdrop|DAGs → descriptors → heaps|MAIN scheduling protects nine active coarse pose-stamped tiles and three rolling replacements from ordinary eviction; they remain depth-bearing rendered data, not a chart image|
 |Demand-ordered scheduler|DAGs → kernels|MAIN graph nodes emit deterministic jobs ordered by holes, visible benefit, cost, and stable ID|
 |Tile reconstruction values|Kernels → geo|Kernels publish paired GPU-resident value and source reconstruction records consumed without readback|
+|Per-tile full-chain reprojection|Re-projection|Each pose-stamped descriptor reconstructs its source-visible sample and evaluates the complete requested target chain and target depth; no whole-frame homography substitutes for it|
 |One-pass depth composition|Scene → re-projection|Candidate tiles reconstruct into the target pose and compete in one target depth domain before the surface is shaded|
 
-**Verified — the tiled study defines these responsibilities rather than a texture cache alone.** It separates coordinate identity, descriptor/heap relationship, compatibility, target selection, one-pass depth composition, demand order, bounded resource policy, and staged migration (`docs/julibrot/tiled-reprojection.md:37-89`, `docs/julibrot/tiled-reprojection.md:101-160`, `docs/julibrot/tiled-reprojection.md:187-249`, `docs/julibrot/tiled-reprojection.md:347-360`).
+**Proposed — tile demand crosses back only as a new producer edit, never as a graph edge or hot-value feedback.** Re-projection emits coverage and benefit telemetry; a cache-policy producer combines it with its own scene-rate inputs and publishes a later epoch-stamped MAIN demand edit. Warp-only hot values are neither sent nor stored in that edit.
+
+**Verified — the tiled study defines these responsibilities rather than a texture cache alone.** It requires per-tile full-chain reprojection and the protected nine-plus-three backdrop, then separates coordinate identity, descriptor/heap relationship, compatibility, target selection, one-pass depth composition, demand order, bounded resource policy, and staged migration (`docs/julibrot/tiled-reprojection.md:7-23`, `docs/julibrot/tiled-reprojection.md:37-89`, `docs/julibrot/tiled-reprojection.md:101-160`, `docs/julibrot/tiled-reprojection.md:187-249`, `docs/julibrot/tiled-reprojection.md:347-360`).
 
 **Derived — chart hierarchy is an index, never a compositor.** A chart-pyramid cell narrows the descriptor candidates for a target region; physical target depth resolves intersections. Allowing the index to choose the visible surface would confuse spatial lookup with geometric truth (`docs/julibrot/tiled-reprojection.md:69-89`, `docs/julibrot/tiled-reprojection.md:205-225`).
 
@@ -285,15 +295,15 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 ### 11.3 Refactoring rounds and named seams
 
-**Proposed — round one is survey.** It records existing ownership, call direction, versions, allocations, regional writes, fences, and facts at each seam below without changing behavior; any undocumented dependency becomes a survey finding before extraction.
+**Proposed — round one is a read-only survey of `app/src/{state.rs,saved.rs,frame.rs,frame/**,runtime.rs,surface.rs}`, `worker/src/{channel.rs,endpoint.rs,browser_owner.rs,owner.rs,registry.rs,wire.rs}`, `kernels/src/{gpu.rs,refinement.rs,tile_job.rs}`, and `present/src/{contract.rs,uniform.rs,tile.rs,planner.rs,gpu/device/**}`.** Its deliverable maps J-01–J-12 to concrete callers, ownership, versions, allocations, writes, and fences. Its oracle is an unchanged worker event trace, app frame-loop trace, present planner result, and captured whole-grid pixels/facts.
 
-**Proposed — round two is debt clearing.** It removes duplicate entry points, hidden global access, mixed ownership, stale naming, and app-to-internal-module reach-through only where the survey shows they obstruct a named seam; every removal preserves existing lab traces and visible behavior.
+**Proposed — round two clears only debt named by the survey in those files: duplicate entry points, hidden global access, mixed ownership, stale naming, and app reach-through.** Each edit names the obstructed J seam. Its oracle is equality of worker events and accepted epochs, unchanged whole-grid descriptor bytes and scene identities, equal planner results, equal fence order, and existing pixel tolerances.
 
-**Proposed — round three exposes the tile-based render and reprojection seams.** It introduces engine-neutral records and ports at the named boundaries, keeps the current whole-grid path as the reference arm, and lands tile constructs in the stages of §11.2 one independently measurable step at a time.
+**Proposed — round three edits `math/src/reprojection.rs`, `kernels/src/{tile_job.rs,gpu.rs}`, `present/src/{tile.rs,planner.rs,gpu/device/**}`, and `app/src/frame/**` to expose engine-neutral tile records and ports while retaining the whole-grid arm.** Its oracle first requires whole-grid parity, then adds descriptor round-trip, source self-reconstruction, full-target projection, depth-order independence, exhaustive-index comparison, protected-backdrop, hole-before-upgrade, palette-immediacy, and seam oracles from `docs/julibrot/tiled-reprojection.md`.
 
 **Proposed — the refactor names the following twelve seams.**
 
-- **J-01 AST edit seam:** `app::{state,saved,runtime}` to an epoch-stamped producer adapter.
+- **J-01 AST edit seam:** `app::{state,saved}` to an epoch-stamped producer adapter.
 - **J-02 ownership-transfer seam:** `worker::{channel,endpoint,browser_owner,wire}` behind the engine edit-buffer channel.
 - **J-03 owner/drain seam:** `worker::{owner,registry}` and HOT/MAIN drains behind the single DAG consumer port.
 - **J-04 graph-compilation seam:** drained Julibrot edits to future resource/frame nodes without importing Julibrot types into the graph core.
@@ -301,9 +311,9 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 - **J-06 scene-descriptor seam:** `PresentMain`, `SceneUniform`, tile keys, pose headers, and descriptor pairs behind regional descriptor emission.
 - **J-07 kernel-job seam:** `kernels::{refinement,tile_job,gpu}` behind graph-issued dialect-v2 jobs and published span generations.
 - **J-08 value/reconstruction seam:** paired semantic escape values and source reconstruction data from kernels into resident tile spans.
-- **J-09 geometry/projection seam:** `present::{mesh,lattice,homography,planner}` consumes handles and explicit pose-stamped records.
+- **J-09 geometry/projection seam:** `present::{mesh,lattice,shader,planner}` consumes handles and explicit pose-stamped records.
 - **J-10 scene-publication seam:** `present::gpu::device::{scene,ledger,poll}` publishes a completed scene identity and source pose.
-- **J-11 reprojection/composition seam:** `planner`, `device::{warp,redraw}`, and tile candidate composition produce measured warp, redraw, hold, or clear.
+- **J-11 reprojection/composition seam:** `math::{reprojection,warp}`, `present::{homography,planner}`, `device::{warp,redraw}`, and tile candidate composition produce measured warp, redraw, hold, or clear.
 - **J-12 surface seam:** `app::{surface,frame::loop,measurement}` owns acquisition through matching completion and presents outside timing.
 
 **Proposed — seam acceptance requires a two-arm oracle.** Before replacing a current call path, the extracted path must produce equal owner events, accepted epochs, descriptor bytes, scene identities, planner outcomes, pixels within the existing oracle, fence order, and facts on the whole-grid fixtures; tile-only behavior adds separate study oracles instead of weakening those pins.
@@ -334,15 +344,15 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 ### 12.1 The unmerged 4D corpus is a target, not this design
 
-**Verified — `.lane/4d-arena/` contains four branch-only documents: `4d-first-engine.md`, `4d-content.md`, `4d-torus-world.md`, and `bound-movement.md`.** They remain an unmerged target corpus; this document does not copy their designs or promote that branch into the current engine contract (`.lane/4d-arena/4d-first-engine.md:1`, `.lane/4d-arena/4d-content.md:1`, `.lane/4d-arena/4d-torus-world.md:1`, `.lane/4d-arena/bound-movement.md:1`).
+**Verified — the unmerged `origin/docs/4d-arena` branch contains four target documents under `docs/`: `4d-first-engine.md`, `4d-content.md`, `4d-torus-world.md`, and `bound-movement.md`.** They remain a branch-only target corpus; this document does not copy their designs or promote that branch into the current engine contract (`origin/docs/4d-arena:docs/4d-first-engine.md:1`, `origin/docs/4d-arena:docs/4d-content.md:1`, `origin/docs/4d-arena:docs/4d-torus-world.md:1`, `origin/docs/4d-arena:docs/bound-movement.md:1`).
 
 **Proposed — the chain must be able to carry three generalization points without knowing their mathematics.** The higher-dimensional world quotient belongs in the authoritative AST, the slice operation becomes an explicit derived stage, and the after-the-fact warp limit becomes the structural split between scene work and safe presentation work.
 
-**Derived — the world quotient belongs in the AST because it defines source identity and placement, not pixels.** The target topology is a finite quotient source queried into local views; treating its manifestations as heap or scene authority would make residency decide what exists (`.lane/4d-arena/4d-torus-world.md:9-41`; `.lane/4d-arena/4d-content.md:19-31`).
+**Derived — the world quotient belongs in the AST because it defines source identity and placement, not pixels.** The target topology is a finite quotient source queried into local views; treating its manifestations as heap or scene authority would make residency decide what exists (`origin/docs/4d-arena:docs/4d-torus-world.md:9-41`; `origin/docs/4d-arena:docs/4d-content.md:19-31`).
 
-**Derived — slicing is a stage between authoritative world data and ordinary geometry.** The target describes the visible slice as a lossy render derivation that carries slice identity into scene state; it may be discarded and rebuilt and never becomes a collider or world source (`.lane/4d-arena/4d-first-engine.md:33-63`, `.lane/4d-arena/4d-first-engine.md:122-156`, `.lane/4d-arena/4d-first-engine.md:176-182`).
+**Derived — slicing is a stage between authoritative world data and ordinary geometry.** The target describes the visible slice as a lossy render derivation that carries slice identity into scene state; it may be discarded and rebuilt and never becomes a collider or world source (`origin/docs/4d-arena:docs/4d-first-engine.md:33-63`, `origin/docs/4d-arena:docs/4d-first-engine.md:122-156`, `origin/docs/4d-arena:docs/4d-first-engine.md:176-182`).
 
-**Derived — the ATW limit defines the hot/cold split.** Motion that preserves the source slice may be corrected in re-projection; phase or hyperplane changes require slice and scene work, so a completed scene may be held but not reinterpreted as another slice (`.lane/4d-arena/4d-first-engine.md:87-118`). Bound movement makes some ordinary locomotion revise phase and inherit that non-warpable path (`.lane/4d-arena/bound-movement.md:104-118`).
+**Derived — the ATW limit defines the hot/cold split.** Motion that preserves the source slice may be corrected in re-projection; phase or hyperplane changes require slice and scene work, so a completed scene may be held but not reinterpreted as another slice (`origin/docs/4d-arena:docs/4d-first-engine.md:87-118`). Bound movement makes some ordinary locomotion revise phase and inherit that non-warpable path (`origin/docs/4d-arena:docs/bound-movement.md:104-118`).
 
 **Proposed — a future slice node consumes one versioned world description, explicit slice definition, and time, then publishes generation-handled geometry plus a slice stamp.** This is only a carrier requirement: algorithms, topology policy, physics, content encoding, quotient search, and movement binding remain outside this document.
 
@@ -358,20 +368,22 @@ Claims use the corpus vocabulary: **Verified** means checked against the cited r
 
 **Proposed — every unimplemented construct in this document remains conditional on the corresponding evidence below.**
 
+**Proposed — gate readiness.** A gate specification is not an executable acceptance result until its row names an existing or newly added harness, a reference arm, captured facts, target identity, and every qualitative threshold. Harness absence is reported as `measurement unavailable`, never as a pass.
+
 |Proposal|Construct and cost paid|Required evidence|Rejection gate|
 |--------|-----------------------|-----------------|--------------|
 |P-01|Forward pure-stage contract; explicit version and time metadata on every boundary|Deterministic replay from equal AST snapshots and time stamps through equal command/table hashes|Any output depends on scheduling, hidden mutable state, or a later-stage value|
 |P-02|Many ASTs with producer-local identities and clocks; adapter and schema complexity|Two or more unlike producers publish concurrently without identity collision or shared cadence|A producer loses sole authority, IDs alias, or engine timing changes producer truth|
-|P-03|Crossbeam-shaped bounded edit channels; buffers, framing, validation, and return traffic|Adversarial ownership and epoch traces plus drain-wall and starvation distributions|Double ownership, gaps repaired silently, compliant starvation, or PRE-PROJECTION drain misses its guard|
+|P-03|Crossbeam-shaped dual-lane producer endpoints; buffers, graph-kind framing, validation, and return traffic|Adversarial ownership and epoch traces plus per-lane drain wall, credit, suffix age, guard, and starvation distributions|Double ownership, gaps repaired silently, compliant starvation, MAIN pressure changes PRE-PROJECTION capacity, or PRE-PROJECTION drain misses its guard|
 |P-04|One combined resource/frame `StableGraph`; node/edge memory and cycle checks|Equal snapshots yield equal stable topology and plans; cycle, stale-generation, and destroy tests refuse cleanly|A cycle publishes, stable identity revives, or graph overhead exceeds the regional work saved|
 |P-05|Dirty-cause propagation and stable topological walk; frontier bookkeeping|Localized edit corpus reports closure, bytes, and wall well below full-graph/table rebuild|Unchanged refresh walks, ordering changes bytes, or representative fan-out becomes effectively global|
 |P-06|Two double-buffered DAGs; four graph instances and copy/version-retention cost|Refresh traces prove two drains/swaps, coherent-prefix publication, immutable frame reads, bounded retained memory|Torn reads, half transactions, hard-guard misses, copy domination, or unbounded old versions|
-|P-07|Credit-shaped producer API; estimation and per-producer statistics|Mixed-cost producers converge to bounded queue age while the DAG thread performs no ordinary shaping|Oscillation, systematic undercharge, producer cross-starvation, or consumer queueing becomes normal pressure|
+|P-07|Credit-shaped producer API; estimation and statistics per `(producer_id, graph_kind)`|Mixed-cost producer lanes converge to bounded queue age without cross-graph capacity theft while the DAG thread performs no ordinary shaping|Oscillation, systematic undercharge, lane cross-starvation, MAIN pressure consumes PRE-PROJECTION credit, or consumer queueing becomes normal pressure|
 |P-08|Refresh-rate hot UBO ring; extra uniform bytes and compatibility checks|In-flight stress proves no overwrite/stall and measures lower late-latch age under the refresh guard|A value changes truth, ring exhaustion is routine, or redraw/refusal cost exceeds latency gain|
 |P-09|DAG-to-descriptor/heap/kernel integration; indirection and allocation overhead|Regional-write, bind, generation, scratch-copy, residency, CPU, and GPU comparisons on real workloads|Per-object binding returns, readback returns, stale handles resolve, or indirection loses on the target|
 |P-10|Worker/native/single-thread channel lowerings; duplicated wasm memory and transport work|Equal semantic trace across modes plus browser detachment, copy, allocation, shutdown, and wall facts|COOP/COEP becomes required, semantics diverge, a buffer strands, or progress waits without a bound|
 |P-11|Typed WebGL2-floor initialization and optional-path equivalence|Minimum conformance scene and refusal fixtures on the capability matrix of EO-06|An admitted device lacks a mandatory path or an optional feature changes meaning|
-|P-12|Julibrot seam extraction and tiled value/reconstruction path; dual arms and tile metadata cost|Whole-grid parity first, then tile identity, selection, depth, demand, seam, and palette-change oracles|Existing traces regress, app internals leak through seams, or tiles cost more without meeting freshness/quality gates|
+|P-12|Julibrot seam extraction and tiled value/reconstruction path; dual arms, protected backdrop, and tile metadata cost|Whole-grid parity first, then descriptor round-trip, source reconstruction, full-target projection, depth-order independence, exhaustive index, protected backdrop, demand, palette-immediacy, and seam oracles|Existing traces regress, app internals leak through seams, a later-stage signal bypasses a producer edit, or tiles cost more without meeting freshness/quality gates|
 |P-13|Tiered arena handle/heap/DAG migration; temporary duplicate paths and instrumentation|Every A0–A6 tier supplies its named arena-specific reason and preserves fixed-tick replay and pixel oracles|A tier cannot isolate its gain, changes authority, exceeds floor walls, or fails to beat its retained prior arm|
 |P-14|Carrier seams for world quotient, slice stage, and warp/scene compatibility; added stamps and node kind|Synthetic higher-dimensional records cross the chain without geometry authority or unsafe warp acceptance|A later stage defines world identity, a slice becomes truth, or incompatible slice stamps can reach warp|
 
