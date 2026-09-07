@@ -311,10 +311,9 @@ pub(super) fn redraw_source_covers_destination(
     else {
         return false;
     };
-    let Some(rows) = pack_homography_rows(compose_homography(
-        delivery.covering_map(),
-        flat.inverse,
-    )) else {
+    let Some(rows) =
+        pack_homography_rows(compose_homography(delivery.covering_map(), flat.inverse))
+    else {
         return false;
     };
     lattice.covers_destination(rows)

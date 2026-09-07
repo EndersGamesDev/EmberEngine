@@ -1,6 +1,4 @@
-use super::ledger::{
-    LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination,
-};
+use super::ledger::{LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination};
 use super::shade::{encode_shade, ensure_value_target, write_palette};
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
