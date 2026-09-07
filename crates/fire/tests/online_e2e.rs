@@ -268,6 +268,12 @@ fn two_clients_see_each_other_move() {
             a.game.roster,
         );
     }
+    assert!(
+        b.wait_for(Duration::from_secs(10), |g| g.phase == Phase::Racing),
+        "bob never entered the race.\n  {}\n  {}",
+        b.dump("bob"),
+        a.dump("alice")
+    );
 
     // Only alice drives; bob holds still. Alice must see bob's car where the
     // server puts it, and bob must see alice pull away.
@@ -287,6 +293,17 @@ fn two_clients_see_each_other_move() {
         thread::sleep(Duration::from_millis(16));
     }
 
+    assert!(
+        b.wait_for(Duration::from_secs(5), |g| {
+            g.race.racers[usize::from(a_slot)]
+                .car
+                .pos
+                .distance(a_start_seen_by_b)
+                > 40.0
+        }),
+        "bob never received alice's final movement snapshot.\n  {}",
+        b.dump("bob")
+    );
     let a_moved_for_b = b.game.race.racers[usize::from(a_slot)]
         .car
         .pos
