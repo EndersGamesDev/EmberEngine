@@ -156,7 +156,10 @@ pub fn repair_publication_mode(path: &Path, mode: PublicationMode) -> io::Result
 /// Never fails on these hosts; the `Result` keeps the Unix signature so
 /// callers are written once.
 #[cfg(not(unix))]
-#[allow(clippy::unnecessary_wraps)]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "The non-Unix no-op preserves the fallible Unix signature for shared callers"
+)]
 pub const fn repair_publication_mode(_path: &Path, _mode: PublicationMode) -> io::Result<()> {
     Ok(())
 }

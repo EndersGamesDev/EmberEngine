@@ -110,7 +110,6 @@ impl Write for PrefixThenFailWriter {
 
 #[derive(Parser)]
 #[command(name = "fixture-helper", version = "1.2.3", about = "Fixture helper")]
-#[allow(dead_code)]
 struct FixtureCli {
     #[arg(long)]
     name: Option<String>,
