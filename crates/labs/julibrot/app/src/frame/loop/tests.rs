@@ -23,7 +23,7 @@ use super::{
     FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity, KernelGridTarget,
     KernelJob, KernelPlan, KernelPlanning, KernelPublication, KernelReferenceIdentity,
     KernelRetirement, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, LEVELS,
-    OrderedRefresh, PresentEventEffect, PresentEventOwner, PresentEventPort,
+    OrderedRefresh, PresentEventEffect, PresentEventFacts, PresentEventOwner, PresentEventPort,
     PresentEventTransaction, PresentEventTurn, PresentEventView, PresentFenceRefusal,
     PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES,
     REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule,
@@ -1926,15 +1926,6 @@ impl SurfacePort for ReplaySurfaceResolution<'_> {
         self.presenter
             .runtime
             .retain_for_warp(receipt.warp_id, generation);
-        let capture = CaptureArming {
-            armed: self.presenter.capture == TraceCaptureState::Armed,
-            route_matches: true,
-            readback_in_flight: self.presenter.capture == TraceCaptureState::InFlight,
-            renderer_already_armed: false,
-        };
-        if capture.surface_due() {
-            self.presenter.capture = TraceCaptureState::InFlight;
-        }
         Ok(())
     }
 
@@ -1946,9 +1937,14 @@ impl SurfacePort for ReplaySurfaceResolution<'_> {
         self.presenter.runtime.resolve_surface(event)
     }
 
-    fn present(&mut self, _event: &SurfaceResolutionEvent, frame: Self::Frame) {
+    fn present(&mut self, event: &SurfaceResolutionEvent, frame: Self::Frame) {
         self.outcome.surface_action = TraceSurfaceAction::Present { warp_id: frame };
         self.presenter.presented_warps.push(frame);
+        if let SurfaceResolutionEvent::WarpCompleted { capture, .. } = *event
+            && capture.surface_due()
+        {
+            self.presenter.capture = TraceCaptureState::InFlight;
+        }
     }
 
     fn drop_frame(&mut self, frame: Self::Frame) {
@@ -2056,7 +2052,9 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
                 warp_id: measurement.id,
             };
         }
-        self.applied_presented_scene_id = measurement.source_scene_id;
+        if resolution.presented {
+            self.applied_presented_scene_id = measurement.source_scene_id;
+        }
         Ok(self.effect(resolution.presented, false, false))
     }
 
@@ -3575,6 +3573,7 @@ struct SurfaceTurnInput {
 struct RecordedSurfaceTurn {
     input: SurfaceTurnInput,
     surface: SurfaceResolutionTurn,
+    present_facts: PresentEventFacts,
     outcome: TurnOutcome,
     capture: TraceCaptureState,
     capture_scene: Option<u64>,
@@ -3606,7 +3605,7 @@ fn surface_refusal(warp_id: u64) -> PresentEvent {
     }
 }
 
-fn surface_turn_inputs() -> [SurfaceTurnInput; 5] {
+fn surface_turn_inputs() -> [SurfaceTurnInput; 7] {
     [
         SurfaceTurnInput {
             name: "submit",
@@ -3678,6 +3677,34 @@ fn surface_turn_inputs() -> [SurfaceTurnInput; 5] {
             next_id: 80,
             terminal: None,
         },
+        SurfaceTurnInput {
+            name: "capture-present-no-submit",
+            clock: FakeClock { now_ms: 6.0 },
+            generation: 12,
+            pending_warp: Some(75),
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(37),
+            capture_armed: true,
+            policy: FramePolicy::SingleFrameOnDemand,
+            warps: false,
+            receipt_refresh_id: None,
+            next_id: 75,
+            terminal: Some(Box::new(surface_completion(75))),
+        },
+        SurfaceTurnInput {
+            name: "ignored-completion",
+            clock: FakeClock { now_ms: 7.0 },
+            generation: 13,
+            pending_warp: Some(76),
+            retained_scene_id: Some(41),
+            presented_scene_id: Some(37),
+            capture_armed: false,
+            policy: FramePolicy::SingleFrameOnDemand,
+            warps: false,
+            receipt_refresh_id: None,
+            next_id: 77,
+            terminal: Some(Box::new(surface_completion(77))),
+        },
     ]
 }
 
@@ -3715,6 +3742,11 @@ fn record_surface_turn(input: SurfaceTurnInput) -> RecordedSurfaceTurn {
     );
     let capture = presenter.capture;
     let capture_scene = presenter.capture_scene;
+    let present_facts = presenter
+        .present_turns
+        .last()
+        .unwrap_or_else(|| unreachable!("the native refresh records its present-event turn"))
+        .facts;
     let surface = presenter
         .surface_turns
         .pop()
@@ -3722,6 +3754,7 @@ fn record_surface_turn(input: SurfaceTurnInput) -> RecordedSurfaceTurn {
     RecordedSurfaceTurn {
         input,
         surface,
+        present_facts,
         outcome,
         capture,
         capture_scene,
@@ -3847,6 +3880,16 @@ fn append_surface_turn(output: &mut String, turn: &RecordedSurfaceTurn) {
     for record in &turn.surface.records {
         append_surface_record(output, record);
     }
+    let facts = turn.present_facts;
+    let _written = writeln!(
+        output,
+        "present-facts presented={} refused={} cancelled={} retained={:?} presented_scene={:?}",
+        facts.presented,
+        facts.refused,
+        facts.cancelled,
+        facts.retained_scene_id,
+        facts.presented_scene_id,
+    );
     let outcome = turn.outcome;
     let _written = writeln!(
         output,
@@ -3871,6 +3914,7 @@ input now_bits=3ff0000000000000 generation=7 pending=None retained=Some(41) pres
 record now_bits=3ff0000000000000 operations=1
 transaction=Submit generation=7 extent=64x32 refresh=1 now_bits=3ff0000000000000 slot=1/512/1
 resolution=Submitted refresh=1 warp=71 source=Some(41) precision=Deterministic exposed=false status=ShowingCompletedScene
+present-facts presented=false refused=false cancelled=false retained=None presented_scene=None
 outcome scene=None warp=Some(71) presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
 turn=present
 input now_bits=4000000000000000 generation=8 pending=Some(72) retained=Some(41) presented=Some(37) capture=true policy=Continuous warps=true receipt_refresh=None next_id=72 terminal=WarpCompleted
@@ -3880,25 +3924,45 @@ transaction=WarpCompleted capture=true/true/false/false
 resolution=Present warp=72
 transaction=Submit generation=8 extent=64x32 refresh=1 now_bits=4000000000000000 slot=1/512/1
 resolution=Submitted refresh=1 warp=73 source=Some(41) precision=Deterministic exposed=false status=ShowingCompletedScene
+present-facts presented=true refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
 outcome scene=None warp=Some(73) presented=true refused=false completed_scene=None completed_warp=Some(72) refused_scene=None refused_warp=None surface=Present { warp_id: 72 } capture=InFlight capture_scene=None
 turn=drop
 input now_bits=4008000000000000 generation=9 pending=Some(73) retained=Some(41) presented=Some(41) capture=false policy=SingleFrameOnDemand warps=false receipt_refresh=None next_id=73 terminal=FenceRefused
 record now_bits=4008000000000000 operations=1
 transaction=WarpRefused kind=Warp id=73 reason=Deadline polls=5 wall_bits=4018000000000000 precision=Deterministic
 resolution=Drop warp=Some(73)
+present-facts presented=false refused=true cancelled=false retained=Some(41) presented_scene=Some(41)
 outcome scene=None warp=None presented=false refused=true completed_scene=None completed_warp=None refused_scene=None refused_warp=Some(73) surface=Drop { warp_id: 73 } capture=Idle capture_scene=None
 turn=occupied
 input now_bits=4010000000000000 generation=10 pending=Some(74) retained=Some(41) presented=Some(41) capture=false policy=Continuous warps=true receipt_refresh=None next_id=74 terminal=None
 record now_bits=4010000000000000 operations=1
 transaction=Submit generation=10 extent=64x32 refresh=1 now_bits=4010000000000000 slot=1/512/1
 resolution=Occupied
+present-facts presented=false refused=false cancelled=false retained=None presented_scene=None
 outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
 turn=invalid-receipt
 input now_bits=4014000000000000 generation=11 pending=None retained=None presented=None capture=false policy=Continuous warps=true receipt_refresh=Some(999) next_id=80 terminal=None
 record now_bits=4014000000000000 operations=1
 transaction=Submit generation=11 extent=64x32 refresh=1 now_bits=4014000000000000 slot=1/512/1
 resolution=Failed stage=InvalidReceipt
+present-facts presented=false refused=false cancelled=false retained=None presented_scene=None
 outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=None refused_scene=None refused_warp=None surface=None capture=Idle capture_scene=None
+turn=capture-present-no-submit
+input now_bits=4018000000000000 generation=12 pending=Some(75) retained=Some(41) presented=Some(37) capture=true policy=SingleFrameOnDemand warps=false receipt_refresh=None next_id=75 terminal=WarpCompleted
+record now_bits=4018000000000000 operations=1
+transaction=WarpCompleted capture=true/true/false/false
+  measurement kind=Warp id=75 sequence=20 source=Some(41) sample=Measured precision=PictureFast wall_bits=4014000000000000 fence_bits=4004000000000000 polls=4
+resolution=Present warp=75
+present-facts presented=true refused=false cancelled=false retained=Some(41) presented_scene=Some(41)
+outcome scene=None warp=None presented=true refused=false completed_scene=None completed_warp=Some(75) refused_scene=None refused_warp=None surface=Present { warp_id: 75 } capture=InFlight capture_scene=None
+turn=ignored-completion
+input now_bits=401c000000000000 generation=13 pending=Some(76) retained=Some(41) presented=Some(37) capture=false policy=SingleFrameOnDemand warps=false receipt_refresh=None next_id=77 terminal=WarpCompleted
+record now_bits=401c000000000000 operations=1
+transaction=WarpCompleted capture=false/true/false/false
+  measurement kind=Warp id=77 sequence=20 source=Some(41) sample=Measured precision=PictureFast wall_bits=4014000000000000 fence_bits=4004000000000000 polls=4
+resolution=Ignore warp=Some(77)
+present-facts presented=false refused=false cancelled=false retained=Some(41) presented_scene=Some(37)
+outcome scene=None warp=None presented=false refused=false completed_scene=None completed_warp=Some(77) refused_scene=None refused_warp=None surface=Ignore { warp_id: 77 } capture=Idle capture_scene=None
 ";
 
 #[test]
@@ -3937,6 +4001,26 @@ fn native_refresh_replays_plain_surface_resolution_transactions() {
             ..
         })
     ));
+    assert_eq!(recorded[5].surface.records.len(), 1);
+    assert!(matches!(
+        recorded[5].surface.records.first(),
+        Some(super::SurfaceResolutionRecord {
+            transaction: SurfaceResolutionTransaction::Resolve(_),
+            outcome: SurfaceResolutionOutcome::Presented { warp_id: 75 },
+        })
+    ));
+    assert_eq!(recorded[5].capture, TraceCaptureState::InFlight);
+    assert_eq!(recorded[5].capture_scene, None);
+    assert!(matches!(
+        recorded[6].surface.records.first(),
+        Some(super::SurfaceResolutionRecord {
+            transaction: SurfaceResolutionTransaction::Resolve(_),
+            outcome: SurfaceResolutionOutcome::Ignored { warp_id: Some(77) },
+        })
+    ));
+    assert!(!recorded[6].outcome.presented);
+    assert!(!recorded[6].present_facts.presented);
+    assert_eq!(recorded[6].present_facts.presented_scene_id, Some(37));
 }
 
 #[test]
@@ -3958,6 +4042,9 @@ fn browser_and_native_refresh_share_surface_resolution_order() {
     let submit = owner
         .find("port.submit(&frame, &job)")
         .unwrap_or_else(|| unreachable!("owner submits the warp"));
+    let validate = owner
+        .find("if receipt.refresh_id != job.refresh_id || receipt.warp_id == 0")
+        .unwrap_or_else(|| unreachable!("owner validates before retaining"));
     let retain = owner
         .find("port.retain(frame, job.generation, &receipt)")
         .unwrap_or_else(|| unreachable!("owner retains the submitted surface"));
@@ -3967,7 +4054,7 @@ fn browser_and_native_refresh_share_surface_resolution_order() {
     let present = owner
         .find("port.present(&transaction, frame)")
         .unwrap_or_else(|| unreachable!("owner presents only the matching completion"));
-    assert!(pending < acquire && acquire < submit && submit < retain);
+    assert!(pending < acquire && acquire < submit && submit < validate && validate < retain);
     assert!(resolve < present);
 
     let browser = production
