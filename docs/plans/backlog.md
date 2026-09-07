@@ -200,7 +200,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - The kings wasm canvas is a view only: no ray pick exists anywhere in `crates/kings/src/`, so the page's 2D grid stays the pointer input.
 - Kings card variants and cross-player card trading are each a protocol bump: no trade message or per-piece rule-text variant exists in `crates/kings-core/src/proto.rs`.
 - The kings pawn-capture set and the joker step are playtest knobs to be settled by playing (`crates/kings-core/src/rules.rs:19`, `:28`, read at `:174` and `:198`).
-- The Kings e2e race in `two_clients_create_join_start_move_and_time_out` came from waiting for Ada's two-entry roster before immediately reading Bob's roster without pumping him; use a bounded Bob wait and preserve the unchanged roster and board assertions.
 - The fire netcode has only been exercised on loopback, so the 25 m convergence bound in `crates/fire/tests/online_e2e.rs:207` is meaningless until it runs across real latency; no latency-injecting harness exists.
 - `assets/models/level-backdrop.glb` (1.4 MB) is drawn by no game — its only references are documentary (`docs/asset-pipeline.md:14`, `tools/level_backdrop.py:20`) — so delete it or keep it deliberately as the pipeline's example.
 - The two basalt textures in `assets/textures/` (3.9 MB together) have no reader: the only source mentions are prose (`crates/arena/src/online.rs:313`, `crates/arena/src/props.rs:45`) and the crate that used them is gone.
