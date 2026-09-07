@@ -84,5 +84,14 @@ mod tests {
         assert!(source.contains("base = palette.interior_rgba;"));
         assert!(source.contains("textureSample(presentation_values, nearest_value, input.uv)"));
         assert!(!source.contains("textureSampleLevel"));
+        let scene = crate::scene_shader(ember_lab_heap::DialectLimits {
+            descriptor_capacity: 2,
+            span_capacity: 2,
+            handle_capacity: 4,
+        });
+        for value_source in [scene.as_str(), crate::warp_shader()] {
+            assert!(!value_source.contains("PaletteUniform"));
+            assert!(!value_source.contains("palette."));
+        }
     }
 }

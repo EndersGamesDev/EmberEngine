@@ -1,9 +1,10 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
 use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_plane};
-use ember_julibrot_worker::MainState;
+use ember_julibrot_worker::{HotState, MainState};
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
 use super::ledger::{LatticeRefusal, presentation_ledger_entry};
+use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
@@ -250,6 +251,231 @@ fn binding_main() -> PresentMain {
         map: PoseMap::EdgeOn,
         backdrop: None,
     }
+}
+
+fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter,
+    };
+    let adapter = pollster::block_on(instance.request_adapter(&request(true)))
+        .or_else(|| pollster::block_on(instance.request_adapter(&request(false))))
+        .expect("a native GPU or software adapter is available for the presentation test");
+    let required =
+        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
+    assert!(
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba32Float)
+            .allowed_usages
+            .contains(required),
+        "the native test adapter supports the WebGL2 value-target contract"
+    );
+    let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("Julibrot native presentation test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+        },
+        None,
+    ))
+    .expect("the native presentation test device is created");
+    (Arc::new(device), Arc::new(queue))
+}
+
+fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native presentation test heap"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let data_view = Arc::new(texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    }));
+    let buffer = |label, size| {
+        Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        }))
+    };
+    HeapPresentResources {
+        data_view,
+        descriptor_buffer: buffer("Julibrot native test heap descriptors", 16),
+        span_directory_buffer: buffer("Julibrot native test heap directory", 32),
+        descriptor_capacity: 1,
+        span_capacity: 1,
+        handle_capacity: 4,
+    }
+}
+
+fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
+    let (device, queue) = native_test_device();
+    let config = PresentConfig {
+        surface_format: wgpu::TextureFormat::Rgba8Unorm,
+        min_uniform_buffer_offset_alignment: device.limits().min_uniform_buffer_offset_alignment,
+        fence_deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
+        max_fence_polls: PresentConfig::V1_MAX_FENCE_POLLS,
+    };
+    let mut presenter = Presenter::new(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        native_test_heap(&device),
+        config,
+    )
+    .expect("the native palette presenter is created");
+    let mut main = binding_main();
+    main.state.generation_applied = 1;
+    main.state.centre_revision = 1;
+    main.state.precision_mode = PrecisionMode::PictureFast as u32;
+    presenter.set_main(main);
+    let completed = promote_binding_scene(&mut presenter.ledger, 37);
+    presenter.facts.completed_scene_id = Some(completed.scene_id);
+    let texture_index = usize::try_from(completed.texture_index)
+        .expect("the retained texture index fits this process");
+    ensure_scene_texture(
+        &device,
+        &mut presenter.gpu,
+        texture_index,
+        completed.extent,
+    )
+    .expect("the retained value texture is allocated");
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Julibrot native retained-value encoder"),
+    });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot native retained-value clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &presenter.gpu.scene_textures[texture_index].view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 12.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 0.7,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+    }
+    queue.submit([encoder.finish()]);
+    (presenter, device)
+}
+
+fn capture_native_palette(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    palette_id: PaletteId,
+    refresh_id: u64,
+) -> (FrameReceipt, FrameReadback) {
+    let mut main = presenter.main.clone().expect("the test MAIN is installed");
+    main.epoch = refresh_id;
+    main.state.palette_id = palette_id as u32;
+    presenter.set_main(main);
+    let pose = binding_pose();
+    let hot = PresentHot {
+        epoch: refresh_id,
+        state: HotState::default(),
+        plane: pose.plane,
+        object: pose.object,
+        view: pose.view,
+        map: pose.map,
+    };
+    let stride = crate::hot_stride(device.limits().min_uniform_buffer_offset_alignment)
+        .expect("the device admits the HOT stride");
+    let slot = HotSlot::for_refresh(refresh_id, stride, hot.epoch)
+        .expect("the refresh selects a HOT slot");
+    presenter.write_hot(slot, hot, WarpValidation::Ordinary, false);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native palette presentation target"),
+        size: extent_3d(BINDING_EXTENT),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    presenter.arm_offscreen_frame_readback();
+    let now_ms = f64::from(
+        u32::try_from(refresh_id).expect("the native test refresh fits the exact f64 range"),
+    );
+    let receipt = presenter
+        .frame(
+            FrameState {
+                surface_view: &view,
+                canvas_width: BINDING_EXTENT[0],
+                canvas_height: BINDING_EXTENT[1],
+                refresh_id,
+                now_ms,
+            },
+            slot,
+        )
+        .expect("the palette presentation is submitted");
+    device.poll(wgpu::Maintain::Wait);
+    assert!(presenter.poll_fixed(now_ms + 1.0).into_iter().any(
+        |event| matches!(event, crate::PresentEvent::WarpCompleted { measurement } if measurement.id == receipt.warp_id)
+    ));
+    presenter.record_presented(receipt.warp_id);
+    device.poll(wgpu::Maintain::Wait);
+    let readback = presenter
+        .take_frame_readback()
+        .expect("the offscreen palette copy maps")
+        .expect("the offscreen palette copy is ready");
+    (receipt, readback)
+}
+
+#[test]
+fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
+    let (mut presenter, device) = native_palette_presenter();
+    let next_scene_id = presenter.next_scene_id;
+    let (classic_receipt, classic) = capture_native_palette(
+        &mut presenter,
+        &device,
+        PaletteId::Classic,
+        101,
+    );
+    let (ice_receipt, ice) =
+        capture_native_palette(&mut presenter, &device, PaletteId::Ice, 102);
+
+    assert_eq!(classic_receipt.source_scene_id, Some(37));
+    assert_eq!(ice_receipt.source_scene_id, classic_receipt.source_scene_id);
+    assert_eq!(classic.scene_id, Some(37));
+    assert_eq!(ice.scene_id, classic.scene_id);
+    assert_eq!(presenter.facts().completed_scene_id, Some(37));
+    assert_eq!(presenter.next_scene_id, next_scene_id);
+    assert_eq!(classic.route, FrameReadbackRoute::OffscreenRerender);
+    assert_eq!(ice.route, FrameReadbackRoute::OffscreenRerender);
+    assert_eq!(classic.rgba.len(), ice.rgba.len());
+    assert!(
+        classic
+            .rgba
+            .chunks_exact(4)
+            .zip(ice.rgba.chunks_exact(4))
+            .any(|(classic, ice)| classic != ice),
+        "the present-time palette changes pixels without a new scene"
+    );
 }
 
 #[test]
@@ -711,7 +937,7 @@ fn a_changed_backdrop_never_clears_a_held_picture() {
 }
 
 #[test]
-fn a_palette_change_reuses_values_and_recolours_on_the_next_present() {
+fn palette_is_not_a_scene_selection_key_and_is_uploaded_before_shade() {
     let previous = binding_main();
     let mut current = previous.clone();
     current.state.palette_id = PaletteId::Ice as u32;
@@ -734,8 +960,10 @@ fn a_palette_change_reuses_values_and_recolours_on_the_next_present() {
         span_capacity: 2,
         handle_capacity: 4,
     });
-    assert!(!scene.contains("PaletteUniform"));
-    assert!(!scene.contains("palette."));
+    for source in [scene.as_str(), crate::warp_shader()] {
+        assert!(!source.contains("PaletteUniform"));
+        assert!(!source.contains("palette."));
+    }
     assert!(crate::shade_shader().contains("palette."));
     assert!(!include_str!("scene/submit.rs").contains("selected_palette"));
 }
