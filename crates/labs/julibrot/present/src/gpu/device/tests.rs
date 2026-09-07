@@ -1469,6 +1469,110 @@ fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     assert!(!source.contains(&bypass));
 }
 
+const HEAP_DESCRIPTOR_LAYOUT: &str = "create_heap_layout descriptor/static_uniform_entry";
+const HEAP_DIRECTORY_LAYOUT: &str = "create_heap_layout directory/static_uniform_entry";
+const SCENE_UNIFORM_LAYOUT: &str = "create_scene_layout scene/static_uniform_entry";
+const SCENE_HOT_LAYOUT: &str = "create_scene_layout HOT/hot_uniform_entry";
+const WARP_HOT_LAYOUT: &str = "create_warp_hot_layout HOT/hot_uniform_entry";
+const WARP_SCENE_LAYOUT: &str = "create_warp_hot_layout scene/static_uniform_entry";
+const PALETTE_LAYOUT: &str = "create_palette_layout/static_uniform_entry";
+
+type UniformLayoutFact = (&'static str, &'static str, u32, bool, u64);
+
+fn uniform_layout_fact(
+    constructor: &'static str,
+    class: &'static str,
+    entry: &wgpu::BindGroupLayoutEntry,
+) -> UniformLayoutFact {
+    assert_eq!(
+        entry.visibility,
+        wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+        "{constructor} visibility"
+    );
+    assert!(entry.count.is_none(), "{constructor} is not an array");
+    let wgpu::BindingType::Buffer {
+        ty,
+        has_dynamic_offset,
+        min_binding_size,
+    } = &entry.ty
+    else {
+        panic!("{constructor} must construct a uniform buffer entry");
+    };
+    assert!(matches!(ty, wgpu::BufferBindingType::Uniform));
+    assert_eq!(
+        *has_dynamic_offset,
+        class == "dynamic",
+        "{constructor} structural class"
+    );
+    (
+        constructor,
+        class,
+        entry.binding,
+        *has_dynamic_offset,
+        min_binding_size.as_ref().map_or(0, |size| size.get()),
+    )
+}
+
+#[test]
+fn every_uniform_layout_lists_its_structural_constructor() {
+    let heap = super::uniforms::heap_layout_entries(ember_lab_heap::DialectLimits {
+        descriptor_capacity: 8,
+        span_capacity: 4,
+        handle_capacity: 4,
+    })
+    .expect("the enumerated heap layout sizes fit");
+    let scene = super::uniforms::scene_layout_entries();
+    let warp = super::uniforms::warp_hot_layout_entries();
+    let palette = super::uniforms::palette_layout_entries();
+    assert!(matches!(&heap[0].ty, wgpu::BindingType::Texture { .. }));
+
+    let actual = [
+        uniform_layout_fact(HEAP_DESCRIPTOR_LAYOUT, "static", &heap[1]),
+        uniform_layout_fact(HEAP_DIRECTORY_LAYOUT, "static", &heap[2]),
+        uniform_layout_fact(SCENE_UNIFORM_LAYOUT, "static", &scene[0]),
+        uniform_layout_fact(SCENE_HOT_LAYOUT, "dynamic", &scene[1]),
+        uniform_layout_fact(WARP_HOT_LAYOUT, "dynamic", &warp[0]),
+        uniform_layout_fact(WARP_SCENE_LAYOUT, "static", &warp[1]),
+        uniform_layout_fact(PALETTE_LAYOUT, "static", &palette[0]),
+    ];
+    assert_eq!(
+        actual,
+        [
+            (HEAP_DESCRIPTOR_LAYOUT, "static", 1, false, 128),
+            (HEAP_DIRECTORY_LAYOUT, "static", 2, false, 80),
+            (
+                SCENE_UNIFORM_LAYOUT,
+                "static",
+                0,
+                false,
+                u64::from(SCENE_PAYLOAD_BYTES),
+            ),
+            (
+                SCENE_HOT_LAYOUT,
+                "dynamic",
+                1,
+                true,
+                u64::from(HOT_PAYLOAD_BYTES),
+            ),
+            (
+                WARP_HOT_LAYOUT,
+                "dynamic",
+                0,
+                true,
+                u64::from(HOT_PAYLOAD_BYTES),
+            ),
+            (
+                WARP_SCENE_LAYOUT,
+                "static",
+                1,
+                false,
+                u64::from(SCENE_PAYLOAD_BYTES),
+            ),
+            (PALETTE_LAYOUT, "static", 0, false, 48),
+        ]
+    );
+}
+
 /// One completed picture at `extent`, shaped as the ledger promotes it.
 fn frame_at_extent(scene_id: u64, extent: [u32; 2]) -> crate::SceneFrame {
     let mut pose = binding_pose();
