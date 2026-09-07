@@ -77,14 +77,21 @@
       return hash.toString(16).padStart(16, "0");
     }
 
-    // Base64 is a lossless compact spelling of the raw bytes, not a canvas re-encoding.
-    function base64(bytes) {
-      const chunkSize = 32 * 1024;
-      let binary = "";
-      for (let start = 0; start < bytes.length; start += chunkSize) {
-        binary += String.fromCharCode(...bytes.subarray(start, start + chunkSize));
+    // Consecutive equal pixels become one lossless run over the raw RGBA stream. The byte digest
+    // below remains independent of this compact spelling.
+    function rgbaRuns(bytes) {
+      assert(bytes.length % 4 === 0, "RGBA runs need complete pixels");
+      const runs = [];
+      for (let start = 0; start < bytes.length; start += 4) {
+        const rgba = Array.from(bytes.subarray(start, start + 4));
+        const previous = runs[runs.length - 1];
+        if (previous && previous.rgba.every((channel, index) => channel === rgba[index])) {
+          previous.length += 1;
+        } else {
+          runs.push({ length: 1, rgba });
+        }
       }
-      return btoa(binary);
+      return runs;
     }
 
     function assert(condition, message) {
@@ -119,8 +126,8 @@
           rgba: {
             byte_length: frame.rgba.length,
             digest: { algorithm: "fnv1a64", hex: fnv1a64(frame.rgba) },
-            encoding: "base64",
-            data: base64(frame.rgba),
+            encoding: "rgba-runs-v1",
+            runs: rgbaRuns(frame.rgba),
           },
         };
         const text = JSON.stringify(actual, null, 2);
