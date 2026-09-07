@@ -27,7 +27,7 @@ use super::{
     perturbation_reference_is_current, published_iteration_cap,
     reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
     schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed,
+    stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up,
@@ -2840,9 +2840,11 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         };
 
         let view_is_stale = presented_revision != requested_revision;
+        let defer_scene_for_redraw =
+            defer_scene_until_relief_redraw(selected == WarpKind::ReliefRedraw, view_is_stale);
         if pending_scene.is_none()
             && requested_revision != 0
-            && !view_is_stale
+            && !defer_scene_for_redraw
             && !renders_same_picture(&retained.pose, &requested)
         {
             pending_scene = Some(PendingZoomScene {
@@ -2852,10 +2854,11 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             });
         }
         let hold_redraw = selected == WarpKind::ReliefRedraw && pending_scene.is_some();
-        if frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand)
-            && pending_warp.is_none()
-            && !hold_redraw
-        {
+        let warp_requested = warp_submission_due(
+            frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand),
+            defer_scene_for_redraw,
+        );
+        if warp_requested && pending_warp.is_none() && !hold_redraw {
             pending_warp = Some(PendingZoomWarp {
                 completes_at_turn: turn.saturating_add(WARP_FLIGHT_TURNS),
                 kind: selected,

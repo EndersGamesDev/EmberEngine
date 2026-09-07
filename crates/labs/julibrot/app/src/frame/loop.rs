@@ -1305,7 +1305,13 @@ mod browser {
             };
 
             let mut warp_id = None;
-            let warp_requested = self.loop_state.warp_requested(self.frame_policy.policy());
+            // A redraw that defers the replacement scene is itself required progress. Stale-view
+            // recovery may restart refinement without arming a one-shot frame request, so making
+            // the redraw depend only on scheduler demand would leave both submissions waiting.
+            let warp_requested = super::warp_submission_due(
+                self.loop_state.warp_requested(self.frame_policy.policy()),
+                defer_scene_for_redraw,
+            );
             let redraw_scene_in_flight = super::hold_redraw_during_scene(
                 relief_redraw,
                 self.presenter.facts().in_flight_scene_id.is_some(),
