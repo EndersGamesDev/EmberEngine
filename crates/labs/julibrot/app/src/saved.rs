@@ -170,7 +170,6 @@ impl SavedView {
     pub fn capture(viewer: &ViewerController) -> Result<Self, AppError> {
         let requested = viewer.requested();
         let centre = viewer
-            .owner()
             .navigation_centre()
             .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
         Ok(Self {
@@ -515,7 +514,6 @@ mod tests {
         let saved = SavedView::capture(&viewer).expect("a capturable row");
         let decoded = saved.centre().expect("a decodable centre");
         let original = viewer
-            .owner()
             .navigation_centre()
             .expect("configured navigation");
         assert_eq!(decoded.precision_bits, original.precision_bits);
@@ -631,7 +629,6 @@ mod tests {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         finish_initial_reference(&mut viewer);
         let centre = viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre");
 
@@ -652,15 +649,14 @@ mod tests {
         finish_initial_reference(&mut viewer);
         viewer.pan_px([24.0, 0.0]).expect("finite pan");
         let centre = viewer
-            .owner()
             .navigation_centre()
             .expect("configured centre");
-        assert_ne!(viewer.owner().reference_centre(), Some(centre.clone()));
+        assert_ne!(viewer.reference_centre(), Some(centre.clone()));
 
         viewer.set_centre(centre.clone()).expect("centre repair");
 
-        assert_eq!(viewer.owner().navigation_centre(), Some(centre.clone()));
-        assert_eq!(viewer.owner().reference_centre(), Some(centre));
+        assert_eq!(viewer.navigation_centre(), Some(centre.clone()));
+        assert_eq!(viewer.reference_centre(), Some(centre));
         assert_eq!(
             viewer
                 .take_reference_submission()
