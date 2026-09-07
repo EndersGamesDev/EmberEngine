@@ -240,7 +240,7 @@ pub struct WarpPlan {
     pub edge_on: bool,
     /// Whether any destination surface region has no retained source sample.
     pub exposed: bool,
-    /// Conservative share of destination pixels at stale-resolution or source-coverage risk.
+    /// Conservative share of destination pixels at hole or residual-disagreement risk.
     pub predicted_exposed_fraction: Option<f64>,
     /// Exact, approximate, or clear-only plan kind.
     pub kind: WarpKind,
@@ -282,7 +282,7 @@ pub enum WarpRefusalReason {
     },
     /// The retained source footprint exceeds the measured relief-redraw admission ceiling.
     ReliefExposure {
-        /// Conservative predicted share at stale-resolution or source-coverage risk.
+        /// Conservative predicted share at hole or residual-disagreement risk.
         predicted_fraction: f64,
         /// Maximum admitted share.
         limit: f64,
@@ -614,7 +614,7 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
-    /// Image-warp clear share or relief-redraw stale-resolution and coverage risk.
+    /// Image-warp clear share or relief-redraw hole and residual-disagreement risk.
     pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,

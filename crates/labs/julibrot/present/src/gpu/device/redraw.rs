@@ -74,7 +74,7 @@ pub(super) fn relief_scene_uniform(
             operation: "compose relief redraw source lattice",
         },
     )?;
-    SceneUniform::new(
+    let mut uniform = SceneUniform::new(
         source.extent,
         source.level as u32,
         source.iteration_cap,
@@ -92,5 +92,23 @@ pub(super) fn relief_scene_uniform(
             height: source.extent[1],
             logical_len: grid.span.logical_len,
         },
-    })
+    })?;
+    if !crate::planner::exact_relief_redraw_family(&source.pose, destination) {
+        let maximum = crate::planner::relief_redraw_max_screen_stretch_px(source, destination)
+            .ok_or(PresentError::Device {
+                operation: "derive relief redraw stretch limit",
+            })?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the finite redraw stretch limit is narrowed once into the scene GPU ABI"
+        )]
+        let maximum = maximum as f32;
+        if !maximum.is_finite() || maximum <= 0.0 {
+            return Err(PresentError::Device {
+                operation: "pack relief redraw stretch limit",
+            });
+        }
+        uniform.reserved_0[0] = maximum;
+    }
+    Ok(uniform)
 }

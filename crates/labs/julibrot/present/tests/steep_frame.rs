@@ -409,6 +409,16 @@ struct Vertex {
 enum Rule {
     Base,
     Fixed,
+    Guarded { maximum_stretch: f64 },
+}
+
+impl Rule {
+    const fn maximum_stretch(self) -> Option<f64> {
+        match self {
+            Self::Guarded { maximum_stretch } => Some(maximum_stretch),
+            Self::Base | Self::Fixed => None,
+        }
+    }
 }
 
 fn ambient_camera(mut point: [f64; 5], view: &ViewControls) -> [f64; 5] {
@@ -653,6 +663,8 @@ struct Frame {
     cause: Vec<Cause>,
     record: Vec<Option<[f32; 4]>>,
     chart: Vec<Option<[f64; 2]>>,
+    /// Pixels at which a projected source cell was rejected as over-stretched.
+    stretch_discarded: Vec<bool>,
     /// Pixels painted with a record belonging to no corner of the primitive that covered them.
     foreign: u64,
 }
@@ -685,6 +697,7 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
     let mut cause = vec![Cause::Sky; pixels];
     let mut sampled_record = vec![None; pixels];
     let mut sampled_chart = vec![None; pixels];
+    let mut stretch_discarded = vec![false; pixels];
     let mut foreign = 0_u64;
     let half_w = 0.5 * f64::from(width);
     let half_h = 0.5 * f64::from(height);
@@ -792,6 +805,13 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
                                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
                             }) / reciprocal
                         });
+                        if rule.maximum_stretch().is_some_and(|maximum| {
+                            fragment_maximum_stretch(tri, weights, area)
+                                .is_none_or(|stretch| stretch > maximum + 1.0e-9)
+                        }) {
+                            stretch_discarded[index] = true;
+                            continue;
+                        }
                         let chart: [f64; 2] = core::array::from_fn(|axis| {
                             weights.iter().zip(tri).fold(0.0, |sum, (weight, vertex)| {
                                 (weight * vertex.reciprocal_w).mul_add(vertex.chart[axis], sum)
@@ -832,8 +852,73 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
         cause,
         record: sampled_record,
         chart: sampled_chart,
+        stretch_discarded,
         foreign,
     }
+}
+
+fn fragment_maximum_stretch(
+    tri: [Vertex; 3],
+    weights: [f64; 3],
+    area: f64,
+) -> Option<f64> {
+    let derivative_x = [
+        (tri[1].y - tri[2].y) / area,
+        (tri[2].y - tri[0].y) / area,
+        (tri[0].y - tri[1].y) / area,
+    ];
+    let derivative_y = [
+        (tri[2].x - tri[1].x) / area,
+        (tri[0].x - tri[2].x) / area,
+        (tri[1].x - tri[0].x) / area,
+    ];
+    let reciprocal = weights
+        .into_iter()
+        .zip(tri)
+        .fold(0.0, |sum, (weight, vertex)| {
+            weight.mul_add(vertex.reciprocal_w, sum)
+        });
+    if !reciprocal.is_finite() || reciprocal <= 0.0 {
+        return None;
+    }
+    let derivative = |axis: usize, weight_derivatives: [f64; 3]| {
+        let numerator = weights
+            .into_iter()
+            .zip(tri)
+            .fold(0.0, |sum, (weight, vertex)| {
+                (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
+            });
+        let numerator_derivative = weight_derivatives.into_iter().zip(tri).fold(
+            0.0,
+            |sum, (weight, vertex)| {
+                (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
+            },
+        );
+        let reciprocal_derivative = weight_derivatives
+            .into_iter()
+            .zip(tri)
+            .fold(0.0, |sum, (weight, vertex)| {
+                weight.mul_add(vertex.reciprocal_w, sum)
+            });
+        numerator_derivative.mul_add(reciprocal, -numerator * reciprocal_derivative)
+            / (reciprocal * reciprocal)
+    };
+    let dx = [
+        derivative(0, derivative_x),
+        derivative(1, derivative_x),
+    ];
+    let dy = [
+        derivative(0, derivative_y),
+        derivative(1, derivative_y),
+    ];
+    let trace = dx[0] * dx[0] + dx[1] * dx[1] + dy[0] * dy[0] + dy[1] * dy[1];
+    let determinant = dx[0].mul_add(dy[1], -dx[1] * dy[0]);
+    let discriminant = trace.mul_add(trace, -4.0 * determinant * determinant).max(0.0);
+    let minimum_eigenvalue = (0.5 * (trace - discriminant.sqrt())).max(0.0);
+    if !minimum_eigenvalue.is_finite() || minimum_eigenvalue <= 0.0 {
+        return None;
+    }
+    Some(minimum_eigenvalue.sqrt().recip())
 }
 
 /// The browser's own classifier, over the canvas readback of the served frame.
@@ -914,6 +999,26 @@ fn render_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
     )
 }
 
+fn relief_redraw_stretch_limit(from: &Pose, to: &Pose) -> f64 {
+    let zoom_scale = (to.zoom_log2 - from.zoom_log2).exp2();
+    let source_step = zoom_scale
+        * (f64::from(to.grid_width) / f64::from(from.grid_width))
+            .max(f64::from(to.grid_height) / f64::from(from.grid_height));
+    let source_texel_reach = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
+    core::f64::consts::SQRT_2 * source_texel_reach
+}
+
+fn render_guarded_relief_redraw(from: &Pose, to: &Pose, records: &[[f32; 4]]) -> Frame {
+    render_frame(
+        &relief_redraw_pose(from, to),
+        records,
+        Rule::Guarded {
+            maximum_stretch: relief_redraw_stretch_limit(from, to),
+        },
+        Mapping::InteriorAtFloor,
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RecordClass {
     Interior,
@@ -955,6 +1060,7 @@ fn records_equal(left: [f32; 4], right: [f32; 4]) -> bool {
         .all(|(left, right)| left.to_bits() == right.to_bits())
 }
 
+#[derive(Debug)]
 struct ReliefRedrawMeasurement {
     zoom_delta: f64,
     agree: u64,
@@ -1140,6 +1246,10 @@ fn measure_relief_redraw(
     let mut hole_mask = vec![false; redraw.covered.len()];
     for index in 0..redraw.covered.len() {
         match (redraw.covered[index], truth.covered[index]) {
+            (false, false) if redraw.stretch_discarded[index] => {
+                hole = hole.saturating_add(1);
+                hole_mask[index] = true;
+            }
             (false, false) => agree = agree.saturating_add(1),
             (false, true) => {
                 hole = hole.saturating_add(1);
@@ -1230,6 +1340,8 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
     let mut from = sampling_from;
     from.centre_from_reference_px = [0.0; 2];
     let mut reports = Vec::new();
+    let mut guarded_reports = Vec::new();
+    let mut stretch_limits = Vec::new();
     for zoom_delta in [0.1, 0.5] {
         let to = screen_centred_zoom_destination(&from, zoom_delta);
         if zoom_delta == 0.1 {
@@ -1258,6 +1370,9 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         );
         let true_records = steep_records(&sampling_to);
         let redraw = render_relief_redraw(&from, &to, &source_records);
+        let guarded = render_guarded_relief_redraw(&from, &to, &source_records);
+        let stretch_limit = relief_redraw_stretch_limit(&from, &to);
+        stretch_limits.push(stretch_limit);
         let device_pose = relief_redraw_source_pose(&from, EXTENT, &to)
             .expect("the device path composes the measured source and destination poses");
         let device_redraw = render_frame(
@@ -1274,9 +1389,32 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
             device_redraw.cause, redraw.cause,
             "the device source-map split changes the visible record at zoom delta {zoom_delta}"
         );
+        let device_guarded = render_frame(
+            &device_pose,
+            &source_records,
+            Rule::Guarded {
+                maximum_stretch: stretch_limit,
+            },
+            Mapping::InteriorAtFloor,
+        );
+        assert_eq!(
+            device_guarded.covered, guarded.covered,
+            "the guarded device source-map split changes coverage at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_guarded.cause, guarded.cause,
+            "the guarded device source-map split changes the visible record at zoom delta {zoom_delta}"
+        );
+        assert_eq!(
+            device_guarded.stretch_discarded, guarded.stretch_discarded,
+            "the guarded device source-map split changes discarded cells at zoom delta {zoom_delta}"
+        );
         let truth = render_frame(&to, &true_records, Rule::Fixed, Mapping::InteriorAtFloor);
         reports.push(measure_relief_redraw(
             &from, &to, &redraw, &truth, zoom_delta,
+        ));
+        guarded_reports.push(measure_relief_redraw(
+            &from, &to, &guarded, &truth, zoom_delta,
         ));
     }
     let expected = [
@@ -1341,6 +1479,9 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         reports
             .iter()
             .all(|report| report.exposed_fraction < RELIEF_REDRAW_MAX_EXPOSED_FRACTION)
+    );
+    panic!(
+        "guarded relief redraw measurement\nstretch_limits={stretch_limits:#?}\nbefore={reports:#?}\nafter={guarded_reports:#?}"
     );
 }
 

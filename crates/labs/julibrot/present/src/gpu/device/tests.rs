@@ -729,6 +729,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
     assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(uniform.reserved_0, [0.0; 4]);
     let load = scene_load_color();
     assert_eq!([load.r, load.g, load.b, load.a], [0.0, 0.0, 4.0, 1.0]);
 }
@@ -1377,6 +1378,8 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
     assert!((display[0] - 0.75).abs() < 1.0e-6);
     assert!((display[1] + 0.775).abs() < 1.0e-6);
+    assert!((uniform.reserved_0[0] - 17.0).abs() < f32::EPSILON);
+    assert_eq!(uniform.reserved_0[1..], [0.0; 3]);
 
     let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
         .expect("the source delivery lattice composes into the destination pose");

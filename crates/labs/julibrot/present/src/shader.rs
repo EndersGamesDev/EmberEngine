@@ -3,7 +3,7 @@ use ember_lab_heap::DialectLimits;
 const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
-struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, }
+struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, reserved_0: vec4<f32>, reserved_1: vec4<f32>, reserved_2: vec4<f32>, }
 struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
@@ -82,6 +82,17 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     rotated.fifth += hot.camera_translation_1.x;
     return rotated;
 }
+fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>) -> bool {
+    let maximum_stretch = scene.reserved_0.x;
+    if (maximum_stretch <= 0.0) { return false; }
+    let dx = dpdx(grid_coordinate);
+    let dy = dpdy(grid_coordinate);
+    let trace = dot(dx, dx) + dot(dy, dy);
+    let determinant = dx.x * dy.y - dx.y * dy.x;
+    let discriminant = max(trace * trace - 4.0 * determinant * determinant, 0.0);
+    let minimum_eigenvalue = max(0.5 * (trace - sqrt(discriminant)), 0.0);
+    return !finite(minimum_eigenvalue) || minimum_eigenvalue * maximum_stretch * maximum_stretch < 1.0;
+}
 @vertex fn scene_vertex(@builtin(vertex_index) index: u32) -> SceneVertex {
     let column = index % scene.grid.x;
     let row = index / scene.grid.x;
@@ -149,6 +160,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     return output;
 }
 @fragment fn scene_fragment(input: SceneVertex) -> @location(0) vec4<f32> {
+    if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }
     if (input.valid < 0.999999) { discard; }
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
@@ -347,6 +359,11 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("@vertex fn scene_vertex"));
         assert!(source.contains("let record = load_escape(index);"));
+        assert!(source.contains("fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>)"));
+        assert!(source.contains("let dx = dpdx(grid_coordinate);"));
+        assert!(source.contains("let dy = dpdy(grid_coordinate);"));
+        assert!(source.contains("let maximum_stretch = scene.reserved_0.x;"));
+        assert!(source.contains("if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }"));
         assert!(
             source.contains("let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;")
         );

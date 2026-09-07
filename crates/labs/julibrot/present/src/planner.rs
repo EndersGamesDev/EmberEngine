@@ -24,7 +24,7 @@ const MEASURED_RELIEF_REDRAW_EXPOSED_FRACTION: f64 = 0.071_952_160_494;
 /// Maximum measured reprojection error a displayed warp may move a feature.
 pub const WARP_MAX_ERROR_PX: f64 = 1.0;
 
-/// Largest conservative stale-resolution or source-coverage share admitted for a relief redraw.
+/// Largest conservative hole or residual-disagreement share admitted for a relief redraw.
 ///
 /// The 960 by 540 measured relief zoom row reached 7.1952 percent at its worse measured step.
 /// Eight percent is the nearest round boundary above it and leaves 0.8048 percentage point for
@@ -103,11 +103,11 @@ impl Warp {
 ///
 /// The exact redraw family has no stale-lattice allowance and pays only for source-footprint
 /// exposure. A generalized redraw takes the larger of that fixed 65-by-65 coverage census and the
-/// measured relief row's 7.1952 percent stale-resolution risk. Eight percent admits both measured
-/// zoom steps with 0.8048 percentage point of headroom and refuses a move whose retained footprint
-/// needs more. A corpus refusal no longer clears the whole surface: the unchanged scene vertex
-/// stage refuses that record at its own near limit, while the clear load remains visible beneath
-/// every primitive that consequently cannot be drawn.
+/// measured relief row's 7.1952 percent hole-plus-residual-disagreement risk. Eight percent admits
+/// both measured zoom steps with 0.8048 percentage point of headroom and refuses a move whose
+/// retained footprint needs more. A corpus refusal no longer clears the whole surface: the scene
+/// vertex stage refuses that record at its own near limit, while the fragment stretch guard clears
+/// retained cells that bridge a disocclusion.
 fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
     let maximum = plan.approx_max_error_px;
     let over_ceiling = maximum.is_some_and(|max_px| max_px > WARP_MAX_ERROR_PX);
@@ -168,7 +168,7 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
 /// layer remains one fixed plane that the later perspectives and observer map projectively. Equal
 /// non-neutral cameras do not suffice because mixing the height axis generally destroys that
 /// fixed-plane relation.
-fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
+pub(crate) fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
     if [from.grid_width, from.grid_height] != [to.grid_width, to.grid_height] {
         return false;
     }
@@ -176,6 +176,27 @@ fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
         && neutral_five_camera(to.view)
         && same_sampling_lattice(from, to))
         || pure_height_or_fifth_distance(from, to)
+}
+
+/// Maximum local destination-pixel stretch admitted for one retained source texel.
+///
+/// The native oracle's source-texel reach is the sum of the projected source-texel and
+/// destination-pixel half diagonals. Multiplying that reach by `sqrt(2)` therefore recovers the
+/// projected source step plus one destination pixel of conservative raster headroom.
+pub(crate) fn relief_redraw_max_screen_stretch_px(
+    source: &SceneFrame,
+    destination: &Pose,
+) -> Option<f64> {
+    if source.extent.contains(&0) {
+        return None;
+    }
+    let zoom_scale = (destination.zoom_log2 - source.pose.zoom_log2).exp2();
+    let source_step = zoom_scale
+        * (f64::from(destination.grid_width) / f64::from(source.extent[0]))
+            .max(f64::from(destination.grid_height) / f64::from(source.extent[1]));
+    let source_texel_reach_px = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
+    let maximum = core::f64::consts::SQRT_2 * source_texel_reach_px;
+    maximum.is_finite().then_some(maximum)
 }
 
 fn neutral_five_camera(view: ViewControls) -> bool {
