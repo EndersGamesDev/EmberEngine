@@ -18,10 +18,11 @@ use super::super::schedule::{
     STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
 use super::{
-    BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
-    FencesObserved, FrameLoop, HotWritten, LEVELS, OrderedRefresh, PresenterPoll,
+    BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, DrainedWorkerArrival,
+    FenceRefusal, FencesObserved, FrameLoop, HotWritten, LEVELS, OrderedRefresh, PresenterPoll,
     REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
     RefinementSchedule, RefusalClass, SceneConsidered, SceneMode, SubmissionKind,
+    WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
     coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
     expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
@@ -38,7 +39,10 @@ use ember_julibrot_present::{
     LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
     WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
 };
-use ember_julibrot_worker::ReferenceVerification;
+use ember_julibrot_worker::{
+    EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
+    SubmitOutcome, WorkerFacts, WorkerMode,
+};
 use ember_lab_heap::SpanArena;
 
 /// Poll budget and wall the version-three present configuration refuses at.
@@ -796,6 +800,65 @@ enum BrowserAction {
     WarpConsidered,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerTurn {
+    arrivals: [Option<WorkerArrival>; 2],
+    applications: [Option<WorkerApplication>; 2],
+    submission: Option<WorkerSubmission>,
+    facts: WorkerFacts,
+}
+
+#[derive(Debug)]
+struct ReplayWorkerService {
+    arrivals: std::collections::VecDeque<WorkerArrival>,
+    submit_outcome: SubmitOutcome,
+    facts: WorkerFacts,
+}
+
+impl Default for ReplayWorkerService {
+    fn default() -> Self {
+        Self {
+            arrivals: std::collections::VecDeque::new(),
+            submit_outcome: SubmitOutcome::Transferred,
+            facts: WorkerFacts::new(WorkerMode::SameThread),
+        }
+    }
+}
+
+impl WorkerServicePort for ReplayWorkerService {
+    type Arrival = WorkerArrival;
+    type Error = std::convert::Infallible;
+
+    fn submit(&mut self, request: OrbitRequest) -> WorkerSubmission {
+        WorkerSubmission {
+            generation: request.generation(),
+            outcome: self.submit_outcome,
+        }
+    }
+
+    fn drain(&mut self) -> Option<DrainedWorkerArrival<Self::Arrival>> {
+        let facts = self.arrivals.pop_front()?;
+        Some(DrainedWorkerArrival {
+            facts,
+            lease: facts,
+        })
+    }
+
+    fn apply(
+        &mut self,
+        arrival: &mut Self::Arrival,
+        application: WorkerApplication,
+        _owner_now_us: u64,
+    ) -> Result<WorkerApplication, Self::Error> {
+        debug_assert_eq!(arrival.generation, application.generation);
+        Ok(application)
+    }
+
+    fn facts(&self) -> WorkerFacts {
+        self.facts
+    }
+}
+
 #[derive(Debug, Default)]
 struct FakeRuntime {
     surface: SurfaceState<u64>,
@@ -889,6 +952,9 @@ struct FakePresenter {
     presented_clear_only: u64,
     hot_epoch: u64,
     main_epoch: u64,
+    worker_service: WorkerServiceOwner<ReplayWorkerService>,
+    worker_submission: Option<OrbitRequest>,
+    worker_turns: Vec<WorkerTurn>,
     runtime: FakeRuntime,
     capture: TraceCaptureState,
     capture_scene: Option<u64>,
@@ -1371,6 +1437,39 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
         let FencesObserved = stage;
         let has_retained_scene = self.presenter.retained_scene.is_some();
         self.presenter.write_hot_for_slot(has_retained_scene, 0);
+        let mut arrivals = [None; 2];
+        let mut applications = [None; 2];
+        for (arrival_facts, application_facts) in arrivals.iter_mut().zip(&mut applications) {
+            let Some(mut arrival) = self.presenter.worker_service.drain() else {
+                break;
+            };
+            *arrival_facts = Some(arrival.facts);
+            let application = WorkerApplication {
+                generation: arrival.facts.generation,
+                disposition: OrbitDisposition::Stale,
+                reference_applied: false,
+            };
+            match self
+                .presenter
+                .worker_service
+                .apply(&mut arrival.lease, application, 0)
+            {
+                Ok(applied) => *application_facts = Some(applied),
+                Err(error) => match error {},
+            }
+        }
+        let submission = self
+            .presenter
+            .worker_submission
+            .take()
+            .map(|request| self.presenter.worker_service.submit(request));
+        let facts = self.presenter.worker_service.facts();
+        self.presenter.worker_turns.push(WorkerTurn {
+            arrivals,
+            applications,
+            submission,
+            facts,
+        });
         Ok(())
     }
 
@@ -1441,6 +1540,69 @@ fn drive_refresh(
         false,
     )
     .scene_id
+}
+
+fn recorded_worker_service_turn() -> WorkerTurn {
+    let mut frame_loop = FrameLoop::default();
+    let mut presenter = FakePresenter::default();
+    let arrival = WorkerArrival {
+        generation: 7,
+        centre_revision: 3,
+        length: 41,
+        compute_us: 250,
+        precision_bits: 192,
+        cancelled: false,
+    };
+    presenter.worker_service.port.arrivals.push_back(arrival);
+    let centre = BigCentre::from_f64([0.0; 4], 192).expect("finite replay centre");
+    let encoded = EncodedCentre::encode_math(&centre, 3).expect("encodable replay centre");
+    presenter.worker_submission = Some(
+        OrbitRequest::new(
+            8,
+            encoded,
+            1,
+            192,
+            64,
+            PrecisionMode::Deterministic,
+            OrbitReason::CENTRE_THRESHOLD,
+        )
+        .expect("valid replay request"),
+    );
+    let _outcome = drive_turn(
+        &mut frame_loop,
+        &mut presenter,
+        FakeClock::default(),
+        FramePolicy::SingleFrameOnDemand,
+        false,
+    );
+    presenter.worker_turns[0]
+}
+
+#[test]
+fn native_refresh_replays_plain_worker_service_transactions() {
+    let recorded = recorded_worker_service_turn();
+    let replayed = recorded_worker_service_turn();
+    assert_eq!(replayed, recorded);
+    assert_eq!(
+        recorded.arrivals[0].map(|arrival| arrival.generation),
+        Some(7)
+    );
+    assert_eq!(
+        recorded.applications[0],
+        Some(WorkerApplication {
+            generation: 7,
+            disposition: OrbitDisposition::Stale,
+            reference_applied: false,
+        })
+    );
+    assert_eq!(
+        recorded.submission,
+        Some(WorkerSubmission {
+            generation: 8,
+            outcome: SubmitOutcome::Transferred,
+        })
+    );
+    assert_eq!(recorded.facts, WorkerFacts::new(WorkerMode::SameThread));
 }
 
 fn drive_viewer_harness(

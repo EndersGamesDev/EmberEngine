@@ -573,6 +573,120 @@ fn execute_ordered_refresh<R: OrderedRefresh>(mut refresh: R) -> Result<R::Outpu
     refresh.consider_warp(SceneConsidered)
 }
 
+/// Plain result of handing one orbit request to the worker service.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerSubmission {
+    generation: u32,
+    outcome: ember_julibrot_worker::SubmitOutcome,
+}
+
+/// Plain metadata observed when one worker arrival is drained.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerArrival {
+    generation: u32,
+    centre_revision: u32,
+    length: u32,
+    compute_us: u32,
+    precision_bits: u32,
+    cancelled: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WorkerArrival {
+    const fn from_response(response: &ember_julibrot_worker::OrbitResponseView) -> Self {
+        Self {
+            generation: response.generation(),
+            centre_revision: response.centre_revision(),
+            length: response.length(),
+            compute_us: response.compute_us(),
+            precision_bits: response.precision_bits(),
+            cancelled: response.cancelled(),
+        }
+    }
+
+    fn matches(self, response: &ember_julibrot_worker::OrbitResponseView) -> bool {
+        self == Self {
+            generation: response.generation(),
+            centre_revision: response.centre_revision(),
+            length: response.length(),
+            compute_us: response.compute_us(),
+            precision_bits: response.precision_bits(),
+            cancelled: response.cancelled(),
+        }
+    }
+}
+
+/// Plain result of applying one drained arrival and returning its credit.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkerApplication {
+    generation: u32,
+    disposition: ember_julibrot_worker::OrbitDisposition,
+    reference_applied: bool,
+}
+
+/// A drained value keeps its transport lease private while exposing replayable metadata.
+#[cfg(any(target_arch = "wasm32", test))]
+struct DrainedWorkerArrival<A> {
+    facts: WorkerArrival,
+    lease: A,
+}
+
+/// App-local lowering used by the replayable worker-service transaction owner.
+#[cfg(any(target_arch = "wasm32", test))]
+trait WorkerServicePort {
+    type Arrival;
+    type Error;
+
+    fn submit(&mut self, request: ember_julibrot_worker::OrbitRequest) -> WorkerSubmission;
+    fn drain(&mut self) -> Option<DrainedWorkerArrival<Self::Arrival>>;
+    fn apply(
+        &mut self,
+        arrival: &mut Self::Arrival,
+        application: WorkerApplication,
+        owner_now_us: u64,
+    ) -> Result<WorkerApplication, Self::Error>;
+    fn facts(&self) -> ember_julibrot_worker::WorkerFacts;
+}
+
+/// Owns worker service transactions independently of their browser or replay lowering.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default)]
+struct WorkerServiceOwner<P> {
+    port: P,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl<P: WorkerServicePort> WorkerServiceOwner<P> {
+    #[cfg(target_arch = "wasm32")]
+    const fn new(port: P) -> Self {
+        Self { port }
+    }
+
+    fn submit(&mut self, request: ember_julibrot_worker::OrbitRequest) -> WorkerSubmission {
+        self.port.submit(request)
+    }
+
+    fn drain(&mut self) -> Option<DrainedWorkerArrival<P::Arrival>> {
+        self.port.drain()
+    }
+
+    fn apply(
+        &mut self,
+        arrival: &mut P::Arrival,
+        application: WorkerApplication,
+        owner_now_us: u64,
+    ) -> Result<WorkerApplication, P::Error> {
+        self.port.apply(arrival, application, owner_now_us)
+    }
+
+    fn facts(&self) -> ember_julibrot_worker::WorkerFacts {
+        self.port.facts()
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
@@ -597,9 +711,10 @@ mod browser {
     use super::{
         BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
         FrameLoop, HotWritten, OrderedRefresh, PAGE_MAX_ITERATION_CAP, RefusalClass,
-        SceneConsidered, SceneMode, backdrop_extent, coverage_pre_empts, execute_ordered_refresh,
-        horizon_facts, main_for_grid, published_iteration_cap, sampling_zoom_log2,
-        stamp_scene_level, stamped_screen_map,
+        SceneConsidered, SceneMode, WorkerApplication, WorkerArrival, WorkerServiceOwner,
+        WorkerServicePort, WorkerSubmission, backdrop_extent, coverage_pre_empts,
+        execute_ordered_refresh, horizon_facts, main_for_grid, published_iteration_cap,
+        sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{
@@ -649,6 +764,62 @@ mod browser {
         verification: ember_julibrot_worker::ReferenceVerification,
         max_consumed_word_error_ulps: Option<u32>,
         precision_escalations: u32,
+    }
+
+    struct ChannelWorkerService {
+        owner_endpoint: OwnerEndpoint,
+        _producer_endpoint: ProducerEndpoint,
+    }
+
+    impl WorkerServicePort for ChannelWorkerService {
+        type Arrival = ember_julibrot_worker::OrbitResponseView;
+        type Error = ember_julibrot_worker::ChannelError;
+
+        fn submit(&mut self, request: OrbitRequest) -> WorkerSubmission {
+            let generation = request.generation();
+            let outcome = self.owner_endpoint.submit(request);
+            WorkerSubmission {
+                generation,
+                outcome,
+            }
+        }
+
+        fn drain(&mut self) -> Option<super::DrainedWorkerArrival<Self::Arrival>> {
+            let response = self.owner_endpoint.next_arrival()?;
+            Some(super::DrainedWorkerArrival {
+                facts: WorkerArrival::from_response(&response),
+                lease: response,
+            })
+        }
+
+        fn apply(
+            &mut self,
+            arrival: &mut Self::Arrival,
+            application: WorkerApplication,
+            owner_now_us: u64,
+        ) -> Result<WorkerApplication, Self::Error> {
+            self.owner_endpoint
+                .return_credit(arrival, application.disposition, owner_now_us)?;
+            Ok(application)
+        }
+
+        fn facts(&self) -> WorkerFacts {
+            self.owner_endpoint.facts()
+        }
+    }
+
+    impl WorkerServiceOwner<ChannelWorkerService> {
+        fn take_error(&self) -> Option<ember_julibrot_worker::ChannelError> {
+            self.port.owner_endpoint.take_error()
+        }
+
+        fn latest_generation(&self) -> u32 {
+            self.port.owner_endpoint.latest_generation()
+        }
+
+        fn pending_request_depth(&self) -> u32 {
+            self.port.owner_endpoint.pending_request_depth()
+        }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -743,8 +914,7 @@ mod browser {
         executor: GpuKernelExecutor,
         kernels: JulibrotKernels,
         presenter: Presenter,
-        owner_endpoint: OwnerEndpoint,
-        _producer_endpoint: ProducerEndpoint,
+        worker_service: WorkerServiceOwner<ChannelWorkerService>,
         orbits: OrbitRegistry<RegisteredOrbit>,
         current_orbit: Option<OrbitHandle>,
         accepted_reference: Option<BigCentre>,
@@ -875,7 +1045,7 @@ mod browser {
                     .request_scene_update(frame_loop.main.generation_applied);
                 frame_loop.prepared_level = None;
             }
-            if let Some(error) = frame_loop.owner_endpoint.take_error() {
+            if let Some(error) = frame_loop.worker_service.take_error() {
                 frame_loop.abandon_submitted_references(viewer);
                 return Err(worker_error(error));
             }
@@ -1285,8 +1455,10 @@ mod browser {
                 executor,
                 kernels,
                 presenter,
-                owner_endpoint,
-                _producer_endpoint: producer_endpoint,
+                worker_service: WorkerServiceOwner::new(ChannelWorkerService {
+                    owner_endpoint,
+                    _producer_endpoint: producer_endpoint,
+                }),
                 orbits: OrbitRegistry::new(),
                 current_orbit: None,
                 accepted_reference: Some(accepted_reference),

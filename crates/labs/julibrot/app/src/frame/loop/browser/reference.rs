@@ -125,10 +125,11 @@ impl BrowserFrameLoop {
     ) -> Result<bool, AppError> {
         let mut applied = false;
         for _ in 0..2 {
-            let Some(mut response) = self.owner_endpoint.next_arrival() else {
+            let Some(mut drained) = self.worker_service.drain() else {
                 break;
             };
-            let generation = response.generation();
+            debug_assert!(drained.facts.matches(&drained.lease));
+            let generation = drained.facts.generation;
             let submitted = self
                 .submitted_references
                 .iter()
@@ -139,17 +140,23 @@ impl BrowserFrameLoop {
             // ordinary acceptance uses, and that entry only answers the submission it named: a
             // submission finished first is a navigation nothing can be handed to. The successor a
             // finished submission releases is taken later in the same turn, so nothing waits.
-            let processed = self.process_arrival(viewer, &response, submitted);
+            let processed = self.process_arrival(viewer, &drained.lease, submitted);
             let _finished = viewer.finish_reference_submission(generation);
             let disposition = processed
                 .as_ref()
                 .map_or(OrbitDisposition::Stale, |result| result.0);
+            let application = WorkerApplication {
+                generation,
+                disposition,
+                reference_applied: processed.as_ref().is_ok_and(|result| result.1),
+            };
             let credited = self
-                .owner_endpoint
-                .return_credit(&mut response, disposition, now_us(now_ms))
+                .worker_service
+                .apply(&mut drained.lease, application, now_us(now_ms))
                 .map_err(worker_error);
             let (_, arrival_applied) = processed?;
-            credited?;
+            let applied_facts = credited?;
+            debug_assert_eq!(applied_facts, application);
             applied |= arrival_applied;
         }
         Ok(applied)
@@ -255,7 +262,7 @@ impl BrowserFrameLoop {
                 && super::super::arrival_is_current(
                     response.cancelled(),
                     response.generation(),
-                    self.owner_endpoint.latest_generation(),
+                    self.worker_service.latest_generation(),
                     viewer.navigation_pending_depth(),
                 )
         }) else {
@@ -518,8 +525,10 @@ impl BrowserFrameLoop {
                 })?;
         }
         let transfer_started_us = monotonic_now_us();
-        let submit_outcome = self.owner_endpoint.submit(request);
+        let submitted_request = self.worker_service.submit(request);
         let transfer_finished_us = monotonic_now_us();
+        debug_assert_eq!(submitted_request.generation, navigation.generation);
+        let submit_outcome = submitted_request.outcome;
         if submit_outcome == SubmitOutcome::GenerationExhausted {
             let _finished = viewer.finish_reference_submission(navigation.generation);
             return Err(AppError::GenerationExhausted);
