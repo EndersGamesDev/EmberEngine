@@ -399,8 +399,9 @@ fn draft_clock_result_reset_and_silent_cleanup_follow_the_lifecycle() {
     assert_eq!(lobby.m.seed, seed.wrapping_add(1));
     assert!(lobby.m.roster[0].connected);
     assert!(!lobby.m.roster[0].picked);
-    hub.conns.get_mut(&1).unwrap().last_seen =
-        Instant::now() - Duration::from_secs(proto::CLIENT_TIMEOUT_SECS + 1);
+    hub.conns.get_mut(&1).unwrap().last_seen = Instant::now()
+        .checked_sub(Duration::from_secs(proto::CLIENT_TIMEOUT_SECS + 1))
+        .unwrap();
     drop_silent(&mut hub.conns, &mut hub.lobbies);
     assert!(hub.conns.is_empty());
     assert!(hub.lobbies.is_empty());
@@ -431,141 +432,158 @@ fn wire_until(ws: &mut Wire, matches: impl Fn(&S2C) -> bool) -> S2C {
     panic!("timed out waiting for the expected server message");
 }
 
+fn connect_wire_clients(url: &str, mode: u8) -> Vec<Wire> {
+    let mut clients = Vec::new();
+    for slot in 0..=2 * mode {
+        let (mut ws, _) = tungstenite::connect(url).unwrap();
+        if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+        }
+        wire_send(
+            &mut ws,
+            &C2S::Hello {
+                proto: if slot == 2 * mode {
+                    0
+                } else {
+                    proto::PROTO_VERSION
+                },
+                handle: format!("wire-{slot}"),
+            },
+        );
+        wire_until(
+            &mut ws,
+            |m| matches!(m, S2C::Welcome { proto: p, .. } if *p == proto::PROTO_VERSION),
+        );
+        clients.push(ws);
+    }
+    clients
+}
+
+fn fill_wire_lobby(clients: &mut [Wire], mode: u8) {
+    let browser = usize::from(2 * mode);
+    wire_send(
+        &mut clients[browser],
+        &C2S::CreateLobby {
+            name: "wrong-version".into(),
+            password: None,
+            mode,
+        },
+    );
+    wire_until(&mut clients[browser], |m| matches!(m, S2C::Rejected { .. }));
+    wire_send(
+        &mut clients[0],
+        &C2S::CreateLobby {
+            name: "wire-game".into(),
+            password: None,
+            mode,
+        },
+    );
+    wire_until(&mut clients[0], |m| matches!(m, S2C::Joined { id: 0, .. }));
+    for slot in 1..2 * mode {
+        wire_send(
+            &mut clients[usize::from(slot)],
+            &C2S::JoinLobby {
+                name: "wire-game".into(),
+                password: None,
+            },
+        );
+        wire_until(
+            &mut clients[usize::from(slot)],
+            |m| matches!(m, S2C::Joined { id, .. } if *id == slot),
+        );
+    }
+    wire_send(&mut clients[browser], &C2S::ListLobbies);
+    wire_until(
+        &mut clients[browser],
+        |m| matches!(m, S2C::Lobbies { lobbies } if lobbies.len() == 1 && lobbies[0].players == 2 * mode && lobbies[0].cap == 2 * mode),
+    );
+    for slot in 0..2 * mode {
+        wire_send(
+            &mut clients[usize::from(slot)],
+            &C2S::Pick {
+                champ: slot % mode,
+                d: 0,
+                f: 1,
+                runes: [0, 1, 2],
+            },
+        );
+        wire_until(
+            &mut clients[usize::from(slot)],
+            |m| matches!(m, S2C::Roster { roster } if roster[usize::from(slot)].picked && roster[usize::from(slot)].champ == slot % mode),
+        );
+    }
+}
+
+fn exercise_live_wire_commands(clients: &mut [Wire], mode: u8) {
+    wire_send(&mut clients[0], &C2S::StartMatch);
+    let first = wire_until(
+        &mut clients[0],
+        |m| matches!(m, S2C::State { champs, .. } if champs.len() == usize::from(2 * mode)),
+    );
+    let S2C::State { units, .. } = first else {
+        unreachable!()
+    };
+    let start_x = units.iter().find(|u| u.k == 0 && u.slot == 0).unwrap().x;
+    for cmd in [
+        Cmd::Rank { slot: 0 },
+        Cmd::Buy { item: 1 },
+        Cmd::Move { x: -40.0, z: 0.0 },
+    ] {
+        wire_send(&mut clients[0], &C2S::Cmd(cmd));
+    }
+    wire_until(
+        &mut clients[0],
+        |m| matches!(m, S2C::State { tick, units, champs, .. } if *tick > 0 && units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > start_x + 0.5) && champs[0].ranks[0] == 1 && champs[0].items[0] == 1),
+    );
+    // Travel beyond the previous Move destination, so a silently ignored
+    // new command cannot pass this actual socket regression.
+    wire_send(
+        &mut clients[0],
+        &C2S::Cmd(Cmd::AttackMove { x: -30.0, z: 0.0 }),
+    );
+    wire_until(
+        &mut clients[0],
+        |m| matches!(m, S2C::State { units, .. } if units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > -38.0)),
+    );
+    wire_send(&mut clients[0], &C2S::LeaveLobby);
+    wire_until(&mut clients[1], |m| {
+        matches!(m, S2C::PlayerLeft { slot: 0 })
+    });
+}
+
+fn exercise_wire_mode(mode: u8) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
+    let server = thread::spawn(move || {
+        let hub = thread::spawn(move || hub_loop(&rx, &ServerConfig::default()).unwrap());
+        let mut connections = Vec::new();
+        for id in 0..=u64::from(2 * mode) {
+            let stream = listener.accept().unwrap().0;
+            let events = tx.clone();
+            connections.push(thread::spawn(move || conn_thread(id, stream, &events)));
+        }
+        drop(tx);
+        for connection in connections {
+            connection.join().unwrap();
+        }
+        hub.join().unwrap();
+    });
+    let mut clients = connect_wire_clients(&url, mode);
+    fill_wire_lobby(&mut clients, mode);
+    exercise_live_wire_commands(&mut clients, mode);
+    for client in &mut clients {
+        drop(client.close(None));
+    }
+    drop(clients);
+    server.join().unwrap();
+}
+
 #[test]
 fn real_websockets_fill_both_modes_and_apply_live_player_commands() {
     for mode in [1u8, 3] {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("ws://{}", listener.local_addr().unwrap());
-        let (tx, rx) = mpsc::sync_channel(MAX_PENDING_EVENTS);
-        let server = thread::spawn(move || {
-            let hub = thread::spawn(move || hub_loop(&rx, &ServerConfig::default()).unwrap());
-            let mut connections = Vec::new();
-            for id in 0..=u64::from(2 * mode) {
-                let stream = listener.accept().unwrap().0;
-                let events = tx.clone();
-                connections.push(thread::spawn(move || conn_thread(id, stream, &events)));
-            }
-            drop(tx);
-            for connection in connections {
-                connection.join().unwrap();
-            }
-            hub.join().unwrap();
-        });
-        let mut clients = Vec::new();
-        for slot in 0..=2 * mode {
-            let (mut ws, _) = tungstenite::connect(&url).unwrap();
-            if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
-                stream
-                    .set_read_timeout(Some(Duration::from_millis(100)))
-                    .unwrap();
-            }
-            wire_send(
-                &mut ws,
-                &C2S::Hello {
-                    proto: if slot == 2 * mode {
-                        0
-                    } else {
-                        proto::PROTO_VERSION
-                    },
-                    handle: format!("wire-{slot}"),
-                },
-            );
-            wire_until(
-                &mut ws,
-                |m| matches!(m, S2C::Welcome { proto: p, .. } if *p == proto::PROTO_VERSION),
-            );
-            clients.push(ws);
-        }
-        let browser = usize::from(2 * mode);
-        wire_send(
-            &mut clients[browser],
-            &C2S::CreateLobby {
-                name: "wrong-version".into(),
-                password: None,
-                mode,
-            },
-        );
-        wire_until(&mut clients[browser], |m| matches!(m, S2C::Rejected { .. }));
-        wire_send(
-            &mut clients[0],
-            &C2S::CreateLobby {
-                name: "wire-game".into(),
-                password: None,
-                mode,
-            },
-        );
-        wire_until(&mut clients[0], |m| matches!(m, S2C::Joined { id: 0, .. }));
-        for slot in 1..2 * mode {
-            wire_send(
-                &mut clients[usize::from(slot)],
-                &C2S::JoinLobby {
-                    name: "wire-game".into(),
-                    password: None,
-                },
-            );
-            wire_until(
-                &mut clients[usize::from(slot)],
-                |m| matches!(m, S2C::Joined { id, .. } if *id == slot),
-            );
-        }
-        wire_send(&mut clients[browser], &C2S::ListLobbies);
-        wire_until(
-            &mut clients[browser],
-            |m| matches!(m, S2C::Lobbies { lobbies } if lobbies.len() == 1 && lobbies[0].players == 2 * mode && lobbies[0].cap == 2 * mode),
-        );
-        for slot in 0..2 * mode {
-            wire_send(
-                &mut clients[usize::from(slot)],
-                &C2S::Pick {
-                    champ: slot % mode,
-                    d: 0,
-                    f: 1,
-                    runes: [0, 1, 2],
-                },
-            );
-            wire_until(
-                &mut clients[usize::from(slot)],
-                |m| matches!(m, S2C::Roster { roster } if roster[usize::from(slot)].picked && roster[usize::from(slot)].champ == slot % mode),
-            );
-        }
-        wire_send(&mut clients[0], &C2S::StartMatch);
-        let first = wire_until(
-            &mut clients[0],
-            |m| matches!(m, S2C::State { champs, .. } if champs.len() == usize::from(2 * mode)),
-        );
-        let S2C::State { units, .. } = first else {
-            unreachable!()
-        };
-        let start_x = units.iter().find(|u| u.k == 0 && u.slot == 0).unwrap().x;
-        for cmd in [
-            Cmd::Rank { slot: 0 },
-            Cmd::Buy { item: 1 },
-            Cmd::Move { x: -40.0, z: 0.0 },
-        ] {
-            wire_send(&mut clients[0], &C2S::Cmd(cmd));
-        }
-        wire_until(
-            &mut clients[0],
-            |m| matches!(m, S2C::State { tick, units, champs, .. } if *tick > 0 && units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > start_x + 0.5) && champs[0].ranks[0] == 1 && champs[0].items[0] == 1),
-        );
-        // Travel beyond the previous Move destination, so a silently ignored
-        // new command cannot pass this actual socket regression.
-        wire_send(
-            &mut clients[0],
-            &C2S::Cmd(Cmd::AttackMove { x: -30.0, z: 0.0 }),
-        );
-        wire_until(
-            &mut clients[0],
-            |m| matches!(m, S2C::State { units, .. } if units.iter().any(|u| u.k == 0 && u.slot == 0 && u.x > -38.0)),
-        );
-        wire_send(&mut clients[0], &C2S::LeaveLobby);
-        wire_until(&mut clients[1], |m| {
-            matches!(m, S2C::PlayerLeft { slot: 0 })
-        });
-        for client in &mut clients {
-            drop(client.close(None));
-        }
-        drop(clients);
-        server.join().unwrap();
+        exercise_wire_mode(mode);
     }
 }

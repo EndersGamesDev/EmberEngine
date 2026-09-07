@@ -96,8 +96,12 @@ struct Lobby {
     clock_left: f32,
 }
 
-#[must_use]
-pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
+/// Serve League connections accepted from `listener` until it closes.
+///
+/// # Errors
+///
+/// Returns an I/O error when the listener's local address cannot be read.
+pub fn run(listener: &TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     let (version, commit) = build_stamp();
     let host = if cfg.host_name.is_empty() {
@@ -302,7 +306,10 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
         let elapsed = now.duration_since(last).as_secs_f32().min(0.25);
         last = now;
         acc += elapsed;
-        while acc >= league_core::DT {
+        loop {
+            if acc < league_core::DT {
+                break;
+            }
             acc -= league_core::DT;
             tick_lobbies(&mut lobbies, &conns);
             for conn in conns.values_mut() {
@@ -400,7 +407,7 @@ fn reset_for_select(lobby: &mut Lobby) {
     let mut fresh = Match::new(lobby.mode, lobby.m.seed.wrapping_add(1));
     for r in &lobby.m.roster {
         let slot = &mut fresh.roster[usize::from(r.slot)];
-        slot.handle = r.handle.clone();
+        slot.handle.clone_from(&r.handle);
         slot.bot = r.bot;
         slot.connected = r.connected;
     }
@@ -463,56 +470,8 @@ fn handle_msg(
     cfg: &ServerConfig,
 ) {
     match msg {
-        C2S::Hello { proto: v, handle } => {
-            let Some(c) = conns.get_mut(&id) else { return };
-            if c.handle.is_some() {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "Hello was already received".into(),
-                    },
-                );
-                return;
-            }
-            tracing::info!(conn = id, proto = v, handle = %handle, "hello");
-            c.proto = v;
-            c.handle = Some(proto::sanitize_handle(&handle));
-            let players = conns.values().filter(|c| c.slot.is_some()).count() as u32;
-            let open = lobbies.len() as u32;
-            let (version, commit) = build_stamp();
-            send_to(
-                conns,
-                id,
-                &S2C::Welcome {
-                    proto: proto::PROTO_VERSION,
-                    host: cfg.host_name.clone(),
-                    version: version.to_owned(),
-                    commit: commit.to_owned(),
-                    players,
-                    lobbies: open,
-                },
-            );
-        }
-        C2S::ListLobbies => {
-            let rows: Vec<LobbyInfo> = lobbies
-                .iter()
-                .map(|(name, l)| LobbyInfo {
-                    name: name.clone(),
-                    host: l.members.keys().min().map_or_else(
-                        || "?".to_string(),
-                        |s| l.m.roster[usize::from(*s)].handle.clone(),
-                    ),
-                    has_password: l.password.is_some(),
-                    players: u8::try_from(l.m.roster.iter().filter(|r| !r.bot).count())
-                        .unwrap_or(u8::MAX),
-                    cap: 2 * l.mode,
-                    mode: l.mode,
-                    racing: l.m.phase == Phase::Live,
-                })
-                .collect();
-            send_to(conns, id, &S2C::Lobbies { lobbies: rows });
-        }
+        C2S::Hello { proto: v, handle } => handle_hello(id, v, &handle, conns, lobbies, cfg),
+        C2S::ListLobbies => handle_list_lobbies(id, conns, lobbies),
         C2S::CreateLobby {
             name,
             password,
@@ -524,115 +483,192 @@ fn handle_msg(
         }
         C2S::LeaveLobby => leave_lobby(id, conns, lobbies),
         C2S::Pick { champ, d, f, runes } => {
-            let (Some(lobby_name), Some(slot)) = (
-                conns.get(&id).and_then(|c| c.lobby.clone()),
-                conns.get(&id).and_then(|c| c.slot),
-            ) else {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "not in a lobby".into(),
-                    },
-                );
-                return;
-            };
-            let Some(lobby) = lobbies.get_mut(&lobby_name) else {
-                return;
-            };
-            if lobby.m.phase != Phase::Select {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "the draft is closed".into(),
-                    },
-                );
-                return;
-            }
-            lobby.m.set_pick(slot, champ, d, f, runes);
-            let pick = &lobby.m.roster[usize::from(slot)];
-            if !pick.picked || (pick.champ, pick.d, pick.f, pick.runes) != (champ, d, f, runes) {
-                send_to(conns, id, &S2C::Rejected {
-                    reason: "choose an available champion for your team, two different spells, and three different runes".into(),
-                });
-                return;
-            }
-            // a click on a champion card is cheap to echo; broadcast the
-            // whole roster so every screen in the draft agrees
-            broadcast(lobby, conns, &roster_msg(lobby));
+            handle_pick(id, champ, d, f, runes, conns, lobbies);
         }
-        C2S::StartMatch => {
-            let (Some(lobby_name), Some(slot)) = (
-                conns.get(&id).and_then(|c| c.lobby.clone()),
-                conns.get(&id).and_then(|c| c.slot),
-            ) else {
-                return;
-            };
-            let Some(lobby) = lobbies.get_mut(&lobby_name) else {
-                return;
-            };
-            if lobby.members.keys().copied().min() != Some(slot) {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "only the host can start the match".into(),
-                    },
-                );
-                return;
-            }
-            if lobby.m.phase != Phase::Select {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "the draft already ran".into(),
-                    },
-                );
-                return;
-            }
-            if lobby.m.roster.iter().any(|r| !r.bot && !r.picked) {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "every player must pick a champion before the host can start"
-                            .into(),
-                    },
-                );
-                return;
-            }
-            lobby.m.start();
-            broadcast(lobby, conns, &roster_msg(lobby));
-            broadcast(
-                lobby,
-                conns,
-                &S2C::Phase {
-                    phase: Phase::Live,
-                    left: 0.0,
-                },
-            );
-            let state = lobby.m.snapshot();
-            broadcast(lobby, conns, &state);
-        }
-        C2S::Cmd(cmd) => {
-            let (Some(lobby_name), Some(slot)) = (
-                conns.get(&id).and_then(|c| c.lobby.clone()),
-                conns.get(&id).and_then(|c| c.slot),
-            ) else {
-                return;
-            };
-            let Some(lobby) = lobbies.get_mut(&lobby_name) else {
-                return;
-            };
-            if lobby.m.phase == Phase::Live {
-                lobby.m.command(slot, cmd.sanitized());
-            }
-        }
+        C2S::StartMatch => handle_start_match(id, conns, lobbies),
+        C2S::Cmd(cmd) => handle_cmd(id, cmd, conns, lobbies),
         C2S::Ping { nonce } => {
             send_to(conns, id, &S2C::Pong { nonce });
         }
+    }
+}
+
+fn handle_hello(
+    id: u64,
+    version: u16,
+    handle: &str,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &HashMap<String, Lobby>,
+    cfg: &ServerConfig,
+) {
+    let Some(conn) = conns.get_mut(&id) else {
+        return;
+    };
+    if conn.handle.is_some() {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "Hello was already received".into(),
+            },
+        );
+        return;
+    }
+    tracing::info!(conn = id, proto = version, handle = %handle, "hello");
+    conn.proto = version;
+    conn.handle = Some(proto::sanitize_handle(handle));
+    let players =
+        u32::try_from(conns.values().filter(|c| c.slot.is_some()).count()).unwrap_or(u32::MAX);
+    let open = u32::try_from(lobbies.len()).unwrap_or(u32::MAX);
+    let (version, commit) = build_stamp();
+    send_to(
+        conns,
+        id,
+        &S2C::Welcome {
+            proto: proto::PROTO_VERSION,
+            host: cfg.host_name.clone(),
+            version: version.to_owned(),
+            commit: commit.to_owned(),
+            players,
+            lobbies: open,
+        },
+    );
+}
+
+fn handle_list_lobbies(id: u64, conns: &HashMap<u64, Conn>, lobbies: &HashMap<String, Lobby>) {
+    let rows: Vec<LobbyInfo> = lobbies
+        .iter()
+        .map(|(name, lobby)| LobbyInfo {
+            name: name.clone(),
+            host: lobby.members.keys().min().map_or_else(
+                || "?".to_string(),
+                |slot| lobby.m.roster[usize::from(*slot)].handle.clone(),
+            ),
+            has_password: lobby.password.is_some(),
+            players: u8::try_from(lobby.m.roster.iter().filter(|r| !r.bot).count())
+                .unwrap_or(u8::MAX),
+            cap: 2 * lobby.mode,
+            mode: lobby.mode,
+            racing: lobby.m.phase == Phase::Live,
+        })
+        .collect();
+    send_to(conns, id, &S2C::Lobbies { lobbies: rows });
+}
+
+fn handle_pick(
+    id: u64,
+    champ: u8,
+    d: u8,
+    f: u8,
+    runes: [u8; 3],
+    conns: &HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+) {
+    let (Some(lobby_name), Some(slot)) = (
+        conns.get(&id).and_then(|c| c.lobby.clone()),
+        conns.get(&id).and_then(|c| c.slot),
+    ) else {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "not in a lobby".into(),
+            },
+        );
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+        return;
+    };
+    if lobby.m.phase != Phase::Select {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "the draft is closed".into(),
+            },
+        );
+        return;
+    }
+    lobby.m.set_pick(slot, champ, d, f, runes);
+    let pick = &lobby.m.roster[usize::from(slot)];
+    if !pick.picked || (pick.champ, pick.d, pick.f, pick.runes) != (champ, d, f, runes) {
+        send_to(conns, id, &S2C::Rejected {
+            reason: "choose an available champion for your team, two different spells, and three different runes".into(),
+        });
+        return;
+    }
+    // a click on a champion card is cheap to echo; broadcast the
+    // whole roster so every screen in the draft agrees
+    broadcast(lobby, conns, &roster_msg(lobby));
+}
+
+fn handle_start_match(id: u64, conns: &HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
+    let (Some(lobby_name), Some(slot)) = (
+        conns.get(&id).and_then(|c| c.lobby.clone()),
+        conns.get(&id).and_then(|c| c.slot),
+    ) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+        return;
+    };
+    if lobby.members.keys().copied().min() != Some(slot) {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "only the host can start the match".into(),
+            },
+        );
+        return;
+    }
+    if lobby.m.phase != Phase::Select {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "the draft already ran".into(),
+            },
+        );
+        return;
+    }
+    if lobby.m.roster.iter().any(|r| !r.bot && !r.picked) {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "every player must pick a champion before the host can start".into(),
+            },
+        );
+        return;
+    }
+    lobby.m.start();
+    broadcast(lobby, conns, &roster_msg(lobby));
+    broadcast(
+        lobby,
+        conns,
+        &S2C::Phase {
+            phase: Phase::Live,
+            left: 0.0,
+        },
+    );
+    let state = lobby.m.snapshot();
+    broadcast(lobby, conns, &state);
+}
+
+fn handle_cmd(id: u64, cmd: Cmd, conns: &HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
+    let (Some(lobby_name), Some(slot)) = (
+        conns.get(&id).and_then(|c| c.lobby.clone()),
+        conns.get(&id).and_then(|c| c.slot),
+    ) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+        return;
+    };
+    if lobby.m.phase == Phase::Live {
+        lobby.m.command(slot, cmd.sanitized());
     }
 }
 
@@ -748,17 +784,17 @@ fn join_lobby(
         );
         return;
     };
-    if let Some(want) = &lobby.password {
-        if proto::sanitize(password, proto::MAX_PASSWORD_LEN) != *want {
-            send_to(
-                conns,
-                id,
-                &S2C::Rejected {
-                    reason: "wrong password".into(),
-                },
-            );
-            return;
-        }
+    if let Some(want) = &lobby.password
+        && proto::sanitize(password, proto::MAX_PASSWORD_LEN) != *want
+    {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "wrong password".into(),
+            },
+        );
+        return;
     }
     let already_here = conns
         .get(&id)
@@ -773,8 +809,18 @@ fn join_lobby(
         );
         return;
     }
-    // Validate first: a typo, a full lobby or a wrong password must not
-    // remove a player from a match they are already playing.
+    finish_join(id, name, already_here, conns, lobbies);
+}
+
+fn finish_join(
+    id: u64,
+    name: &str,
+    already_here: bool,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+) {
+    // Validation finished before this point: a typo, a full lobby or a
+    // wrong password must not remove a player from an existing match.
     if !already_here {
         leave_lobby(id, conns, lobbies);
     }
