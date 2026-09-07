@@ -101,10 +101,6 @@ impl OnlineGame {
         })
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Keep the exhaustive server-message lifecycle mapping together for protocol review"
-    )]
     fn apply(&mut self, msg: S2C) {
         match msg {
             S2C::Welcome { .. } => self.welcomed = true,
