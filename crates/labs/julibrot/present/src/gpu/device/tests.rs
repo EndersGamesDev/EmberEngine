@@ -3,9 +3,7 @@ use ember_julibrot_math::{ObjectAngles, PrecisionMode, ViewControls, construct_p
 use ember_julibrot_worker::{HotState, MainState};
 
 use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
-use super::ledger::{
-    LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination,
-};
+use super::ledger::{LatticeRefusal, presentation_ledger_entry, redraw_source_covers_destination};
 use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
@@ -1463,10 +1461,9 @@ fn reproduced_source_covers_destination(
     ) else {
         return false;
     };
-    let Some(lattice) = crate::LatticePair::new(
-        source.extent,
-        [requested.grid_width, requested.grid_height],
-    ) else {
+    let Some(lattice) =
+        crate::LatticePair::new(source.extent, [requested.grid_width, requested.grid_height])
+    else {
         return false;
     };
     let Some(rows) = crate::pack_homography_rows(crate::compose_homography(
@@ -1486,12 +1483,12 @@ fn assert_coverage_decision(
     expected: bool,
 ) {
     let reproduced = reproduced_source_covers_destination(plan, source, requested);
-    assert_eq!(reproduced, expected, "the reproduced {name} decision moved");
     assert_eq!(
         redraw_source_covers_destination(plan, source, requested),
         reproduced,
         "production coverage drifted from the app reproduction for {name}"
     );
+    assert_eq!(reproduced, expected, "the reproduced {name} decision moved");
 }
 
 #[test]
@@ -1504,7 +1501,9 @@ fn production_redraw_coverage_matches_the_reproduction_oracle() {
     let mut covered = pose_on(extent);
     covered.zoom_log2 = 1.0;
     let mut outside = covered;
-    outside.centre_from_reference_px = [480.0, -270.0];
+    // At this two-times zoom the inverse map sends the right edge to source x=540, sixty pixels
+    // beyond the source's +480 edge, and likewise crosses the lower edge in y.
+    outside.centre_from_reference_px = [600.0, -360.0];
 
     let admitted_final_covered = crate::WarpPlan {
         kind: WarpKind::ReliefRedraw,
