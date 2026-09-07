@@ -258,6 +258,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
+- R2-02 must reconcile or deliberately preserve the worker transport divergence: the same logical ownership scenario dispatches and returns request slot 0 on the same-thread queue versus slot 1 on the browser stack, and same-thread credit return advances the final fact epoch to 7 versus 6 in the browser owner core.
 - App facts `newest_measurement` compares the last scene and warp `wall_ms` durations as though they were submission recency, so `warmup_label` reports the longer submission's class rather than the newer one's; the fix selects by submission recency and regenerates the served whole-grid fixture (`crates/labs/julibrot/app/src/facts.rs:508`).
 - R2-04d (surface resolution extraction) is the scheduled home for a poll-only browser boundary; until then the served whole-grid oracle reports `owner_epoch`, `presentation_ledger`, and `capture_count` as load-dependent evidence because `app_refresh()` both polls GPU fences and runs presentation turns.
 - The integrated `Cargo.lock` change is the workspace-only `pollster.workspace = true` dev-dependency edge for the present crate's native palette tests; it adds no registry crate.

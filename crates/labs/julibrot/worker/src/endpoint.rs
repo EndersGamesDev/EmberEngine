@@ -1015,6 +1015,15 @@ pub(crate) mod tests {
         buffer_capacity,
     };
 
+    /// Generation shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_GENERATION: u32 = 11;
+    /// Stable capacity shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_MAX_ITER: u32 = 64;
+    /// Completed records shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_RECORDS: usize = 1;
+    /// Credit-return time shared by both ownership-oracle transports.
+    pub(crate) const OWNERSHIP_SCENARIO_OWNER_NOW_US: u64 = 0;
+
     /// One in-process transfer slot with the browser slot's shared-mutation shape.
     struct FakeSlot {
         buffer: RefCell<WireBuffer>,
@@ -1375,23 +1384,29 @@ pub(crate) mod tests {
 
     /// Runs the production browser core through its transition-site ownership oracle.
     pub(crate) fn browser_ownership_trace() -> OwnershipTrace {
-        let mut harness = Harness::boot(64);
+        let mut harness = Harness::boot(OWNERSHIP_SCENARIO_MAX_ITER);
         begin_ownership_trace();
-        let generation = 11;
-        assert_eq!(harness.submit(generation, 64), SubmitOutcome::Transferred);
+        assert_eq!(
+            harness.submit(
+                OWNERSHIP_SCENARIO_GENERATION,
+                OWNERSHIP_SCENARIO_MAX_ITER
+            ),
+            SubmitOutcome::Transferred
+        );
 
-        harness.produce(1);
+        harness.produce(OWNERSHIP_SCENARIO_RECORDS);
         let epoch = harness.core.pool_epoch();
         let (slot, _) = harness.core.take_arrival().expect("one queued response");
         let header = slot.header().expect("a validated response header");
         let disposition = OrbitDisposition::Applied;
         let now_us = harness.wire.borrow().now_us;
+        assert_eq!(now_us, OWNERSHIP_SCENARIO_OWNER_NOW_US);
         harness
             .core
             .return_slot(slot, epoch, disposition, now_us)
             .expect("credit return remains valid");
         harness.pump();
-        assert_eq!(header.generation, generation);
+        assert_eq!(header.generation, OWNERSHIP_SCENARIO_GENERATION);
         let facts = harness.core.facts();
         finish_ownership_trace(facts)
     }
