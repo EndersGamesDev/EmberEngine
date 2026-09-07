@@ -1431,6 +1431,8 @@ mod browser {
                     }
                     Err(error) => return Err(error),
                 }
+            } else {
+                let _refresh_order = refresh_order.warp_considered();
             }
             let status = if presented {
                 RefreshStatus::Presented
