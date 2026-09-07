@@ -68,6 +68,28 @@ fn options() -> Result<(String, String, u8, Option<String>), String> {
     ))
 }
 
+fn validate_welcome(welcome: S2C, expected_commit: Option<&str>) -> Result<(), String> {
+    if let S2C::Welcome {
+        proto: version,
+        commit,
+        ..
+    } = welcome
+    {
+        if version != proto::PROTO_VERSION {
+            return Err(format!(
+                "server uses protocol v{version}, expected v{}",
+                proto::PROTO_VERSION
+            ));
+        }
+        if let Some(expected) = expected_commit
+            && expected != commit
+        {
+            return Err(format!("server commit {commit:?}, expected {expected:?}"));
+        }
+    }
+    Ok(())
+}
+
 fn run(url: &str, lobby: &str, mode: u8, expected_commit: Option<&str>) -> Result<(), String> {
     drop(rustls::crypto::ring::default_provider().install_default());
     let (mut ws, _) = tungstenite::connect(url).map_err(|e| e.to_string())?;
@@ -94,24 +116,7 @@ fn run(url: &str, lobby: &str, mode: u8, expected_commit: Option<&str>) -> Resul
     let welcome = receive(&mut ws, deadline, "Welcome", |m| {
         matches!(m, S2C::Welcome { .. })
     })?;
-    if let S2C::Welcome {
-        proto: version,
-        commit,
-        ..
-    } = welcome
-    {
-        if version != proto::PROTO_VERSION {
-            return Err(format!(
-                "server uses protocol v{version}, expected v{}",
-                proto::PROTO_VERSION
-            ));
-        }
-        if let Some(expected) = expected_commit {
-            if expected != commit {
-                return Err(format!("server commit {commit:?}, expected {expected:?}"));
-            }
-        }
-    }
+    validate_welcome(welcome, expected_commit)?;
 
     send(
         &mut ws,

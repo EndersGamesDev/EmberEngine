@@ -84,7 +84,8 @@ impl Match {
         }
         let def = u.def;
         let (sx, sz) = (u.x, u.z);
-        let (fx_start, proj_start, zone_start) = (self.fx.len(), self.projs.len(), self.zones.len());
+        let (fx_start, proj_start, zone_start) =
+            (self.fx.len(), self.projs.len(), self.zones.len());
         let stats = self.champ_stats_of(&self.units[ui]);
         let haste_scale = 100.0 / (100.0 + stats.haste + self.boon_haste(ui));
         {

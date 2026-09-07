@@ -29,11 +29,12 @@ fn main() -> io::Result<()> {
                 name = Some(n);
             }
             "--help" | "-h" => {
-                println!(
+                writeln!(
+                    io::stdout().lock(),
                     "league-server [BIND_ADDR] [--name HOST]\n\n \
                      The host name is also read from EMBER_HOST_NAME; --name wins.\n \
                      Without either the server runs unnamed and says so."
-                );
+                )?;
                 return Ok(());
             }
             other if other.starts_with('-') => {
@@ -63,7 +64,7 @@ fn main() -> io::Result<()> {
     // the first line a human sees when they attach to the console
     drop(io::stdout().flush());
     league_server::run(
-        listener,
+        &listener,
         league_server::ServerConfig {
             host_name,
             ..Default::default()

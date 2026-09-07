@@ -2469,7 +2469,9 @@ mod tests {
                 for z in &m.zones {
                     assert_eq!((z.champ, z.ability), (champ, ability));
                 }
-                let proto::S2C::State { fx, projs, .. } = m.snapshot() else { unreachable!() };
+                let proto::S2C::State { fx, projs, .. } = m.snapshot() else {
+                    unreachable!()
+                };
                 assert!(fx.iter().any(|f| {
                     f.k == 13 && f.champ == champ && f.ability == ability && f.source == source
                 }));
@@ -2543,7 +2545,9 @@ mod tests {
         assert!(m.projs.iter().any(|p| p.ability == 4));
         m.units.retain(|u| u.kind != Kind::Clone);
         m.fx.clear();
-        let proto::S2C::State { projs, .. } = m.snapshot() else { unreachable!() };
+        let proto::S2C::State { projs, .. } = m.snapshot() else {
+            unreachable!()
+        };
         assert!(projs.iter().all(|p| p.champ == data::SWARM));
         for _ in 0..120 {
             for pi in 0..m.projs.len() {
@@ -2592,7 +2596,10 @@ mod tests {
         m.cast(caster, 1, 4.0, 0.0);
         m.fx.clear();
         m.step_zone(0);
-        assert!(m.fx.iter().any(|f| f.k == 2 && f.champ == data::TESSERA && f.ability == 1));
+        assert!(
+            m.fx.iter()
+                .any(|f| f.k == 2 && f.champ == data::TESSERA && f.ability == 1)
+        );
 
         let mut m = visual_duel(data::HALLOW);
         let caster = m.champ_by_slot(0).unwrap();
@@ -2601,7 +2608,10 @@ mod tests {
         m.fx.clear();
         m.units[caster].hp = 1.0;
         m.deal_damage(caster, 10.0, 0, m.units[attacker].id, false);
-        assert!(m.fx.iter().any(|f| f.k == 9 && f.champ == data::HALLOW && f.ability == 3));
+        assert!(
+            m.fx.iter()
+                .any(|f| f.k == 9 && f.champ == data::HALLOW && f.ability == 3)
+        );
         assert!(!m.units[caster].dead);
     }
 
