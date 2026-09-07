@@ -10,7 +10,6 @@ use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
 use crate::{
     FrameReceipt, FrameState, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
-    WarpValidation,
 };
 
 #[test]
@@ -505,7 +504,7 @@ fn capture_native_palette_on(
         .expect("the device admits the HOT stride");
     let slot = HotSlot::for_refresh(refresh_id, stride, hot.epoch)
         .expect("the refresh selects a HOT slot");
-    presenter.write_hot(slot, hot, WarpValidation::Ordinary, false);
+    presenter.write_hot(slot, hot, false);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("Julibrot native palette presentation target"),
         size: extent_3d(extent),
@@ -1660,13 +1659,7 @@ fn a_plan_states_the_lattice_pair_it_maps_between_whatever_its_kind() {
     pose.grid_height = destination_extent[1];
     let mut frame = frame_at_extent(61, source_extent);
     frame.pose = pose;
-    let plan = crate::Warp::reproject(
-        &frame,
-        &pose,
-        &pose,
-        PrecisionMode::PictureFast,
-        crate::WarpValidation::Ordinary,
-    );
+    let plan = crate::Warp::reproject(&frame, &pose, &pose);
     assert_eq!(plan.kind, WarpKind::AnchorHomography);
     assert!(plan.source_valid);
     for chart in [
@@ -1803,15 +1796,9 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     assert!((actual.1 - expected.1).abs() < 1.0e-9);
 }
 
-/// Reprojects `frame` onto `to_pose` the way the presenter does, with no validation demand.
+/// Reprojects `frame` onto `to_pose` through the same planner entry as the presenter.
 fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan {
-    crate::Warp::reproject(
-        frame,
-        &frame.pose,
-        to_pose,
-        PrecisionMode::PictureFast,
-        crate::WarpValidation::Ordinary,
-    )
+    crate::Warp::reproject(frame, &frame.pose, to_pose)
 }
 
 /// Independently reproduces record-chart containment so fixture decisions cannot drift silently.

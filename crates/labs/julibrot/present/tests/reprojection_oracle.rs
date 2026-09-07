@@ -6,8 +6,8 @@ use ember_julibrot_math::{
 use ember_julibrot_present::{
     CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame, SubmissionKind,
     SubmissionMeasurement, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpPlan, WarpRefusalReason,
-    WarpValidation, apply_homography, grid_screen, height_for_record, presentation_value,
-    project_scene_point, project_scene_vertex, relief_redraw_source_pose, shade_presentation_value,
+    apply_homography, grid_screen, height_for_record, presentation_value, project_scene_point,
+    project_scene_vertex, relief_redraw_source_pose, shade_presentation_value,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -608,13 +608,7 @@ fn check_fixture(
     height: f64,
     expected: Expected,
 ) -> Option<String> {
-    let plan = Warp::reproject(
-        &frame(from),
-        from,
-        to,
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
-    );
+    let plan = Warp::reproject(&frame(from), from, to);
     let measured_exposure = exposure_count(&plan);
     let verdict = (|| -> Result<(), &'static str> {
         if plan.kind == WarpKind::ReliefRedraw {
@@ -1274,13 +1268,7 @@ fn a_camera_factor_turns_the_flat_picture_off_the_preset_row() {
         "a turned camera must resample the slice, not reproduce it: {resampled} of {compared}"
     );
 
-    let plan = Warp::reproject(
-        &frame(&preset),
-        &preset,
-        &turned,
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
-    );
+    let plan = Warp::reproject(&frame(&preset), &preset, &turned);
     assert!(plan.source_valid, "the turned flat warp is accepted");
     assert!(plan.exposed, "the turned rectangle exposes surface corners");
     assert_eq!(plan.source_scene_id, Some(7));
@@ -1495,15 +1483,7 @@ fn thirty_hertz_height_drag_keeps_both_measured_rows_inside_the_exact_redraw_fam
                 ZOOM_LOG2,
                 [0.0; 2],
             );
-            match Warp::reproject(
-                &retained_frame,
-                &retained,
-                &to,
-                PrecisionMode::PictureFast,
-                WarpValidation::Ordinary,
-            )
-            .kind
-            {
+            match Warp::reproject(&retained_frame, &retained, &to).kind {
                 WarpKind::ClearOnly => clear_only = clear_only.saturating_add(1),
                 WarpKind::ReliefRedraw => relief_redraws = relief_redraws.saturating_add(1),
                 WarpKind::AnchorHomography => {

@@ -47,7 +47,7 @@ use crate::{
 use ember_julibrot_present::{
     DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentEvents, PresentStatus,
     SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
-    WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
+    relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
@@ -6254,13 +6254,7 @@ fn measured_relief_plan(
     retained: &SceneFrame,
     requested: &Pose,
 ) -> ember_julibrot_present::WarpPlan {
-    Warp::reproject(
-        retained,
-        &retained.pose,
-        requested,
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
-    )
+    Warp::reproject(retained, &retained.pose, requested)
 }
 
 fn measured_relief_source_covers_destination(
@@ -6860,8 +6854,6 @@ fn measured_height_drag_plan(
         &frame,
         &retained,
         &measured_height_drag_pose(row, requested_height_scale),
-        PrecisionMode::PictureFast,
-        WarpValidation::Ordinary,
     )
     .kind
 }

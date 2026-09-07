@@ -13,7 +13,7 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::{
     PresentEvent, PresentEvents, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    Warp, WarpValidation,
+    Warp,
 };
 
 struct CountingAllocator;
@@ -130,15 +130,7 @@ fn planning_the_full_error_corpus_allocates_nothing() {
     let from = pose([0.0; 2]);
     let to = pose([5.0, -3.0]);
     let retained = frame(&from);
-    let plan = || {
-        Warp::reproject(
-            &retained,
-            &from,
-            &to,
-            PrecisionMode::PictureFast,
-            WarpValidation::Measure,
-        )
-    };
+    let plan = || Warp::reproject(&retained, &from, &to);
     std::hint::black_box(plan());
     let (planned, allocations) = measured_allocations(|| std::hint::black_box(plan()));
     assert!(planned.approx_max_error_px.is_some());

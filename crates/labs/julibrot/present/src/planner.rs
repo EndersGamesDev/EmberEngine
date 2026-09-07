@@ -1,12 +1,12 @@
 use ember_julibrot_math::{
-    Homography, Plane, Pose, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION, ViewControls,
-    pixel_scale, plane_chart_relation, warp_matrix,
+    Homography, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls, pixel_scale,
+    plane_chart_relation, warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
 use crate::{
     LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpRefusalReason,
-    WarpValidation, apply_homography, compose_homography, height_for_record, identity_warp_rows,
+    apply_homography, compose_homography, height_for_record, identity_warp_rows,
     pack_homography_rows,
 };
 
@@ -51,41 +51,39 @@ impl Warp {
     /// A pose mismatch or incompatible arithmetic returns an honest clear-only plan. A screen
     /// corner beyond a horizon remains a homogeneous anchor and does not clear the whole picture.
     #[must_use]
-    pub fn reproject(
-        last_frame: &SceneFrame,
-        from_pose: &Pose,
-        to_pose: &Pose,
-        _precision_mode: PrecisionMode,
-        _validation: WarpValidation,
-    ) -> WarpPlan {
-        if matches!(to_pose.map, PoseMap::EdgeOn) {
-            return edge_on();
-        }
-        if last_frame.pose != *from_pose {
-            return clear_only(true, Some(WarpRefusalReason::PoseMismatch));
-        }
-        if renders_same_picture(from_pose, to_pose) {
-            return exact_self(last_frame, to_pose)
-                .unwrap_or_else(|| clear_only(true, Some(WarpRefusalReason::Matrix)));
-        }
-        if !object_samples_match(from_pose, to_pose) {
-            return clear_only(true, Some(WarpRefusalReason::ObjectSamples));
-        }
-        let Ok(flat) = warp_matrix(from_pose, to_pose) else {
-            return clear_only(true, Some(WarpRefusalReason::Matrix));
-        };
-        let chart_residual = chart_residual(from_pose, to_pose);
-        if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
-            return clear_only(
-                true,
-                Some(WarpRefusalReason::ChartResidual { px: chart_residual }),
-            );
-        }
-        anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual).map_or_else(
-            || clear_only(true, Some(WarpRefusalReason::Matrix)),
-            |plan| enforce_error_ceiling(plan, from_pose, to_pose),
-        )
+    pub fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
+        reproject(last_frame, from_pose, to_pose)
     }
+}
+
+fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
+    if matches!(to_pose.map, PoseMap::EdgeOn) {
+        return edge_on();
+    }
+    if last_frame.pose != *from_pose {
+        return clear_only(true, Some(WarpRefusalReason::PoseMismatch));
+    }
+    if renders_same_picture(from_pose, to_pose) {
+        return exact_self(last_frame, to_pose)
+            .unwrap_or_else(|| clear_only(true, Some(WarpRefusalReason::Matrix)));
+    }
+    if !object_samples_match(from_pose, to_pose) {
+        return clear_only(true, Some(WarpRefusalReason::ObjectSamples));
+    }
+    let Ok(flat) = warp_matrix(from_pose, to_pose) else {
+        return clear_only(true, Some(WarpRefusalReason::Matrix));
+    };
+    let chart_residual = chart_residual(from_pose, to_pose);
+    if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
+        return clear_only(
+            true,
+            Some(WarpRefusalReason::ChartResidual { px: chart_residual }),
+        );
+    }
+    anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual).map_or_else(
+        || clear_only(true, Some(WarpRefusalReason::Matrix)),
+        |plan| enforce_error_ceiling(plan, from_pose, to_pose),
+    )
 }
 
 /// Selects retained-record redraw when the image homography exceeds the displayed-error ceiling.
@@ -1002,8 +1000,8 @@ fn project_scene_vertex_with_shortcut(
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
-        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, ViewControls, construct_plane,
-        screen_to_plane,
+        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, ViewControls,
+        construct_plane, screen_to_plane,
     };
 
     use super::*;
@@ -1633,13 +1631,7 @@ mod tests {
     }
 
     fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
-        Warp::reproject(
-            last_frame,
-            from_pose,
-            to_pose,
-            PrecisionMode::PictureFast,
-            WarpValidation::Ordinary,
-        )
+        Warp::reproject(last_frame, from_pose, to_pose)
     }
 
     #[derive(Clone, Debug)]
@@ -1648,60 +1640,26 @@ mod tests {
         frame: SceneFrame,
         from_pose: Pose,
         to_pose: Pose,
-        precision_mode: PrecisionMode,
-        validation: WarpValidation,
     }
 
     impl PlannerCorpusCase {
-        fn new(
-            name: &'static str,
-            from_pose: &Pose,
-            to_pose: &Pose,
-            precision_mode: PrecisionMode,
-            validation: WarpValidation,
-        ) -> Self {
+        fn new(name: &'static str, from_pose: &Pose, to_pose: &Pose) -> Self {
             Self {
                 name,
                 frame: frame(from_pose),
                 from_pose: *from_pose,
                 to_pose: *to_pose,
-                precision_mode,
-                validation,
             }
         }
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
-    #[allow(
-        dead_code,
-        reason = "the complete plan stays in Debug and equality for the later paired-entry oracle"
-    )]
     struct PlannerCorpusResult {
         name: &'static str,
         plan: WarpPlan,
     }
 
-    type PlannerEntry = fn(&SceneFrame, &Pose, &Pose, PrecisionMode, WarpValidation) -> WarpPlan;
-
-    fn current_planner_entry(
-        frame: &SceneFrame,
-        from_pose: &Pose,
-        to_pose: &Pose,
-        precision_mode: PrecisionMode,
-        validation: WarpValidation,
-    ) -> WarpPlan {
-        Warp::reproject(frame, from_pose, to_pose, precision_mode, validation)
-    }
-
-    fn extracted_planner_entry(
-        frame: &SceneFrame,
-        from_pose: &Pose,
-        to_pose: &Pose,
-        _precision_mode: PrecisionMode,
-        _validation: WarpValidation,
-    ) -> WarpPlan {
-        reproject(frame, from_pose, to_pose)
-    }
+    type PlannerEntry = fn(&SceneFrame, &Pose, &Pose) -> WarpPlan;
 
     fn named_planner_corpus() -> Vec<PlannerCorpusCase> {
         let exact = pose(ViewControls::NEUTRAL, [0.0; 2]);
@@ -1736,69 +1694,23 @@ mod tests {
             screen_centred_measured_relief_zoom(&measured_source, -1.0, [960, 540]);
 
         vec![
-            PlannerCorpusCase::new(
-                "exact-self",
-                &exact,
-                &exact,
-                PrecisionMode::Deterministic,
-                WarpValidation::Ordinary,
-            ),
-            PlannerCorpusCase::new(
-                "flat-pan-zoom",
-                &exact,
-                &flat_pan_zoom,
-                PrecisionMode::PictureFast,
-                WarpValidation::Measure,
-            ),
+            PlannerCorpusCase::new("exact-self", &exact, &exact),
+            PlannerCorpusCase::new("flat-pan-zoom", &exact, &flat_pan_zoom),
             PlannerCorpusCase {
                 name: "pose-mismatch",
                 frame: frame(&pose_mismatch_source),
                 from_pose: pose_mismatch_claim,
                 to_pose: pose_mismatch_source,
-                precision_mode: PrecisionMode::Deterministic,
-                validation: WarpValidation::Final,
             },
-            PlannerCorpusCase::new(
-                "edge-on",
-                &exact,
-                &edge_on,
-                PrecisionMode::PictureFast,
-                WarpValidation::Ordinary,
-            ),
-            PlannerCorpusCase::new(
-                "object-samples",
-                &exact,
-                &object_samples,
-                PrecisionMode::Deterministic,
-                WarpValidation::Measure,
-            ),
-            PlannerCorpusCase::new(
-                "matrix-invalid-extent",
-                &invalid_extent,
-                &invalid_extent,
-                PrecisionMode::Deterministic,
-                WarpValidation::Ordinary,
-            ),
-            PlannerCorpusCase::new(
-                "chart-residual",
-                &exact,
-                &chart_residual,
-                PrecisionMode::PictureFast,
-                WarpValidation::Ordinary,
-            ),
-            PlannerCorpusCase::new(
-                "measured-relief-redraw",
-                &measured_source,
-                &measured_redraw,
-                PrecisionMode::PictureFast,
-                WarpValidation::Final,
-            ),
+            PlannerCorpusCase::new("edge-on", &exact, &edge_on),
+            PlannerCorpusCase::new("object-samples", &exact, &object_samples),
+            PlannerCorpusCase::new("matrix-invalid-extent", &invalid_extent, &invalid_extent),
+            PlannerCorpusCase::new("chart-residual", &exact, &chart_residual),
+            PlannerCorpusCase::new("measured-relief-redraw", &measured_source, &measured_redraw),
             PlannerCorpusCase::new(
                 "measured-relief-exposure-refusal",
                 &measured_source,
                 &measured_refusal,
-                PrecisionMode::Deterministic,
-                WarpValidation::Measure,
             ),
         ]
     }
@@ -1808,21 +1720,15 @@ mod tests {
             .into_iter()
             .map(|case| PlannerCorpusResult {
                 name: case.name,
-                plan: entry(
-                    &case.frame,
-                    &case.from_pose,
-                    &case.to_pose,
-                    case.precision_mode,
-                    case.validation,
-                ),
+                plan: entry(&case.frame, &case.from_pose, &case.to_pose),
             })
             .collect()
     }
 
     #[test]
     fn named_paired_planner_corpus_matches_complete_warp_plans() {
-        let current = run_planner_corpus(current_planner_entry);
-        let extracted = run_planner_corpus(extracted_planner_entry);
+        let current = run_planner_corpus(Warp::reproject);
+        let extracted = run_planner_corpus(super::reproject);
         assert_eq!(current, extracted);
         assert_eq!(
             current.iter().map(|result| result.name).collect::<Vec<_>>(),
@@ -2585,29 +2491,16 @@ mod tests {
     }
 
     #[test]
-    fn every_validation_mode_measures_the_full_corpus() {
+    fn planner_measures_the_full_error_corpus() {
         let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut to = pose(ViewControls::NEUTRAL, [5.0, -3.0]);
         to.zoom_log2 += 0.1;
-        let ordinary = reproject(&frame(&from), &from, &to);
-        let approximate = unpack_rows(ordinary.rows);
-        let full =
-            sampled_errors(&from, &to, approximate).expect("the full validation corpus projects");
+        let plan = reproject(&frame(&from), &from, &to);
+        let approximate = unpack_rows(plan.rows);
+        let full = sampled_errors(&from, &to, approximate).expect("the full error corpus projects");
         assert_eq!(full.len(), 9 * 9 * HEIGHT_SAMPLES.len());
         assert_eq!(
-            ordinary.approx_max_error_px,
-            full.iter().copied().reduce(f64::max)
-        );
-
-        let measured = Warp::reproject(
-            &frame(&from),
-            &from,
-            &to,
-            PrecisionMode::PictureFast,
-            WarpValidation::Measure,
-        );
-        assert_eq!(
-            measured.approx_max_error_px,
+            plan.approx_max_error_px,
             full.iter().copied().reduce(f64::max)
         );
     }

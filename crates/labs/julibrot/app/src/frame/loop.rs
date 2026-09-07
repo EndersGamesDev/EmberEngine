@@ -1917,7 +1917,7 @@ mod browser {
     };
     use ember_julibrot_present::{
         FenceRefusal, FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvents,
-        PresentHot, PresentMain, Presenter, SubmissionKind, WarpValidation, hot_stride,
+        PresentHot, PresentMain, Presenter, SubmissionKind, hot_stride,
     };
     use ember_julibrot_worker::{
         EncodedCentre, OrbitDisposition, OrbitHandle, OrbitRegistry, OrbitRequest, OwnerEndpoint,
@@ -2600,11 +2600,9 @@ mod browser {
                 frame_loop.abandon_submitted_references(viewer);
             }
             let backdrop_active = frame_loop.prepare_backdrop(viewer)?;
-            let final_validation = if backdrop_active {
-                false
-            } else {
-                frame_loop.prepare_due_level()
-            };
+            if !backdrop_active {
+                frame_loop.prepare_due_level();
+            }
             let extent = frame_loop.prepared_extent();
             let mut hot = viewer.drain_hot(extent)?;
             frame_loop.owner_epoch = hot.state.epoch;
@@ -2642,16 +2640,9 @@ mod browser {
                 hot.state.epoch,
             )
             .map_err(|error| AppError::Present(error.to_string()))?;
-            let measure_validation =
-                requests.measurement && frame_loop.presenter.facts().completed_scene_id.is_some();
-            let validation = if measure_validation {
+            if requests.measurement && frame_loop.presenter.facts().completed_scene_id.is_some() {
                 requests.measurement = false;
-                WarpValidation::Measure
-            } else if final_validation {
-                WarpValidation::Final
-            } else {
-                WarpValidation::Ordinary
-            };
+            }
             // Scheduler idleness cannot disarm a covering retained picture. The presenter proves
             // geometric coverage before it turns this authorization into a hold.
             let hold_refused_warp = frame_loop.presenter.facts().completed_scene_id.is_some();
@@ -2668,7 +2659,6 @@ mod browser {
                     view: viewer.requested().view,
                     map: hot.pose.map,
                 },
-                validation,
                 hold_refused_warp,
             );
 
@@ -2701,7 +2691,6 @@ mod browser {
                         view: viewer.requested().view,
                         map: hot.pose.map,
                     },
-                    WarpValidation::Ordinary,
                     hold_refused_warp,
                 );
             }
@@ -2711,8 +2700,7 @@ mod browser {
                     .skip_drafts_for_accepted_warp(frame_loop.presenter.accepted_warp_source(slot))
             {
                 frame_loop.prepared_level = None;
-                let final_validation = frame_loop.prepare_due_level();
-                debug_assert!(final_validation);
+                frame_loop.prepare_due_level();
                 hot = viewer.drain_hot(frame_loop.prepared_extent())?;
                 frame_loop.owner_epoch = hot.state.epoch;
                 frame_loop.main = hot.state.main;
@@ -2737,7 +2725,6 @@ mod browser {
                         view: viewer.requested().view,
                         map: hot.pose.map,
                     },
-                    WarpValidation::Final,
                     hold_refused_warp,
                 );
             }

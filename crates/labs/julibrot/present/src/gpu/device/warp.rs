@@ -11,8 +11,8 @@ use crate::fence::FenceLedger;
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose, PoseMap,
     PresentError, PresentHot, PresentMain, PresentStatus, RefinementLevel, SubmissionKind, Warp,
-    WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
-    identity_warp_rows, pack_homography_rows, palette, view_scale, warp_shader,
+    WarpKind, camera_rotation, camera_rotation_pairs, camera_translation, identity_warp_rows,
+    pack_homography_rows, palette, view_scale, warp_shader,
 };
 
 /// Keeps the displayed redraw accepted while a render temporarily leases its record span.
@@ -61,13 +61,7 @@ impl Presenter {
         clippy::cast_precision_loss,
         reason = "the destination lattice aspect is narrowed once into the binary32 GPU ABI"
     )]
-    pub fn write_hot(
-        &mut self,
-        slot: HotSlot,
-        hot: PresentHot,
-        validation: WarpValidation,
-        hold_refused_warp: bool,
-    ) {
+    pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot, hold_refused_warp: bool) {
         let screen_rows = match hot.map {
             PoseMap::Mapped(map) => pack_homography_rows(map.rows),
             PoseMap::EdgeOn => Some(identity_warp_rows()),
@@ -93,11 +87,11 @@ impl Presenter {
             |to_pose| {
                 if matches!(to_pose.map, PoseMap::EdgeOn) {
                     clear_warp_plan(true, false)
-                } else if let (Some(frame), Some(precision_mode)) = (
+                } else if let (Some(frame), Some(_)) = (
                     self.ledger.retained(),
                     self.main.as_ref().and_then(PresentMain::precision_mode),
                 ) {
-                    Warp::reproject(frame, &frame.pose, to_pose, precision_mode, validation)
+                    Warp::reproject(frame, &frame.pose, to_pose)
                 } else {
                     clear_warp_plan(false, true)
                 }
@@ -279,7 +273,7 @@ impl Presenter {
 
     #[allow(
         clippy::too_many_lines,
-        reason = "warp submission keeps validation and its ordered GPU transaction together"
+        reason = "warp submission keeps its ordered GPU transaction together"
     )]
     fn try_frame(
         &mut self,
