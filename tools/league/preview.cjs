@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const {spawn}=require('node:child_process');
 const root=path.resolve(__dirname,'../..');
 
-async function startPreview({port=8094,gamePort=7794,gameVersion='v2',protocol=gameVersion==='v3'?2:1,uiDirectory=path.join(root,`web/games/league/${gameVersion}`),online=true}={}){
+async function startPreview({port=8094,gamePort=7794,gameVersion='v2',protocol=Number(gameVersion.slice(1))>=3?2:1,uiDirectory=path.join(root,`web/games/league/${gameVersion}`),online=true}={}){
   if(!/^v[1-9][0-9]*$/.test(gameVersion)||!Number.isInteger(protocol)||protocol<1)throw new Error('Invalid preview version/protocol');
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);
   const web=path.join(root,'web'),origin=`http://127.0.0.1:${port}`,ws=`ws://127.0.0.1:${gamePort}`;

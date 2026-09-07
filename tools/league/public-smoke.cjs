@@ -171,7 +171,7 @@ async function main(){
   await click(gamePage,'#abils [data-abil="0"] .up');
   await gamePage.waitForFunction(()=>JSON.parse(window.proofWasm.state_json()).me.rk[0]===1);
   check(true,'Q learns through the public HUD');
-  if(selected==='v3')await v3Controls(gamePage,commands);
+  if(Number(selected.slice(1))>=3)await v3Controls(gamePage,commands);
   await gamePage.evaluate(()=>{
     const c=document.querySelector('#ember-root canvas'),r=c.getBoundingClientRect();
     const event=new PointerEvent('pointermove',{bubbles:true,cancelable:true,pointerType:'mouse',pointerId:1,isPrimary:true,clientX:r.left+r.width*.62,clientY:r.top+r.height*.43,button:-1,buttons:0});

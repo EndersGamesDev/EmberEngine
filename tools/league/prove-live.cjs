@@ -2,7 +2,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {execFileSync}=require('node:child_process');
-const {gameVersion,safeRelative,treeFiles,proveScope,hash}=require('./publish.cjs');
+const {gameVersion,safeRelative,treeFiles,proveScope,hash,proveServerCompatibility}=require('./publish.cjs');
 const base='https://endersgamesdev.github.io/EmberEngine/';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function frozenArtifacts(root,revision,selected,scope,previous){
@@ -19,11 +19,16 @@ function frozenArtifacts(root,revision,selected,scope,previous){
     return files;
   }).sort();
 }
-function verifyHost(book,report,version){
+function verifyHost(book,report,version,root){
   const protocol=version.proto,stamp=report.liveWelcome.commit;
+  const serverCommit=report.serverCommit??report.sourceCommit;
+  if(serverCommit!==report.sourceCommit){
+    assert(root,'Reused server requires a fresh Git compatibility proof');
+    assert.deepEqual(proveServerCompatibility(root,report.sourceCommit,serverCommit),report.serverCompatibility,'Recorded server compatibility proof differs');
+  }
   assert(Number.isInteger(protocol)&&protocol>0,'Invalid selected protocol');
   assert.equal(report.liveWelcome.proto,protocol,'Proven server protocol differs from selected catalog version');
-  assert(/^[0-9a-f]{7,40}$/.test(stamp)&&report.sourceCommit.startsWith(stamp),'Invalid live build stamp');
+  assert(/^[0-9a-f]{7,40}$/.test(stamp)&&serverCommit.startsWith(stamp),'Invalid live build stamp');
   const hosts=book.hosts.filter(value=>value.name===report.host);
   assert.equal(hosts.length,1,'Public host is missing or duplicated');
   const host=hosts[0];
@@ -46,6 +51,9 @@ async function main(){
   for(const revision of [report.pagesCommit,report.base,report.sourceCommit])assert(/^[0-9a-f]{40,64}$/.test(revision),'Invalid release revision');
   if(report.entry)assert.equal(report.entry,entry,'Publish report has a mismatched entry');
   const git=(...args)=>execFileSync('git',['-C',root,...args],{windowsHide:true,maxBuffer:64*1024*1024});
+  const serverCommit=report.serverCommit??report.sourceCommit;
+  const serverCompatibility=proveServerCompatibility(root,report.sourceCommit,serverCommit);
+  if(report.serverCompatibility)assert.deepEqual(serverCompatibility,report.serverCompatibility,'Recorded server compatibility proof differs');
   const scope=proveScope(root,report.base,report.pagesCommit,entry);
   const release=treeFiles(root,report.pagesCommit,entry).map(row=>row.file).sort();
   for(const required of ['index.html','version.json','pkg/league.js','pkg/league_bg.wasm'])assert(release.includes(`${entry}/${required}`),`Missing published artifact: ${required}`);
@@ -75,14 +83,21 @@ async function main(){
   const version=current?.versions.find(version=>version.v===selected&&version.path===`${entry}/`&&version.live);
   assert(version,'Selected version is not published live');
   for(const old of previous.games.find(game=>game.id==='league')?.versions||[])assert(current.versions.some(version=>version.v===old.v&&version.path===old.path),'A frozen League catalog version disappeared');
-  const book=JSON.parse(await get('server.json')),host=verifyHost(book,report,version),stamp=report.liveWelcome.commit;
+  const manifest=JSON.parse(bytes.get(`${entry}/version.json`));
+  assert.equal(manifest.commit,report.sourceCommit,'Public client manifest source differs');
+  assert.equal(manifest.serverCommit??manifest.commit,serverCommit,'Public manifest server commit differs');
+  if(manifest.serverCommit){
+    assert.equal(manifest.serverVersion,report.liveWelcome.version,'Public manifest server version differs');
+    assert.equal(manifest.version,`r${git('rev-list','--count',report.sourceCommit).toString().trim()}`,'Public client build revision differs');
+  }
+  const book=JSON.parse(await get('server.json')),host=verifyHost(book,report,version,root),stamp=report.liveWelcome.commit;
   const probes=[];
   for(const mode of [1,3]){
     const log=execFileSync(path.join(root,'target/release/examples/wsprobe.exe'),[host.league_ws,`public-${selected}-${Date.now()}-${mode}`,'--mode',String(mode),'--expect-commit',stamp],{windowsHide:true,timeout:35000}).toString();
     assert(log.includes(`wsprobe: league protocol v${version.proto} healthy`),'Probe protocol differs from selected release');
     probes.push({mode,log});console.log(log.trim());
   }
-  const proof={passed:true,gameVersion:selected,sourceCommit:report.sourceCommit,pagesCommit:report.pagesCommit,url:base+entry+'/',files:results,frozenFiles,frozenVersions:scope.frozenVersions,probes,peerTreesUnchanged:true,unchangedOutsideRelease:true,elapsedSeconds:(Date.now()-started)/1000};
+  const proof={passed:true,gameVersion:selected,sourceCommit:report.sourceCommit,serverCommit,serverCompatibility,pagesCommit:report.pagesCommit,url:base+entry+'/',files:results,frozenFiles,frozenVersions:scope.frozenVersions,probes,peerTreesUnchanged:true,unchangedOutsideRelease:true,elapsedSeconds:(Date.now()-started)/1000};
   fs.writeFileSync('target/league-publish/public-proof.json',JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof,null,2));
 }
 module.exports={frozenArtifacts,verifyHost};

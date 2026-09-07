@@ -12,6 +12,31 @@ function gameVersion(value='v1'){
   assert(/^v[1-9][0-9]{0,5}$/.test(value),`Invalid game version: ${value}`);
   return value;
 }
+const SERVER_INPUTS=['crates/league-core','crates/league-server','Cargo.toml','Cargo.lock','rust-toolchain.toml'];
+// Reusing a server is explicit and only safe when its complete simulation/server
+// trees and workspace build inputs are identical to the selected client source.
+function proveServerCompatibility(root,sourceCommit,serverCommit=sourceCommit){
+  for(const commit of [sourceCommit,serverCommit]){
+    assert(typeof commit==='string'&&/^[0-9a-f]{40}$/.test(commit),'Server/source commit must be a full SHA');
+    assert.equal(text(root,'rev-parse',`${commit}^{commit}`),commit,'Selected revision is not an exact commit');
+  }
+  try{git(root,'merge-base','--is-ancestor',serverCommit,sourceCommit);}
+  catch{assert.fail('Selected server commit must be an ancestor of client source');}
+  const object=(commit,file)=>{
+    const rows=git(root,'ls-tree','-z',commit,'--',file).toString().split('\0').filter(Boolean);
+    assert.equal(rows.length,1,`Required server compatibility input missing: ${file}`);
+    const tab=rows[0].indexOf('\t'),[mode,type,oid]=rows[0].slice(0,tab).split(' ');
+    assert.equal(rows[0].slice(tab+1),file,'Unexpected compatibility path');
+    assert(file.startsWith('crates/')?type==='tree'&&mode==='040000':type==='blob'&&['100644','100755'].includes(mode),`Server compatibility input is a link or wrong type: ${file}`);
+    return {path:file,mode,type,oid};
+  };
+  const unchanged=SERVER_INPUTS.map(file=>{
+    const before=object(serverCommit,file);
+    assert.deepEqual(object(sourceCommit,file),before,`Server compatibility input changed: ${file}`);
+    return before;
+  });
+  return {sourceCommit,serverCommit,reusedServer:serverCommit!==sourceCommit,ancestor:true,unchanged};
+}
 function safeRelative(name){
   assert(typeof name==='string'&&name.length>0&&!path.isAbsolute(name),`Invalid release path: ${name}`);
   assert(name.split('/').every(part=>/^[A-Za-z0-9._-]+$/.test(part)&&part!=='.'&&part!=='..'&&!part.endsWith('.')&&part.toLowerCase()!=='.git'&&!/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)),`Unsafe release path: ${name}`);
@@ -119,11 +144,13 @@ async function main(){
   const root=process.cwd(),started=Date.now(),args=process.argv.slice(2);
   const arg=name=>args.find(value=>value.startsWith(`--${name}=`))?.slice(name.length+3);
   const names=args.map(value=>value.split('=')[0]);assert.equal(new Set(names).size,names.length,'Duplicate argument');
-  assert(args.every(value=>value==='--push'||/^--(?:build-commit|wasm-sha256|game-version)=/.test(value)),'Unknown argument');
+  assert(args.every(value=>value==='--push'||/^--(?:build-commit|server-commit|wasm-sha256|game-version)=/.test(value)),'Unknown argument');
   const selected=gameVersion(arg('game-version')),entry=`games/league/${selected}`;
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);
   assert.equal(text(root,'status','--porcelain'),'','Source must be clean');
   const commit=text(root,'rev-parse','HEAD');assert.equal(arg('build-commit'),commit,'Build revision differs from HEAD');
+  const serverCommit=arg('server-commit')??commit;
+  const serverCompatibility=proveServerCompatibility(root,commit,serverCommit);
   const wasm=fs.readFileSync(safePath(root,'web/pkg/league_bg.wasm'));
   assert.equal(hash(wasm),arg('wasm-sha256'),'Tested WASM changed');assert(WebAssembly.validate(wasm),'Invalid WASM');
   const files=sourceFiles(root,entry);
@@ -137,10 +164,11 @@ async function main(){
   assert(source&&source.versions[0].path===`${entry}/`&&source.versions[0].v===selected&&source.versions[0].live,'Selected version must be the source catalog live version');
   const proto=source.versions[0].proto;assert(Number.isInteger(proto)&&proto>0,'Invalid League protocol');
   const validCommit=value=>typeof value==='string'&&/^[0-9a-f]{7,40}$/.test(value);
-  const host=book.hosts.find(value=>value.league_proto===proto&&value.league_ws&&validCommit(value.league_commit)&&commit.startsWith(value.league_commit));
+  const host=book.hosts.find(value=>value.league_proto===proto&&value.league_ws&&validCommit(value.league_commit)&&serverCommit.startsWith(value.league_commit));
   assert(host,'Published address book must contain this League build');
   const live=await welcome(host.league_ws,proto);
-  assert.equal(live.proto,proto);assert(validCommit(live.commit)&&commit.startsWith(live.commit),'Wrong public League build');
+  assert.equal(live.proto,proto);assert(validCommit(live.commit)&&serverCommit.startsWith(live.commit),'Wrong public League build');
+  assert.equal(live.commit,host.league_commit,'Public welcome and address book stamps differ');
   const previousLeague=catalog.games.find(game=>game.id==='league'),priorPeers=catalog.games.filter(game=>game.id!=='league');
   for(const previous of previousLeague?.versions||[])assert(source.versions.some(version=>version.v===previous.v&&version.path===previous.path),'Existing League catalog version was dropped or moved');
   const at=catalog.games.findIndex(game=>game.id==='league');if(at<0)catalog.games.splice(1,0,source);else catalog.games[at]=source;
@@ -150,7 +178,7 @@ async function main(){
   git(root,'worktree','add','--detach','--no-checkout',worktree,base);
   git(worktree,'sparse-checkout','set','--no-cone','/games.json',`/${entry}/`);git(worktree,'read-tree','-mu','HEAD');
   assert.equal(text(worktree,'write-tree'),text(root,'rev-parse',`${base}^{tree}`));
-  const version={version:live.version,gameVersion:selected,commit,built:new Date().toISOString(),wasmSha256:hash(wasm)};
+  const version={version:`r${text(root,'rev-list','--count',commit)}`,gameVersion:selected,commit,serverCommit,serverVersion:live.version,built:new Date().toISOString(),wasmSha256:hash(wasm)};
   files.set(`${entry}/version.json`,Buffer.from(JSON.stringify(version,null,2)+'\n'));
   files.set('games.json',Buffer.from(JSON.stringify(catalog,null,2)+'\n'));
   for(const previous of existing)if(!files.has(previous.file))fs.unlinkSync(safePath(worktree,previous.file));
@@ -160,13 +188,15 @@ async function main(){
   assert.deepEqual(treeFiles(worktree,candidate,entry).map(row=>row.file).sort(),[...files.keys()].filter(file=>file!=='games.json').sort(),'Staged release differs from the complete local manifest');
   for(const [file,bytes] of files)assert.equal(hash(git(worktree,'show',`${candidate}:${file}`)),hash(bytes),`Staged bytes differ: ${file}`);
   assert.equal(text(root,'status','--porcelain'),'','Source changed while preparing');
+  assert.equal(text(root,'rev-parse','HEAD'),commit,'Source HEAD changed while preparing');
+  assert.deepEqual(proveServerCompatibility(root,commit,serverCommit),serverCompatibility,'Server compatibility changed while preparing');
   assert.equal(hash(fs.readFileSync(safePath(root,'web/pkg/league_bg.wasm'))),arg('wasm-sha256'));
   assert.equal(hash(fs.readFileSync(safePath(root,'web/pkg/league.js'))),hash(files.get(`${entry}/pkg/league.js`)),'Generated JS changed while preparing');
   assert.equal(text(root,'ls-remote','origin','refs/heads/gh-pages').split(/\s+/)[0],base,'Concurrent Pages update: prepare again');
-  const report={sourceCommit:commit,gameVersion:selected,entry,base,worktree,version,host:host.name,liveWelcome:live,...scope,files:[...files].map(([file,bytes])=>({file,sha256:hash(bytes)})),unchangedOutsideRelease:true,pushed:false};
+  const report={sourceCommit:commit,serverCommit,serverCompatibility,gameVersion:selected,entry,base,worktree,version,host:host.name,liveWelcome:live,...scope,files:[...files].map(([file,bytes])=>({file,sha256:hash(bytes)})),unchangedOutsideRelease:true,pushed:false};
   if(args.includes('--push')){git(worktree,'commit','-m',`Publish UltimateLegue ${selected} ${commit.slice(0,8)}; preserve frozen versions and other games`);git(worktree,'push','origin','HEAD:gh-pages');report.pagesCommit=text(worktree,'rev-parse','HEAD');report.pushed=true;}
   report.elapsedSeconds=(Date.now()-started)/1000;
   fs.mkdirSync(path.join(root,'target/league-publish'),{recursive:true});fs.writeFileSync(path.join(root,'target/league-publish/results.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
 }
-module.exports={gameVersion,safeRelative,safePath,collectFiles,treeFiles,proveScope,sourceFiles,hash};
+module.exports={gameVersion,safeRelative,safePath,collectFiles,treeFiles,proveScope,sourceFiles,hash,proveServerCompatibility,SERVER_INPUTS};
 if(require.main===module)main().catch(error=>{console.error(error);process.exitCode=1;});

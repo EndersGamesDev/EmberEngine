@@ -118,7 +118,7 @@ async function practice(mode,champ){
   const start=await state(p);await motion(p,.73,.47,true);await pause(300);
   const moved=await state(p);
   check(Math.hypot(moved.me.x-start.me.x,moved.me.z-start.me.z)>.1,`champion ${champ}: right-click ground moves the champion`);
-  if(selected==='v3'&&mode===1&&champ===0){
+  if(Number(selected.slice(1))>=3&&mode===1&&champ===0){
     const bindings=await p.evaluate(()=>JSON.parse(window.qaWasm.bindings_json()));
     check(bindings.attackMove==='KeyA','v3 exposes default A attack-move');
     await key(p,bindings.stop);await pause(150);
@@ -154,7 +154,7 @@ async function online(){
   await waitState(b,()=>window.qaState().phase==='live'&&window.qaState().me);
   check(true,'two real browser clients enter an authoritative online match');
   await command(b,{rank:0});await b.waitForFunction(()=>window.qaState().me.rk[0]===1);
-  if(selected==='v3'){
+  if(Number(selected.slice(1))>=3){
     const before=await state(b);await motion(b,.35,.47);await key(b,'KeyA');await pause(350);
     const after=await state(b);
     check(Math.hypot(after.me.x-before.me.x,after.me.z-before.me.z)>.1,'v3 guest A attack-move reaches the authoritative server');
