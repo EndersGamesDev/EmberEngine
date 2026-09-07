@@ -29,7 +29,10 @@ use super::{
     schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
     stamped_screen_map, view_projection_changed,
 };
-use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
+use crate::{
+    AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up,
+    box_zoom_delta_log2,
+};
 use ember_julibrot_present::{
     LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
     WarpValidation, renders_same_picture,
@@ -2502,6 +2505,12 @@ enum ZoomRefinementOnEdit {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZoomEditTrigger {
+    RequestedFrame,
+    StaleViewRecovery,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ZoomLatticeProbe {
     Skip,
     Enforce,
@@ -2548,6 +2557,7 @@ struct ZoomScript<'a> {
     edits: &'a [(u32, f64, Option<[f64; 2]>)],
     initial_scene: ZoomInitialScene,
     refinement_on_edit: ZoomRefinementOnEdit,
+    edit_trigger: ZoomEditTrigger,
     forget_records_before_selection_at_turn: Option<u32>,
     destination_extent: [u32; 2],
     lattice_probe: ZoomLatticeProbe,
@@ -2574,6 +2584,10 @@ struct ZoomTurnRecord {
     refinement: ZoomRefinementState,
     hold: ZoomHoldState,
     source_coverage: ZoomSourceCoverage,
+    requested_revision: u32,
+    warp_in_flight: bool,
+    scene_in_flight: bool,
+    completed_requested_final: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2770,10 +2784,12 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             }
             edit_state = ZoomEditState::Applied;
             requested_revision = requested_revision.saturating_add(1);
-            frame_loop.accept_request(
-                37,
-                script.refinement_on_edit == ZoomRefinementOnEdit::Restart,
-            );
+            let restart_scene = script.refinement_on_edit == ZoomRefinementOnEdit::Restart;
+            if script.edit_trigger == ZoomEditTrigger::RequestedFrame {
+                frame_loop.accept_request(37, restart_scene);
+            } else if restart_scene {
+                frame_loop.scene_changed(37);
+            }
         }
 
         let destination_extent = script.destination_extent;
@@ -2836,7 +2852,10 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             });
         }
         let hold_redraw = selected == WarpKind::ReliefRedraw && pending_scene.is_some();
-        if pending_warp.is_none() && !hold_redraw {
+        if frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand)
+            && pending_warp.is_none()
+            && !hold_redraw
+        {
             pending_warp = Some(PendingZoomWarp {
                 completes_at_turn: turn.saturating_add(WARP_FLIGHT_TURNS),
                 kind: selected,
@@ -2847,6 +2866,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
                 },
                 requested_revision,
             });
+            frame_loop.warp_submitted();
         }
         trace.push(ZoomTurnRecord {
             scenario: script.scenario,
@@ -2876,6 +2896,12 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             } else {
                 ZoomSourceCoverage::NotCovering
             },
+            requested_revision,
+            warp_in_flight: pending_warp.is_some(),
+            scene_in_flight: pending_scene.is_some(),
+            completed_requested_final: requested_revision != 0
+                && retained.level == RefinementLevel::Final
+                && retained.pose == requested,
         });
     }
     trace
@@ -2915,6 +2941,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 1.43, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2925,6 +2952,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 0.1, None), (6, 0.5, None)],
             initial_scene: ZoomInitialScene::SettledFinal,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2935,6 +2963,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 0.5, None)],
             initial_scene: ZoomInitialScene::FinalInFlight,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2945,6 +2974,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[idle_refused_edit],
             initial_scene: ZoomInitialScene::SettledFinal,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2955,6 +2985,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2965,6 +2996,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Skip,
@@ -2975,6 +3007,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::FinalInFlight,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
             destination_extent: MEASURED_FINAL_EXTENT,
             lattice_probe: ZoomLatticeProbe::Enforce,
@@ -3026,6 +3059,56 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
     assert!(
         violations.is_empty(),
         "far off-centre ReliefExposure candidate found: {found_idle_relief_exposure}; covered zoom-in ruling violations: {violations:#?}; planner exposure follow-up: {exposure_report:#?}; scenario outcomes: {outcomes:#?}; per-turn traces: {traces:#?}"
+    );
+}
+
+#[test]
+fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
+    let anchor = anchor_px_up(
+        [200.0, 130.0],
+        MEASURED_FINAL_EXTENT.map(f64::from),
+        MEASURED_FINAL_EXTENT,
+    )
+    .expect("corner box centre maps into the measured frame");
+    let delta_log2 = box_zoom_delta_log2(
+        [320.0 - 80.0, 200.0 - 60.0],
+        MEASURED_FINAL_EXTENT.map(f64::from),
+    )
+    .expect("corner box has a finite zoom");
+    let edits = [(0, delta_log2, Some(anchor))];
+    let trace = drive_measured_zoom_trace(ZoomScript {
+        scenario: "corner box after stale-view recovery",
+        retained_level: RefinementLevel::Final,
+        edits: &edits,
+        initial_scene: ZoomInitialScene::SettledFinal,
+        refinement_on_edit: ZoomRefinementOnEdit::Restart,
+        edit_trigger: ZoomEditTrigger::StaleViewRecovery,
+        forget_records_before_selection_at_turn: None,
+        destination_extent: MEASURED_FINAL_EXTENT,
+        lattice_probe: ZoomLatticeProbe::Skip,
+    });
+    let edited = trace
+        .iter()
+        .find(|turn| turn.edit_state == ZoomEditState::Applied)
+        .expect("corner box edit appears in its turn trace");
+    assert_eq!(edited.planned, WarpKind::ReliefRedraw, "{trace:#?}");
+    assert_eq!(
+        edited.source_coverage,
+        ZoomSourceCoverage::NotCovering,
+        "the corner box must exercise honest outside-source margins: {trace:#?}"
+    );
+
+    let first_stalled = trace.iter().find(|turn| {
+        turn.requested_revision != 0
+            && !turn.completed_requested_final
+            && turn.presented.is_none()
+            && !turn.warp_in_flight
+            && !turn.scene_in_flight
+    });
+    let final_turn = trace.iter().find(|turn| turn.completed_requested_final);
+    assert!(
+        first_stalled.is_none() && final_turn.is_some(),
+        "a redraw, hold, or in-flight scene must cover every turn until the requested Final arrives; first stalled: {first_stalled:#?}; Final: {final_turn:#?}; trace: {trace:#?}"
     );
 }
 
