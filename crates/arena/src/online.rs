@@ -5007,17 +5007,8 @@ mod net {
                             // server logged a plain disconnect. Measured on
                             // 2026-09-04: a capture's alpha dropped 7.5 s in
                             // with nothing in either log. Every other read
-                            // loop in this workspace already carries this
-                            // predicate (`arena-server/src/lib.rs`,
-                            // `arena-server/examples/wsbot.rs`,
-                            // `ember-client-net::transport`,
-                            // `fire_core::proto::is_transient_read`); this
-                            // one was the exception, so it is inlined here
-                            // rather than depending on any of them.
-                            Err(tungstenite::Error::Io(e))
-                                if e.raw_os_error() == Some(997)
-                                    || e.kind() == std::io::ErrorKind::WouldBlock
-                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                            // loop uses the same shared classification.
+                            Err(tungstenite::Error::Io(e)) if ember_net::is_transient_read(&e) => {}
                             Err(_) => {
                                 dead.store(true, Ordering::Relaxed);
                                 return;
