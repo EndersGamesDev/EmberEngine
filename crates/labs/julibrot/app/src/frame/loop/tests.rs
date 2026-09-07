@@ -4111,20 +4111,38 @@ fn browser_and_native_refresh_share_present_event_transaction_order() {
     assert!(owner_body.contains("let receipt = view"));
     assert!(owner_body.contains("receipt.matches(view)"));
 
-    let browser = owner
+    let refresh = owner
         .split_once("impl OrderedRefresh for BrowserRefreshTurn")
         .unwrap_or_else(|| unreachable!("browser refresh lowering exists"))
         .1
         .split_once("impl BrowserFrameLoop")
         .unwrap_or_else(|| unreachable!("browser refresh lowering ends"))
         .0;
-    let browser_events = browser
+    let browser_events = refresh
         .find("PresentEventOwner::observe(&mut port, self.now_ms)")
         .unwrap_or_else(|| unreachable!("browser refresh calls the present-event owner"));
-    let browser_hot = browser
+    let browser_hot = refresh
         .find("frame_loop.synchronize_precision_mode(viewer)")
         .unwrap_or_else(|| unreachable!("browser refresh writes HOT after events"));
     assert!(browser_events < browser_hot);
+
+    let arrivals = refresh
+        .find("frame_loop.service_arrivals")
+        .expect("worker arrivals");
+    let writes: Vec<_> = refresh
+        .match_indices("frame_loop.presenter.write_hot")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(writes.len(), 3);
+    let accepted = refresh
+        .find("skip_drafts_for_accepted_warp")
+        .expect("accepted-warp rewrite");
+    assert!(
+        writes[0] < arrivals
+            && arrivals < writes[1]
+            && writes[1] < accepted
+            && accepted < writes[2]
+    );
 
     let native = include_str!("tests.rs")
         .split_once("impl OrderedRefresh for NativeRefreshTurn")

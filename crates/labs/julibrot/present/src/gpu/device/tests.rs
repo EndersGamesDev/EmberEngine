@@ -1515,6 +1515,23 @@ fn uniform_layout_fact(
 
 #[test]
 fn every_uniform_layout_lists_its_structural_constructor() {
+    let source = include_str!("uniforms.rs");
+    assert_eq!(
+        source.matches("static_uniform_entry(").count(),
+        6,
+        "five static bindings plus the constructor definition"
+    );
+    assert_eq!(
+        source.matches("hot_uniform_entry(").count(),
+        3,
+        "two HOT bindings plus the constructor definition"
+    );
+    assert_eq!(
+        source.matches("has_dynamic_offset:").count(),
+        2,
+        "only the static and HOT constructors set the field"
+    );
+
     let heap = super::uniforms::heap_layout_entries(ember_lab_heap::DialectLimits {
         descriptor_capacity: 8,
         span_capacity: 4,
