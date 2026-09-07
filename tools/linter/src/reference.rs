@@ -608,7 +608,6 @@ pub fn cited_in(region: &Region, lexicon: &Lexicon, source: &BytePath) -> Vec<Ca
 /// policy integration will obtain these bounds from the structural owners that
 /// already know them; the shadow router merely consumes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Justified: bite 2 lands this shadow input before policy integration.
 struct PathValueRegion {
     start: usize,
     end: usize,
@@ -630,7 +629,6 @@ impl PathValueRegion {
 
 /// The shadow result of asking the carrier catalog where the path policy participates.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Justified: bite 2 preserves the future finding outcome in shadow.
 enum CarrierClassification {
     /// The carrier has a declared reader; these are all citations that reader found.
     Catalogued(Vec<Candidate>),
@@ -748,7 +746,6 @@ pub struct Parameters {
 /// This is deliberately not connected to the engine or [`crate::finding`]. It
 /// proves the participation relation and preserves the uncatalogued outcome for
 /// the later policy wave without changing any current verdict.
-#[allow(dead_code)] // Justified: bite 2 proves routing before bite 3 wires the policy.
 fn classify_carrier(
     source: &BytePath,
     text: &str,
