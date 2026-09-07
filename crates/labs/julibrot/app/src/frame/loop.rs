@@ -549,6 +549,7 @@ impl BrowserRefreshOrder<0> {
     }
 
     const fn capture_drained(self) -> BrowserRefreshOrder<1> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -556,6 +557,7 @@ impl BrowserRefreshOrder<0> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<1> {
     const fn capture_staged(self) -> BrowserRefreshOrder<2> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -563,6 +565,7 @@ impl BrowserRefreshOrder<1> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<2> {
     const fn fences_observed(self) -> BrowserRefreshOrder<3> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -570,6 +573,7 @@ impl BrowserRefreshOrder<2> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<3> {
     const fn hot_written(self) -> BrowserRefreshOrder<4> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -577,6 +581,7 @@ impl BrowserRefreshOrder<3> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<4> {
     const fn scene_considered(self) -> BrowserRefreshOrder<5> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -584,6 +589,7 @@ impl BrowserRefreshOrder<4> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<5> {
     const fn warp_considered(self) -> BrowserRefreshOrder<6> {
+        let Self = self;
         BrowserRefreshOrder
     }
 }
@@ -612,8 +618,8 @@ mod browser {
     use super::{
         BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FrameLoop,
         PAGE_MAX_ITERATION_CAP, RefusalClass, SceneMode, backdrop_extent, coverage_pre_empts,
-        horizon_facts, main_for_grid,
-        published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
+        horizon_facts, main_for_grid, published_iteration_cap, sampling_zoom_log2,
+        stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
     use crate::{

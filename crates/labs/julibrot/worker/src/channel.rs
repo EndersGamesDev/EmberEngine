@@ -195,6 +195,11 @@ impl OwnerEndpoint {
     }
 
     /// Returns the next completed response without blocking.
+    ///
+    /// # Panics
+    ///
+    /// Panics only in tests if a validated in-process response loses its immutable slot identity,
+    /// which the buffer pool cannot arrange.
     #[must_use]
     pub fn next_arrival(&self) -> Option<OrbitResponseView> {
         #[cfg(target_arch = "wasm32")]
@@ -1164,8 +1169,7 @@ impl ChannelCore {
             orbit_queue_depth: u32::try_from(self.orbit_to_main.len()).unwrap_or(u32::MAX),
             shutdown_queue_depth: self.facts.shutdown_queue_depth,
             allocation_events: self.facts.allocation_events,
-            request_buffers_owned_main: u32::try_from(self.request_main.len())
-                .unwrap_or(u32::MAX),
+            request_buffers_owned_main: u32::try_from(self.request_main.len()).unwrap_or(u32::MAX),
             orbit_buffers_owned_main: u32::try_from(self.orbit_to_main.len())
                 .unwrap_or(u32::MAX)
                 .saturating_add(self.orbit_leases),
@@ -1232,9 +1236,7 @@ mod tests {
     use super::{
         Admission, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
     };
-    use crate::endpoint::{
-        OwnershipTrace, begin_ownership_trace, finish_ownership_trace,
-    };
+    use crate::endpoint::{OwnershipTrace, begin_ownership_trace, finish_ownership_trace};
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
         OrbitVerificationFacts, ReferenceOrbitRecord, ReferenceVerification,
@@ -1509,6 +1511,20 @@ mod tests {
             .return_credit(&mut response, OrbitDisposition::Applied, 0)
             .unwrap();
         finish_ownership_trace(owner.facts())
+    }
+
+    const SAME_THREAD_OWNERSHIP_FIXTURE: &str = "OwnershipTrace {\n    events: [\n        OwnershipEvent {\n            phase: RequestDispatched,\n            result: Transferred,\n            pool: Request,\n            slot: 0,\n            logical_owner: Producer,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 1,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 1,\n            orbit_buffers_owned_main: 0,\n        },\n        OwnershipEvent {\n            phase: RequestReturned,\n            result: Transferred,\n            pool: Request,\n            slot: 0,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 3,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 0,\n        },\n        OwnershipEvent {\n            phase: ResponseQueued,\n            result: Transferred,\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 4,\n            credit_us: 250000,\n            orbit_queue_depth: 1,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 1,\n        },\n        OwnershipEvent {\n            phase: ResponseLeased,\n            result: Leased,\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 5,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 1,\n        },\n        OwnershipEvent {\n            phase: CreditReturned,\n            result: Credited(\n                Applied,\n            ),\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Producer,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 7,\n            credit_us: 249000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 0,\n        },\n    ],\n    facts: NormalizedWorkerFacts {\n        epoch: 7,\n        last_applied_generation: 11,\n        last_ack_generation: 11,\n        orbit_queue_depth: 0,\n        shutdown_queue_depth: 0,\n        credit_us: 249000,\n        applied_count: 1,\n        stale_count: 0,\n        cancelled_count: 0,\n        allocation_events: 1,\n        request_buffers_owned_main: 2,\n        orbit_buffers_owned_main: 0,\n    },\n}";
+    const BROWSER_OWNERSHIP_FIXTURE: &str = "OwnershipTrace {\n    events: [\n        OwnershipEvent {\n            phase: RequestDispatched,\n            result: Transferred,\n            pool: Request,\n            slot: 1,\n            logical_owner: Producer,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 1,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 1,\n            orbit_buffers_owned_main: 0,\n        },\n        OwnershipEvent {\n            phase: RequestReturned,\n            result: Transferred,\n            pool: Request,\n            slot: 1,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 3,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 0,\n        },\n        OwnershipEvent {\n            phase: ResponseQueued,\n            result: Transferred,\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 4,\n            credit_us: 250000,\n            orbit_queue_depth: 1,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 1,\n        },\n        OwnershipEvent {\n            phase: ResponseLeased,\n            result: Leased,\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Main,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 5,\n            credit_us: 250000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 1,\n        },\n        OwnershipEvent {\n            phase: CreditReturned,\n            result: Credited(\n                Applied,\n            ),\n            pool: Orbit,\n            slot: 0,\n            logical_owner: Producer,\n            generation: 11,\n            pool_epoch: 0,\n            fact_epoch: 6,\n            credit_us: 249000,\n            orbit_queue_depth: 0,\n            shutdown_queue_depth: 0,\n            allocation_events: 1,\n            request_buffers_owned_main: 2,\n            orbit_buffers_owned_main: 0,\n        },\n    ],\n    facts: NormalizedWorkerFacts {\n        epoch: 6,\n        last_applied_generation: 11,\n        last_ack_generation: 11,\n        orbit_queue_depth: 0,\n        shutdown_queue_depth: 0,\n        credit_us: 249000,\n        applied_count: 1,\n        stale_count: 0,\n        cancelled_count: 0,\n        allocation_events: 1,\n        request_buffers_owned_main: 2,\n        orbit_buffers_owned_main: 0,\n    },\n}";
+
+    #[test]
+    fn ownership_modes_match_their_frozen_transition_sequences() {
+        let same_thread = format!("{:#?}", same_thread_ownership_trace());
+        let browser = format!(
+            "{:#?}",
+            crate::endpoint::tests::browser_ownership_trace()
+        );
+        assert_eq!(same_thread, SAME_THREAD_OWNERSHIP_FIXTURE);
+        assert_eq!(browser, BROWSER_OWNERSHIP_FIXTURE);
     }
 
     #[test]

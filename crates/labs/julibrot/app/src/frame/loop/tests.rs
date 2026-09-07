@@ -824,10 +824,6 @@ impl FakePresenter {
         scene.id
     }
 
-    fn write_hot(&mut self, hold_refused_warp: bool) {
-        self.write_hot_for_slot(hold_refused_warp, 0);
-    }
-
     fn write_hot_for_slot(&mut self, hold_refused_warp: bool, slot_order: u32) {
         self.hot_writes += 1;
         self.hot_epoch = self.hot_epoch.saturating_add(1);
@@ -898,9 +894,9 @@ impl FakePresenter {
         self.capture = TraceCaptureState::Armed;
     }
 
-    const fn drain_frame_capture(&mut self) {}
+    const fn drain_frame_capture(&self) {}
 
-    const fn stage_frame_capture(&mut self) {}
+    const fn stage_frame_capture(&self) {}
 
     fn fire_completed_callback(&mut self) {
         self.callback = self.pending.map(FakeEvent::Completed);
@@ -1606,7 +1602,10 @@ fn named_frame_scenarios_match_frozen_complete_turn_records() {
             .picture_finished
     );
 
-    assert_eq!(format!("{:#?}", named_frame_traces()), APP_FRAME_TRACE_FIXTURE);
+    assert_eq!(
+        format!("{:#?}", named_frame_traces()),
+        APP_FRAME_TRACE_FIXTURE
+    );
 }
 
 #[test]

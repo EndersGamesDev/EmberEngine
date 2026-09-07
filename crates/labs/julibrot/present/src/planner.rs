@@ -1858,10 +1858,7 @@ mod tests {
         // ReliefExposure; neither is a reachable terminal result of `Warp::reproject`.
         assert!(current.iter().all(|result| !matches!(
             result.plan.refusal_reason,
-            Some(
-                WarpRefusalReason::ErrorCeiling { .. }
-                    | WarpRefusalReason::ErrorCorpus { .. }
-            )
+            Some(WarpRefusalReason::ErrorCeiling { .. } | WarpRefusalReason::ErrorCorpus { .. })
         )));
     }
 

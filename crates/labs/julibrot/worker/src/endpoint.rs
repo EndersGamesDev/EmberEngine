@@ -409,14 +409,7 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.refresh_facts();
         #[cfg(test)]
         if let Some((phase, result, logical_owner)) = transition {
-            self.trace_transition(
-                phase,
-                result,
-                pool,
-                slot_id,
-                logical_owner,
-                generation,
-            );
+            self.trace_transition(phase, result, pool, slot_id, logical_owner, generation);
         }
         Ok(())
     }
@@ -806,8 +799,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             orbit_queue_depth: u32::try_from(self.arrivals.len()).unwrap_or(u32::MAX),
             shutdown_queue_depth: u32::from(self.drain.is_some()),
             allocation_events: self.facts.allocation_events,
-            request_buffers_owned_main: u32::try_from(self.request_owned.len())
-                .unwrap_or(u32::MAX),
+            request_buffers_owned_main: u32::try_from(self.request_owned.len()).unwrap_or(u32::MAX),
             orbit_buffers_owned_main: u32::try_from(self.orbit_owned.len())
                 .unwrap_or(u32::MAX)
                 .saturating_add(u32::try_from(self.arrivals.len()).unwrap_or(u32::MAX))
@@ -1386,10 +1378,7 @@ pub(crate) mod tests {
         let mut harness = Harness::boot(64);
         begin_ownership_trace();
         let generation = 11;
-        assert_eq!(
-            harness.submit(generation, 64),
-            SubmitOutcome::Transferred
-        );
+        assert_eq!(harness.submit(generation, 64), SubmitOutcome::Transferred);
 
         harness.produce(1);
         let epoch = harness.core.pool_epoch();
