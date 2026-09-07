@@ -1175,7 +1175,13 @@ fn explicit_deterministic_mode_and_the_disabled_hook_do_not_promote() {
     assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TraceSubmissionAction {
+    Scene { id: u64 },
+    Warp { id: u64 },
+}
+
+#[derive(Debug, Default, PartialEq)]
 struct TurnOutcome {
     scene_id: Option<u64>,
     warp_id: Option<u64>,
@@ -1186,6 +1192,7 @@ struct TurnOutcome {
     refused_scene_id: Option<u64>,
     refused_warp_id: Option<u64>,
     surface_action: TraceSurfaceAction,
+    submission_actions: Vec<TraceSubmissionAction>,
 }
 
 /// Drives the same typed stage protocol consumed by the production browser refresh.
@@ -1259,19 +1266,34 @@ fn drive_turn(
     let has_retained_scene = presenter.retained_scene.is_some();
     presenter.write_hot_for_slot(has_retained_scene, 0);
     let refresh_order = refresh_order.hot_written();
-    if !outcome.refused
-        && let Some(level) = frame_loop.due()
-    {
-        let id = presenter.submit(frame_loop.generation(), level);
-        frame_loop.submitted(id, level);
-        outcome.scene_id = Some(id);
-    }
-    let refresh_order = refresh_order.scene_considered();
-    if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-        outcome.warp_id = Some(presenter.submit_warp(frame_loop.generation()));
-        frame_loop.warp_submitted();
-    }
-    let _refresh_order = refresh_order.warp_considered();
+    let (refresh_order, scene_id) = refresh_order.run_scene(|| {
+        if !outcome.refused
+            && let Some(level) = frame_loop.due()
+        {
+            let id = presenter.submit(frame_loop.generation(), level);
+            frame_loop.submitted(id, level);
+            outcome
+                .submission_actions
+                .push(TraceSubmissionAction::Scene { id });
+            Some(id)
+        } else {
+            None
+        }
+    });
+    outcome.scene_id = scene_id;
+    let (_refresh_order, warp_id) = refresh_order.run_warp(|| {
+        if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
+            let id = presenter.submit_warp(frame_loop.generation());
+            frame_loop.warp_submitted();
+            outcome
+                .submission_actions
+                .push(TraceSubmissionAction::Warp { id });
+            Some(id)
+        } else {
+            None
+        }
+    });
+    outcome.warp_id = warp_id;
     outcome
 }
 
@@ -1550,8 +1572,30 @@ fn named_frame_traces() -> Vec<FrameTraceTurn> {
     .collect()
 }
 
+fn simultaneous_submission_actions() -> Vec<TraceSubmissionAction> {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(7, true);
+    assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false))));
+    let mut presenter = FakePresenter::default();
+    drive_turn(
+        &mut frame_loop,
+        &mut presenter,
+        FakeClock::default(),
+        FramePolicy::SingleFrameOnDemand,
+        true,
+    )
+    .submission_actions
+}
+
 #[test]
 fn named_frame_scenarios_match_frozen_complete_turn_records() {
+    assert_eq!(
+        simultaneous_submission_actions(),
+        vec![
+            TraceSubmissionAction::Scene { id: 1 },
+            TraceSubmissionAction::Warp { id: 2 },
+        ]
+    );
     let scenarios = [
         ("short", short_frame_trace as fn() -> Vec<FrameTraceTurn>),
         ("zoom", zoom_frame_trace),
