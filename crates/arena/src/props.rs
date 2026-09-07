@@ -717,7 +717,6 @@ impl Props {
 #[cfg(test)]
 // Exact float equality is the point of the face-for-face test: an atlas box
 // must reproduce `textured_box`'s vertices bit for bit, not approximately.
-#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use arena_core::shooter::Level;

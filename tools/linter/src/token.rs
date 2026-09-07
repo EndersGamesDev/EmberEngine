@@ -241,7 +241,6 @@ impl Region {
     /// the containment question here lets the path router consume both facts
     /// without reconstructing either one from prose.
     #[must_use]
-    #[allow(dead_code)] // Justified: the shadow router lands before its policy integration.
     pub(crate) fn stands_within(&self, start: usize, end: usize) -> bool {
         let Some(last) = self.text.len().checked_sub(1) else {
             return false;

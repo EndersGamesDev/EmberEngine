@@ -5,8 +5,6 @@
 
 #![deny(missing_docs)]
 // Public names remain explicit after re-export from private implementation modules.
-#![allow(clippy::module_name_repetitions)]
-
 mod connection;
 mod frame;
 mod handshake;

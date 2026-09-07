@@ -5,8 +5,6 @@
 //! that says so in its first log line (`docs/hosts.md`, section 4).
 
 // A build script speaks to cargo on stdout; that is the protocol.
-#![allow(clippy::print_stdout)]
-
 fn main() {
     println!("cargo:rerun-if-env-changed=EMBER_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=EMBER_BUILD_COMMIT");

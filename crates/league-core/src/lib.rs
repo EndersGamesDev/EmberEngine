@@ -13,7 +13,7 @@
     clippy::missing_errors_doc,
     clippy::missing_panics_doc
 )]
-#![allow(clippy::needless_range_loop, clippy::module_name_repetitions)]
+#![allow(clippy::needless_range_loop)]
 
 //! Ultimate League — the shared simulation and wire format.
 //!

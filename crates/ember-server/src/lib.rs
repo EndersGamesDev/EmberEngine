@@ -7,8 +7,6 @@
 
 #![deny(missing_docs)]
 // Public host and registry qualifiers remain clear when imported beside version-owned types.
-#![allow(clippy::module_name_repetitions)]
-
 mod capabilities;
 mod connection;
 #[cfg(any(test, feature = "demo"))]

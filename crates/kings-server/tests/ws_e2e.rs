@@ -35,13 +35,24 @@ fn start_server(turn_ms: u32) -> u16 {
             },
         ));
     });
-    // Give the accept loop a moment to come up.
-    thread::sleep(Duration::from_millis(150));
     port
 }
 
+fn connect_with_retry(port: u16) -> Client {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match connect(format!("ws://127.0.0.1:{port}")) {
+            Ok((ws, _)) => return ws,
+            Err(error) => {
+                assert!(Instant::now() < deadline, "connect: {error}");
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 fn raw_client(port: u16) -> Client {
-    let (ws, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
+    let ws = connect_with_retry(port);
     set_read_timeout(&ws, Duration::from_millis(50));
     ws
 }

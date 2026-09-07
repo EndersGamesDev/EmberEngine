@@ -48,7 +48,6 @@ fn start_server(laps: u32) -> u16 {
             },
         ));
     });
-    thread::sleep(Duration::from_millis(150));
     port
 }
 

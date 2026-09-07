@@ -58,8 +58,6 @@ fn start_server(turn_ms: u32) -> u16 {
             },
         ));
     });
-    // Give the accept loop a moment to come up.
-    thread::sleep(Duration::from_millis(150));
     port
 }
 

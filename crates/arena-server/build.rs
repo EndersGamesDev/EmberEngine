@@ -8,8 +8,6 @@
 //! is "newest build wins".
 
 // A build script's only channel to cargo is stdout; printing IS its interface.
-#![allow(clippy::print_stdout)]
-
 fn main() {
     println!("cargo:rerun-if-env-changed=EMBER_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=EMBER_BUILD_COMMIT");

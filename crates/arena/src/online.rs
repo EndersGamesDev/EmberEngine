@@ -8493,7 +8493,6 @@ mod grip_muzzle_tests {
     }
 
     // Keep the fixture and its frame-level assertions together for diagnostics.
-    #[allow(clippy::too_many_lines)]
     fn assert_rendered_muzzle(game: &mut ShooterGame, case: CaptureCase) {
         game.latest.insert(REMOTE, remote(case));
         // Interpolate position AND height while the gait and crouch ease
