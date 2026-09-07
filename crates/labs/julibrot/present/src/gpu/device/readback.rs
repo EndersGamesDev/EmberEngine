@@ -591,7 +591,7 @@ mod tests {
         );
         assert_eq!(
             FrameReadbackRoute::OffscreenRerender.as_str(),
-            "copied from an offscreen re-render of the presented pass"
+            "copied from an offscreen re-render of the shade pass"
         );
     }
 }
