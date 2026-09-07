@@ -1378,6 +1378,16 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     assert!((display[1] + 0.775).abs() < 1.0e-6);
     assert_eq!(super::redraw::RELIEF_STRETCH_GUARD, None);
     assert_eq!(uniform.reserved_0, [0.0; 4]);
+    assert_eq!(super::redraw::RELIEF_STRETCH_GUARD_CANDIDATE, 1.0);
+    let guarded = relief_scene_uniform_with_guard(
+        &grid,
+        &source,
+        &destination,
+        [960, 540],
+        Some(super::redraw::RELIEF_STRETCH_GUARD_CANDIDATE),
+    )
+    .expect("the measured candidate packs its enabled guard lane");
+    assert_eq!(guarded.reserved_0, [1.0, 960.0, 540.0, 1.0]);
 
     let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
         .expect("the source delivery lattice composes into the destination pose");

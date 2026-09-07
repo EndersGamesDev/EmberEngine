@@ -26,7 +26,7 @@ use ledger::{
 use readback::{PendingFrameReadback, ReadbackTarget};
 use redraw::encode_relief_redraw;
 #[cfg(test)]
-use redraw::relief_scene_uniform;
+use redraw::{relief_scene_uniform, relief_scene_uniform_with_guard};
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,

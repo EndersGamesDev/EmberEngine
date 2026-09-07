@@ -5,6 +5,9 @@ use super::{
     warp_load_color,
 };
 
+/// Measured excess-stretch candidate for generalized relief redraws, in destination pixels.
+pub(super) const RELIEF_STRETCH_GUARD_CANDIDATE: f64 = 1.0;
+
 /// Optional excess-stretch allowance for generalized relief redraws, in destination pixels.
 ///
 /// `None` leaves the measured candidate guard disabled while its coverage trade-off is decided.
@@ -74,6 +77,22 @@ pub(super) fn relief_scene_uniform(
     destination: &Pose,
     surface_extent: [u32; 2],
 ) -> Result<SceneUniform, PresentError> {
+    relief_scene_uniform_with_guard(
+        grid,
+        source,
+        destination,
+        surface_extent,
+        RELIEF_STRETCH_GUARD,
+    )
+}
+
+pub(super) fn relief_scene_uniform_with_guard(
+    grid: &ember_julibrot_kernels::EscapeGrid,
+    source: &crate::SceneFrame,
+    destination: &Pose,
+    surface_extent: [u32; 2],
+    stretch_guard: Option<f64>,
+) -> Result<SceneUniform, PresentError> {
     if [grid.width, grid.height] != source.extent {
         return Err(PresentError::InvalidGrid {
             width: source.extent[0],
@@ -106,7 +125,7 @@ pub(super) fn relief_scene_uniform(
         },
     })?;
     if !crate::planner::exact_relief_redraw_family(&source.pose, destination) {
-        let Some(excess_px) = RELIEF_STRETCH_GUARD else {
+        let Some(excess_px) = stretch_guard else {
             return Ok(uniform);
         };
         #[allow(
