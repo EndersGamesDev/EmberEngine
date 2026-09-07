@@ -1719,6 +1719,15 @@ mod tests {
         changed_object.rho_13 += 0.3;
         set_object(&mut object_samples, changed_object);
 
+        let mut invalid_extent = exact;
+        invalid_extent.grid_width = 0;
+
+        // The image homography sees only the in-plane origin projection. Moving the requested
+        // origin in an orthogonal axis therefore leaves a finite flat map while the independent
+        // chart census exposes the out-of-plane residual.
+        let mut chart_residual = exact;
+        chart_residual.plane_origin[2] = 2.0e-12;
+
         let measured_source = measured_relief_zoom_pose();
         let measured_redraw =
             screen_centred_measured_relief_zoom(&measured_source, -0.005, [960, 540]);
@@ -1761,6 +1770,20 @@ mod tests {
                 &object_samples,
                 PrecisionMode::Deterministic,
                 WarpValidation::Measure,
+            ),
+            PlannerCorpusCase::new(
+                "matrix-invalid-extent",
+                &invalid_extent,
+                &invalid_extent,
+                PrecisionMode::Deterministic,
+                WarpValidation::Ordinary,
+            ),
+            PlannerCorpusCase::new(
+                "chart-residual",
+                &exact,
+                &chart_residual,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
             ),
             PlannerCorpusCase::new(
                 "measured-relief-redraw",
@@ -1808,10 +1831,38 @@ mod tests {
                 "pose-mismatch",
                 "edge-on",
                 "object-samples",
+                "matrix-invalid-extent",
+                "chart-residual",
                 "measured-relief-redraw",
                 "measured-relief-exposure-refusal",
             ]
         );
+        assert_eq!(
+            current
+                .iter()
+                .find(|result| result.name == "matrix-invalid-extent")
+                .map(|result| result.plan.refusal_reason),
+            Some(Some(WarpRefusalReason::Matrix))
+        );
+        assert!(matches!(
+            current
+                .iter()
+                .find(|result| result.name == "chart-residual")
+                .map(|result| result.plan.refusal_reason),
+            Some(Some(WarpRefusalReason::ChartResidual { px })) if px > MAX_CHART_RESIDUAL_PX
+        ));
+        // `HoldStale` cannot be emitted by this pure planner: device-side `apply_hold_policy`
+        // owns it and its complete-plan behavior is pinned by the present-policy corpus in the
+        // device tests. Likewise, a planner-created anchor plan always has a lattice, so
+        // `enforce_error_ceiling` converts ErrorCeiling/ErrorCorpus into ReliefRedraw or
+        // ReliefExposure; neither is a reachable terminal result of `Warp::reproject`.
+        assert!(current.iter().all(|result| !matches!(
+            result.plan.refusal_reason,
+            Some(
+                WarpRefusalReason::ErrorCeiling { .. }
+                    | WarpRefusalReason::ErrorCorpus { .. }
+            )
+        )));
     }
 
     fn unpack_rows(rows: [[f32; 4]; 3]) -> [f64; 9] {
