@@ -219,6 +219,14 @@ impl OwnerEndpoint {
         core.orbit_leases += 1;
         core.bump_facts();
         core.refresh_facts();
+        #[cfg(test)]
+        core.trace_transition(
+            crate::endpoint::OwnershipPhase::ResponseLeased,
+            crate::endpoint::OwnershipResult::Leased,
+            id_for(&buffer).expect("the validated response retains its pool identity"),
+            crate::endpoint::LogicalOwner::Main,
+            header.generation,
+        );
         let centre_revision = if header.generation == core.latest_generation {
             core.latest_centre_revision
         } else {
@@ -944,6 +952,14 @@ impl ChannelCore {
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        self.trace_transition(
+            crate::endpoint::OwnershipPhase::RequestDispatched,
+            crate::endpoint::OwnershipResult::Transferred,
+            id,
+            crate::endpoint::LogicalOwner::Producer,
+            request.generation(),
+        );
         Ok(None)
     }
 
@@ -964,11 +980,21 @@ impl ChannelCore {
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        self.trace_transition(
+            crate::endpoint::OwnershipPhase::RequestReturned,
+            crate::endpoint::OwnershipResult::Transferred,
+            id,
+            crate::endpoint::LogicalOwner::Main,
+            generation,
+        );
         Ok(())
     }
 
     fn send_to_main(&mut self, buffer: WireBuffer, kind: MessageKind) -> Result<(), ChannelError> {
         let id = id_for(&buffer)?;
+        #[cfg(test)]
+        let generation = buffer.header()?.generation;
         self.slots.begin(id, kind)?;
         self.slots.deliver(id)?;
         self.orbit_to_main
@@ -976,6 +1002,14 @@ impl ChannelCore {
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        self.trace_transition(
+            crate::endpoint::OwnershipPhase::ResponseQueued,
+            crate::endpoint::OwnershipResult::Transferred,
+            id,
+            crate::endpoint::LogicalOwner::Main,
+            generation,
+        );
         Ok(())
     }
 
@@ -1001,6 +1035,18 @@ impl ChannelCore {
         self.pump_pending();
         self.bump_facts();
         self.refresh_facts();
+        #[cfg(test)]
+        self.trace_transition(
+            crate::endpoint::OwnershipPhase::CreditReturned,
+            crate::endpoint::OwnershipResult::Credited(match kind {
+                MessageKind::CreditApplied => OrbitDisposition::Applied,
+                MessageKind::CreditStale => OrbitDisposition::Stale,
+                _ => unreachable!("only credit messages return orbit slots"),
+            }),
+            id,
+            crate::endpoint::LogicalOwner::Producer,
+            header.generation,
+        );
         Ok(())
     }
 
@@ -1095,6 +1141,36 @@ impl ChannelCore {
             self.last_error = Some(ChannelError::new(ErrorCode::EpochExhausted, 0, 0, 0));
         }
     }
+
+    #[cfg(test)]
+    fn trace_transition(
+        &self,
+        phase: crate::endpoint::OwnershipPhase,
+        result: crate::endpoint::OwnershipResult,
+        id: SlotId,
+        logical_owner: crate::endpoint::LogicalOwner,
+        generation: u32,
+    ) {
+        crate::endpoint::record_ownership_event(crate::endpoint::OwnershipEvent {
+            phase,
+            result,
+            pool: id.pool,
+            slot: id.slot,
+            logical_owner,
+            generation,
+            pool_epoch: self.facts.allocation_events.saturating_sub(1),
+            fact_epoch: self.facts.epoch,
+            credit_us: self.credit.credit_us(),
+            orbit_queue_depth: u32::try_from(self.orbit_to_main.len()).unwrap_or(u32::MAX),
+            shutdown_queue_depth: self.facts.shutdown_queue_depth,
+            allocation_events: self.facts.allocation_events,
+            request_buffers_owned_main: u32::try_from(self.request_main.len())
+                .unwrap_or(u32::MAX),
+            orbit_buffers_owned_main: u32::try_from(self.orbit_to_main.len())
+                .unwrap_or(u32::MAX)
+                .saturating_add(self.orbit_leases),
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1156,7 +1232,9 @@ mod tests {
     use super::{
         Admission, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
     };
-    use crate::endpoint::{OwnershipEvent, OwnershipTrace, normalized_facts};
+    use crate::endpoint::{
+        OwnershipTrace, begin_ownership_trace, finish_ownership_trace,
+    };
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
         OrbitVerificationFacts, ReferenceOrbitRecord, ReferenceVerification,
@@ -1412,49 +1490,44 @@ mod tests {
             .unwrap();
     }
 
+    fn same_thread_ownership_trace() -> OwnershipTrace {
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
+        begin_ownership_trace();
+        let generation = 11;
+        assert_eq!(
+            owner.submit(request(generation, generation)),
+            SubmitOutcome::Transferred
+        );
+        let lease = producer.next_request().unwrap().unwrap();
+        producer
+            .complete(lease, &[zero_record()], 64, 1_000, 250_000)
+            .unwrap();
+        let mut response = owner.next_arrival().unwrap();
+        assert_eq!(response.generation(), generation);
+        owner
+            .return_credit(&mut response, OrbitDisposition::Applied, 0)
+            .unwrap();
+        finish_ownership_trace(owner.facts())
+    }
+
     #[test]
-    fn logical_trace_and_browser_binding_are_mode_equivalent_contracts() {
-        fn same_thread_trace() -> OwnershipTrace {
-            let (owner, producer) =
-                WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
-            let generation = 11;
-            let outcome = owner.submit(request(generation, generation));
-            let mut events = vec![OwnershipEvent::RequestSubmitted {
-                generation,
-                outcome,
-            }];
-            let lease = producer.next_request().unwrap().unwrap();
-            producer
-                .complete(lease, &[zero_record()], 64, 1_000, 250_000)
-                .unwrap();
-            let mut response = owner.next_arrival().unwrap();
-            events.push(OwnershipEvent::ResponseQueued {
-                generation: response.generation(),
-                centre_revision: response.centre_revision(),
-                length: response.length(),
-                precision_bits: response.precision_bits(),
-                cancelled: response.cancelled(),
-            });
-            events.push(OwnershipEvent::ResponseLeased {
-                generation: response.generation(),
-            });
-            let disposition = OrbitDisposition::Applied;
-            let returned_generation = response.generation();
-            owner.return_credit(&mut response, disposition, 0).unwrap();
-            events.push(OwnershipEvent::CreditReturned {
-                generation: returned_generation,
-                disposition,
-            });
-            OwnershipTrace {
-                events,
-                facts: normalized_facts(owner.facts(), false),
-            }
-        }
-
-        let same_thread = same_thread_trace();
+    #[ignore = "prints the transition-site worker fixtures for review and verbatim commit"]
+    #[allow(
+        clippy::print_stdout,
+        reason = "the ignored generator emits its reviewed fixtures"
+    )]
+    fn print_worker_ownership_trace_fixtures() {
+        let same_thread = same_thread_ownership_trace();
         let browser = crate::endpoint::tests::browser_ownership_trace();
-        assert_eq!(same_thread, browser);
+        let same_thread_fixture = format!("{same_thread:#?}");
+        let browser_fixture = format!("{browser:#?}");
+        println!("const SAME_THREAD_OWNERSHIP_FIXTURE: &str = {same_thread_fixture:?};");
+        println!("const BROWSER_OWNERSHIP_FIXTURE: &str = {browser_fixture:?};");
+    }
 
+    #[test]
+    fn browser_binding_uses_the_shared_owner_core() {
         let channel_source = include_str!("channel.rs");
         let browser_source = include_str!("browser_owner.rs");
         let endpoint_source = include_str!("endpoint.rs");
