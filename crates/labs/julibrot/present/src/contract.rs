@@ -751,8 +751,8 @@ pub enum PresentError {
         /// Published directory index.
         directory_index: u32,
     },
-    /// Fixed LDR scene targets are unsupported.
-    #[error("Rgba8Unorm scene targets are unsupported")]
+    /// The required fixed RGBA32F value-target usages are unsupported.
+    #[error("Rgba32Float value-target usages are unsupported")]
     UnsupportedSceneFormat,
     /// App-selected surface format cannot be rendered.
     #[error("surface format {format:?} is unsupported for warp output")]
