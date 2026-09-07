@@ -527,7 +527,10 @@ fn native_whole_grid_capture() -> NativeWholeGridCapture {
 
 #[test]
 #[ignore = "prints the server-rendered fixture for review and verbatim commit"]
-#[allow(clippy::print_stdout, reason = "the ignored generator emits its reviewed fixture")]
+#[allow(
+    clippy::print_stdout,
+    reason = "the ignored generator emits its reviewed fixture"
+)]
 fn print_native_whole_grid_capture_fixture() {
     let capture = native_whole_grid_capture();
     let fixture = format!("{capture:#?}");
