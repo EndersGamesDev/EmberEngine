@@ -837,11 +837,7 @@ pub(super) fn apply_precision_mode(
     plan: &mut RefinementPlan,
     viewer: &mut ViewerController,
 ) -> Result<(), AppError> {
-    viewer
-        .owner_mut()
-        .configure_precision_mode(next, PICTURE_FAST_EDIT_BUDGET)
-        .map_err(|error| AppError::Worker(error.to_string()))?;
-    let generation = viewer.owner().latest_requested_generation();
+    let generation = viewer.configure_navigation_precision(next, PICTURE_FAST_EDIT_BUDGET)?;
     *precision_mode = next;
     loop_state.apply_precision_mode(next, generation);
     *plan = (*plan).with_precision_mode(next);

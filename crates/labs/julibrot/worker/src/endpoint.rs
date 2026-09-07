@@ -14,6 +14,8 @@
     reason = "the private module publishes its port seam to the browser and channel modules"
 )]
 
+use std::collections::VecDeque;
+
 use crate::{
     BUFFER_RETURN_DEADLINE_US, ChannelError, CreditAccount, ErrorCode, JULIBROT_ABI_VERSION,
     MIN_MAX_ITER, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest, Pool, SubmitOutcome,
@@ -21,6 +23,7 @@ use crate::{
 };
 
 /// A fixed-capacity FIFO whose `clear` drops occupied values in physical slot order.
+#[derive(Debug)]
 struct TwoSlotQueue<T> {
     slots: [Option<T>; 2],
     head: usize,
@@ -83,17 +86,24 @@ pub(crate) trait OwnerSlot: Sized {
     fn validate_message(&self) -> Result<MessageKind, ChannelError>;
 
     /// Writes one canonical header under the message kind's payload-ownership rule.
-    fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError>;
+    fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError>;
 
     /// Writes one canonical request body into a request-pool slot.
-    fn encode_request(&self, request: &OrbitRequest) -> Result<(), ChannelError>;
+    fn encode_request(&mut self, request: &OrbitRequest) -> Result<(), ChannelError>;
 
     /// Reads the typed body of a validated channel-error message.
-    fn channel_error(&self) -> Result<ChannelError, ChannelError>;
+    fn channel_error(&self) -> Result<ChannelError, ChannelError> {
+        Err(ChannelError::new(
+            ErrorCode::BadKind,
+            self.header()?.kind,
+            0,
+            0,
+        ))
+    }
 
     /// Writes a payload-free message of the named kind.
     fn write_empty(
-        &self,
+        &mut self,
         kind: MessageKind,
         generation: u32,
         compute_us: u32,
@@ -128,6 +138,16 @@ pub(crate) trait OwnerPort {
 
     /// Reads the owner-side monotonic clock in microseconds.
     fn now_us(&self) -> Result<u64, ChannelError>;
+
+    /// Reclaims the two idle producer-held orbit slots for a same-thread pool replacement.
+    fn reclaim_orbit_pool(&mut self) -> Option<[Self::Slot; 2]> {
+        None
+    }
+
+    /// Reports whether the same-thread producer has returned to its startup ownership state.
+    fn producer_reconciled(&self) -> bool {
+        false
+    }
 }
 
 /// One decoded producer object-handshake message.
@@ -154,12 +174,37 @@ struct Drain {
     acknowledged: bool,
 }
 
+/// Transport policy selected for one owner core.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OwnerTransport {
+    /// In-process producer with synchronous slot delivery.
+    SameThread,
+    /// Browser worker with an object handshake and transferable slots.
+    Browser,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProducerState {
+    AwaitingAbi,
+    Ready,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnerLifecycle {
+    Open,
+    Closing,
+    Closed,
+}
+
 /// Main-thread endpoint state independent of transport lowering.
+#[derive(Debug)]
 pub(crate) struct OwnerCore<P: OwnerPort> {
     port: P,
     config: WorkerConfig,
-    request_owned: Vec<P::Slot>,
-    orbit_owned: Vec<P::Slot>,
+    mode: WorkerMode,
+    transport: OwnerTransport,
+    request_owned: VecDeque<P::Slot>,
+    orbit_owned: VecDeque<P::Slot>,
     arrivals: TwoSlotQueue<P::Slot>,
     pending_request: Option<OrbitRequest>,
     latest_generation: u32,
@@ -169,15 +214,19 @@ pub(crate) struct OwnerCore<P: OwnerPort> {
     facts: WorkerFacts,
     orbit_leases: u32,
     pool_epoch: u32,
-    ready: bool,
-    closed: bool,
-    reconciled: bool,
+    producer_state: ProducerState,
+    lifecycle: OwnerLifecycle,
     drain: Option<Drain>,
 }
 
 impl<P: OwnerPort> OwnerCore<P> {
-    /// Allocates the startup pool and returns an endpoint that has not yet probed the producer.
-    pub(crate) fn new(port: P, config: WorkerConfig) -> Result<Self, ChannelError> {
+    /// Allocates the startup pool and applies the selected adapter's initial ownership split.
+    pub(crate) fn new(
+        port: P,
+        config: WorkerConfig,
+        mode: WorkerMode,
+        transport: OwnerTransport,
+    ) -> Result<Self, ChannelError> {
         if config.max_iter < MIN_MAX_ITER {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -190,23 +239,27 @@ impl<P: OwnerPort> OwnerCore<P> {
         let mut core = Self {
             port,
             config,
-            request_owned: Vec::with_capacity(2),
-            orbit_owned: Vec::with_capacity(2),
+            mode,
+            transport,
+            request_owned: VecDeque::with_capacity(2),
+            orbit_owned: VecDeque::with_capacity(2),
             arrivals: TwoSlotQueue::new(),
             pending_request: None,
             latest_generation: 0,
             latest_centre_revision: 0,
             last_error: None,
             credit: CreditAccount::new(),
-            facts: WorkerFacts::new(WorkerMode::WebWorker),
+            facts: WorkerFacts::new(mode),
             orbit_leases: 0,
             pool_epoch: 0,
-            ready: false,
-            closed: false,
-            reconciled: false,
+            producer_state: ProducerState::AwaitingAbi,
+            lifecycle: OwnerLifecycle::Open,
             drain: None,
         };
         core.allocate_pool(config.max_iter)?;
+        if transport == OwnerTransport::SameThread {
+            core.install_same_thread_pool()?;
+        }
         core.refresh_facts();
         Ok(core)
     }
@@ -214,6 +267,11 @@ impl<P: OwnerPort> OwnerCore<P> {
     /// Borrows the transport mutably for lowering-specific work.
     pub(crate) const fn port_mut(&mut self) -> &mut P {
         &mut self.port
+    }
+
+    /// Reports the transport lowering selected at construction.
+    pub(crate) const fn mode(&self) -> WorkerMode {
+        self.mode
     }
 
     /// Sends the startup ABI probe.
@@ -224,7 +282,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     /// Accepts every newer edit and keeps at most one request pending while the port is busy.
     pub(crate) fn submit(&mut self, request: OrbitRequest) -> SubmitOutcome {
         self.advance();
-        if self.closed || self.latest_generation == u32::MAX {
+        if self.lifecycle != OwnerLifecycle::Open || self.latest_generation == u32::MAX {
             return SubmitOutcome::GenerationExhausted;
         }
         if request.generation() <= self.latest_generation {
@@ -233,7 +291,7 @@ impl<P: OwnerPort> OwnerCore<P> {
         let requested_cap = request.max_iter();
         self.latest_generation = request.generation();
         self.latest_centre_revision = request.centre().revision;
-        if requested_cap < MIN_MAX_ITER {
+        if requested_cap < MIN_MAX_ITER && self.transport == OwnerTransport::Browser {
             self.last_error = Some(ChannelError::new(
                 ErrorCode::BadLength,
                 requested_cap,
@@ -304,9 +362,27 @@ impl<P: OwnerPort> OwnerCore<P> {
         disposition: OrbitDisposition,
         owner_now_us: u64,
     ) -> Result<(), ChannelError> {
-        let old = slot.header()?;
+        let mut slot = Some(slot);
+        self.return_lease_slot(&mut slot, lease_epoch, disposition, owner_now_us)
+    }
+
+    /// Returns one optional leased slot without consuming it before credit validation succeeds.
+    pub(crate) fn return_lease_slot(
+        &mut self,
+        slot: &mut Option<P::Slot>,
+        lease_epoch: u32,
+        disposition: OrbitDisposition,
+        owner_now_us: u64,
+    ) -> Result<(), ChannelError> {
+        let old = slot
+            .as_ref()
+            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?
+            .header()?;
         #[cfg(test)]
-        let (pool, slot_id) = slot.identity()?;
+        let (pool, slot_id) = slot
+            .as_ref()
+            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?
+            .identity()?;
         let kind = match disposition {
             OrbitDisposition::Applied => MessageKind::CreditApplied,
             OrbitDisposition::Stale => MessageKind::CreditStale,
@@ -316,7 +392,12 @@ impl<P: OwnerPort> OwnerCore<P> {
         header.precision_bits = old.precision_bits;
         header.compute_us = old.compute_us;
         header.credit_us = charge.credit_us;
-        slot.write_header(header)?;
+        slot.as_mut()
+            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?
+            .write_header(header)?;
+        let slot = slot
+            .take()
+            .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
         if lease_epoch == self.pool_epoch {
             self.port.post(slot)?;
         } else {
@@ -324,7 +405,11 @@ impl<P: OwnerPort> OwnerCore<P> {
         }
         self.record_credit(old, disposition, charge.overfeed_us);
         self.orbit_leases = self.orbit_leases.saturating_sub(1);
+        if self.transport == OwnerTransport::SameThread {
+            self.bump_facts();
+        }
         self.advance();
+        self.pump_request();
         self.bump_facts();
         self.refresh_facts();
         #[cfg(test)]
@@ -349,6 +434,15 @@ impl<P: OwnerPort> OwnerCore<P> {
         let generation = slot.header()?.generation;
         #[cfg(test)]
         let mut transition = None;
+        let defer_request_pump = self.transport == OwnerTransport::SameThread
+            && pool == Pool::Request
+            && kind == MessageKind::RequestReturn;
+        let pump_after_response_trace = self.transport == OwnerTransport::SameThread
+            && pool == Pool::Orbit
+            && matches!(
+                kind,
+                MessageKind::OrbitResponse | MessageKind::OrbitCancelled
+            );
         match (pool, kind) {
             (Pool::Request, MessageKind::RequestReturn) => {
                 push_unique(&mut self.request_owned, slot)?;
@@ -362,7 +456,7 @@ impl<P: OwnerPort> OwnerCore<P> {
                 }
             }
             (Pool::Orbit, MessageKind::OrbitResponse | MessageKind::OrbitCancelled) => {
-                if self.closed {
+                if self.lifecycle != OwnerLifecycle::Open {
                     self.return_stale_slot(slot)?;
                 } else if self.arrivals.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
@@ -404,12 +498,17 @@ impl<P: OwnerPort> OwnerCore<P> {
             }
         }
         self.advance();
-        self.pump_request();
+        if !defer_request_pump && !pump_after_response_trace {
+            self.pump_request();
+        }
         self.bump_facts();
         self.refresh_facts();
         #[cfg(test)]
         if let Some((phase, result, logical_owner)) = transition {
             self.trace_transition(phase, result, pool, slot_id, logical_owner, generation);
+        }
+        if pump_after_response_trace {
+            self.pump_request();
         }
         Ok(())
     }
@@ -427,8 +526,8 @@ impl<P: OwnerPort> OwnerCore<P> {
                 if version != JULIBROT_ABI_VERSION {
                     return Err(ChannelError::new(ErrorCode::BadVersion, version, 0, 0));
                 }
-                self.ready = true;
-                while let Some(slot) = self.orbit_owned.pop() {
+                self.producer_state = ProducerState::Ready;
+                while let Some(slot) = self.orbit_owned.pop_back() {
                     self.port.post(slot)?;
                 }
                 self.advance();
@@ -443,7 +542,14 @@ impl<P: OwnerPort> OwnerCore<P> {
 
     /// Begins the closing drain; completion is reported by `shutdown_acknowledged`.
     pub(crate) fn shutdown(&mut self) -> Result<(), ChannelError> {
-        self.closed = true;
+        if self.transport == OwnerTransport::SameThread {
+            if !self.same_thread_reconciled() {
+                return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
+            }
+            self.lifecycle = OwnerLifecycle::Closed;
+            return Ok(());
+        }
+        self.lifecycle = OwnerLifecycle::Closing;
         self.pending_request = None;
         self.drain = Some(Drain {
             resize: None,
@@ -461,7 +567,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     /// Reports whether all four slots returned and the producer acknowledged, or the closing
     /// drain became terminal at its deadline; callers inspect `take_error` to distinguish them.
     pub(crate) const fn shutdown_acknowledged(&self) -> bool {
-        self.reconciled
+        matches!(self.lifecycle, OwnerLifecycle::Closed)
     }
 
     /// Returns and clears the latest typed refusal.
@@ -516,7 +622,6 @@ impl<P: OwnerPort> OwnerCore<P> {
             return Ok(());
         };
         let acknowledged = drain.acknowledged && home;
-        self.reconciled = acknowledged;
         let resize = drain.resize;
         if acknowledged {
             return if let Some(max_iter) = resize {
@@ -545,10 +650,10 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn send_shutdown(&mut self) -> Result<(), ChannelError> {
-        if !self.ready {
+        if self.producer_state != ProducerState::Ready {
             return Ok(());
         }
-        let Some(slot) = self.request_owned.pop() else {
+        let Some(mut slot) = self.request_owned.pop_back() else {
             return Ok(());
         };
         slot.write_empty(MessageKind::Shutdown, self.latest_generation, 0, 0)?;
@@ -560,7 +665,22 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn arm_resize(&mut self, max_iter: u32) {
-        if !self.ready && self.drain.is_none() && self.four_slots_home() {
+        if self.transport == OwnerTransport::SameThread {
+            if self.same_thread_owner_idle() {
+                let Some(slots) = self.port.reclaim_orbit_pool() else {
+                    return;
+                };
+                self.orbit_owned.extend(slots);
+                if let Err(error) = self.replace_pool(max_iter) {
+                    self.last_error = Some(error);
+                }
+            }
+            return;
+        }
+        if self.producer_state == ProducerState::AwaitingAbi
+            && self.drain.is_none()
+            && self.four_slots_home()
+        {
             if let Err(error) = self.replace_pool(max_iter) {
                 self.last_error = Some(error);
             }
@@ -593,15 +713,29 @@ impl<P: OwnerPort> OwnerCore<P> {
         }
     }
 
-    const fn four_slots_home(&self) -> bool {
+    fn four_slots_home(&self) -> bool {
         self.request_owned.len() == 2
             && self.orbit_owned.len() == 2
             && self.arrivals.is_empty()
             && self.orbit_leases == 0
     }
 
+    fn same_thread_owner_idle(&self) -> bool {
+        self.request_owned.len() == 2
+            && self.orbit_owned.is_empty()
+            && self.arrivals.is_empty()
+            && self.orbit_leases == 0
+            && self.drain.is_none()
+    }
+
+    fn same_thread_reconciled(&self) -> bool {
+        self.same_thread_owner_idle()
+            && self.pending_request.is_none()
+            && self.port.producer_reconciled()
+    }
+
     fn first_missing_slot(&self) -> (Pool, u32) {
-        let present = |owned: &Vec<P::Slot>, slot: u32| {
+        let present = |owned: &VecDeque<P::Slot>, slot: u32| {
             owned
                 .iter()
                 .any(|held| held.identity().is_ok_and(|(_, held)| held == slot))
@@ -622,8 +756,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     fn restart_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
         self.port.restart_producer()?;
         self.replace_pool(max_iter)?;
-        self.ready = false;
-        self.reconciled = false;
+        self.producer_state = ProducerState::AwaitingAbi;
         self.drain = None;
         self.port.probe_abi()
     }
@@ -635,14 +768,17 @@ impl<P: OwnerPort> OwnerCore<P> {
         self.arrivals.clear();
         self.orbit_leases = 0;
         self.pool_epoch = self.pool_epoch.wrapping_add(1);
-        self.ready = false;
-        self.reconciled = true;
+        self.producer_state = ProducerState::AwaitingAbi;
+        self.lifecycle = OwnerLifecycle::Closed;
         self.drain = None;
         self.refresh_facts();
     }
 
     fn replace_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
         self.allocate_pool(max_iter)?;
+        if self.transport == OwnerTransport::SameThread {
+            self.install_same_thread_pool()?;
+        }
         self.arrivals.clear();
         self.orbit_leases = 0;
         self.config.max_iter = max_iter;
@@ -654,39 +790,59 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn allocate_pool(&mut self, max_iter: u32) -> Result<(), ChannelError> {
-        let mut request_owned = Vec::with_capacity(2);
-        let mut orbit_owned = Vec::with_capacity(2);
+        let mut request_owned = VecDeque::with_capacity(2);
+        let mut orbit_owned = VecDeque::with_capacity(2);
         for slot in 0..=1 {
-            request_owned.push(self.port.allocate(Pool::Request, slot, max_iter)?);
-            orbit_owned.push(self.port.allocate(Pool::Orbit, slot, max_iter)?);
+            request_owned.push_back(self.port.allocate(Pool::Request, slot, max_iter)?);
+            orbit_owned.push_back(self.port.allocate(Pool::Orbit, slot, max_iter)?);
         }
         self.request_owned = request_owned;
         self.orbit_owned = orbit_owned;
         Ok(())
     }
 
+    fn install_same_thread_pool(&mut self) -> Result<(), ChannelError> {
+        while let Some(slot) = self.orbit_owned.pop_front() {
+            self.port.post(slot)?;
+        }
+        self.producer_state = ProducerState::Ready;
+        Ok(())
+    }
+
     fn pump_request(&mut self) -> bool {
-        if !self.ready || self.closed || self.drain.is_some() || self.pending_request.is_none() {
+        if self.producer_state != ProducerState::Ready
+            || self.lifecycle != OwnerLifecycle::Open
+            || self.drain.is_some()
+            || self.pending_request.is_none()
+        {
             return false;
         }
-        let Some(slot) = self.request_owned.pop() else {
+        let requested_cap = self
+            .pending_request
+            .as_ref()
+            .map_or(self.config.max_iter, OrbitRequest::max_iter);
+        if requested_cap > self.config.max_iter {
+            self.arm_resize(requested_cap);
+            if requested_cap > self.config.max_iter {
+                return false;
+            }
+        }
+        let slot = if self.transport == OwnerTransport::SameThread {
+            self.request_owned.pop_front()
+        } else {
+            self.request_owned.pop_back()
+        };
+        let Some(mut slot) = slot else {
             return false;
         };
         let Some(request) = self.pending_request.take() else {
-            self.request_owned.push(slot);
+            self.request_owned.push_back(slot);
             return false;
         };
-        if request.max_iter() > self.config.max_iter {
-            let requested_cap = request.max_iter();
-            self.pending_request = Some(request);
-            self.request_owned.push(slot);
-            self.arm_resize(requested_cap);
-            return false;
-        }
         if let Err(error) = slot.encode_request(&request) {
             self.last_error = Some(error);
             self.pending_request = Some(request);
-            self.request_owned.push(slot);
+            self.request_owned.push_back(slot);
             return false;
         }
         #[cfg(test)]
@@ -699,6 +855,10 @@ impl<P: OwnerPort> OwnerCore<P> {
             self.last_error = Some(error);
             self.pending_request = Some(request);
             return false;
+        }
+        if self.transport == OwnerTransport::SameThread {
+            self.bump_facts();
+            self.refresh_facts();
         }
         #[cfg(test)]
         self.trace_transition(
@@ -719,7 +879,7 @@ impl<P: OwnerPort> OwnerCore<P> {
         Ok(())
     }
 
-    fn return_stale_slot(&mut self, slot: P::Slot) -> Result<(), ChannelError> {
+    fn return_stale_slot(&mut self, mut slot: P::Slot) -> Result<(), ChannelError> {
         let old = slot.header()?;
         let charge = self.credit.charge(self.port.now_us()?, old.compute_us)?;
         let mut header = MessageHeader::new(MessageKind::CreditStale, old.generation);
@@ -808,7 +968,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 }
 
-fn push_unique<S: OwnerSlot>(owned: &mut Vec<S>, slot: S) -> Result<(), ChannelError> {
+fn push_unique<S: OwnerSlot>(owned: &mut VecDeque<S>, slot: S) -> Result<(), ChannelError> {
     let identity = slot.identity()?;
     if owned
         .iter()
@@ -821,7 +981,7 @@ fn push_unique<S: OwnerSlot>(owned: &mut Vec<S>, slot: S) -> Result<(), ChannelE
             0,
         ));
     }
-    owned.push(slot);
+    owned.push_back(slot);
     Ok(())
 }
 
@@ -1004,8 +1164,8 @@ pub(crate) mod tests {
     use ember_julibrot_math::PrecisionMode;
 
     use super::{
-        ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnershipTrace, TwoSlotQueue,
-        begin_ownership_trace, finish_ownership_trace,
+        ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnerTransport, OwnershipTrace,
+        TwoSlotQueue, begin_ownership_trace, finish_ownership_trace,
     };
     use crate::wire::WireBuffer;
     use crate::{
@@ -1031,7 +1191,7 @@ pub(crate) mod tests {
 
     impl FakeSlot {
         fn allocate(pool: Pool, slot: u32, max_iter: u32) -> Result<Self, ChannelError> {
-            let allocated = Self {
+            let mut allocated = Self {
                 buffer: RefCell::new(WireBuffer::new(pool, slot, max_iter)?),
             };
             let initial = match pool {
@@ -1084,11 +1244,11 @@ pub(crate) mod tests {
             self.buffer.borrow().validate_message()
         }
 
-        fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError> {
+        fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
             self.buffer.borrow_mut().write_header(header)
         }
 
-        fn encode_request(&self, request: &OrbitRequest) -> Result<(), ChannelError> {
+        fn encode_request(&mut self, request: &OrbitRequest) -> Result<(), ChannelError> {
             request.encode_into(&mut self.buffer.borrow_mut())
         }
 
@@ -1134,7 +1294,7 @@ pub(crate) mod tests {
             }
         }
 
-        fn receive(&mut self, slot: FakeSlot) -> Result<(), ChannelError> {
+        fn receive(&mut self, mut slot: FakeSlot) -> Result<(), ChannelError> {
             let header = slot.header()?;
             let kind = header.validate()?;
             match (slot.pool()?, kind) {
@@ -1176,11 +1336,11 @@ pub(crate) mod tests {
             {
                 return Ok(());
             }
-            while let Some(orbit) = self.producer.orbit_slots.pop() {
+            while let Some(mut orbit) = self.producer.orbit_slots.pop() {
                 orbit.write_empty(MessageKind::CreditStale, 0, 0, 0)?;
                 self.to_owner.push_back(FakeMessage::Slot(orbit));
             }
-            let Some(slot) = self.producer.shutdown_slot.take() else {
+            let Some(mut slot) = self.producer.shutdown_slot.take() else {
                 return Ok(());
             };
             slot.write_empty(MessageKind::ShutdownAck, 0, 0, 0)?;
@@ -1281,7 +1441,13 @@ pub(crate) mod tests {
                 wire: Rc::clone(&wire),
             };
             let mut harness = Self {
-                core: OwnerCore::new(port, WorkerConfig { max_iter }).unwrap(),
+                core: OwnerCore::new(
+                    port,
+                    WorkerConfig { max_iter },
+                    WorkerMode::WebWorker,
+                    OwnerTransport::Browser,
+                )
+                .unwrap(),
                 wire,
             };
             harness.core.probe_abi().unwrap();

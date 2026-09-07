@@ -15,7 +15,7 @@ use wasm_bindgen::prelude::JsValue;
 use web_sys::{MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use crate::browser::TransferBuffer;
-use crate::endpoint::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot};
+use crate::endpoint::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, OwnerTransport};
 use crate::{
     ChannelError, ErrorCode, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest,
     OrbitResponseView, Pool, SubmitOutcome, WorkerConfig, WorkerFacts,
@@ -23,6 +23,27 @@ use crate::{
 
 const WORKER_URL_GLOBAL: &str = "JULIBROT_WORKER_URL";
 const WORKER_URL_FALLBACK: &str = "./worker.js?v=1";
+
+type BrowserClock = fn() -> Result<u64, ChannelError>;
+
+struct BrowserOwnerInputs {
+    worker_url: String,
+    clock: BrowserClock,
+}
+
+impl BrowserOwnerInputs {
+    fn page_defaults() -> Self {
+        let worker_url = Reflect::get(&js_sys::global(), &JsValue::from_str(WORKER_URL_GLOBAL))
+            .ok()
+            .and_then(|value| value.as_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| WORKER_URL_FALLBACK.to_owned());
+        Self {
+            worker_url,
+            clock: browser_now_us,
+        }
+    }
+}
 
 /// Main-thread endpoint connected to `worker_main` through one browser Worker port.
 #[derive(Clone)]
@@ -47,7 +68,9 @@ impl BrowserOwnerEndpoint {
     /// Returns a typed length or allocation refusal, or `BufferStarved` when the browser refuses
     /// worker construction or message-listener installation.
     pub fn new(config: WorkerConfig) -> Result<Self, ChannelError> {
-        Self::from_worker(config, spawn_worker()?)
+        let inputs = BrowserOwnerInputs::page_defaults();
+        let worker = spawn_worker(&inputs.worker_url)?;
+        Self::from_worker_with_inputs(config, worker, inputs)
     }
 
     /// Attaches the four-buffer owner endpoint to an app-created module Worker.
@@ -64,12 +87,27 @@ impl BrowserOwnerEndpoint {
         reason = "the endpoint takes ownership of the app-provided browser port"
     )]
     pub fn from_worker(config: WorkerConfig, worker: Worker) -> Result<Self, ChannelError> {
+        Self::from_worker_with_inputs(config, worker, BrowserOwnerInputs::page_defaults())
+    }
+
+    fn from_worker_with_inputs(
+        config: WorkerConfig,
+        worker: Worker,
+        inputs: BrowserOwnerInputs,
+    ) -> Result<Self, ChannelError> {
         let port = BrowserPort {
             worker,
+            worker_url: inputs.worker_url,
+            clock: inputs.clock,
             listener: None,
         };
         let endpoint = Self {
-            core: Rc::new(RefCell::new(OwnerCore::new(port, config)?)),
+            core: Rc::new(RefCell::new(OwnerCore::new(
+                port,
+                config,
+                crate::WorkerMode::WebWorker,
+                OwnerTransport::Browser,
+            )?)),
         };
         let weak = Rc::downgrade(&endpoint.core);
         let listener = Closure::<dyn FnMut(MessageEvent)>::new(move |event| {
@@ -186,6 +224,8 @@ impl BrowserOwnerEndpoint {
 /// Browser lowering of the owner transport: one module Worker and its transferable buffers.
 struct BrowserPort {
     worker: Worker,
+    worker_url: String,
+    clock: BrowserClock,
     listener: Option<Closure<dyn FnMut(MessageEvent)>>,
 }
 
@@ -249,7 +289,7 @@ impl OwnerPort for BrowserPort {
 
     fn restart_producer(&mut self) -> Result<(), ChannelError> {
         self.worker.terminate();
-        self.worker = spawn_worker()?;
+        self.worker = spawn_worker(&self.worker_url)?;
         let listener = self
             .listener
             .take()
@@ -264,7 +304,7 @@ impl OwnerPort for BrowserPort {
     }
 
     fn now_us(&self) -> Result<u64, ChannelError> {
-        browser_now_us()
+        (self.clock)()
     }
 }
 
@@ -281,11 +321,11 @@ impl OwnerSlot for TransferBuffer {
         Self::validate_message(self)
     }
 
-    fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError> {
+    fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
         Self::write_header(self, header)
     }
 
-    fn encode_request(&self, request: &OrbitRequest) -> Result<(), ChannelError> {
+    fn encode_request(&mut self, request: &OrbitRequest) -> Result<(), ChannelError> {
         crate::encode_transfer_request(self.array(), request)
     }
 
@@ -294,7 +334,7 @@ impl OwnerSlot for TransferBuffer {
     }
 
     fn write_empty(
-        &self,
+        &mut self,
         kind: MessageKind,
         generation: u32,
         compute_us: u32,
@@ -348,16 +388,11 @@ fn object_u32(value: &JsValue, name: &str) -> Option<u32> {
     Some(number as u32)
 }
 
-fn spawn_worker() -> Result<Worker, ChannelError> {
+fn spawn_worker(url: &str) -> Result<Worker, ChannelError> {
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
     options.set_name("julibrot-orbit");
-    let url = Reflect::get(&js_sys::global(), &JsValue::from_str(WORKER_URL_GLOBAL))
-        .ok()
-        .and_then(|value| value.as_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| WORKER_URL_FALLBACK.to_owned());
-    Worker::new_with_options(&url, &options)
+    Worker::new_with_options(url, &options)
         .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))
 }
 

@@ -199,8 +199,8 @@ impl BrowserFrameLoop {
             self.install_main(viewer, requested.object_angles, plane, map);
             return Ok(());
         }
-        if viewer.owner().latest_requested_generation() != generation
-            || viewer.owner().navigation_pending_depth() != 0
+        if viewer.latest_requested_generation() != generation
+            || viewer.navigation_pending_depth() != 0
         {
             self.sampled_reference_refusal = Some(super::super::SUPERSEDED_CORRECTION_REASON);
             return Ok(());
@@ -223,7 +223,7 @@ impl BrowserFrameLoop {
         };
         let orbit = self.orbits.get(handle).map_err(registry_error)?;
         let (orbit_length, orbit_precision_bits) = (orbit.length, orbit.precision_bits);
-        if !viewer.owner_mut().accept_navigation_with_orbit(
+        if !viewer.accept_navigation_with_orbit(
             generation,
             centre_revision,
             handle.id,
@@ -256,7 +256,7 @@ impl BrowserFrameLoop {
                     response.cancelled(),
                     response.generation(),
                     self.owner_endpoint.latest_generation(),
-                    viewer.owner().navigation_pending_depth(),
+                    viewer.navigation_pending_depth(),
                 )
         }) else {
             return Ok((OrbitDisposition::Stale, false));
@@ -333,7 +333,7 @@ impl BrowserFrameLoop {
             self.remove_orbit(handle)?;
             return Err(error);
         }
-        let disposition = viewer.owner_mut().accept_orbit(response, handle, shift);
+        let disposition = viewer.accept_reference_orbit(response, handle, shift);
         if disposition == OrbitDisposition::Stale {
             self.remove_orbit(handle)?;
             return Ok((disposition, false));
@@ -423,7 +423,6 @@ impl BrowserFrameLoop {
         let requested = viewer.requested();
         if KernelMode::for_zoom(navigation.zoom_log2) == KernelMode::Shallow {
             if !viewer
-                .owner_mut()
                 .accept_navigation_without_orbit(navigation.generation, navigation.centre_revision)
             {
                 return Ok(false);
@@ -468,7 +467,7 @@ impl BrowserFrameLoop {
                 .current_orbit
                 .ok_or_else(|| AppError::Worker("compatible lease has no orbit".to_string()))?;
             let orbit = self.orbits.get(handle).map_err(registry_error)?;
-            if !viewer.owner_mut().accept_navigation_with_orbit(
+            if !viewer.accept_navigation_with_orbit(
                 navigation.generation,
                 navigation.centre_revision,
                 handle.id,
