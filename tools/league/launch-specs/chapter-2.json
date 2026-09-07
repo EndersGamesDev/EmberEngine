@@ -1,0 +1,9 @@
+{
+  "prompt": "Wide cinematic original fantasy illustration. A weary armored flame knight kneeling beside an immense pale turquoise crystal in an ancient ivory garden courtyard, dark volcanic bronze armor and a faint amber glow in the chest, greatsword resting on the stone. Behind the knight stands a tall faceless healer in cream robes, a dark hood and a broken bronze halo, staff casting gentle warm golden light over the knight. Two distinct silhouettes, a quiet moment of mercy, old mossy arches, weathered bronze inlay, emerald vines, painterly storybook concept art, atmospheric depth, no lettering",
+  "negative": "text, logo, watermark, UI, collage, blurry, low quality, duplicate people, extra arms, extra heads, modern clothes, blood, gore, photorealism",
+  "seed": 6090703,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

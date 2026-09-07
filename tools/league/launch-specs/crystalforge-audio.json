@@ -1,0 +1,8 @@
+{
+  "prompt": "Deep resonant magical crystal hum in a vast stone chamber, delicate glass chimes, a gentle airy rise, cinematic fantasy atmosphere, clean low rumble, restrained and spacious, no speech, no voices, no melody",
+  "negative_prompt": "speech, voices, vocals, singing, harsh distortion, clipping, noise, music",
+  "duration": 4,
+  "seed": 6090721,
+  "num_steps": 25,
+  "cfg_strength": 4.5
+}

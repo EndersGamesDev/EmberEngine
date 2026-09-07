@@ -1,0 +1,8 @@
+{
+  "prompt": "A cinematic fantasy flame sword being drawn from a bronze scabbard, low metallic scrape, a short rising whoosh and a deep soft impact, glowing embers crackle and fade, spacious high quality game sound effect, no speech or music",
+  "negative_prompt": "voices, speech, singing, vocals, music, clipping, harsh distortion, constant white noise",
+  "duration": 4,
+  "seed": 6090722,
+  "num_steps": 25,
+  "cfg_strength": 4.5
+}

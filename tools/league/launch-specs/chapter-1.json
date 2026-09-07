@@ -1,0 +1,9 @@
+{
+  "prompt": "Wide cinematic original fantasy illustration, at the foot of a colossal ancient ivory stone bridge, a small floating bronze and ivory spherical surveillance drone with one glowing turquoise eye discovers a rusted bronze hook emerging from dark jade swamp water, broken carved stone slabs among giant reeds and moss, the water reflects faint amber lights, mysterious ancient garden ruin, low atmospheric mist, elegant painterly concept art, dramatic detailed foreground hook at right, hovering mechanical orb at left, strong readable silhouettes, quiet discovery, no human faces, no lettering",
+  "negative": "text, numbers, logo, watermark, UI, collage, blurry, low quality, modern robot, photorealism, oversaturated, multiple orbs",
+  "seed": 6090702,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

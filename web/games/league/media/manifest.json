@@ -1,0 +1,455 @@
+{
+  "schemaVersion": 1,
+  "project": "UltimateLegue V3 — Crystalforge",
+  "assets": [
+    {
+      "file": "hero.webp",
+      "sha256": "dcb6aa8e8df4b9ff390b51cc2e5364891fea933aa948fc8fd9c7e68426d54d3b",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "c82462fd-09e1-447d-a78c-c59968a71be6",
+      "parameters": {
+        "prompt": "Epic wide cinematic fantasy landscape illustration, an ancient ivory stone bridge spanning an immense emerald chasm, weathered bronze arches and a luminous turquoise crystal monolith on each distant shore, low jade garden walls and hanging flowering vines, amber evening light through atmospheric mist, calm dark foreground, magnificent elevated Crystalforge arena, symmetrical rival citadels in the far distance, one clear unbroken bridge in the center, elegant painted game key art with rich material detail, original high fantasy strategy world, dramatic cinematic depth, no people, no lettering, no UI",
+        "negative": "text, logo, watermark, UI, collage, multiple panels, blurry, low quality, oversaturated, modern buildings, photograph",
+        "seed": 6090701,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "1c57133ed72a42ac3c11b9f87d3bcfad5a10ba9d5a13c3aa79de9ad3f676e8da",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "An ivory bridge above an emerald river. Original world concept illustration."
+    },
+    {
+      "file": "chapter-1.webp",
+      "sha256": "c77ab0e04d5b15c9743efb79b35a8bac93adcf453952475da05f9f6def02eadc",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "c2404aa5-e6b7-4138-acbf-c09350c0d74b",
+      "parameters": {
+        "prompt": "Wide cinematic original fantasy illustration, at the foot of a colossal ancient ivory stone bridge, a small floating bronze and ivory spherical surveillance drone with one glowing turquoise eye discovers a rusted bronze hook emerging from dark jade swamp water, broken carved stone slabs among giant reeds and moss, the water reflects faint amber lights, mysterious ancient garden ruin, low atmospheric mist, elegant painterly concept art, dramatic detailed foreground hook at right, hovering mechanical orb at left, strong readable silhouettes, quiet discovery, no human faces, no lettering",
+        "negative": "text, numbers, logo, watermark, UI, collage, blurry, low quality, modern robot, photorealism, oversaturated, multiple orbs",
+        "seed": 6090702,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "91f8104ef8c89f420242d05c4be4bee3c9a644d12f4cf2443daeb33e722a2663",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Mossy bridge and quiet river; an atmospheric setting for The Count."
+    },
+    {
+      "file": "chapter-2.webp",
+      "sha256": "dfa04726e2fe8594cfaf98627a129cb2b4f73639d6e71e812b1dedea589677df",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "2f7508cd-b38e-4b4c-b3a7-bd833edac782",
+      "parameters": {
+        "prompt": "Wide cinematic original fantasy illustration. A weary armored flame knight kneeling beside an immense pale turquoise crystal in an ancient ivory garden courtyard, dark volcanic bronze armor and a faint amber glow in the chest, greatsword resting on the stone. Behind the knight stands a tall faceless healer in cream robes, a dark hood and a broken bronze halo, staff casting gentle warm golden light over the knight. Two distinct silhouettes, a quiet moment of mercy, old mossy arches, weathered bronze inlay, emerald vines, painterly storybook concept art, atmospheric depth, no lettering",
+        "negative": "text, logo, watermark, UI, collage, blurry, low quality, duplicate people, extra arms, extra heads, modern clothes, blood, gore, photorealism",
+        "seed": 6090703,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "e69edc826f91d1aa1cfa3c0b6e83b8b8d1d70001735619990aad161120f451a0",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Knight and hooded healer in warm ivory ruins; story illustration, not gameplay."
+    },
+    {
+      "file": "chapter-3.webp",
+      "sha256": "75e85aae1c70ac420872885b9b9c08a6958ab420f1fd40f4245432036a9aeb21",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "4ac19b4c-8525-4065-812d-73c6f2b7001f",
+      "parameters": {
+        "prompt": "Wide cinematic fantasy illustration of an ancient ivory bridge at twilight, in the foreground a beautiful small bronze clockwork trap with violet hourglass crystal and three concentric toothed rings embedded in a stone slab, a tiny amber spark lights its mechanism. Beyond it the bridge runs straight between two distant glowing turquoise citadels, drifting jade mist, abandoned ceremonial garden, weathered engraved bronze and ivory architecture, tense stillness before battle, exquisite painted concept art with cinematic perspective and selective detail, original Crystalforge world, no people, no lettering",
+        "negative": "text, clock numbers, logo, watermark, UI, collage, blurry, low quality, giant watch face, photograph, modern buildings, oversaturated",
+        "seed": 6090704,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "1b18621a98a30e868fd47d7c269de3257de13cb22f9af97e4340aa8dc3378c8d",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Bronze and ivory bridges above turquoise water; setting for The Beat."
+    },
+    {
+      "file": "emberknight-story.webp",
+      "sha256": "199cf2402a76c627dadd0db48f2059dc8d9dc62df5678d81f44645afe47b7fd1",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "a062a8ef-65be-4d32-a0a4-d8c6a839f7ae",
+      "parameters": {
+        "prompt": "A single towering knight in black and bronze plate armor, enclosed ivory helmet and fiery amber visor, deep red cloak, broad greatsword with a burning orange edge, small embers around the armor, solemn flame guardian, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+        "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+        "seed": 6090741,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "df56fafd9ac0e27dc77e595a2a92995fa6d9d293f8a0a6e625abf6e46cc2c86c",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Armored flame knight, red cloak and glowing sword before a citadel."
+    },
+    {
+      "file": "hallow-story.webp",
+      "sha256": "aba0c704b872ec24869d241d60d2834046a579ca38d21d825b3190a25aba38f6",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "3018cefe-a25e-4f3e-b5e6-012ee2874881",
+      "parameters": {
+        "prompt": "(A completely faceless empty hood filled with warm golden light:1.5), (no face, no eyes, no mouth:1.4), a mysterious supernatural saint in flowing ivory robes, tall and solemn, broken bronze halo behind the head, mint ribbons swirling in the air, pale crystal staff, magical healer in an ancient ivory garden courtyard, wide cinematic fantasy concept art, jade and gold light, no text",
+        "negative": "text, watermark, blurry, duplicate, extra limbs, low quality, face, eyes, mouth, nose, woman face, man face, skull, mask, visible head, human skin, hair",
+        "seed": 6090751,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "989fa4cf2470b275db62bb33fc2af8936648792371260c720e308420c0b1e9bd",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Selected second pass preserves the faceless hood, ivory robes and staff."
+    },
+    {
+      "file": "bogmaw-story.webp",
+      "sha256": "4414feb537e40f7d20759f0fa7a65dd1fb458ae23f9ab1bd0ee0be824301fd69",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "3fd8617c-3c85-4d8f-aba4-3484f5980077",
+      "parameters": {
+        "prompt": "A single massive moss green swamp monster with luminous yellow eyes, bulky muscular arms, ivory stone plates growing along its back, amber fungus on shoulders, holding a rusty bronze hook, emerging from an emerald river beneath an old bridge, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+        "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+        "seed": 6090743,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "4f8ef77ec1fe6d0a4c778059c549127e4dbe6935b1606b582067d654c3b51221",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Mossy ravine guardian in its river; yellow light, jade hide and a heavy silhouette."
+    },
+    {
+      "file": "tessera-story.webp",
+      "sha256": "09ab957ec570b0a514585200c9da7aa4e84d6177292d3db9fa7065b5e6945ac5",
+      "generator": "SDXL 1.0 / ComfyUI",
+      "worker": "specht32",
+      "job": "9404dc99-0eae-4bdd-b83c-f66e1e4c04aa",
+      "parameters": {
+        "prompt": "A single silver haired female clockmaker in a plum purple long coat with ivory and bronze armor segments, amber goggles, intricate clockwork backpack, violet hourglass pendant, holding a bronze gear, clever and solemn, ancient fantasy inventor, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+        "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+        "seed": 6090744,
+        "width": 1344,
+        "height": 768,
+        "steps": 32,
+        "cfg": 7
+      },
+      "rawSha256": "5a990e48a16bf9993a4bce7a565e822e67992ddbe76aa90c0b877f673dfc89ed",
+      "derivation": "RGB WebP, quality90, method6",
+      "review": "Silver-haired clockmaker in plum and bronze with a glowing timepiece."
+    },
+    {
+      "file": "swarm-story.webp",
+      "sha256": "ddf24332dd90f799178b41be13c70ff1e1702bec2247dc4a60687016d046d87b",
+      "generator": "SDXL 1.0 / LAN specht32 ComfyUI",
+      "source": "../v2/art/swarm.webp",
+      "sourceSha256": "e890351e66107b3e4f39aa4aa0f31dbcd7a2fadccc452a8a64081df76f714c11",
+      "review": "Reuse the established bronze/turquoise orb design. Two new candidates were rejected for legs or missing lens."
+    }
+  ],
+  "trailer": {
+    "title": "UltimateLegue V3 — One lane. Five reasons to fight.",
+    "duration": 44,
+    "resolution": [
+      1280,
+      720
+    ],
+    "fps": 24,
+    "videoCodec": "H.264",
+    "audioCodec": "AAC",
+    "motionSource": "Wan 2.2 TI2V-5B",
+    "timeline": [
+      {
+        "id": "intro",
+        "in": 0,
+        "out": 5,
+        "kind": "motion",
+        "source": "target\\league-launch\\assets\\crystalforge-motion-fixed\\crystalforge-motion-fixed.mp4",
+        "sha256": "5e5e70c8a11bcb0f6b20dbcffc09f9519bd6b65072aba0a4030d12bdbd9bb254"
+      },
+      {
+        "id": "bridge",
+        "in": 5,
+        "out": 8,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\chapter-3.webp",
+        "sha256": "75e85aae1c70ac420872885b9b9c08a6958ab420f1fd40f4245432036a9aeb21"
+      },
+      {
+        "id": "swarm-story",
+        "in": 8,
+        "out": 10.5,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\swarm-story.webp",
+        "sha256": "ddf24332dd90f799178b41be13c70ff1e1702bec2247dc4a60687016d046d87b"
+      },
+      {
+        "id": "swarm-game",
+        "in": 10.5,
+        "out": 13.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\swarm.webm",
+        "sha256": "d1e11bd87a373f711e45de4bc665148f59d85b5aeabce86b164febecdfda2137"
+      },
+      {
+        "id": "emberknight-story",
+        "in": 13.0,
+        "out": 15.5,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\emberknight-story.webp",
+        "sha256": "199cf2402a76c627dadd0db48f2059dc8d9dc62df5678d81f44645afe47b7fd1"
+      },
+      {
+        "id": "emberknight-game",
+        "in": 15.5,
+        "out": 18.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\knight.webm",
+        "sha256": "45f06aed513b65e450ac911f8452fde03cfd5b1ac38a79f9d472dc5ba92da587"
+      },
+      {
+        "id": "hallow-story",
+        "in": 18.0,
+        "out": 20.5,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\hallow-story.webp",
+        "sha256": "aba0c704b872ec24869d241d60d2834046a579ca38d21d825b3190a25aba38f6"
+      },
+      {
+        "id": "hallow-game",
+        "in": 20.5,
+        "out": 23.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\hallow.webm",
+        "sha256": "32925acda6094e966795bf58efdaa68b33a503c0f15c59113a5a26df61b187f9"
+      },
+      {
+        "id": "bogmaw-story",
+        "in": 23.0,
+        "out": 25.5,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\bogmaw-story.webp",
+        "sha256": "4414feb537e40f7d20759f0fa7a65dd1fb458ae23f9ab1bd0ee0be824301fd69"
+      },
+      {
+        "id": "bogmaw-game",
+        "in": 25.5,
+        "out": 28.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\maw.webm",
+        "sha256": "95d25b5afa306b33df55f76d2e9b93e30a8d8c5c6ac9155a42d0ae493c430fb1"
+      },
+      {
+        "id": "tessera-story",
+        "in": 28.0,
+        "out": 30.5,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\tessera-story.webp",
+        "sha256": "09ab957ec570b0a514585200c9da7aa4e84d6177292d3db9fa7065b5e6945ac5"
+      },
+      {
+        "id": "tessera-game",
+        "in": 30.5,
+        "out": 33.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\tessera.webm",
+        "sha256": "0d4331a37d7c1159e133e144a5b4d2ed2c2a98c4031b4dd532ce9df3f114c9ef"
+      },
+      {
+        "id": "battle",
+        "in": 33.0,
+        "out": 38.0,
+        "kind": "gameplay",
+        "source": "target\\league-launch\\gameplay\\knight.webm",
+        "sha256": "45f06aed513b65e450ac911f8452fde03cfd5b1ac38a79f9d472dc5ba92da587"
+      },
+      {
+        "id": "outro",
+        "in": 38.0,
+        "out": 44.0,
+        "kind": "still",
+        "source": "web\\games\\league\\media\\hero.webp",
+        "sha256": "dcb6aa8e8df4b9ff390b51cc2e5364891fea933aa948fc8fd9c7e68426d54d3b"
+      }
+    ],
+    "audio": {
+      "sources": [
+        {
+          "name": "crystalforge-audio",
+          "sha256": "5bf0ac5afa8b06c331b729b8d9c71beec8b603bb3f1e3edbc817b98cccf33024",
+          "sourcePeak": 1.0,
+          "insertions": [
+            0,
+            4,
+            8,
+            13,
+            18,
+            23,
+            28,
+            33,
+            38,
+            40
+          ]
+        },
+        {
+          "name": "ember-audio",
+          "sha256": "67515b798bb9008a27701253eaa528e6e9fcbf5f104687ff08a9f509eabd5099",
+          "sourcePeak": 1.0,
+          "insertions": [
+            10.5,
+            15.5,
+            20.5,
+            25.5,
+            30.5,
+            35.5
+          ]
+        }
+      ],
+      "peak": 0.75,
+      "rms": 0.13672879754555434,
+      "originalComposition": "Four soft chord voicings written for this trailer; no sampled music or voice."
+    },
+    "validation": {
+      "sampledFrames": 176,
+      "fps": 4,
+      "meanMin": 31.263032407407408,
+      "meanMax": 100.03326388888888,
+      "longestBlackOrFlatSeconds": 0.0,
+      "durationSeconds": 44.0
+    },
+    "sha256": "38fd8416deb0c20e52ac70bb465f8a02c3dd56d9b373ee75459c307f2d8bc4cd",
+    "captionsSha256": "bfc08e4d8f15ad4f8a1a0613ca8310bfc1f4027faa8b9f47f561121ad32a1642",
+    "posterSha256": "0644255f5ec0e414bfe823a6013b7c0d3d79a853a06c0c11dd085d44e7a67b37",
+    "bytes": 5358518,
+    "elapsedSeconds": 16.585,
+    "generatorJob": "cfd732be82ce",
+    "generatorParameters": {
+      "prompt": "Cinematic fantasy game trailer establishing shot. A slow camera glide above one ancient ivory stone bridge crossing a deep emerald ravine, two distant bronze citadels, luminous turquoise crystal monoliths, garden vines, gentle golden rays moving through thin mist. A few tiny turquoise particles drift in the air. Painterly original high fantasy, restrained elegant motion, coherent solid architecture, dramatic jade and amber lighting. No people, no text, no interface.",
+      "negative_prompt": "blurry, low quality, text, logo, watermark, subtitles, UI, shaking camera, rapid motion, melting architecture, distorted buildings, flicker",
+      "seed": 6090711,
+      "width": 640,
+      "height": 384,
+      "num_frames": 25,
+      "fps": 24,
+      "num_inference_steps": 20,
+      "guidance_scale": 5
+    },
+    "generatorRawSha256": "5e5e70c8a11bcb0f6b20dbcffc09f9519bd6b65072aba0a4030d12bdbd9bb254",
+    "generatedAudio": [
+      {
+        "name": "crystalforge-audio",
+        "generator": "MMAudio",
+        "worker": "knecht24",
+        "job": "20260907T103422-939581d3",
+        "parameters": {
+          "prompt": "Deep resonant magical crystal hum in a vast stone chamber, delicate glass chimes, a gentle airy rise, cinematic fantasy atmosphere, clean low rumble, restrained and spacious, no speech, no voices, no melody",
+          "negative_prompt": "speech, voices, vocals, singing, harsh distortion, clipping, noise, music",
+          "duration": 4,
+          "seed": 6090721,
+          "num_steps": 25,
+          "cfg_strength": 4.5
+        },
+        "rawSha256": "5bf0ac5afa8b06c331b729b8d9c71beec8b603bb3f1e3edbc817b98cccf33024"
+      },
+      {
+        "name": "ember-audio",
+        "generator": "MMAudio",
+        "worker": "knecht24",
+        "job": "20260907T104236-54550842",
+        "parameters": {
+          "prompt": "A cinematic fantasy flame sword being drawn from a bronze scabbard, low metallic scrape, a short rising whoosh and a deep soft impact, glowing embers crackle and fade, spacious high quality game sound effect, no speech or music",
+          "negative_prompt": "voices, speech, singing, vocals, music, clipping, harsh distortion, constant white noise",
+          "duration": 4,
+          "seed": 6090722,
+          "num_steps": 25,
+          "cfg_strength": 4.5
+        },
+        "rawSha256": "67515b798bb9008a27701253eaa528e6e9fcbf5f104687ff08a9f509eabd5099"
+      }
+    ],
+    "gameplayCaptures": [
+      {
+        "champion": "SW4RM",
+        "durationSeconds": 12.031600000023841,
+        "sha256": "d1e11bd87a373f711e45de4bc665148f59d85b5aeabce86b164febecdfda2137",
+        "wasmSha256": "adbfdc6224e9320f9009939b604601bf9c4e75300d4a92f664e159798b103a91",
+        "simulationSeconds": 12.216666221618652,
+        "aliveSampleFraction": 1,
+        "acceptedCasts": 2
+      },
+      {
+        "champion": "EmberKnight",
+        "durationSeconds": 12.56390000000596,
+        "sha256": "45f06aed513b65e450ac911f8452fde03cfd5b1ac38a79f9d472dc5ba92da587",
+        "wasmSha256": "adbfdc6224e9320f9009939b604601bf9c4e75300d4a92f664e159798b103a91",
+        "simulationSeconds": 12.75,
+        "aliveSampleFraction": 1,
+        "acceptedCasts": 1
+      },
+      {
+        "champion": "The Hallow One",
+        "durationSeconds": 12.478,
+        "sha256": "32925acda6094e966795bf58efdaa68b33a503c0f15c59113a5a26df61b187f9",
+        "wasmSha256": "adbfdc6224e9320f9009939b604601bf9c4e75300d4a92f664e159798b103a91",
+        "simulationSeconds": 12.683333396911621,
+        "aliveSampleFraction": 1,
+        "acceptedCasts": 2
+      },
+      {
+        "champion": "Bog Maw",
+        "durationSeconds": 12.1805,
+        "sha256": "95d25b5afa306b33df55f76d2e9b93e30a8d8c5c6ac9155a42d0ae493c430fb1",
+        "wasmSha256": "adbfdc6224e9320f9009939b604601bf9c4e75300d4a92f664e159798b103a91",
+        "simulationSeconds": 12.34999942779541,
+        "aliveSampleFraction": 1,
+        "acceptedCasts": 1
+      },
+      {
+        "champion": "Tessera",
+        "durationSeconds": 12.103599999994039,
+        "sha256": "0d4331a37d7c1159e133e144a5b4d2ed2c2a98c4031b4dd532ce9df3f114c9ef",
+        "wasmSha256": "adbfdc6224e9320f9009939b604601bf9c4e75300d4a92f664e159798b103a91",
+        "simulationSeconds": 12.283332824707031,
+        "aliveSampleFraction": 1,
+        "acceptedCasts": 2
+      }
+    ],
+    "captureEvidence": "tools/league/trailer-gameplay.cjs; raw frame/state/inputs manifests retained in target/league-launch/gameplay",
+    "editRecipe": "tools/league/trailer-edit.py"
+  },
+  "rejected": [
+    {
+      "job": "b4fed053c988",
+      "reason": "Wan temporal VAE decode produced black frames. Rejected; absent from published media."
+    },
+    {
+      "job": "dd023c7d-ed26-40f4-8afd-fe0b1f573e59",
+      "reason": "SW4RM candidate added legs; inconsistent with hovering orb."
+    },
+    {
+      "job": "711398f3-499c-48ac-a226-12a046283f3b",
+      "reason": "SW4RM candidate lost its defining lens and fins."
+    },
+    {
+      "job": "78cc4541-4d57-4b70-a895-9fc74d11ffc1",
+      "reason": "Hallow candidate added a visible face; selected a faceless second pass."
+    }
+  ],
+  "rights": "Generated original game artwork and sound; original score and typography; genuine local game capture. No third-party game footage or music."
+}

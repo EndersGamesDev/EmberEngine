@@ -1,0 +1,9 @@
+{
+  "prompt": "(A flying bronze sphere, no limbs:1.5), (hovering spherical robot high above the ground, no legs, no arms:1.4), a single ancient bronze and ivory drone sphere with one enormous turquoise camera lens, four short bronze fins around the sphere, magical surveillance automaton in a grand ivory hall, dramatic turquoise and amber light, wide cinematic fantasy game concept art, entire floating sphere visible, no text",
+  "negative": "text, watermark, blurry, duplicate, extra limbs, low quality, legs, arms, hands, feet, human, humanoid, robot legs, insect legs, mechanical legs, walking, landing gear",
+  "seed": 6090750,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

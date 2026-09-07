@@ -1,0 +1,9 @@
+{
+  "prompt": "Wide cinematic fantasy illustration of an ancient ivory bridge at twilight, in the foreground a beautiful small bronze clockwork trap with violet hourglass crystal and three concentric toothed rings embedded in a stone slab, a tiny amber spark lights its mechanism. Beyond it the bridge runs straight between two distant glowing turquoise citadels, drifting jade mist, abandoned ceremonial garden, weathered engraved bronze and ivory architecture, tense stillness before battle, exquisite painted concept art with cinematic perspective and selective detail, original Crystalforge world, no people, no lettering",
+  "negative": "text, clock numbers, logo, watermark, UI, collage, blurry, low quality, giant watch face, photograph, modern buildings, oversaturated",
+  "seed": 6090704,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

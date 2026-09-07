@@ -1,0 +1,9 @@
+{
+  "prompt": "A single bronze spherical automaton with engraved ivory armor plates and one enormous luminous turquoise lens, small flying drone companions, hovering above old ivory paving, ancient mechanical census guardian, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+  "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+  "seed": 6090740,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

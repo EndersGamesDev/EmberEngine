@@ -1,0 +1,9 @@
+{
+  "prompt": "Epic wide cinematic fantasy landscape illustration, an ancient ivory stone bridge spanning an immense emerald chasm, weathered bronze arches and a luminous turquoise crystal monolith on each distant shore, low jade garden walls and hanging flowering vines, amber evening light through atmospheric mist, calm dark foreground, magnificent elevated Crystalforge arena, symmetrical rival citadels in the far distance, one clear unbroken bridge in the center, elegant painted game key art with rich material detail, original high fantasy strategy world, dramatic cinematic depth, no people, no lettering, no UI",
+  "negative": "text, logo, watermark, UI, collage, multiple panels, blurry, low quality, oversaturated, modern buildings, photograph",
+  "seed": 6090701,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

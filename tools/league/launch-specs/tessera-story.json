@@ -1,0 +1,9 @@
+{
+  "prompt": "A single silver haired female clockmaker in a plum purple long coat with ivory and bronze armor segments, amber goggles, intricate clockwork backpack, violet hourglass pendant, holding a bronze gear, clever and solemn, ancient fantasy inventor, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+  "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+  "seed": 6090744,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

@@ -1,0 +1,11 @@
+{
+  "prompt": "Cinematic fantasy game trailer establishing shot. A slow camera glide above one ancient ivory stone bridge crossing a deep emerald ravine, two distant bronze citadels, luminous turquoise crystal monoliths, garden vines, gentle golden rays moving through thin mist. A few tiny turquoise particles drift in the air. Painterly original high fantasy, restrained elegant motion, coherent solid architecture, dramatic jade and amber lighting. No people, no text, no interface.",
+  "negative_prompt": "blurry, low quality, text, logo, watermark, subtitles, UI, shaking camera, rapid motion, melting architecture, distorted buildings, flicker",
+  "seed": 6090711,
+  "width": 640,
+  "height": 384,
+  "num_frames": 25,
+  "fps": 24,
+  "num_inference_steps": 20,
+  "guidance_scale": 5
+}

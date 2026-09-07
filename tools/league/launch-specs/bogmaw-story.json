@@ -1,0 +1,9 @@
+{
+  "prompt": "A single massive moss green swamp monster with luminous yellow eyes, bulky muscular arms, ivory stone plates growing along its back, amber fungus on shoulders, holding a rusty bronze hook, emerging from an emerald river beneath an old bridge, cinematic original fantasy game splash art, painterly exquisite detail, monumental ivory arches and hanging jade vines in background, turquoise atmospheric mist, golden rim lighting, strong readable silhouette, hero on right half of wide composition, dramatic mid shot, no text",
+  "negative": "text, letters, logo, watermark, duplicate character, multiple panels, photo, blurry, low quality, distorted face, extra limbs",
+  "seed": 6090743,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}

@@ -1,0 +1,9 @@
+{
+  "prompt": "(A completely faceless empty hood filled with warm golden light:1.5), (no face, no eyes, no mouth:1.4), a mysterious supernatural saint in flowing ivory robes, tall and solemn, broken bronze halo behind the head, mint ribbons swirling in the air, pale crystal staff, magical healer in an ancient ivory garden courtyard, wide cinematic fantasy concept art, jade and gold light, no text",
+  "negative": "text, watermark, blurry, duplicate, extra limbs, low quality, face, eyes, mouth, nose, woman face, man face, skull, mask, visible head, human skin, hair",
+  "seed": 6090751,
+  "width": 1344,
+  "height": 768,
+  "steps": 32,
+  "cfg": 7
+}
