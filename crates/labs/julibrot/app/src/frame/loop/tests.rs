@@ -2555,7 +2555,6 @@ struct ZoomScript<'a> {
     retained_level: RefinementLevel,
     edits: &'a [(u32, f64, Option<[f64; 2]>)],
     initial_scene: ZoomInitialScene,
-    retire_scene_at_turn: Option<u32>,
     refinement_on_edit: ZoomRefinementOnEdit,
     edit_trigger: ZoomEditTrigger,
     forget_records_before_selection_at_turn: Option<u32>,
@@ -2750,9 +2749,6 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         let mut edit_state = ZoomEditState::None;
         let mut attempted_crosshair = None;
         let mut attempted_zoom_delta = None;
-        if script.retire_scene_at_turn == Some(turn) && pending_scene.take().is_some() {
-            frame_loop.schedule.pause();
-        }
         if pending_warp.is_some_and(|warp| warp.completes_at_turn == turn) {
             let warp = pending_warp.take().expect("due warp is pending");
             presented = Some(warp.kind);
@@ -2959,7 +2955,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 1.43, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2971,7 +2966,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.1, None), (6, 0.5, None)],
             initial_scene: ZoomInitialScene::SettledFinal,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2983,7 +2977,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Preview,
             edits: &[(0, 0.5, None)],
             initial_scene: ZoomInitialScene::FinalInFlight,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2995,7 +2988,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[idle_refused_edit],
             initial_scene: ZoomInitialScene::SettledFinal,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -3007,7 +2999,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
@@ -3019,7 +3010,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
@@ -3031,7 +3021,6 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Preview,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::FinalInFlight,
-            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -3090,65 +3079,85 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
 
 #[test]
 fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
-    let anchor = anchor_px_up(
+    let trace_box = |scenario, centre, size| {
+        let anchor = anchor_px_up(
+            centre,
+            MEASURED_FINAL_EXTENT.map(f64::from),
+            MEASURED_FINAL_EXTENT,
+        )
+        .expect("box centre maps into the measured frame");
+        let delta_log2 = box_zoom_delta_log2(size, MEASURED_FINAL_EXTENT.map(f64::from))
+            .expect("box has a finite zoom");
+        let edits = [(0, delta_log2, Some(anchor))];
+        drive_measured_zoom_trace(ZoomScript {
+            scenario,
+            retained_level: RefinementLevel::Final,
+            edits: &edits,
+            initial_scene: ZoomInitialScene::SettledFinal,
+            refinement_on_edit: ZoomRefinementOnEdit::Restart,
+            edit_trigger: ZoomEditTrigger::StaleViewRecovery,
+            forget_records_before_selection_at_turn: None,
+            destination_extent: MEASURED_FINAL_EXTENT,
+            lattice_probe: ZoomLatticeProbe::Skip,
+        })
+    };
+    let corner = trace_box(
+        "corner box after stale-view recovery",
         [200.0, 130.0],
-        MEASURED_FINAL_EXTENT.map(f64::from),
-        MEASURED_FINAL_EXTENT,
-    )
-    .expect("corner box centre maps into the measured frame");
-    let delta_log2 = box_zoom_delta_log2(
         [320.0 - 80.0, 200.0 - 60.0],
-        MEASURED_FINAL_EXTENT.map(f64::from),
-    )
-    .expect("corner box has a finite zoom");
-    let edits = [(0, delta_log2, Some(anchor))];
-    let trace = drive_measured_zoom_trace(ZoomScript {
-        scenario: "corner box after stale-view recovery",
-        retained_level: RefinementLevel::Final,
-        edits: &edits,
-        initial_scene: ZoomInitialScene::SettledFinal,
-        retire_scene_at_turn: Some(24),
-        refinement_on_edit: ZoomRefinementOnEdit::Restart,
-        edit_trigger: ZoomEditTrigger::StaleViewRecovery,
-        forget_records_before_selection_at_turn: None,
-        destination_extent: MEASURED_FINAL_EXTENT,
-        lattice_probe: ZoomLatticeProbe::Skip,
-    });
-    let edited = trace
+    );
+    let centred = trace_box(
+        "centred box after stale-view recovery",
+        [450.0, 250.0],
+        [600.0 - 300.0, 350.0 - 150.0],
+    );
+    let edited = corner
         .iter()
         .find(|turn| turn.edit_state == ZoomEditState::Applied)
         .expect("corner box edit appears in its turn trace");
-    assert_eq!(edited.planned, WarpKind::ReliefRedraw, "{trace:#?}");
+    assert_eq!(edited.planned, WarpKind::ReliefRedraw, "{corner:#?}");
     assert_eq!(
         edited.source_coverage,
         ZoomSourceCoverage::NotCovering,
-        "the corner box must exercise honest outside-source margins: {trace:#?}"
+        "the corner box must exercise honest outside-source margins: {corner:#?}"
+    );
+    assert_eq!(
+        centred
+            .iter()
+            .find(|turn| turn.edit_state == ZoomEditState::Applied)
+            .map(|turn| turn.source_coverage),
+        Some(ZoomSourceCoverage::CoversDestination),
+        "the centred comparison must exercise retained-source coverage: {centred:#?}"
     );
 
-    let first_stalled = trace.iter().find(|turn| {
+    let first_stalled = corner.iter().find(|turn| {
         turn.requested_revision != 0
             && !turn.completed_requested_final
             && turn.presented.is_none()
             && !turn.warp_in_flight
             && !turn.scene_in_flight
     });
-    let final_turn = trace.iter().find(|turn| turn.completed_requested_final);
-    let final_presentation = final_turn.and_then(|completed| {
-        trace.iter().find(|turn| {
+    let corner_final = corner.iter().find(|turn| turn.completed_requested_final);
+    let centred_final = centred
+        .iter()
+        .find(|turn| turn.completed_requested_final);
+    let final_presentation = corner_final.and_then(|completed| {
+        corner.iter().find(|turn| {
             turn.turn > completed.turn && turn.presented == Some(WarpKind::AnchorHomography)
         })
     });
     assert!(
-        first_stalled.is_none() && final_turn.is_some(),
-        "a redraw, hold, or in-flight scene must cover every turn until the requested Final arrives; first stalled: {first_stalled:#?}; Final: {final_turn:#?}; trace: {trace:#?}"
+        first_stalled.is_none() && corner_final.is_some(),
+        "a redraw, hold, or in-flight scene must cover every turn until the requested Final arrives; first stalled: {first_stalled:#?}; Final: {corner_final:#?}; trace: {corner:#?}"
     );
-    assert!(
-        final_turn.is_some_and(|turn| turn.turn >= 54),
-        "the Final must be the replacement requested after the scripted turn-24 retirement: {trace:#?}"
+    assert_eq!(
+        corner_final.map(|turn| turn.turn),
+        centred_final.map(|turn| turn.turn),
+        "a translated box must not retire the requested main scene or add a replacement flight; corner: {corner:#?}; centred: {centred:#?}"
     );
     assert!(
         final_presentation.is_some(),
-        "the recovery request must survive until the requested Final's anchor presentation: {trace:#?}"
+        "the request must survive until the requested Final's anchor presentation: {corner:#?}"
     );
 }
 
