@@ -144,6 +144,8 @@ pub struct SubmissionMeasurement {
     pub kind: SubmissionKind,
     /// Monotonic identity within that kind.
     pub id: u64,
+    /// Monotonic completion order shared by scene and warp measurements.
+    pub completion_sequence: u64,
     /// Retained source scene for a valid warp; absent for clear-only output.
     pub source_scene_id: Option<u64>,
     /// Warm-up and policy label.

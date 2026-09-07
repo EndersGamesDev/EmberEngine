@@ -129,11 +129,17 @@ pub(super) fn arm_fence(
     }
 }
 
-pub(super) fn observe_fence(pending: &mut PendingFence, now_ms: f64) -> FenceDecision {
+pub(super) fn observe_fence(
+    pending: &mut PendingFence,
+    now_ms: f64,
+    completion_sequence: u64,
+) -> FenceDecision {
     if pending.signal_result.is_none() {
         pending.signal_result = pending.signal.lock().ok().and_then(|mut slot| slot.take());
     }
-    pending.ledger.observe(now_ms, pending.signal_result)
+    pending
+        .ledger
+        .observe(now_ms, pending.signal_result, completion_sequence)
 }
 
 pub(super) fn take_glitch_readback_result(pending: &mut PendingFence) -> Option<Result<(), ()>> {

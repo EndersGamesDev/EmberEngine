@@ -114,6 +114,7 @@ const fn frame(pose: &Pose) -> SceneFrame {
         measurement: SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: 7,
+            completion_sequence: 7,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::PictureFast.as_str(),
@@ -149,6 +150,7 @@ fn fixed_poll_result_iteration_allocates_nothing() {
     let measurement = SubmissionMeasurement {
         kind: SubmissionKind::Warp,
         id: 9,
+        completion_sequence: 9,
         source_scene_id: Some(7),
         sample_class: SampleClass::Measured,
         precision_mode: PrecisionMode::PictureFast.as_str(),

@@ -1797,6 +1797,7 @@ fn headless_frame_loop_populates_a_per_level_timing_record() {
         SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: scene_id,
+            completion_sequence: scene_id,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::Deterministic.as_str(),
@@ -1808,6 +1809,7 @@ fn headless_frame_loop_populates_a_per_level_timing_record() {
     timings.complete_warp(SubmissionMeasurement {
         kind: SubmissionKind::Warp,
         id: 99,
+        completion_sequence: 99,
         source_scene_id: Some(scene_id),
         sample_class: SampleClass::Measured,
         precision_mode: PrecisionMode::Deterministic.as_str(),
@@ -2981,6 +2983,7 @@ fn measured_relief_scene(scene_id: u64, level: RefinementLevel, pose: &Pose) -> 
         measurement: SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: scene_id,
+            completion_sequence: scene_id,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::PictureFast.as_str(),
@@ -3723,6 +3726,7 @@ fn measured_height_drag_plan(
         measurement: SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: 37,
+            completion_sequence: 37,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::PictureFast.as_str(),

@@ -55,6 +55,7 @@ fn pending_surface_contract_has_one_warp_completion_identity() {
     let measurement = ember_julibrot_present::SubmissionMeasurement {
         kind: ember_julibrot_present::SubmissionKind::Warp,
         id: 41,
+        completion_sequence: 43,
         source_scene_id: Some(9),
         sample_class: ember_julibrot_present::SampleClass::Measured,
         precision_mode: "PictureFast",
@@ -67,6 +68,7 @@ fn pending_surface_contract_has_one_warp_completion_identity() {
         panic!("constructed event changed kind");
     };
     assert_eq!(measurement.id, 41);
+    assert_eq!(measurement.completion_sequence, 43);
     assert_eq!(
         measurement.kind,
         ember_julibrot_present::SubmissionKind::Warp

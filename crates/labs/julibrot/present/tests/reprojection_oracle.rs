@@ -103,6 +103,7 @@ const fn frame(pose: &Pose) -> SceneFrame {
         measurement: SubmissionMeasurement {
             kind: SubmissionKind::Scene,
             id: 7,
+            completion_sequence: 7,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
             precision_mode: PrecisionMode::PictureFast.as_str(),
