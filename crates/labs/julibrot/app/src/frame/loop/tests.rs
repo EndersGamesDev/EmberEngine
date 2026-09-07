@@ -30,7 +30,8 @@ use super::{
     stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
-    AppError, FramePolicy, LevelTimingLedger, ViewerController, anchor_px_up, box_zoom_delta_log2,
+    AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
+    SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
     LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
@@ -702,6 +703,15 @@ enum FakeEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum TraceSurfaceAction {
+    #[default]
+    None,
+    Present { warp_id: u64 },
+    Drop { warp_id: u64 },
+    Ignore { warp_id: u64 },
+}
+
 #[derive(Debug, Default)]
 struct FakePresenter {
     next_id: u64,
@@ -726,11 +736,19 @@ struct FakePresenter {
     warp_hold_count: u64,
     warp_relief_redraw_count: u64,
     presented_clear_only: u64,
+    hot_epoch: u64,
+    main_epoch: u64,
+    surface: SurfaceState<u64>,
+    capture_armed: bool,
+    capture_in_flight: bool,
+    capture_ready: bool,
+    capture_scene: Option<u64>,
 }
 
 impl FakePresenter {
     fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
         self.next_id += 1;
+        self.main_epoch = self.main_epoch.saturating_add(1);
         let scene = PendingFakeScene {
             id: self.next_id,
             generation,
@@ -743,6 +761,7 @@ impl FakePresenter {
 
     fn write_hot(&mut self, hold_refused_warp: bool) {
         self.hot_writes += 1;
+        self.hot_epoch = self.hot_epoch.saturating_add(1);
         let planned = self.forced_warp_kind.unwrap_or_else(|| {
             if self.relief_redraw && self.retained_scene.is_some() {
                 WarpKind::ReliefRedraw
@@ -765,7 +784,7 @@ impl FakePresenter {
         });
     }
 
-    fn submit_warp(&mut self) -> u64 {
+    fn submit_warp(&mut self, generation: u32) -> u64 {
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
         self.pending_warp_kind = self.warp_kind;
@@ -776,8 +795,33 @@ impl FakePresenter {
         if self.warp_kind == Some(WarpKind::HoldStale) {
             self.warp_hold_count = self.warp_hold_count.saturating_add(1);
         }
+        self.surface
+            .claim(generation)
+            .expect("the fake surface has one owner");
+        self.surface
+            .retain(PendingSurface {
+                warp_id: self.next_id,
+                generation,
+                precision_mode: PrecisionMode::Deterministic.as_str(),
+                frame: self.next_id,
+            })
+            .expect("the fake warp owns its surface");
+        let capture = CaptureArming {
+            armed: self.capture_armed,
+            route_matches: true,
+            readback_in_flight: self.capture_in_flight,
+            renderer_already_armed: false,
+        };
+        if capture.surface_due() {
+            self.capture_armed = false;
+            self.capture_in_flight = true;
+        }
         self.warp_submissions.push(self.next_id);
         self.next_id
+    }
+
+    const fn arm_capture(&mut self) {
+        self.capture_armed = true;
     }
 
     fn fire_completed_callback(&mut self) {
@@ -832,7 +876,13 @@ impl PresenterPoll for FakePresenter {
                         self.warp_relief_redraw_count =
                             self.warp_relief_redraw_count.saturating_add(1);
                     }
-                    self.presented_scene = self.pending_warp_source.take();
+                    let presented_scene = self.pending_warp_source.take();
+                    self.presented_scene = presented_scene;
+                    if self.capture_in_flight {
+                        self.capture_in_flight = false;
+                        self.capture_ready = true;
+                        self.capture_scene = presented_scene;
+                    }
                 }
                 self.pending_warp_kind = None;
                 self.pending_warp = None;
@@ -1002,6 +1052,7 @@ struct TurnOutcome {
     warp_id: Option<u64>,
     presented: bool,
     refused: bool,
+    surface_action: TraceSurfaceAction,
 }
 
 /// Drives one turn in the browser's order: poll, then scene, then surface warp.
@@ -1021,6 +1072,11 @@ fn drive_turn(
             FakeEvent::WarpCompleted(id) => {
                 presenter.presented_warps.push(id);
                 outcome.presented = true;
+                outcome.surface_action = match presenter.surface.complete(id) {
+                    SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
+                    SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+                    SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
+                };
             }
             FakeEvent::Deadline(id) => {
                 let refusal = frame_loop.refused(
@@ -1041,6 +1097,13 @@ fn drive_turn(
             } => {
                 let refusal = frame_loop.refused(kind, reason, id, polls, wall_ms);
                 outcome.refused = refusal.class != RefusalClass::Device;
+                if matches!(kind, SubmissionKind::Warp) {
+                    outcome.surface_action = match presenter.surface.refuse(id) {
+                        SurfaceAction::Present(warp_id) => TraceSurfaceAction::Present { warp_id },
+                        SurfaceAction::Drop(warp_id) => TraceSurfaceAction::Drop { warp_id },
+                        SurfaceAction::Ignore => TraceSurfaceAction::Ignore { warp_id: id },
+                    };
+                }
             }
         }
     }
@@ -1057,7 +1120,7 @@ fn drive_turn(
         outcome.scene_id = Some(id);
     }
     if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-        outcome.warp_id = Some(presenter.submit_warp());
+        outcome.warp_id = Some(presenter.submit_warp(frame_loop.generation()));
         frame_loop.warp_submitted();
     }
     outcome
@@ -1101,6 +1164,271 @@ fn retained_presenter(refuse_warp: bool) -> FakePresenter {
         refuse_warp,
         ..FakePresenter::default()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    clippy::struct_excessive_bools,
+    reason = "the oracle preserves each independent frame, capture, and finished-picture fact"
+)]
+struct StableFrameFacts {
+    generation: u32,
+    due: Option<RefinementLevel>,
+    refinement_pending: bool,
+    scene_update_pending: bool,
+    scene_in_flight: bool,
+    warp_in_flight: bool,
+    retained_scene: Option<u64>,
+    presented_scene: Option<u64>,
+    capture_armed: bool,
+    capture_in_flight: bool,
+    capture_ready: bool,
+    capture_scene: Option<u64>,
+    picture: PictureState,
+    picture_finished: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "every field remains in Debug and equality so a failed trace prints the complete turn"
+)]
+struct FrameTraceTurn {
+    scenario: &'static str,
+    turn: u32,
+    hot_epoch: u64,
+    main_epoch: u64,
+    submitted_scene_id: Option<u64>,
+    submitted_scene_level: Option<RefinementLevel>,
+    submitted_warp_id: Option<u64>,
+    submitted_warp_kind: Option<WarpKind>,
+    scene_fence_observations: u32,
+    warp_fence_observations: u32,
+    surface_action: TraceSurfaceAction,
+    facts: StableFrameFacts,
+}
+
+fn traced_turn(
+    scenario: &'static str,
+    turn: u32,
+    frame_loop: &mut FrameLoop,
+    presenter: &mut FakePresenter,
+    clock: FakeClock,
+    warps: bool,
+) -> FrameTraceTurn {
+    let outcome = drive_viewer_harness(frame_loop, presenter, clock, warps);
+    let picture = PictureState {
+        refinement_pending: frame_loop.refinement_pending(),
+        scene_update_pending: frame_loop.scene_update_pending(),
+        scene_in_flight: presenter.pending.is_some(),
+        presented_view_stale: presenter.retained_scene.is_some()
+            && presenter.presented_scene != presenter.retained_scene,
+        presented_scene_is_completed: presenter.retained_scene.is_some()
+            && presenter.presented_scene == presenter.retained_scene,
+        warp_holds_stale: presenter.warp_kind == Some(WarpKind::HoldStale),
+    };
+    FrameTraceTurn {
+        scenario,
+        turn,
+        hot_epoch: presenter.hot_epoch,
+        main_epoch: presenter.main_epoch,
+        submitted_scene_id: outcome.scene_id,
+        submitted_scene_level: outcome
+            .scene_id
+            .and(presenter.pending.map(|scene| scene.level)),
+        submitted_warp_id: outcome.warp_id,
+        submitted_warp_kind: outcome.warp_id.and(presenter.pending_warp_kind),
+        scene_fence_observations: presenter.fence_observations,
+        warp_fence_observations: presenter.warp_fence_observations,
+        surface_action: outcome.surface_action,
+        facts: StableFrameFacts {
+            generation: frame_loop.generation(),
+            due: frame_loop.due(),
+            refinement_pending: frame_loop.refinement_pending(),
+            scene_update_pending: frame_loop.scene_update_pending(),
+            scene_in_flight: presenter.pending.is_some(),
+            warp_in_flight: presenter.pending_warp.is_some(),
+            retained_scene: presenter.retained_scene,
+            presented_scene: presenter.presented_scene,
+            capture_armed: presenter.capture_armed,
+            capture_in_flight: presenter.capture_in_flight,
+            capture_ready: presenter.capture_ready,
+            capture_scene: presenter.capture_scene,
+            picture,
+            picture_finished: picture.finished(),
+        },
+    }
+}
+
+fn short_frame_trace() -> Vec<FrameTraceTurn> {
+    let scenario = "short";
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.restart(7);
+    let mut presenter = FakePresenter::default();
+    let mut clock = FakeClock::default();
+    let mut trace = vec![traced_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    )];
+    presenter.fire_completed_callback();
+    clock.advance(1.0);
+    trace.push(traced_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn retained_warp_trace(scenario: &'static str, warp_kind: WarpKind) -> Vec<FrameTraceTurn> {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+    frame_loop.accept_request(37, true);
+    frame_loop.scene_selection_changed(37);
+    let mut presenter = retained_presenter(false);
+    presenter.forced_warp_kind = Some(warp_kind);
+    let mut clock = FakeClock::default();
+    let mut trace = vec![traced_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    )];
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    trace.push(traced_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn zoom_frame_trace() -> Vec<FrameTraceTurn> {
+    retained_warp_trace("zoom", WarpKind::AnchorHomography)
+}
+
+fn height_frame_trace() -> Vec<FrameTraceTurn> {
+    retained_warp_trace("height", WarpKind::ReliefRedraw)
+}
+
+fn completed_picture_trace(scenario: &'static str, arm_capture: bool) -> Vec<FrameTraceTurn> {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(7, true);
+    assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false))));
+    let mut presenter = FakePresenter::default();
+    let mut clock = FakeClock::default();
+    let mut trace = vec![traced_turn(
+        scenario,
+        0,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    )];
+    presenter.fire_completed_callback();
+    presenter.fire_warp_completed();
+    if arm_capture {
+        presenter.arm_capture();
+    }
+    clock.advance(1.0);
+    trace.push(traced_turn(
+        scenario,
+        1,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        true,
+    ));
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    trace.push(traced_turn(
+        scenario,
+        2,
+        &mut frame_loop,
+        &mut presenter,
+        clock,
+        false,
+    ));
+    trace
+}
+
+fn capture_frame_trace() -> Vec<FrameTraceTurn> {
+    completed_picture_trace("capture", true)
+}
+
+fn finished_picture_trace() -> Vec<FrameTraceTurn> {
+    completed_picture_trace("finished-picture", false)
+}
+
+#[test]
+fn named_frame_scenarios_return_equal_complete_turn_records() {
+    let scenarios = [
+        ("short", short_frame_trace as fn() -> Vec<FrameTraceTurn>),
+        ("zoom", zoom_frame_trace),
+        ("height", height_frame_trace),
+        ("capture", capture_frame_trace),
+        ("finished-picture", finished_picture_trace),
+    ];
+    for (scenario, run) in scenarios {
+        let baseline = run();
+        let replay = run();
+        assert_eq!(baseline, replay, "{scenario} trace");
+        assert!(!baseline.is_empty(), "{scenario} trace");
+        assert!(
+            baseline.iter().all(|turn| turn.scenario == scenario),
+            "{scenario} trace names every turn"
+        );
+        assert!(
+            baseline
+                .windows(2)
+                .all(|turns| turns[0].hot_epoch < turns[1].hot_epoch
+                    && turns[0].main_epoch <= turns[1].main_epoch),
+            "{scenario} trace epochs are monotonic"
+        );
+    }
+
+    let zoom = zoom_frame_trace();
+    assert_eq!(
+        zoom[0].submitted_warp_kind,
+        Some(WarpKind::AnchorHomography)
+    );
+    let height = height_frame_trace();
+    assert_eq!(
+        height[0].submitted_warp_kind,
+        Some(WarpKind::ReliefRedraw)
+    );
+    let capture = capture_frame_trace();
+    assert!(capture[1].facts.capture_in_flight);
+    let captured = capture.last().expect("capture completion turn");
+    assert!(captured.facts.capture_ready);
+    assert_eq!(captured.facts.capture_scene, captured.facts.retained_scene);
+    assert!(matches!(
+        captured.surface_action,
+        TraceSurfaceAction::Present { .. }
+    ));
+    let finished = finished_picture_trace();
+    assert!(!finished[1].facts.picture_finished);
+    assert!(
+        finished
+            .last()
+            .expect("finished-picture presentation turn")
+            .facts
+            .picture_finished
+    );
 }
 
 fn finish_pending_refused_ladder(
