@@ -132,7 +132,12 @@ pub(super) fn relief_scene_uniform(
                 operation: "pack relief redraw stretch allowance",
             });
         }
-        uniform.reserved_0 = [1.0, presentation_extent[0], presentation_extent[1], excess_px];
+        uniform.reserved_0 = [
+            1.0,
+            presentation_extent[0],
+            presentation_extent[1],
+            excess_px,
+        ];
     }
     Ok(uniform)
 }

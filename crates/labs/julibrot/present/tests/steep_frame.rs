@@ -1661,7 +1661,10 @@ fn measured_relief_zoom_redraw_pins_the_native_pixel_oracle() {
         actual.assert_partition(expected);
     }
 
-    assert_eq!(box_before, box_after, "uniform magnification must not discard");
+    assert_eq!(
+        box_before, box_after,
+        "uniform magnification must not discard"
+    );
     box_before.assert_partition(ReliefRedrawPartition {
         agree: 506_479,
         hole: 55,

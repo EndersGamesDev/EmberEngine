@@ -507,7 +507,7 @@ mod tests {
             // neither. It is one sample whose map denominator was not positive, so the plane
             // reaches no point for it, and placing it at direct_ndc under a turned camera drew a
             // flat slab at the near depth over relief that is really in front of it.
-            "if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }",
+            "if (scene.span.z != 0u || hot.view_scale.x == 0.0) {",
             "if (record.w == 2.0) { return output; }",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
             "rotate_45(value, hot.camera_rotation_pairs_4.zw)",

@@ -306,12 +306,12 @@ fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
         usage: wgpu::TextureUsages::TEXTURE_BINDING,
         view_formats: &[],
     });
-    let data_view = Arc::new(texture.create_view(&wgpu::TextureViewDescriptor {
+    let data_view = Arc::from(texture.create_view(&wgpu::TextureViewDescriptor {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     }));
     let buffer = |label, size| {
-        Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+        Arc::from(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size,
             usage: wgpu::BufferUsages::UNIFORM,
@@ -465,8 +465,8 @@ fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
     assert_eq!(classic.rgba.len(), ice.rgba.len());
     let (classic_pixels, classic_remainder) = classic.rgba.as_chunks::<4>();
     let (ice_pixels, ice_remainder) = ice.rgba.as_chunks::<4>();
-    assert!(classic_remainder.is_empty());
-    assert!(ice_remainder.is_empty());
+    assert_eq!(classic_remainder, &[]);
+    assert_eq!(ice_remainder, &[]);
     assert!(
         classic_pixels
             .iter()
