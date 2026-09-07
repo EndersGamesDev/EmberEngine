@@ -330,7 +330,6 @@
     ],
     "scene_polls": 2,
     "warp_polls": 2,
-    "warmup_label": "Measured",
     "second_frame_policy": "SingleFrameOnDemand",
     "device_walls": [
       "WebGL2",

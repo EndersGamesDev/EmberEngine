@@ -23,7 +23,7 @@
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
     const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
-    const ENVIRONMENT_FIELDS = ["adapter_name", "backend"];
+    const ENVIRONMENT_FIELDS = ["adapter_name", "backend", "warmup_label"];
     const PAGE_WALL_FIELDS = [
       "worker_compute_us",
       "worker_overfeed_us",
@@ -57,8 +57,8 @@
       for (const field of fields) delete record[field];
     }
 
-    // S-05 normalization removes only named wall durations and the two adapter strings. Credit,
-    // polls, ids, epochs, modes, extents, byte counts, queue depths and policy results stay exact.
+    // S-05 normalization removes only named wall durations and environment strings. Credit, polls,
+    // ids, epochs, modes, extents, byte counts, queue depths and policy results stay exact.
     function stableFacts(facts) {
       const stable = JSON.parse(JSON.stringify(facts));
       omit(stable, ENVIRONMENT_FIELDS);
