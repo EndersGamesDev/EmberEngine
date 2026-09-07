@@ -1927,15 +1927,15 @@ mod browser {
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
     use super::{
-        BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FencesObserved,
-        FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob, KernelPlan,
-        KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, OrderedRefresh,
-        PAGE_MAX_ITERATION_CAP, PresentEventEffect, PresentEventFacts, PresentEventOwner,
-        PresentEventPort, PresentFenceRefusal, PresentSceneCompletion, PresentSceneDrop,
-        PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode, SurfacePort,
-        SurfaceResolutionEvent, SurfaceResolutionOwner, SurfaceSubmission, SurfaceWarpJob,
-        WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
-        WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
+        AllocatedKernelGrid, BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn,
+        FencesObserved, FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob,
+        KernelPlan, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort,
+        OrderedRefresh, PAGE_MAX_ITERATION_CAP, PresentEventEffect, PresentEventFacts,
+        PresentEventOwner, PresentEventPort, PresentFenceRefusal, PresentSceneCompletion,
+        PresentSceneDrop, PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode,
+        SurfacePort, SurfaceResolutionEvent, SurfaceResolutionOwner, SurfaceSubmission,
+        SurfaceWarpJob, WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication,
+        WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
         coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
         published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
@@ -2310,6 +2310,12 @@ mod browser {
         in_flight: Option<BackdropFlight>,
     }
 
+    #[derive(Debug)]
+    struct MainGridPair {
+        current: EscapeGrid,
+        spare: EscapeGrid,
+    }
+
     impl ViewStamp {
         fn render_equivalent(self, other: Self) -> bool {
             let selection_matches = self.generation_applied == other.generation_applied
@@ -2365,8 +2371,7 @@ mod browser {
         sampled_resume_level: Option<RefinementLevel>,
         submitted_references: Vec<SubmittedReference>,
         plan: RefinementPlan,
-        grid: EscapeGrid,
-        spare_grid: Option<EscapeGrid>,
+        main_grid_pair: Option<MainGridPair>,
         grid_round: u64,
         backdrop: Option<BackdropGrid>,
         active_backdrop_map: Option<PoseMap>,
@@ -3021,8 +3026,10 @@ mod browser {
                 sampled_resume_level: None,
                 submitted_references: Vec::with_capacity(2),
                 plan,
-                grid,
-                spare_grid: Some(spare_grid),
+                main_grid_pair: Some(MainGridPair {
+                    current: grid,
+                    spare: spare_grid,
+                }),
                 grid_round: loop_state.ladder_round(),
                 backdrop: None,
                 active_backdrop_map: None,

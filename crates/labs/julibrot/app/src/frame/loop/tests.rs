@@ -6909,7 +6909,7 @@ fn non_dispatching_manual_and_deep_reference_waits_keep_retained_records() {
         .find("let Some(level) = self.loop_state.due()")
         .expect("the paused-schedule wait exists");
     let overwrite = body
-        .find("self.presenter.forget_retained_records(&self.grid);")
+        .find("self.presenter.forget_retained_records(grid);")
         .expect("record invalidation marks the actual overwrite");
     assert!(reference_wait < overwrite && due < overwrite);
 }
@@ -7083,11 +7083,14 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     let source = include_str!("../loop.rs");
     let submit = include_str!("browser/submit.rs");
     assert!(source.contains("const MAX_HEADER_SETS: u32 = 9;"));
-    assert!(source.contains("spare_grid: Option<EscapeGrid>,"));
+    assert!(source.contains(
+        "struct MainGridPair {\n        current: EscapeGrid,\n        spare: EscapeGrid,\n    }"
+    ));
+    assert!(source.contains("main_grid_pair: Option<MainGridPair>,"));
     assert!(source.contains("grid_round: u64,"));
     assert!(source.contains("JulibrotKernels::plan_grid_pair"));
     assert!(source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)"));
-    assert!(submit.contains("std::mem::swap(&mut self.grid, spare);"));
+    assert!(submit.contains("std::mem::swap(&mut grids.current, &mut grids.spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
 }
 
@@ -7146,8 +7149,8 @@ fn precision_replacement_installs_the_plan_that_sized_the_new_pair() {
         .find("self.plan = next_plan;")
         .expect("the new plan is installed");
     let grid = body
-        .find("self.grid = next_grid;")
-        .expect("the new grid is installed");
+        .find("current: next_grid,")
+        .expect("the new grid pair is installed");
     assert!(allocation < install && install < grid);
 }
 
@@ -7161,13 +7164,30 @@ fn main_pair_retirement_keeps_spare_before_current() {
         .split_once("fn restore_main_grid_pair")
         .unwrap_or_else(|| unreachable!("retirement helper ends"))
         .0;
+    let absent = retire_pair
+        .find("self.main_grid_pair.take()")
+        .unwrap_or_else(|| unreachable!("the pair becomes absent before retirement"));
     let spare = retire_pair
         .find("KernelGridTarget::Main, &spare")
         .unwrap_or_else(|| unreachable!("spare retirement exists"));
     let current = retire_pair
         .find("KernelGridTarget::Main, &current")
         .unwrap_or_else(|| unreachable!("current retirement exists"));
-    assert!(spare < current);
+    let restorations: Vec<_> = retire_pair
+        .match_indices("self.main_grid_pair = Some(MainGridPair { current, spare });")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(restorations.len(), 2);
+    let replacement_spare = retire_pair
+        .find(".allocate_grid(&mut self.executor, KernelGridTarget::Main, &self.plan)")
+        .unwrap_or_else(|| unreachable!("current-retirement failure replaces the spare"));
+    assert!(
+        absent < spare
+            && spare < restorations[0]
+            && restorations[0] < current
+            && current < replacement_spare
+            && replacement_spare < restorations[1]
+    );
 }
 
 #[test]
