@@ -10,9 +10,22 @@ use std::sync::Mutex;
 use ember_engine::KeyCode;
 use serde::Deserialize;
 
-const ACTIONS: [&str; 14] = [
-    "q", "w", "e", "r", "d", "f", "item1", "item2", "item3", "item4", "item5", "item6", "stop",
+const ACTIONS: [&str; 15] = [
+    "q",
+    "w",
+    "e",
+    "r",
+    "d",
+    "f",
+    "item1",
+    "item2",
+    "item3",
+    "item4",
+    "item5",
+    "item6",
+    "stop",
     "shop",
+    "attackMove",
 ];
 
 struct KeyOption {
@@ -145,6 +158,8 @@ struct Patch {
     stop: Option<String>,
     #[serde(default, deserialize_with = "present_code")]
     shop: Option<String>,
+    #[serde(default, rename = "attackMove", deserialize_with = "present_code")]
+    attack_move: Option<String>,
 }
 
 fn present_code<'de, D: serde::Deserializer<'de>>(
@@ -155,7 +170,7 @@ fn present_code<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Controls {
-    pub keys: [KeyCode; 14],
+    pub keys: [KeyCode; 15],
     pub enabled: bool,
     pub revision: u64,
 }
@@ -177,6 +192,7 @@ impl Controls {
             KeyCode::Digit6,
             KeyCode::KeyS,
             KeyCode::KeyB,
+            KeyCode::KeyA,
         ],
         enabled: true,
         revision: 0,
@@ -188,8 +204,21 @@ impl Controls {
         }
         let p: Patch = serde_json::from_str(json).map_err(|e| e.to_string())?;
         let values = [
-            p.q, p.w, p.e, p.r, p.d, p.f, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6,
-            p.stop, p.shop,
+            p.q,
+            p.w,
+            p.e,
+            p.r,
+            p.d,
+            p.f,
+            p.item1,
+            p.item2,
+            p.item3,
+            p.item4,
+            p.item5,
+            p.item6,
+            p.stop,
+            p.shop,
+            p.attack_move,
         ];
         let mut keys = Self::DEFAULT.keys;
         for (i, code) in values.iter().enumerate() {
@@ -324,7 +353,8 @@ mod tests {
         assert_eq!(values["item6"], "Digit6");
         assert_eq!(values["stop"], "KeyS");
         assert_eq!(values["shop"], "KeyB");
-        assert_eq!(values.as_object().unwrap().len(), 14);
+        assert_eq!(values["attackMove"], "KeyA");
+        assert_eq!(values.as_object().unwrap().len(), 15);
         for (i, option) in OPTIONS.iter().enumerate() {
             assert!(
                 !OPTIONS[..i]
@@ -345,9 +375,12 @@ mod tests {
     #[test]
     fn partial_maps_start_from_defaults_and_shop_can_move() {
         let mut controls = Controls::DEFAULT;
-        controls.set_json(r#"{"q":"KeyB","shop":"KeyA"}"#).unwrap();
+        controls
+            .set_json(r#"{"q":"KeyB","shop":"KeyZ","attackMove":"KeyX"}"#)
+            .unwrap();
         assert_eq!(controls.keys[0], KeyCode::KeyB);
-        assert_eq!(controls.keys[13], KeyCode::KeyA);
+        assert_eq!(controls.keys[13], KeyCode::KeyZ);
+        assert_eq!(controls.keys[14], KeyCode::KeyX);
         controls.set_json(r#"{"q":"KeyW","w":"KeyQ"}"#).unwrap();
         assert_eq!(controls.keys[0], KeyCode::KeyW);
         assert_eq!(controls.keys[1], KeyCode::KeyQ);
@@ -359,11 +392,13 @@ mod tests {
     #[test]
     fn invalid_maps_are_atomic_and_conflicts_include_shop() {
         let mut controls = Controls::DEFAULT;
-        controls.set_json(r#"{"q":"KeyA"}"#).unwrap();
+        controls.set_json(r#"{"q":"KeyZ"}"#).unwrap();
         let before = controls;
         for bad in [
             r#"{"q":"KeyW"}"#,
             r#"{"q":"KeyB"}"#,
+            r#"{"q":"KeyA"}"#,
+            r#"{"attackMove":"KeyQ"}"#,
             r#"{"q":"KeyA","q":"KeyZ"}"#,
             r#"{"unknown":"KeyX"}"#,
             r#"{"q":"Escape"}"#,
@@ -395,7 +430,7 @@ mod tests {
         assert!(!paused.allows(&controls));
         let resumed = controls.permit();
         assert!(resumed.allows(&controls));
-        controls.set_json(r#"{"q":"KeyA"}"#).unwrap();
+        controls.set_json(r#"{"q":"KeyZ"}"#).unwrap();
         assert!(!resumed.allows(&controls));
     }
 }

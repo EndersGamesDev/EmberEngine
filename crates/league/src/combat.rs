@@ -885,9 +885,22 @@ fn teleport(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
                 sparks(frame, point + Vec3::Y * 0.6, HOT, cast.age, 4);
             }
             3 => {
-                petals(frame, point + Vec3::Y * 0.1, 1.25 + age * 0.5, cast.yaw, 5, SLUDGE);
-                arc(frame, point + Vec3::Y * 0.12, 1.3 + age * 0.5,
-                    [cast.yaw - PI * 0.7, cast.yaw + PI * 0.7], SLUDGE, 0.075);
+                petals(
+                    frame,
+                    point + Vec3::Y * 0.1,
+                    1.25 + age * 0.5,
+                    cast.yaw,
+                    5,
+                    SLUDGE,
+                );
+                arc(
+                    frame,
+                    point + Vec3::Y * 0.12,
+                    1.3 + age * 0.5,
+                    [cast.yaw - PI * 0.7, cast.yaw + PI * 0.7],
+                    SLUDGE,
+                    0.075,
+                );
                 put(
                     frame,
                     MESH_OCTA,
@@ -1010,16 +1023,30 @@ pub fn attack_pose(unit: &UnitLite, effects: &[FxLite]) -> AttackPose {
     if unit.dead || unit.def > 4 || ![unit.x, unit.z, unit.fa].iter().all(|v| v.is_finite()) {
         return AttackPose::default();
     }
-    let Some(fx) = effects.iter().rev().find(|fx| {
-        attack_start(fx)
-            && fx.champ == unit.def
+    let belongs = |fx: &&FxLite| {
+        fx.champ == unit.def
             && fx.life.is_finite()
             && fx.life > 0.0
             && fx.left.is_finite()
             && fx.left > 0.0
             && [fx.x, fx.z, fx.x2, fx.z2].iter().all(|v| v.is_finite())
             && (fx.x - unit.x).powi(2) + (fx.z - unit.z).powi(2) < 0.8 * 0.8
-    }) else {
+    };
+    // A cast owns its short visual window, including a cooldown-ready auto
+    // released later in the same simulation tick. Damage and shots survive.
+    if effects
+        .iter()
+        .filter(belongs)
+        .any(|fx| fx.k == 13 && fx.ability < 4)
+    {
+        return AttackPose::default();
+    }
+    let Some(fx) = effects
+        .iter()
+        .rev()
+        .filter(belongs)
+        .find(|fx| attack_start(fx))
+    else {
         return AttackPose::default();
     };
     let age = (1.0 - fx.left / fx.life).clamp(0.0, 1.0);
@@ -1285,6 +1312,35 @@ mod tests {
             fx.x = unit.x;
             fx.champ = (champ + 1) % 5;
             assert_eq!(attack_pose(&unit, &[fx]), AttackPose::default());
+        }
+    }
+
+    #[test]
+    fn accepted_abilities_own_recovery_window_including_same_tick_attacks() {
+        for champ in 0..5 {
+            let mut world = World::new(1);
+            world.set_units(&[UnitSnap {
+                id: 1,
+                k: 0,
+                def: champ,
+                x: -4.0,
+                z: 1.0,
+                ..UnitSnap::default()
+            }]);
+            let unit = world.units[0];
+            let attack = effect(champ, 4, 0);
+            let original = attack_pose(&unit, &[attack]);
+            assert_ne!(original, AttackPose::default());
+            for ability in 0..4 {
+                let mut cast = effect(champ, ability, 13);
+                assert_eq!(attack_pose(&unit, &[attack, cast]), AttackPose::default());
+                assert_eq!(attack_pose(&unit, &[cast, attack]), AttackPose::default());
+                cast.x += 5.0;
+                assert_eq!(attack_pose(&unit, &[attack, cast]), original);
+                cast.x = unit.x;
+                cast.left = 0.0;
+                assert_eq!(attack_pose(&unit, &[attack, cast]), original);
+            }
         }
     }
 }

@@ -179,14 +179,11 @@ fn read_controls(
 
     // right button: the MOBA cursor — attack what is under it, else walk
     let rmb = input.mouse_down(MouseButton::Right);
-    let lmb = input.mouse_down(MouseButton::Left);
     let rmb_edge = rmb && !prev.rmb;
-    let lmb_edge = lmb && !prev.rmb_was_left;
     prev.rmb = rmb;
-    prev.rmb_was_left = lmb;
 
     if active
-        && (rmb_edge || lmb_edge)
+        && rmb_edge
         && let Some(ndc) = cursor
     {
         if let Some(target) = pick_enemy(&camera, aspect, world, ndc) {
@@ -253,6 +250,15 @@ fn read_controls(
         out.push(Cmd::Move { x: me.x, z: me.z });
     }
     prev.stop = stop;
+    let attack_move = input.down(controls.keys[14]);
+    if active
+        && attack_move
+        && !prev.attack_move
+        && let Some((x, z)) = aim
+    {
+        out.push(Cmd::AttackMove { x, z });
+    }
+    prev.attack_move = attack_move;
     // keys[13] is shop: only the DOM dispatches that presentation action.
     out
 }
@@ -295,11 +301,11 @@ fn pick_enemy(
 #[derive(Default)]
 pub struct Prev {
     pub rmb: bool,
-    pub rmb_was_left: bool,
     pub abil: [bool; 4],
     pub spell: [bool; 2],
     pub item: [bool; 6],
     stop: bool,
+    attack_move: bool,
     revision: u64,
 }
 
@@ -603,11 +609,115 @@ mod tests {
     }
 
     #[test]
+    fn left_click_is_ui_only_and_right_click_targets_enemies() {
+        let mut world = live_world();
+        let controls = Controls::DEFAULT;
+        let mut prev = Prev::default();
+        assert_eq!(
+            mapped_input(&[], &[MouseButton::Left], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert!(matches!(
+            mapped_input(&[], &[MouseButton::Right], &mut prev, &world, &controls).as_slice(),
+            [Cmd::Move { .. }]
+        ));
+        world.set_units(&[
+            UnitSnap {
+                id: 1,
+                k: 0,
+                t: 0,
+                slot: 0,
+                x: -40.0,
+                z: 1.0,
+                ..UnitSnap::default()
+            },
+            UnitSnap {
+                id: 2,
+                k: 0,
+                t: 1,
+                slot: 1,
+                x: -36.0,
+                z: 0.0,
+                ..UnitSnap::default()
+            },
+        ]);
+        let cursor = project(&camera_for(world.cam), 16.0 / 9.0, -36.0, 1.0, 0.0);
+        prev = Prev::default();
+        assert_eq!(
+            read_controls(
+                &InputState::from_parts(&[], &[MouseButton::Right], (0.0, 0.0), None),
+                &mut prev,
+                &world,
+                16.0 / 9.0,
+                true,
+                &controls,
+                Some(cursor.into()),
+            ),
+            vec![Cmd::Attack { target: 2 }]
+        );
+    }
+
+    #[test]
+    fn attack_move_uses_its_mapped_edge_and_obeys_input_suppression() {
+        let world = live_world();
+        let mut controls = Controls::DEFAULT;
+        let mut prev = Prev::default();
+        let (x, z) = ground_point(&camera_for(world.cam), 16.0 / 9.0, [0.0, 0.0]).unwrap();
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            vec![Cmd::AttackMove { x, z }]
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        controls.set_json(r#"{"attackMove":"KeyX"}"#).unwrap();
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyX], &[], &mut prev, &world, &controls),
+            vec![Cmd::AttackMove { x, z }]
+        );
+        controls.set_enabled(false);
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyX], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        controls.set_enabled(true);
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyX], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyX], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[], &[], &mut prev, &world, &controls),
+            Vec::<Cmd>::new()
+        );
+        assert_eq!(
+            mapped_input(&[KeyCode::KeyX], &[], &mut prev, &world, &controls),
+            vec![Cmd::AttackMove { x, z }]
+        );
+    }
+
+    #[test]
     fn remapped_abilities_spells_items_and_stop_use_physical_edges() {
         let world = live_world();
         let mut controls = Controls::DEFAULT;
         controls
-            .set_json(r#"{"q":"KeyA","d":"KeyG","item1":"Numpad1","stop":"KeyX"}"#)
+            .set_json(r#"{"q":"KeyZ","d":"KeyG","item1":"Numpad1","stop":"KeyX"}"#)
             .unwrap();
         let mut prev = Prev::default();
         // Consume the configuration transition before any keys are pressed.
@@ -627,7 +737,7 @@ mod tests {
         );
         let (x, z) = ground_point(&camera_for(world.cam), 16.0 / 9.0, [0.0, 0.0]).unwrap();
         let keys = [
-            KeyCode::KeyA,
+            KeyCode::KeyZ,
             KeyCode::KeyG,
             KeyCode::Numpad1,
             KeyCode::KeyX,
@@ -657,7 +767,7 @@ mod tests {
             );
             assert_eq!(
                 mapped_input(
-                    &[modifier, KeyCode::KeyA],
+                    &[modifier, KeyCode::KeyZ],
                     &[],
                     &mut prev,
                     &world,
@@ -681,23 +791,23 @@ mod tests {
         let keys = [KeyCode::KeyQ, KeyCode::KeyD, KeyCode::Digit1, KeyCode::KeyS];
         controls.set_enabled(false);
         assert_eq!(
-            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            mapped_input(&keys, &[MouseButton::Right], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
         controls.set_enabled(true);
         assert_eq!(
-            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            mapped_input(&keys, &[MouseButton::Right], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
         assert_eq!(
-            mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls),
+            mapped_input(&keys, &[MouseButton::Right], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
         assert_eq!(
             mapped_input(&[], &[], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
-        let commands = mapped_input(&keys, &[MouseButton::Left], &mut prev, &world, &controls);
+        let commands = mapped_input(&keys, &[MouseButton::Right], &mut prev, &world, &controls);
         assert!(matches!(
             commands.as_slice(),
             [
@@ -735,16 +845,16 @@ mod tests {
         let mut controls = Controls::DEFAULT;
         let mut prev = Prev::default();
         assert_eq!(
-            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            mapped_input(&[KeyCode::KeyZ], &[], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
-        controls.set_json(r#"{"q":"KeyA"}"#).unwrap();
+        controls.set_json(r#"{"q":"KeyZ"}"#).unwrap();
         assert_eq!(
-            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            mapped_input(&[KeyCode::KeyZ], &[], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
         assert_eq!(
-            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls),
+            mapped_input(&[KeyCode::KeyZ], &[], &mut prev, &world, &controls),
             Vec::<Cmd>::new()
         );
         assert_eq!(
@@ -752,7 +862,7 @@ mod tests {
             Vec::<Cmd>::new()
         );
         assert!(matches!(
-            mapped_input(&[KeyCode::KeyA], &[], &mut prev, &world, &controls).as_slice(),
+            mapped_input(&[KeyCode::KeyZ], &[], &mut prev, &world, &controls).as_slice(),
             [Cmd::Cast { slot: 0, .. }]
         ));
     }

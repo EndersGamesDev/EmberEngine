@@ -324,7 +324,12 @@ pub fn data_json() -> String {
         "runes": data::RUNES.iter().map(|r| json!({"key": r.key, "name": r.name, "desc": r.desc})).collect::<Vec<_>>(),
         "items": data::ITEMS.iter().map(|i| json!({"id": i.id, "key": i.key, "name": i.name,
             "cost": i.cost, "tier": i.tier, "desc": i.desc, "charges": i.charges})).collect::<Vec<_>>(),
-        "ultimateLevels": data::R_LEVELS
+        "ultimateLevels": data::R_LEVELS,
+        "rules": {"maxLevel": data::MAX_LEVEL, "startGold": data::START_GOLD,
+            "goldPerSecond": data::GOLD_PER_SEC, "xpPerSecond": data::XP_PER_SEC,
+            "boonSeconds": data::BOON_SECS, "courtRespawn": data::COURT_RESPAWN,
+            "coreHp": data::CORE_HP, "waveFirst": data::WAVE_FIRST,
+            "waveEvery": data::WAVE_EVERY, "fountainRadius": data::FOUNTAIN_R}
     }).to_string()
 }
 
@@ -384,7 +389,8 @@ mod tests {
     fn authoritative_effect_identity_survives_client_conversion_and_clocks() {
         let event: proto::Fx = serde_json::from_str(
             r#"{"k":13,"champ":4,"ability":3,"x":1.0,"z":2.0,"x2":9.0,"z2":8.0,"v":0.0}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let mut w = World::new(1);
         w.push_fx(event.into());
         w.tick_clocks(0.1);
