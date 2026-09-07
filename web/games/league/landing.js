@@ -110,6 +110,7 @@ function openReader(card) {
   activeCard = card;
   document.querySelectorAll('.champ').forEach((c) => c.setAttribute('aria-expanded', String(c === card)));
   reader.focus({ preventScroll: true });
+  $('#reader-name').scrollIntoView({ behavior: 'instant', block: 'center' });
 }
 
 function closeReader() {
@@ -118,7 +119,10 @@ function closeReader() {
   const back = activeCard;
   activeCard = null;
   document.querySelectorAll('.champ').forEach((c) => c.setAttribute('aria-expanded', 'false'));
-  if (back) back.focus({ preventScroll: true });
+  if (back) {
+    back.focus({ preventScroll: true });
+    back.scrollIntoView({ behavior: 'instant', block: 'center' });
+  }
 }
 
 document.querySelectorAll('.champ').forEach((card) => {
@@ -189,7 +193,7 @@ function applyChampions(list) {
       const who = isStr(entry.bond.champion) && names[entry.bond.champion.trim()]
         ? names[entry.bond.champion.trim()]
         : '';
-      d.relationship = [isStr(entry.bond.text) ? entry.bond.text.trim() : '', who].filter(Boolean).join(' — ');
+      d.relationship = isStr(entry.bond.text) ? entry.bond.text.trim() : who;
     }
     card.querySelector('.c-name').textContent = d.name;
     card.querySelector('.c-title').textContent = d.title;
@@ -241,7 +245,7 @@ function applyChapters(list) {
 
 function applyFeatures(list) {
   if (!Array.isArray(list) || !list.length) return;
-  const ul = $('#features');
+  const ul = $('#features .features');
   ul.innerHTML = '';
   list.slice(0, 8).forEach((f, i) => {
     if (!f || typeof f !== 'object' || !isStr(f.title) || !isStr(f.text)) return;
