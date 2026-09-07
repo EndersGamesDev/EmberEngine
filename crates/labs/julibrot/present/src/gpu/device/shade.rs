@@ -41,11 +41,7 @@ pub(super) fn create_value_target(
     }
 }
 
-pub(super) fn ensure_value_target(
-    device: &wgpu::Device,
-    gpu: &mut GpuState,
-    extent: [u32; 2],
-) {
+pub(super) fn ensure_value_target(device: &wgpu::Device, gpu: &mut GpuState, extent: [u32; 2]) {
     if gpu.presentation_values.extent != extent {
         gpu.presentation_values =
             create_value_target(device, &gpu.warp_texture_layout, &gpu.scene_sampler, extent);

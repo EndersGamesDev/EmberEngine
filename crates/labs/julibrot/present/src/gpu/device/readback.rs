@@ -30,7 +30,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::PresentError;
 
-use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL, encode_shade};
+use super::shade::encode_shade;
+use super::{MapSignal, Presenter, RGBA8_BYTES_PER_TEXEL};
 
 /// Which of the two routes produced, or will produce, a frame copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

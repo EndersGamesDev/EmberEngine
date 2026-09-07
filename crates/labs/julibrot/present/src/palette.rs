@@ -227,9 +227,7 @@ pub fn shade_presentation_value(value: [f32; 4], selected: PaletteRecord) -> Pal
             contract_violation: false,
         },
         2.0 | 6.0 => shade_escape_record([0.0, 1.0, 0.0, 0.0], selected),
-        0.0 | 3.0 => {
-            shade_lit_escape_record([smooth_iter, escaped, 0.0, status], selected, light)
-        }
+        0.0 | 3.0 => shade_lit_escape_record([smooth_iter, escaped, 0.0, status], selected, light),
         _ => PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: true,
@@ -272,9 +270,18 @@ mod tests {
 
     #[test]
     fn value_statuses_are_palette_free_until_the_single_shade_step() {
-        assert_eq!(presentation_value([-1.0, 0.0, 0.0, 0.0], 0.7), [-1.0, 0.0, 0.0, 0.7]);
-        assert_eq!(presentation_value([12.0, 1.0, 0.0, 1.0], 0.7), [12.0, 1.0, 1.0, 1.0]);
-        assert_eq!(presentation_value([0.0, 1.0, 0.0, 2.0], 0.7), [0.0, 1.0, 2.0, 1.0]);
+        assert_eq!(
+            presentation_value([-1.0, 0.0, 0.0, 0.0], 0.7),
+            [-1.0, 0.0, 0.0, 0.7]
+        );
+        assert_eq!(
+            presentation_value([12.0, 1.0, 0.0, 1.0], 0.7),
+            [12.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            presentation_value([0.0, 1.0, 0.0, 2.0], 0.7),
+            [0.0, 1.0, 2.0, 1.0]
+        );
         assert_eq!(
             shade_presentation_value(CLEAR_VALUE, EMBER_PALETTE).rgba,
             EMBER_PALETTE.clear_rgba

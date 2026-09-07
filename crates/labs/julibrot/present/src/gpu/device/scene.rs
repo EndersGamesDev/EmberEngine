@@ -5,8 +5,8 @@ use crate::{PresentError, PresentMain, scene_indices};
 
 use super::{
     BACKDROP_STENCIL, DEPTH_FORMAT, DepthTarget, GpuState, IndexTarget, SCENE_DEPTH_COMPARE,
-    SCENE_FORMAT, SceneLayer, SceneTexture, scene_depth_range, scene_draw_order,
-    scene_stencil, stencil_reference, viewport_dimension,
+    SCENE_FORMAT, SceneLayer, SceneTexture, scene_depth_range, scene_draw_order, scene_stencil,
+    stencil_reference, viewport_dimension,
 };
 
 mod submit;

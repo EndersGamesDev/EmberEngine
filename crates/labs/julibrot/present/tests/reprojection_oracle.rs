@@ -4,11 +4,10 @@ use ember_julibrot_math::{
     pixel_scale, scene_footprint, screen_to_plane,
 };
 use ember_julibrot_present::{
-    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame,
-    SubmissionKind, SubmissionMeasurement, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpPlan,
-    WarpRefusalReason, WarpValidation, apply_homography, grid_screen, height_for_record,
-    presentation_value, project_scene_point, project_scene_vertex, relief_redraw_source_pose,
-    shade_presentation_value,
+    CLASSIC_PALETTE, RELIEF_REDRAW_MAX_EXPOSED_FRACTION, SampleClass, SceneFrame, SubmissionKind,
+    SubmissionMeasurement, WARP_MAX_ERROR_PX, Warp, WarpKind, WarpPlan, WarpRefusalReason,
+    WarpValidation, apply_homography, grid_screen, height_for_record, presentation_value,
+    project_scene_point, project_scene_vertex, relief_redraw_source_pose, shade_presentation_value,
 };
 
 const EXTENT: [u32; 2] = [96, 54];

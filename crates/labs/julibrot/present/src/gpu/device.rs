@@ -32,9 +32,7 @@ use scene::{
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
     extent_3d, validate_backdrop, validate_extent, validate_grid, validate_grid_parts,
 };
-use shade::{
-    create_shade_pipeline, create_value_target, encode_shade, ensure_value_target, write_palette,
-};
+use shade::{create_shade_pipeline, create_value_target};
 use uniforms::{
     create_heap_layout, create_scene_layout, create_warp_hot_layout, create_warp_texture_layout,
 };
@@ -720,12 +718,8 @@ fn create_gpu_state(
         SCENE_FORMAT,
         Some(SceneLayer::Backdrop),
     );
-    let warp_pipeline = create_warp_pipeline(
-        device,
-        SCENE_FORMAT,
-        &warp_texture_layout,
-        &warp_hot_layout,
-    );
+    let warp_pipeline =
+        create_warp_pipeline(device, SCENE_FORMAT, &warp_texture_layout, &warp_hot_layout);
     let shade_pipeline = create_shade_pipeline(
         device,
         config.surface_format,

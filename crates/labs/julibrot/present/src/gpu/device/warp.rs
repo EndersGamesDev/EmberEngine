@@ -1,4 +1,5 @@
 use super::ledger::{LatticeRefusal, presentation_ledger_entry};
+use super::shade::{encode_shade, ensure_value_target, write_palette};
 use super::{
     FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
     SCENE_GRID_BYTE_OFFSET, apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw,

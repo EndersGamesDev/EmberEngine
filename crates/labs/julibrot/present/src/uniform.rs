@@ -402,8 +402,8 @@ mod tests {
             apron_scale: 1.5,
             ..ember_julibrot_math::Homography::IDENTITY
         });
-        let apron = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map)
-            .expect("apron map packs");
+        let apron =
+            SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map).expect("apron map packs");
         assert_eq!(apron.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.5]);
         assert_eq!(
             SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map),
@@ -413,16 +413,8 @@ mod tests {
                 logical_len: 12,
             })
         );
-        let sky = SceneUniform::new(
-            [3, 2],
-            1,
-            64,
-            7,
-            12,
-            plane,
-            PoseMap::EdgeOn,
-        )
-        .expect("edge-on scene uses finite map placeholders");
+        let sky = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, PoseMap::EdgeOn)
+            .expect("edge-on scene uses finite map placeholders");
         assert_eq!(sky.span, [7, 6, 1, 0]);
         assert_eq!(sky.screen_to_plane_row_2[3], 1.0);
     }

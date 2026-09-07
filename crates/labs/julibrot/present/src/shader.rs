@@ -358,9 +358,7 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
         assert!(source.contains("if (malformed(record))"));
-        assert!(
-            source.contains("if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }")
-        );
+        assert!(source.contains("if (record.w == 1.0) { return vec4<f32>(record.xy, 1.0, 1.0); }"));
         assert!(!source.contains("if (malformed(record) || record.w == 1.0) { return vec4<f32>"));
         assert!(source.contains("if (record.w == 2.0) { return vec4<f32>(0.0, 1.0, 2.0, 1.0); }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));

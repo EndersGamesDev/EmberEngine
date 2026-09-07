@@ -496,7 +496,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
         .retained_grid()
         .expect("retained frame owns its record grid");
     let uniform = relief_scene_uniform(retained_grid, &sampled, &sampled.pose)
-    .expect("compatible records form a scene uniform");
+        .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
     assert_eq!(uniform.span[1], 64 * 36);
@@ -802,10 +802,7 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
         .clone();
     retained_grid.width /= 2;
     retained_grid.height /= 2;
-    assert!(
-        relief_scene_uniform(&retained_grid, &sampled, &sampled.pose)
-        .is_err()
-    );
+    assert!(relief_scene_uniform(&retained_grid, &sampled, &sampled.pose).is_err());
 }
 
 #[test]
@@ -821,9 +818,7 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
             .directory_index,
         main.grid.span.directory_index
     );
-    assert!(
-        relief_scene_uniform(&main.grid, &sampled, &sampled.pose).is_ok()
-    );
+    assert!(relief_scene_uniform(&main.grid, &sampled, &sampled.pose).is_ok());
 }
 
 #[test]
