@@ -273,7 +273,6 @@
     "warp_kind": "AnchorHomography",
     "warp_refusal_reason": null,
     "warmup_label": "Measured",
-    "second_frame_policy": "SingleFrameOnDemand",
     "device_walls": [
       "WebGL2",
       "EXT_color_buffer_float",
@@ -315,64 +314,26 @@
     "texture_reallocations": 2
   },
   "load_dependent": {
-    "reason": "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls and warp_polls; all remain reported evidence until R2-04d adds a poll-only production boundary",
-    "owner_epoch": 33,
+    "reason": "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls, warp_polls and second_frame_policy; that policy is decided from the measured PolicyProbe wall, and all remain reported evidence until R2-04d adds a poll-only production boundary",
+    "owner_epoch": 18,
     "presentation_ledger": [
       {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
+        "scene_id": null,
+        "level": null,
+        "warp_kind": "ClearOnly",
+        "requested_centre_px": null,
+        "anchor_px": null
       },
       {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
+        "scene_id": null,
+        "level": null,
+        "warp_kind": "ClearOnly",
+        "requested_centre_px": null,
+        "anchor_px": null
       },
       {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
+        "scene_id": 1,
+        "level": "Preview",
         "warp_kind": "AnchorHomography",
         "requested_centre_px": [
           480,
@@ -423,9 +384,10 @@
         ]
       }
     ],
-    "capture_count": 7,
+    "capture_count": 2,
     "scene_polls": 2,
-    "warp_polls": 2
+    "warp_polls": 2,
+    "second_frame_policy": "SingleFrameOnDemand"
   },
   "rgba": {
     "byte_length": 2073600,
