@@ -234,8 +234,22 @@ fn create_and_join(a: &mut Peer, b: &mut Peer) {
         a.dump("ada")
     );
     assert_eq!(a.game.roster.len(), 2);
+    assert!(
+        b.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2),
+        "bob never learned ada was in the roster.\n  {}",
+        b.dump("bob")
+    );
     assert_eq!(b.game.roster.len(), 2);
     assert_eq!(a.board().pieces.len(), 64);
+    let waiting = agreed(a.board());
+    assert!(
+        b.wait_for(Duration::from_secs(5), |g| g
+            .board
+            .as_ref()
+            .is_some_and(|board| agreed(board) == waiting)),
+        "bob never received ada's Waiting board.\n  {}",
+        b.dump("bob")
+    );
     assert_eq!(
         agreed(a.board()),
         agreed(b.board()),
