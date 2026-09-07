@@ -659,7 +659,7 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure for non-finite input or result.
-    pub fn wheel_zoom(
+    fn wheel_zoom(
         &mut self,
         delta_log2: f64,
         anchor_px_up: [f64; 2],
@@ -695,7 +695,7 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure for non-finite input or result.
-    pub fn drag_pan(&mut self, delta_dom: [f64; 2]) -> Result<NavigationEdit, AppError> {
+    fn drag_pan(&mut self, delta_dom: [f64; 2]) -> Result<NavigationEdit, AppError> {
         if !delta_dom.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
