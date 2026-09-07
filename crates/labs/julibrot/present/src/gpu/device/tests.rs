@@ -161,10 +161,11 @@ fn census_failure_or_delay_never_refuses_or_delays_the_scene() {
             }),
         };
 
-        let FenceDecision::Complete(measurement) = observe_fence(&mut pending, 101.0) else {
+        let FenceDecision::Complete(measurement) = observe_fence(&mut pending, 101.0, 31) else {
             panic!("a successful scene fence must deliver independently of its census");
         };
         assert_eq!(measurement.id, 29);
+        assert_eq!(measurement.completion_sequence, 31);
         let census = census_if_ready(take_glitch_readback_result(&mut pending), || {
             panic!("an unavailable census must not be read")
         });
