@@ -109,7 +109,7 @@
 
 **Verified.** No scoped owner drain produces a node, dependency, dirty bit, or stable graph identity: the frame loop drains HOT, installs `PresentMain`, services worker arrivals, calls kernels, submits a scene, then acquires/submits a surface warp in one imperative refresh. The design reference itself marks stable resource/frame graphs as missing and round one names J-04 for a future compiler (`crates/labs/julibrot/app/src/frame/loop.rs:1120-1365`; `docs/engine-design.md:257-269`, `docs/engine-design.md:296-320`).
 
-**Proposed.** The smallest honest port is a pure `compile_viewer_drain(previous, next) -> ViewerWorkSet` adapter with stable Julibrot resource keys and ordered HOT, reference, kernel, scene, and presentation intents. It should initially be asserted against the existing trace and remain app-local; introducing a general DAG belongs after the miniature emits this record.
+**Proposed.** No bounded round-two or round-three change makes J-04 real. The smallest prerequisite is an app-local `ViewerWorkSet` with stable Julibrot resource keys and ordered intents. J-04 becomes real only when a later engine round defines resource/frame nodes, dependencies, dirty semantics, and a compiler that consumes that record.
 
 ### J-05 — hot-publication seam
 
@@ -127,7 +127,7 @@
 
 **Verified.** `BrowserFrameLoop::submit_due_scene` directly chooses shallow versus perturbation and calls `JulibrotKernels::encode_shallow` or `encode_perturbation`; kernels owns plans, span/header allocations, cached dispatch templates, accepted reference identity, and the mutable `EscapeGrid`. Versions are owner epoch, refinement rung, reference generation, requested/delivered caps, and `DataSpan` generation. Allocation reserves one or an atomic pair of Final-capacity spans and three header sets; dispatch writes a kernel uniform, encodes scratch work and exact DATA copies, then app submits that encoder before present submits its scene. There is no kernel-specific fence; same-queue order places the later scene fence after the kernel copy (`crates/labs/julibrot/app/src/frame/loop/browser/submit.rs:300-414`, `crates/labs/julibrot/kernels/src/gpu.rs:20-70`, `crates/labs/julibrot/kernels/src/gpu.rs:135-269`, `crates/labs/julibrot/kernels/src/gpu.rs:271-447`, `crates/labs/julibrot/kernels/src/gpu.rs:681-702`).
 
-**Proposed.** Make J-07 real by adding a `KernelJob` enum whose whole-grid variant carries exactly today's arguments and whose tile variant wraps the existing `TileJob`; return an encoded publication receipt rather than mutating app-selected grid state. The first adapter must call the same methods so queue submissions and scene-fence order remain byte-for-byte observable.
+**Proposed.** Make the J-07 job-record and publication-receipt boundary concrete by adding a `KernelJob` enum whose whole-grid variant carries exactly today's arguments and whose tile variant wraps the existing `TileJob`; return an encoded publication receipt rather than mutating app-selected grid state. The first adapter must call the same methods so queue submissions and scene-fence order remain byte-for-byte observable. This makes the job-record and publication-receipt boundary concrete, but J-07 remains app-issued and partial until J-04 supplies the graph issuer.
 
 ### J-08 — value/reconstruction seam
 
