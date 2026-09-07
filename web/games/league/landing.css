@@ -142,6 +142,12 @@ h2 { font-size: clamp(1.9rem, 4.4vw, 3rem); letter-spacing: -.02em; }
   margin: 0 0 22px;
   text-shadow: 0 2px 30px rgba(0, 0, 0, .55);
 }
+.hero .tagline {
+  font-family: var(--serif); font-style: italic;
+  color: var(--bronze-hi);
+  font-size: clamp(1.05rem, 2.2vw, 1.4rem);
+  margin: -8px 0 18px;
+}
 .hero .lede { margin-bottom: 30px; }
 .hero-cta { display: flex; gap: 12px; flex-wrap: wrap; }
 .scrollcue {
@@ -247,11 +253,35 @@ section[id], .endcta { scroll-margin-top: 76px; }
   font-size: .72rem; letter-spacing: .16em; text-transform: uppercase;
   color: var(--bronze-hi); margin-bottom: 6px;
 }
-.r-blocks p { margin: 0; font-size: .92rem; color: var(--ivory-dim); line-height: 1.65; }
+.r-blocks p { margin: 0 0 10px; font-size: .92rem; color: var(--ivory-dim); line-height: 1.65; }
 .r-blocks > div:first-child p { font-family: var(--serif); color: var(--ivory); }
+.r-blocks > div:first-child p:last-child { margin-bottom: 0; }
+.r-quote {
+  font-family: var(--serif); font-style: italic;
+  color: var(--ivory); font-size: 1.05rem;
+  border-left: 2px solid var(--bronze);
+  padding-left: 14px; margin: 0 0 16px;
+}
+.r-role { font-size: .78rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ivory-faint); margin: 0 0 16px; }
+
+/* ---- world block ---- */
+.lore-note { font-size: .78rem; margin-top: 10px; letter-spacing: .02em; }
+.world { max-width: 860px; margin-bottom: clamp(40px, 6vw, 64px); }
+.world h3 { font-family: var(--serif); font-size: clamp(1.5rem, 3vw, 2rem); margin-bottom: 6px; }
+.world-sub { color: var(--bronze-hi); font-family: var(--serif); font-style: italic; margin: 0 0 14px; }
+.world-para p {
+  font-family: var(--serif); font-size: 1.02rem; line-height: 1.8;
+  color: var(--ivory-dim); margin: 0 0 14px;
+}
 
 /* ---- chapters ---- */
 .chapters { list-style: none; margin: 0; padding: 0; display: grid; gap: clamp(30px, 5vw, 56px); }
+.cimg {
+  width: 100%; max-height: 360px; object-fit: cover;
+  border-radius: 12px; border: 1px solid var(--line);
+  margin-bottom: 18px; display: block;
+}
+.csub { color: var(--bronze-hi); font-family: var(--serif); font-style: italic; margin: 0 0 10px; }
 .chapter {
   display: grid; grid-template-columns: 90px 1fr; gap: 24px;
   border-left: 2px solid var(--bronze-dk);
@@ -272,6 +302,11 @@ section[id], .endcta { scroll-margin-top: 76px; }
   display: block; width: 100%; aspect-ratio: 16 / 9;
   background: #05070b; border: 1px solid var(--line2);
   border-radius: 14px;
+  box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .8);
+}
+.trailer-poster {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border: 1px solid var(--line2); border-radius: 14px;
   box-shadow: 0 24px 60px -24px rgba(0, 0, 0, .8);
 }
 .trailer figcaption { margin-top: 12px; font-size: .88rem; color: var(--ivory-dim); }
