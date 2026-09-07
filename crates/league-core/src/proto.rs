@@ -30,25 +30,11 @@ const fn unknown_presentation() -> u8 {
     UNKNOWN_PRESENTATION
 }
 
-pub use ember_net::sanitize;
+pub use ember_net::{is_transient_read, sanitize};
 
 #[must_use]
 pub fn sanitize_handle(s: &str) -> String {
     ember_net::sanitize_handle(s, MAX_HANDLE_LEN, "summoner")
-}
-
-/// Transient socket errors that are not a dead peer. The Windows value
-/// (`ERROR_IO_PENDING`) belongs here: fire's server learned that the hard way.
-const WINDOWS_IO_PENDING: i32 = 997;
-
-#[must_use]
-pub fn is_transient_read(e: &std::io::Error) -> bool {
-    matches!(
-        e.kind(),
-        std::io::ErrorKind::WouldBlock
-            | std::io::ErrorKind::TimedOut
-            | std::io::ErrorKind::Interrupted
-    ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
 }
 
 /// A lobby row for the browser. `mode` is the team size, 1 or 3.
