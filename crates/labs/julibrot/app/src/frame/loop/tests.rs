@@ -2416,7 +2416,7 @@ struct HeightDragRow {
     distance_five: f64,
 }
 
-fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
+fn measured_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     let object = ObjectAngles {
         rho_13: -1.316_653_720_171_549_4,
         rho_24: -1.316_653_720_171_549_4,
@@ -2460,12 +2460,12 @@ fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
     }
 }
 
-fn owner_height_drag_plan(
+fn measured_height_drag_plan(
     row: HeightDragRow,
     retained_height_scale: f64,
     requested_height_scale: f64,
 ) -> WarpKind {
-    let retained = owner_height_drag_pose(row, retained_height_scale);
+    let retained = measured_height_drag_pose(row, retained_height_scale);
     let frame = SceneFrame {
         scene_id: 37,
         pose: retained,
@@ -2490,7 +2490,7 @@ fn owner_height_drag_plan(
     Warp::reproject(
         &frame,
         &retained,
-        &owner_height_drag_pose(row, requested_height_scale),
+        &measured_height_drag_pose(row, requested_height_scale),
         PrecisionMode::PictureFast,
         WarpValidation::Ordinary,
     )
@@ -2503,7 +2503,7 @@ fn manual_final_height_change_keeps_the_accepted_relief_redraw_live() {
     frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
     assert_eq!(frame_loop.due(), None);
     assert_eq!(
-        owner_height_drag_plan(
+        measured_height_drag_plan(
             HeightDragRow {
                 name: "close-d5-2",
                 distance_five: 2.0,
@@ -2570,7 +2570,7 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
 
     for input in 1..=DRAG_FRAMES {
         let requested_height_scale = 4.0 * f64::from(input) / f64::from(DRAG_FRAMES);
-        let flat_source_plan = owner_height_drag_plan(row, 0.0, requested_height_scale);
+        let flat_source_plan = measured_height_drag_plan(row, 0.0, requested_height_scale);
         if flat_source_plan == WarpKind::ClearOnly {
             clear_only_before = clear_only_before.saturating_add(1);
         }
@@ -2597,7 +2597,7 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
         frame_loop.accept_request(37, true);
         frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         let moving_source_plan =
-            owner_height_drag_plan(row, retained_height_scale, requested_height_scale);
+            measured_height_drag_plan(row, retained_height_scale, requested_height_scale);
         assert_eq!(
             moving_source_plan == WarpKind::ClearOnly,
             flat_source_plan == WarpKind::ClearOnly,
@@ -2638,7 +2638,11 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
             frame_loop.restart(37);
             frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         }
-        presenter.forced_warp_kind = Some(owner_height_drag_plan(row, retained_height_scale, 4.0));
+        presenter.forced_warp_kind = Some(measured_height_drag_plan(
+            row,
+            retained_height_scale,
+            4.0,
+        ));
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} settled scene id", row.name);
@@ -3044,7 +3048,7 @@ fn accepted_reference_facts_keep_verification_separate_from_escalations() {
 #[test]
 fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() {
     const CAP: u32 = 512;
-    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    /// Orbit length the measured row at a centre outside the set delivered at zoom sixty.
     const ESCAPED_AT: u32 = 4;
     const ACCEPTED_GENERATION: u32 = 42;
     const ACCEPTED_CENTRE_REVISION: u32 = 316;
@@ -3247,13 +3251,13 @@ fn a_held_warp_does_not_stamp_the_requested_view_as_presented() {
     }
 }
 
-/// Builds the owner state the owner's zoom row reaches: a burst of navigations, an accepted
+/// Builds the owner state the measured zoom row reaches: a burst of navigations, an accepted
 /// reference whose orbit escaped after four iterations, and the census correction in flight.
 fn burst_to_an_escaped_reference() -> (ViewerController, u32, u32, ReferenceLeaseIdentity) {
     const WIDTH: u32 = 960;
     const HEIGHT: u32 = 540;
     const CAP: u32 = 512;
-    /// Orbit length the owner's row at a centre outside the set delivered at zoom sixty.
+    /// Orbit length the measured row at a centre outside the set delivered at zoom sixty.
     const ESCAPED_AT: u32 = 4;
     const ORBIT_ID: u32 = 7;
 

@@ -249,7 +249,7 @@ The first fenced scene and warp after initialization, texture reallocation, or p
 
 ### 2.9 The backdrop grid
 
-Screen-aligned sampling inverts the chart map, and the displayed lift now leaves `H=-2` on that chart. The requested zoom therefore describes the floor: at the first owner row (`height_scale=2.165`, `d₅=8`, yaw and pitch zero) the far exterior and interior remain on the frame they were sampled for, the peaks remain at their former `d₅-4.33` depth, the raster mirror reports zero uncovered surface at apron one, and no backdrop exists to substitute a coarser zoom.
+Screen-aligned sampling inverts the chart map, and the displayed lift now leaves `H=-2` on that chart. The requested zoom therefore describes the floor: at the first measured row (`height_scale=2.165`, `d₅=8`, yaw and pitch zero) the far exterior and interior remain on the frame they were sampled for, the peaks remain at their former `d₅-4.33` depth, the raster mirror reports zero uncovered surface at apron one, and no backdrop exists to substitute a coarser zoom.
 
 An amplitude-only edge estimate no longer describes coverage: floor anchoring leaves the floor on its chart while tilted cameras can still expose surface that a wider sampling map reaches. `scene_footprint` therefore rasterizes the mirrored mesh at apron one and at the candidate set `{1.25,1.5,2,3,5}` and compares exact uncovered-point counts on the interior 63-by-63 census. It finds the candidate with the largest gain over apron one, then chooses the smallest candidate that both recovers at least half that best gain and itself recovers at least one percent of the 3,969 admitted samples, meaning at least 40 points. If no candidate meets both conditions, the request stays one. A best gain of zero identifies sky that no reviewed apron reaches, while a positive sub-threshold gain is reachable ground deliberately not worth a separate coarse scene.
 
@@ -285,8 +285,8 @@ Coverage is measured the way the picture is drawn, because the earlier boundary 
 
 The clipping census keeps its whole fixed denominator, all 405 points. A census point beyond the projective horizon is not at the near limit and is not removed from the denominator; the close row's near-limit share at the selected scale is pinned in the table below.
 
-|Owner row|Main uncovered|`scene_apron_scale` / applied backdrop|Post-request uncovered|Near-clipped census|
-|---------|-------------:|-------------------------------------:|---------------------:|------------------:|
+|Measured row|Main uncovered|`scene_apron_scale` / applied backdrop|Post-request uncovered|Near-clipped census|
+|------------|-------------:|-------------------------------------:|---------------------:|------------------:|
 |Julia, `height_scale=2.165`, `d₅=8`|0|1 / none|0|0|
 |Julia, `height_scale=4`, `d₅=8`|0|1 / none|0|81/405 = 0.2|
 |Tilted Julia, `height_scale=4`, `d₅=d₄=2`|611/3969 ≈ 0.1540|2 / 2|571/3969 ≈ 0.1439|252/405 ≈ 0.6222|
@@ -297,7 +297,7 @@ The close row's candidate uncovered counts are `1.25 → 572`, `1.5 → 573`, `2
 
 At the floor-half 480-by-270 policy extent, all four shipped presets request no backdrop: the flat Mandelbrot and Julia rows return the structural zero, while both relief rows leave fewer than 40 residual interior samples. The native test prints each target's exact count for diagnosis without making a near-tie-sensitive count a cross-target contract; the recorded sokol run reports Mandelbrot relief's seven residual interior samples and Julia relief's zero, both below the admission floor, so the sub-threshold verdict does not buy a coarse grid.
 
-Backdrop policy runs at the floor-half extent selected in `app/src/frame/loop.rs`, while `PageFacts` measures at the device extent. With zero camera translation the forward homography's extent terms cancel under any rescale in exact arithmetic; the power-of-two rescale between a Final and its half-Final also reproduces the rounding bit for bit, and the mirror pins bit-identical answers at 480 by 270, 960 by 540, and 1920 by 1080 for both shipped relief rows and the close owner row. That agreement is arithmetic, not a general extent-invariance theorem: the prior rim-inclusive census changed at the same-aspect 1024-by-576 extent, which is why the policy now excludes the frame tie rather than treating the power-of-two coincidence as geometry.
+Backdrop policy runs at the floor-half extent selected in `app/src/frame/loop.rs`, while `PageFacts` measures at the device extent. With zero camera translation the forward homography's extent terms cancel under any rescale in exact arithmetic; the power-of-two rescale between a Final and its half-Final also reproduces the rounding bit for bit, and the mirror pins bit-identical answers at 480 by 270, 960 by 540, and 1920 by 1080 for both shipped relief rows and the close measured row. That agreement is arithmetic, not a general extent-invariance theorem: the prior rim-inclusive census changed at the same-aspect 1024-by-576 extent, which is why the policy now excludes the frame tie rather than treating the power-of-two coincidence as geometry.
 
 These fractions are the drawn rule evaluated at a stated resolution, not bounds. Sampling five heights understates what the full domain reaches; a 65-by-65 mirror mesh coarser than the drawn one overstates it, because near the projective horizon one long chord cuts across the curved image and covers ground a fine mesh leaves as sky. A point scatter of the same mesh, which counts only where vertices land and never fills a triangle, reports far more sky than either. The published share is therefore comparable against itself — main against backdrop, pose against pose — and is not a claim about the exact pixel count of the delivered frame.
 

@@ -2166,8 +2166,8 @@ mod tests {
         assert_eq!(plan.approx_max_error_px, None);
     }
 
-    /// The owner's broken row, taken from the page's own Copy row JSON.
-    fn owner_relief_row() -> ViewControls {
+    /// The measured relief row, taken from the page's Copy row JSON.
+    fn measured_relief_row() -> ViewControls {
         ViewControls {
             height_scale: 1.327,
             distance_five: 8.0,
@@ -2185,13 +2185,13 @@ mod tests {
     }
 
     #[test]
-    fn the_owner_relief_row_presents_its_completed_scene_and_stops_asking_for_another() {
+    fn the_measured_relief_row_presents_its_completed_scene_and_stops_asking_for_another() {
         let object = ObjectAngles {
             rho_13: 1.174_251_648_646_25,
             rho_23: 1.612_768_861_833_65,
             ..ObjectAngles::IDENTITY
         };
-        let view = owner_relief_row();
+        let view = measured_relief_row();
         let plane = construct_plane(object).expect("the row's plane is orthonormal");
         let mut settled = object_pose(object, plane, view, [0.0; 2]);
         settled.zoom_log2 = 0.0;

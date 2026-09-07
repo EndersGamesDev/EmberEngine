@@ -1633,14 +1633,14 @@ mod tests {
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
 
-    fn set_close_owner_row(viewer: &mut ViewerController) {
+    fn set_close_measured_row(viewer: &mut ViewerController) {
         viewer
             .set_object_angles(ObjectAngles {
                 rho_13: -1.316_653_720_171_549_4,
                 rho_24: -1.316_653_720_171_549_4,
                 ..ObjectAngles::IDENTITY
             })
-            .expect("owner object angles");
+            .expect("measured object angles");
         let mut camera = [0.0; 10];
         camera[1] = -0.254_142_606_623_347_1;
         camera[4] = -0.254_142_606_623_347_1;
@@ -1654,7 +1654,7 @@ mod tests {
                 camera,
                 camera_translation: [0.0; 5],
             })
-            .expect("owner relief view");
+            .expect("measured relief view");
     }
 
     fn object_angles_from_array(values: [f64; 6]) -> ObjectAngles {
@@ -2178,7 +2178,7 @@ mod tests {
     #[test]
     fn footprint_cache_is_bit_exact_on_object_view_and_extent() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        set_close_owner_row(&mut viewer);
+        set_close_measured_row(&mut viewer);
         assert_eq!(viewer.footprint_construction_count(), 0);
         let first = viewer
             .scene_footprint(REFERENCE_GRID)
@@ -2234,7 +2234,7 @@ mod tests {
     #[test]
     fn footprint_cache_retains_the_three_refresh_extents() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        set_close_owner_row(&mut viewer);
+        set_close_measured_row(&mut viewer);
         let refresh_extents = [REFERENCE_GRID, [480, 270], [120, 68]];
 
         for extent in refresh_extents {
@@ -2271,7 +2271,7 @@ mod tests {
     #[test]
     fn each_object_and_view_scalar_requires_a_footprint_recompute() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        set_close_owner_row(&mut viewer);
+        set_close_measured_row(&mut viewer);
         let base_object = viewer.requested().object_angles;
         let base_view = viewer.requested().view;
         viewer
@@ -2318,16 +2318,16 @@ mod tests {
     #[test]
     fn backdrop_map_copies_the_cached_main_rows_and_adds_only_its_apron() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        set_close_owner_row(&mut viewer);
+        set_close_measured_row(&mut viewer);
         let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
-            panic!("owner row is mapped");
+            panic!("measured row is mapped");
         };
         assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
         assert_eq!(viewer.map_construction_count(), 1);
         let Some(PoseMap::Mapped(backdrop)) =
             viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
         else {
-            panic!("close owner row requests a backdrop");
+            panic!("close measured row requests a backdrop");
         };
         assert_eq!(backdrop.rows, main.rows);
         assert_eq!(backdrop.inverse, main.inverse);
@@ -2351,23 +2351,23 @@ mod tests {
     }
 
     #[test]
-    fn second_owner_row_requests_the_smallest_qualifying_backdrop() {
+    fn second_measured_row_requests_the_smallest_qualifying_backdrop() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        set_close_owner_row(&mut viewer);
+        set_close_measured_row(&mut viewer);
         let Some(PoseMap::Mapped(backdrop)) =
             viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
         else {
-            panic!("owner row requests a backdrop");
+            panic!("measured row requests a backdrop");
         };
         assert_eq!(backdrop.apron_scale.to_bits(), 2.0_f64.to_bits());
         let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
-            panic!("owner row is mapped");
+            panic!("measured row is mapped");
         };
         assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
     }
 
     #[test]
-    fn first_owner_row_needs_no_backdrop_at_positive_height() {
+    fn first_measured_row_needs_no_backdrop_at_positive_height() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         viewer
             .set_object_angles(ObjectAngles::JULIA)
@@ -2378,11 +2378,11 @@ mod tests {
                 distance_five: 8.0,
                 ..ViewControls::NEUTRAL
             })
-            .expect("owner relief view");
+            .expect("measured relief view");
         assert_eq!(
             viewer
                 .backdrop_map(REFERENCE_GRID)
-                .expect("owner footprint"),
+                .expect("measured footprint"),
             None
         );
     }
