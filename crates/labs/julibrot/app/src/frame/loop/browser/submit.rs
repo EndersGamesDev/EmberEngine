@@ -12,10 +12,10 @@ impl BrowserFrameLoop {
             return false;
         }
         if self.grid_round != self.loop_state.ladder_round() {
-            let Some(spare) = self.spare_grid.as_mut() else {
+            let Some(grids) = self.main_grid_pair.as_mut() else {
                 return false;
             };
-            std::mem::swap(&mut self.grid, spare);
+            std::mem::swap(&mut grids.current, &mut grids.spare);
             self.grid_round = self.loop_state.ladder_round();
         }
         self.prepared_level = Some(level);
@@ -54,7 +54,14 @@ impl BrowserFrameLoop {
                     None,
                 )
             } else {
-                let mut grid = self.grid.clone();
+                let mut grid = self
+                    .main_grid_pair
+                    .as_ref()
+                    .unwrap_or_else(|| {
+                        unreachable!("main grid pair is present outside replacement")
+                    })
+                    .current
+                    .clone();
                 if let Some(level) = self.prepared_level {
                     let spec = self.plan.level(level);
                     grid.width = spec.extent.width;
@@ -159,11 +166,22 @@ impl BrowserFrameLoop {
             let final_spec = backdrop.plan.level(RefinementLevel::Final);
             return [final_spec.extent.width, final_spec.extent.height];
         }
-        self.prepared_level
-            .map_or([self.grid.width, self.grid.height], |level| {
+        self.prepared_level.map_or_else(
+            || {
+                let grid = &self
+                    .main_grid_pair
+                    .as_ref()
+                    .unwrap_or_else(|| {
+                        unreachable!("main grid pair is present outside replacement")
+                    })
+                    .current;
+                [grid.width, grid.height]
+            },
+            |level| {
                 let extent = self.plan.level(level).extent;
                 [extent.width, extent.height]
-            })
+            },
+        )
     }
 
     pub(super) fn rebuild_grid_if_needed(
@@ -203,8 +221,10 @@ impl BrowserFrameLoop {
                 return Err(kernel_error(error));
             }
         };
-        self.grid = grid;
-        self.spare_grid = Some(spare);
+        self.main_grid_pair = Some(MainGridPair {
+            current: grid,
+            spare,
+        });
         self.plan = next;
         self.grid_round = self.loop_state.ladder_round();
         Ok(())
@@ -260,8 +280,10 @@ impl BrowserFrameLoop {
             return Err(error);
         }
         self.plan = next_plan;
-        self.grid = next_grid;
-        self.spare_grid = Some(next_spare);
+        self.main_grid_pair = Some(MainGridPair {
+            current: next_grid,
+            spare: next_spare,
+        });
         self.grid_round = self.loop_state.ladder_round();
         self.prepared_level = None;
         self.scene_selection = None;
@@ -269,22 +291,22 @@ impl BrowserFrameLoop {
     }
 
     fn retire_main_grid_pair(&mut self) -> Result<(), AppError> {
-        let Some(spare) = self.spare_grid.take() else {
+        let Some(MainGridPair { current, spare }) = self.main_grid_pair.take() else {
             return Err(AppError::Kernel(
                 "main grid replacement has no alternate grid".to_string(),
             ));
         };
         if let Err(error) = self.free_grid(KernelGridTarget::Main, &spare) {
-            self.spare_grid = Some(spare);
+            self.main_grid_pair = Some(MainGridPair { current, spare });
             return Err(error);
         }
-        let current = self.grid.clone();
         if let Err(error) = self.free_grid(KernelGridTarget::Main, &current) {
-            self.spare_grid = self
+            let spare = self
                 .kernel_submission
                 .allocate_grid(&mut self.executor, KernelGridTarget::Main, &self.plan)
-                .map(|allocation| Some(allocation.into_grid()))
+                .map(AllocatedKernelGrid::into_grid)
                 .map_err(kernel_error)?;
+            self.main_grid_pair = Some(MainGridPair { current, spare });
             return Err(error);
         }
         Ok(())
@@ -296,8 +318,10 @@ impl BrowserFrameLoop {
             .allocate_grid_pair(&mut self.executor, KernelGridTarget::Main, plan)
             .map_err(kernel_error)?
             .into_grids();
-        self.grid = grid;
-        self.spare_grid = Some(spare);
+        self.main_grid_pair = Some(MainGridPair {
+            current: grid,
+            spare,
+        });
         self.plan = *plan;
         self.grid_round = self.loop_state.ladder_round();
         Ok(())
@@ -343,11 +367,16 @@ impl BrowserFrameLoop {
         if self.prepared_level != Some(level) {
             return Ok(None);
         }
+        let grid = &mut self
+            .main_grid_pair
+            .as_mut()
+            .unwrap_or_else(|| unreachable!("main grid pair is present outside replacement"))
+            .current;
         if matches!(map, PoseMap::EdgeOn) {
-            super::stamp_scene_level(&mut self.grid, &self.plan, level);
+            super::stamp_scene_level(grid, &self.plan, level);
         }
         let facts = if let PoseMap::Mapped(screen_to_plane) = map {
-            self.presenter.forget_retained_records(&self.grid);
+            self.presenter.forget_retained_records(grid);
             let params = EscapeParams::new(viewer.requested().iteration_cap);
             let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
             let publication = match mode {
@@ -384,7 +413,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: None,
                             },
-                            &mut self.grid,
+                            grid,
                             &job,
                         )
                         .map_err(kernel_error)?
@@ -429,7 +458,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: Some(&orbit.span),
                             },
-                            &mut self.grid,
+                            grid,
                             &job,
                         )
                         .map_err(kernel_error)?
