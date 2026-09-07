@@ -15,14 +15,20 @@
   <pre id="report">opening the served build</pre>
   <script type="module">
     // This test-only page runs one shipped row through the public lab driver and prints the exact
-    // fixture shape used for later whole-grid comparisons. `?generate=1` takes preset zero from
-    // the served wasm; without it, the committed fixture supplies the frozen row and comparison.
+    // fixture shape used for later whole-grid comparisons. Its measured captures use fixed direct
+    // refresh turns after settlement, so a hidden tab cannot add policy samples. `?generate=1`
+    // takes preset zero from the served wasm; without it, the committed fixture supplies the
+    // frozen row and comparison.
     import { openLab } from "./lab.js?v=1";
 
     const FIXTURE_URL = "./whole-grid-v1.json";
     const LOSSLESS_FILE = "whole-grid-v1.rgba.deflate.bin";
     const LOSSLESS_ENCODING = "zlib-rfc1950";
     const MAX_INLINE_BINARY_BYTES = 600_000;
+    const FIXED_CAPTURE_COUNT = 2;
+    const REFRESHES_PER_CAPTURE = 3;
+    const CALLBACK_WAIT_MS = 1_000;
+    const MEASUREMENT_WALL_MS = 1_000_000;
     const CANVAS = document.getElementById("julibrot");
     const REPORT = document.getElementById("report");
     const GENERATING = new URLSearchParams(globalThis.location.search).get("generate") === "1";
@@ -143,14 +149,108 @@
       return compressed;
     }
 
+    const pause = durationMs => new Promise(resolve => setTimeout(resolve, durationMs));
+
+    function captureState(api) {
+      return JSON.parse(api.app_frame_capture_json());
+    }
+
+    function refreshClock(api) {
+      let nowMs = performance.now();
+      let refreshCount = 0;
+      return {
+        advance(deltaMs) {
+          nowMs += deltaMs;
+          api.app_refresh(nowMs);
+          refreshCount += 1;
+          return JSON.parse(api.app_facts_json());
+        },
+        count() {
+          return refreshCount;
+        },
+      };
+    }
+
+    async function captureOnFixedTurns(api, clock, expectedSampleClass) {
+      const support = captureState(api);
+      assert(
+        support.frame_capture_supported,
+        `frame capture is unavailable: ${support.frame_capture_status}`,
+      );
+      assert(
+        !support.frame_capture_pending && !support.frame_capture_ready,
+        "a prior frame capture is still held",
+      );
+      api.app_request_frame_capture();
+      api.app_request_frame();
+
+      clock.advance(1);
+      let state = captureState(api);
+      assert(!state.frame_capture_refusal, `frame capture was refused: ${state.frame_capture_refusal}`);
+      assert(
+        state.frame_capture_pending && !state.frame_capture_ready,
+        "capture was not submitted on its fixed first turn",
+      );
+
+      // No browser callback can run between these two calls. This fixes the first fence
+      // observation as pending instead of letting animation scheduling decide the poll count.
+      clock.advance(1);
+      state = captureState(api);
+      assert(!state.frame_capture_refusal, `frame capture was refused: ${state.frame_capture_refusal}`);
+      assert(
+        state.frame_capture_pending && !state.frame_capture_ready,
+        "capture completed during its synchronous fence poll",
+      );
+
+      // The callback gets one real-time window, then one deliberately large synthetic wall makes
+      // this warp the newest policy sample. If either callback is not ready, this single turn
+      // refuses or stays pending and the oracle fails instead of adding timing-dependent turns.
+      await pause(CALLBACK_WAIT_MS);
+      const facts = clock.advance(MEASUREMENT_WALL_MS);
+      state = captureState(api);
+      assert(!state.frame_capture_refusal, `frame capture was refused: ${state.frame_capture_refusal}`);
+      assert(
+        state.frame_capture_ready && !state.frame_capture_pending,
+        "capture missed its fixed completion turn",
+      );
+      assert(
+        facts.warmup_label === expectedSampleClass,
+        `fixed capture expected ${expectedSampleClass}, got ${facts.warmup_label}`,
+      );
+      const bytes = api.app_take_frame_rgba();
+      assert(bytes, "fixed capture completed without RGBA bytes");
+      assert(
+        bytes.length === state.frame_capture_width * state.frame_capture_height * 4,
+        "fixed capture byte count differs from its extent",
+      );
+      return {
+        frame: {
+          width: state.frame_capture_width,
+          height: state.frame_capture_height,
+          route: state.frame_capture_copy_route,
+          scene_id: state.frame_capture_scene_id,
+          rgba: bytes,
+        },
+        facts,
+      };
+    }
+
     async function measuredFrame(lab) {
-      const maximumCaptures = 12;
-      for (let capture = 1; capture <= maximumCaptures; capture += 1) {
-        const frame = await lab.frame();
-        const facts = lab.facts();
-        if (facts.warmup_label === "Measured") return { frame, facts, captureCount: capture };
-      }
-      throw new Error(`warm-up did not reach Measured in ${maximumCaptures} captured frames`);
+      // The final settled presentation supplies the cold sample. Stop the driver's animation and
+      // fallback schedulers, then contribute exactly the policy probe and measured samples.
+      lab.stop();
+      const clock = refreshClock(lab.api);
+      await captureOnFixedTurns(lab.api, clock, "PolicyProbe");
+      const measured = await captureOnFixedTurns(lab.api, clock, "Measured");
+      assert(
+        clock.count() === FIXED_CAPTURE_COUNT * REFRESHES_PER_CAPTURE,
+        "fixed capture refresh count differs",
+      );
+      return {
+        ...measured,
+        captureCount: FIXED_CAPTURE_COUNT,
+        refreshCount: clock.count(),
+      };
     }
 
     async function run() {
@@ -182,6 +282,8 @@
           determinism: {
             warmup_label: facts.warmup_label,
             capture_count: measured.captureCount,
+            refreshes_per_capture: REFRESHES_PER_CAPTURE,
+            measured_refresh_count: measured.refreshCount,
             completed_scene_id: facts.completed_scene_id ?? null,
             copied_scene_id: frame.scene_id,
             owner_epoch: facts.owner_epoch,
