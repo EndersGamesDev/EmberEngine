@@ -367,11 +367,9 @@ fn main() {
                 // it, so it matches neither arm below and would end the loop.
                 // This example is now deploy-pong-online.sh's health check and
                 // runs on Windows, where that would be a spurious deploy
-                // failure. (fire_core::proto::is_transient_read is the same
-                // predicate; arena-server does not depend on fire-core.)
-                if e.raw_os_error() == Some(997)
-                    || e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                // failure. The shared predicate also retries interrupted
+                // reads, which are transient for this health check.
+                if ember_net::is_transient_read(&e) => {}
             Err(e) => {
                 eprintln!("WSBOT FAIL: read: {e}");
                 std::process::exit(1);
