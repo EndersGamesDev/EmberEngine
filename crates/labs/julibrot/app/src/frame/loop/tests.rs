@@ -2555,6 +2555,7 @@ struct ZoomScript<'a> {
     retained_level: RefinementLevel,
     edits: &'a [(u32, f64, Option<[f64; 2]>)],
     initial_scene: ZoomInitialScene,
+    retire_scene_at_turn: Option<u32>,
     refinement_on_edit: ZoomRefinementOnEdit,
     edit_trigger: ZoomEditTrigger,
     forget_records_before_selection_at_turn: Option<u32>,
@@ -2749,6 +2750,9 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
         let mut edit_state = ZoomEditState::None;
         let mut attempted_crosshair = None;
         let mut attempted_zoom_delta = None;
+        if script.retire_scene_at_turn == Some(turn) && pending_scene.take().is_some() {
+            frame_loop.schedule.pause();
+        }
         if pending_warp.is_some_and(|warp| warp.completes_at_turn == turn) {
             let warp = pending_warp.take().expect("due warp is pending");
             presented = Some(warp.kind);
@@ -2765,6 +2769,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             records_ready = true;
             if scene.requested_revision == requested_revision {
                 frame_loop.schedule.pause();
+                frame_loop.accept_request(37, false);
             }
         }
 
@@ -2796,6 +2801,20 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             .drain_hot(destination_extent)
             .expect("scripted requested pose")
             .pose;
+        let completed_requested_final = requested_revision != 0
+            && retained.level == RefinementLevel::Final
+            && renders_same_picture(&retained.pose, &requested);
+        let view_is_stale = presented_revision != requested_revision;
+        if script.edit_trigger == ZoomEditTrigger::StaleViewRecovery
+            && super::stale_view_needs_a_new_scene(
+                SceneMode::Auto,
+                frame_loop.refinement_pending(),
+                view_is_stale,
+                completed_requested_final,
+            )
+        {
+            frame_loop.request_missing_final(37);
+        }
         let plan = measured_relief_plan(&retained, &requested);
         let source_covers_destination = requested_revision != 0
             && measured_relief_source_covers_destination(&plan, &retained, &requested);
@@ -2838,11 +2857,11 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             ZoomHoldState::Disarmed
         };
 
-        let view_is_stale = presented_revision != requested_revision;
         let defer_scene_for_redraw =
             defer_scene_until_relief_redraw(selected == WarpKind::ReliefRedraw, view_is_stale);
         if pending_scene.is_none()
             && requested_revision != 0
+            && frame_loop.refinement_pending()
             && !defer_scene_for_redraw
             && !renders_same_picture(&retained.pose, &requested)
         {
@@ -2901,9 +2920,7 @@ fn drive_measured_zoom_trace(script: ZoomScript<'_>) -> Vec<ZoomTurnRecord> {
             requested_revision,
             warp_in_flight: pending_warp.is_some(),
             scene_in_flight: pending_scene.is_some(),
-            completed_requested_final: requested_revision != 0
-                && retained.level == RefinementLevel::Final
-                && retained.pose == requested,
+            completed_requested_final,
         });
     }
     trace
@@ -2942,6 +2959,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 1.43, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2953,6 +2971,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.1, None), (6, 0.5, None)],
             initial_scene: ZoomInitialScene::SettledFinal,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2964,6 +2983,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Preview,
             edits: &[(0, 0.5, None)],
             initial_scene: ZoomInitialScene::FinalInFlight,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2975,6 +2995,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[idle_refused_edit],
             initial_scene: ZoomInitialScene::SettledFinal,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -2986,6 +3007,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
@@ -2997,6 +3019,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Final,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::SettledFinal,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::StayIdle,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: Some(0),
@@ -3008,6 +3031,7 @@ fn two_second_visible_zoom_scripts_never_clear_a_covering_retained_scene() {
             retained_level: RefinementLevel::Preview,
             edits: &[(0, 0.5, Some([40.0, 30.0]))],
             initial_scene: ZoomInitialScene::FinalInFlight,
+            retire_scene_at_turn: None,
             refinement_on_edit: ZoomRefinementOnEdit::Restart,
             edit_trigger: ZoomEditTrigger::RequestedFrame,
             forget_records_before_selection_at_turn: None,
@@ -3083,6 +3107,7 @@ fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
         retained_level: RefinementLevel::Final,
         edits: &edits,
         initial_scene: ZoomInitialScene::SettledFinal,
+        retire_scene_at_turn: Some(24),
         refinement_on_edit: ZoomRefinementOnEdit::Restart,
         edit_trigger: ZoomEditTrigger::StaleViewRecovery,
         forget_records_before_selection_at_turn: None,
@@ -3108,9 +3133,22 @@ fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
             && !turn.scene_in_flight
     });
     let final_turn = trace.iter().find(|turn| turn.completed_requested_final);
+    let final_presentation = final_turn.and_then(|completed| {
+        trace.iter().find(|turn| {
+            turn.turn > completed.turn && turn.presented == Some(WarpKind::AnchorHomography)
+        })
+    });
     assert!(
         first_stalled.is_none() && final_turn.is_some(),
         "a redraw, hold, or in-flight scene must cover every turn until the requested Final arrives; first stalled: {first_stalled:#?}; Final: {final_turn:#?}; trace: {trace:#?}"
+    );
+    assert!(
+        final_turn.is_some_and(|turn| turn.turn >= 54),
+        "the Final must be the replacement requested after the scripted turn-24 retirement: {trace:#?}"
+    );
+    assert!(
+        final_presentation.is_some(),
+        "the recovery request must survive until the requested Final's anchor presentation: {trace:#?}"
     );
 }
 
@@ -3833,84 +3871,60 @@ fn a_discarded_census_correction_leaves_a_reference_the_next_dispatch_accepts() 
     assert!(ladder.refinement_pending());
 }
 
-/// Pins when an idle ladder facing a stale view starts another one.
+/// Pins when an idle automatic ladder starts another Final.
 ///
-/// A hold stamps no view, so the requested view reads stale for the whole time the previous picture
-/// stands in for it, including the turn its replacement completes on. The restart rule has to tell
-/// that turn from the case it exists for: a completed scene one present from the canvas is not a
-/// missing scene, while a view that moved on after its scene was shown is.
-///
-/// The scene identities come from the warp plan's source. A hold names the retained frame, which is
-/// also the frame the completed reading names, so a persisting hold leaves the two equal and the
-/// rule keeps working through it. A clear names nothing, so a blank canvas beside a completed scene
-/// is the one-present gap the opening frames of every page are in.
+/// A redraw may stamp the requested view before its replacement scene lands. If that scene is
+/// retired, the surface no longer reads stale, so the retained completed Final is the authority.
 #[test]
-fn a_scene_one_present_from_the_canvas_does_not_start_another_ladder() {
+fn automatic_recovery_stops_only_when_the_requested_final_exists() {
     use super::SceneMode::Auto;
     assert!(
-        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(5)),
-        "the completed scene has not been presented yet, so the picture for this view exists"
+        !super::stale_view_needs_a_new_scene(Auto, false, true, true),
+        "a completed requested Final only needs its presentation warp"
     );
     assert!(
-        !super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), None),
-        "a clear names no source: the completed scene has not reached the canvas yet"
+        !super::stale_view_needs_a_new_scene(Auto, false, false, true),
+        "a completed requested Final needs no replacement scene"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, Some(7), Some(7)),
-        "the completed scene is what is on screen and the view has still moved on"
+        super::stale_view_needs_a_new_scene(Auto, false, true, false),
+        "a stale view with no requested Final starts the ladder"
     );
     assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, None, None),
-        "an opening frame with no scene at all starts the first ladder"
+        super::stale_view_needs_a_new_scene(Auto, false, false, false),
+        "an accepted retained warp cannot conceal a missing requested Final"
     );
+    assert!(!super::stale_view_needs_a_new_scene(Auto, true, true, false));
+
+    let mut recovering = FrameLoop::default();
+    recovering.request_missing_final(7);
+    assert_eq!(recovering.due(), Some(RefinementLevel::Preview));
+    assert!(recovering.warp_requested(FramePolicy::SingleFrameOnDemand));
+    recovering.warp_submitted();
     assert!(
-        super::stale_view_needs_a_new_scene(Auto, false, true, None, Some(5)),
-        "no completed scene exists, so nothing is on its way for this view"
+        recovering.warp_requested(FramePolicy::SingleFrameOnDemand),
+        "the redraw must not consume the request that will present the eventual Final"
     );
-    assert!(!super::stale_view_needs_a_new_scene(
-        Auto, true, true, None, None
-    ));
-    assert!(!super::stale_view_needs_a_new_scene(
-        Auto,
-        false,
-        false,
-        Some(7),
-        Some(7)
-    ));
 }
 
 /// Pins that manual refinement still records every stale turn.
 ///
-/// A manual page holds unconditionally, so under the scene-identity test its ladder would go
-/// unobserved for as long as the hold lasted and the pending-update flag the page shows would never
-/// be set. Manual refinement starts no work in this rule, so there is nothing for the test to save:
-/// the observation is bookkeeping, and it is kept. What the observation then does is unchanged —
-/// manual mode marks the update pending and waits, auto mode restarts.
+/// Coverage may select a hold in manual mode, but the pending-update flag must not depend on that
+/// presentation decision. Manual refinement starts no work in this rule, so the observation is
+/// bookkeeping: manual mode marks the update pending and waits, while auto mode restarts.
 #[test]
 fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
     use super::SceneMode::{Auto, Manual};
     assert!(
-        super::stale_view_needs_a_new_scene(Manual, false, true, Some(7), Some(5)),
+        super::stale_view_needs_a_new_scene(Manual, false, true, false),
         "a manual page records the moved pose in the very gap auto refinement waits through"
     );
-    assert!(super::stale_view_needs_a_new_scene(
-        Manual,
-        false,
-        true,
-        Some(7),
-        None
-    ));
+    assert!(super::stale_view_needs_a_new_scene(Manual, false, true, true));
     assert!(
-        !super::stale_view_needs_a_new_scene(Manual, true, true, Some(7), Some(7)),
+        !super::stale_view_needs_a_new_scene(Manual, true, true, false),
         "a pending ladder is already the record that work is due"
     );
-    assert!(!super::stale_view_needs_a_new_scene(
-        Manual,
-        false,
-        false,
-        Some(7),
-        Some(7)
-    ));
+    assert!(!super::stale_view_needs_a_new_scene(Manual, false, false, false));
 
     // What the observation does in each mode: manual marks the update and stays paused.
     let mut manual = FrameLoop::default();
@@ -3924,7 +3938,7 @@ fn manual_refinement_records_a_stale_view_even_while_a_hold_persists() {
     assert_eq!(auto.due(), Some(RefinementLevel::Preview));
 }
 
-/// Pins the stale reading a hold must not clear./// Pins the stale reading a hold must not clear.
+/// Pins the stale reading a hold must not clear.
 ///
 /// The loop stamps the view it expects the next presented image to reproduce when it submits the
 /// warp that will draw it. A held warp draws the last completed picture unmoved, so the image that

@@ -27,6 +27,25 @@ pub(super) const fn retain_relief_plan_during_scene(
 }
 
 impl Presenter {
+    /// Reports whether the retained completed picture is the requested Final.
+    ///
+    /// Publication epochs and orbit generations do not change rendered pixels, so this compares
+    /// the render inputs plus the value contract instead of using whole-`Pose` equality.
+    #[must_use]
+    pub fn has_completed_requested_final(
+        &self,
+        requested: &Pose,
+        iteration_cap: u32,
+        precision_mode: crate::PrecisionMode,
+    ) -> bool {
+        self.ledger.retained().is_some_and(|frame| {
+            frame.level == RefinementLevel::Final
+                && frame.iteration_cap == iteration_cap
+                && frame.precision_mode == precision_mode.as_str()
+                && crate::renders_same_picture(&frame.pose, requested)
+        })
+    }
+
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
     ///
     /// `hold_refused_warp` authorizes a covering retained source. The presenter independently

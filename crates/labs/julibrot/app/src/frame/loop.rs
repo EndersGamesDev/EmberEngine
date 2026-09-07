@@ -8,9 +8,7 @@ use super::schedule::{
 #[cfg(test)]
 use super::schedule::{PresenterPoll, RefinementSchedule, classify_refusal, stamped_extent};
 #[cfg(any(target_arch = "wasm32", test))]
-use super::warp::{
-    defer_scene_until_relief_redraw, hold_redraw_during_scene, warp_submission_due,
-};
+use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene, warp_submission_due};
 
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
@@ -415,45 +413,27 @@ const fn adopt_reference_lease_for_correction(
     lease.centre_revision = centre_revision;
 }
 
-/// Whether an idle ladder facing a stale presented view has work to start.
+/// Whether an idle ladder has requested-picture work to start.
 ///
-/// A completed scene reaches the canvas one warp after it completes, and while the loop is holding
-/// the previous picture no warp stamps the requested view at all, so the moment the last level
-/// completes the view on screen is honestly not the view being asked for and yet nothing is
-/// missing: the picture for that view exists and the next warp draws it. Restarting there spends a
-/// whole ladder repainting a scene that was one present away.
+/// Keeps automatic refinement due until the requested Final actually exists.
 ///
-/// Manual refinement is exempt because it starts no work here. The observation only records that
-/// the pose moved, and the page's own update decides when a scene is drawn; withholding the record
-/// would lose the bookkeeping without saving the repaint, so a manual page still marks its pending
-/// update on every stale turn as it did before this rule existed.
-///
-/// The scene identities answer one question: is the picture on the canvas the completed scene? A
-/// hold names the retained frame as its source, so during a hold both readings are that frame and
-/// the rule fires as it always did. A clear names no source at all, so a blank canvas beside a
-/// completed scene reads as the one-present gap and waits — which is what it is at page load, where
-/// the opening warps clear and the first scene completes a turn before its own warp runs. That arm
-/// is safe only while a clear cannot strand a completed scene at a stale view: a clear replaces a
-/// hold exactly when nothing is pending, which is the state this rule restarts from, so the turn
-/// that would produce the stranded blank is the turn the ladder restarts on.
+/// An accepted warp may already stamp the requested view while showing retained lower-resolution
+/// data. If the scene behind it is retired, view staleness alone cannot restart the ladder. The
+/// completed-frame comparison therefore decides automatic recovery independently of what the
+/// current surface presents. Manual mode still records only a stale view and waits for Update.
 #[cfg(any(target_arch = "wasm32", test))]
 const fn stale_view_needs_a_new_scene(
     scene_mode: SceneMode,
     refinement_pending: bool,
     view_stale: bool,
-    completed_scene_id: Option<u64>,
-    presented_scene_id: Option<u64>,
+    completed_requested_final: bool,
 ) -> bool {
-    if refinement_pending || !view_stale {
+    if refinement_pending {
         return false;
     }
     match scene_mode {
-        SceneMode::Manual => true,
-        SceneMode::Auto => match (completed_scene_id, presented_scene_id) {
-            (Some(completed), Some(presented)) => completed == presented,
-            (None, _) => true,
-            (Some(_), None) => false,
-        },
+        SceneMode::Manual => view_stale,
+        SceneMode::Auto => !completed_requested_final,
     }
 }
 
@@ -462,8 +442,8 @@ const fn stale_view_needs_a_new_scene(
 /// A held warp draws the last completed picture unmoved, so what reaches the canvas is the view
 /// already there and not the view being asked for. Stamping the requested view against a hold
 /// makes the loop report the held picture as current, which is the one reading a hold exists to
-/// keep honest: the hold is only defensible while the replacement work it waits for is pending,
-/// and a caller cannot see that the wait has gone wrong if the stamp says nothing is stale.
+/// keep honest: the hold is defensible only while the source coverage proof remains valid, and a
+/// caller cannot see that the substitution has gone wrong if the stamp says nothing is stale.
 #[cfg(any(target_arch = "wasm32", test))]
 const fn warp_presents_requested_view(kind: ember_julibrot_present::WarpKind) -> bool {
     !matches!(kind, ember_julibrot_present::WarpKind::HoldStale)
@@ -1174,14 +1154,18 @@ mod browser {
             self.main = hot.state.main;
             self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             self.observe_scene_selection(viewer);
+            let completed_requested_final = self.presenter.has_completed_requested_final(
+                &hot.pose,
+                published_iteration_cap(&self.plan),
+                viewer.requested().precision_mode,
+            );
             if super::stale_view_needs_a_new_scene(
                 self.loop_state.scene_mode(),
                 self.loop_state.refinement_pending(),
                 self.presented_view_is_stale(viewer),
-                self.presenter.facts().completed_scene_id,
-                self.presented_scene_id,
+                completed_requested_final,
             ) {
-                self.loop_state.scene_changed(self.main.generation_applied);
+                self.loop_state.request_missing_final(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
                 // Re-selecting the level changes the prepared extent, and the drained pose is
