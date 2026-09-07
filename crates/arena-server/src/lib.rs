@@ -425,13 +425,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
             // quiet 5 ms - harmless on a Linux host, fatal the moment the
             // server is run on Windows, which the v13 gate did (see the
             // os-error-997 hunt in docs/plans/backlog.md).
-            // The same predicate lives in examples/wsbot.rs and
-            // fire_core::proto::is_transient_read; this crate depends on
-            // neither, so it is inlined here.
-            Err(tungstenite::Error::Io(e))
-                if e.raw_os_error() == Some(997)
-                    || e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut => {}
+            // The shared predicate keeps every hosted read loop aligned.
+            Err(tungstenite::Error::Io(e)) if ember_net::is_transient_read(&e) => {}
             Err(_) => break,
         }
     }

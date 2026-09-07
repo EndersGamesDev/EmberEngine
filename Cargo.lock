@@ -204,6 +204,7 @@ name = "arena-server"
 version = "0.1.0"
 dependencies = [
  "arena-core",
+ "ember-net",
  "rustls",
  "serde_json",
  "tracing",
