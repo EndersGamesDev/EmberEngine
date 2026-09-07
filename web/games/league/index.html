@@ -18,7 +18,7 @@
     <a href="#story">Story</a>
     <a href="#trailer">Trailer</a>
   </nav>
-  <a class="btn go" href="./v2/">Play now</a>
+  <a class="btn go" href="./v3/">Play now</a>
 </header>
 
 <main id="main">
@@ -29,9 +29,10 @@
     <div class="hero-copy">
       <p class="eyebrow">Ember original · Crystalforge</p>
       <h1 id="hero-title">One lane.<br>Five reasons to fight.</h1>
-      <p class="lede" id="world-premise">The forge that made the world is cooling, and the only road between its two hearts is a single lane through the garden. Five champions walk it for different reasons — and the core that falls decides which fire survives.</p>
+      <p class="tagline" id="campaign-tagline" hidden></p>
+      <p class="lede" id="hero-lede">The Crystalforge was grown, not built — and the only road between its two hearths is a single lane across a ravine. Five champions walk it for different reasons. None of them wants the same thing.</p>
       <div class="hero-cta">
-        <a class="btn go big" href="./v2/">Play now — free in your browser</a>
+        <a class="btn go big" href="./v3/">Play now — free in your browser</a>
         <a class="btn" href="#trailer">Watch the trailer</a>
       </div>
     </div>
@@ -50,72 +51,72 @@
     <div class="champs" id="champ-grid">
       <button class="champ fade" type="button" data-key="swarm" style="--accent:#4fd8c8"
         data-name="SW4RM" data-title="The Eye That Learned to Fight"
-        data-desc="A bronze orb with one enormous cyan eye, four blade-fins and a ring of small drones that are really just it, paying attention."
-        data-origin="SW4RM was built to watch the forge, not to guard it. It spent a hundred quiet years cataloguing every spark, every crack, every argument the smiths forgot to finish. When the forge began to cool, the catalogues started to feel like eulogies. Something in the single eye changed: watching stopped being enough, and the drones stopped orbiting for show."
-        data-motive="To be the last thing on the lane that is still paying attention."
-        data-flaw="It fights as a swarm of pieces and feels as a single eye — when the drones scatter, so does its certainty."
-        data-relationship="It logs the other four without understanding any of them, and keeps the log anyway."
+        data-desc="To close the count — the ledger will not close while something it filed as ruin keeps moving."
+        data-origin="SW4RM is the Masons' census construct: a bronze orb, one enormous eye, four blade-fins, and a ring of drones that file the world's state of record. For four hundred years it counted the forge, the garden, the bridge. When the Masons left, it kept counting — and one entry refuses to settle. Slab 406, filed as ruin, keeps moving. The ledger will not close, and the ledger is all it has."
+        data-motive="To close the count."
+        data-flaw="It cannot tell the world from its record of the world; a corrected ledger has, in the past, been worth more to it than the thing itself."
+        data-relationship="It files Tessera as its maker, ever since she repaired it once. She wants the record corrected."
         aria-expanded="false" aria-controls="reader">
         <span class="c-art"><span class="c-emb" aria-hidden="true">◈</span><img src="./v2/art/swarm.webp" alt="Painted portrait of SW4RM, a floating bronze orb with one large glowing cyan eye and blade-shaped fins" loading="lazy" onerror="this.style.display='none'"></span>
         <span class="c-name">SW4RM</span>
         <span class="c-title">The Eye That Learned to Fight</span>
-        <span class="c-desc">A bronze orb with one enormous cyan eye, four blade-fins and a ring of small drones that are really just it, paying attention.</span>
+        <span class="c-desc">To close the count — the ledger will not close while something it filed as ruin keeps moving.</span>
         <span class="c-more">Read the story</span>
       </button>
       <button class="champ fade" type="button" data-key="emberknight" style="--accent:#e6a83e"
         data-name="EmberKnight" data-title="The Last Flame Guard"
-        data-desc="Volcanic black and bronze plate, an amber slit for a face, ember cracks in the shoulders, and one broad sword that burns at the edge."
-        data-origin="The forge kept its doors with fire, and the fire kept a name for the guard who carried it. EmberKnight was the last oath in that line — sworn before the smiths stopped coming, before the flame had anyone left to warm. The cracks in the plate are not damage. They are the oath, still running."
-        data-motive="To walk into whatever is going out, and stay until it stays out."
-        data-flaw="It mistakes endurance for judgment; the sword keeps swinging long after the fight has asked to end."
-        data-relationship="It guards the other four the way a wall guards a house — and resents them for walking in."
+        data-desc="To put the fire out, starting with his own — the hearth-spark in the breastplate went wrong."
+        data-origin="EmberKnight carried a hearth-spark sealed in his breastplate, the last of the Masons' fire, sworn to guard it until the forge was safe. The seal went wrong on the bridge. The spark does not burn the armour — it burns the oath, and the oath is what was holding him. What the garden calls a demon is the forge, burning him, patiently."
+        data-motive="To put the fire out, starting with his own."
+        data-flaw="He mistakes burning for being lit, and he has already tried to douse himself."
+        data-relationship="The Hallow One has stood him up more times than he knows; he is trying to burn out what they relight."
         aria-expanded="false" aria-controls="reader">
         <span class="c-art"><span class="c-emb" aria-hidden="true">♜</span><img src="./v2/art/emberknight.webp" alt="Painted portrait of EmberKnight, a flame knight in black and bronze armor with an amber visor and a flame-edged greatsword" loading="lazy" onerror="this.style.display='none'"></span>
         <span class="c-name">EmberKnight</span>
         <span class="c-title">The Last Flame Guard</span>
-        <span class="c-desc">Volcanic black and bronze plate, an amber slit for a face, ember cracks in the shoulders, and one broad sword that burns at the edge.</span>
+        <span class="c-desc">To put the fire out, starting with his own — the hearth-spark in the breastplate went wrong.</span>
         <span class="c-more">Read the story</span>
       </button>
       <button class="champ fade" type="button" data-key="hallow" style="--accent:#d9c89a"
         data-name="The Hallow One" data-title="The Guardian Without a Face"
-        data-desc="Ivory robes, a broken bronze halo, a hood that holds one warm light instead of a face, and a staff crowned with pale green crystal."
-        data-origin="Nobody remembers the Hallow One's name, and the Hallow One does not argue about it. It is the keeper the forge made for the day the smiths left: it mends the cracks in the lane, carries the hurt back to the fountain, and stands in the doorway of every ruin with its broken halo turned toward the sky."
-        data-motive="To keep what the forge was supposed to protect, even the parts of it that stopped deserving it."
-        data-flaw="It cannot say no to a wound; the green light spends itself first on the ones who do not deserve it."
-        data-relationship="The others fight around it; the lane survives because of it; it would rather be thanked and forgotten."
+        data-desc="To keep the hearth lit and everyone it keeps standing — the healer who sat down and did not stop."
+        data-origin="The Hallow One is the Masons' healer, the one who stayed. They sat down at the South Court to mend the quickened stone and simply did not stop: a faceless hooded figure, a broken halo, a staff of pale green crystal. The Court quickens what they touch, and they have decided that everyone on the lane is worth quickening — including the ones who will not thank them for it."
+        data-motive="To keep the hearth lit and everyone it keeps standing."
+        data-flaw="They cannot say no to a wound; the light spends itself first on the ones least likely to come back."
+        data-relationship="With Tessera, two answers to death — rewind, or refuse. With the EmberKnight, a slower argument in the same language."
         aria-expanded="false" aria-controls="reader">
         <span class="c-art"><span class="c-emb" aria-hidden="true">✦</span><img src="./v2/art/hallow.webp" alt="Painted portrait of The Hallow One, a hooded ivory healer with a golden light in the hood, a broken bronze halo and a green crystal staff" loading="lazy" onerror="this.style.display='none'"></span>
         <span class="c-name">The Hallow One</span>
         <span class="c-title">The Guardian Without a Face</span>
-        <span class="c-desc">Ivory robes, a broken bronze halo, a hood that holds one warm light instead of a face, and a staff crowned with pale green crystal.</span>
+        <span class="c-desc">To keep the hearth lit and everyone it keeps standing — the healer who sat down and did not stop.</span>
         <span class="c-more">Read the story</span>
       </button>
       <button class="champ fade" type="button" data-key="bogmaw" style="--accent:#8fb573"
         data-name="Bog Maw" data-title="The Garden's Patient Keeper"
-        data-desc="A mossy green bruiser with yellow eyes, ivory stone plates grown into its back, reeds and amber fungus in the gaps, and one rusted bronze hook."
-        data-origin="Before the lane was a lane, it was a bog, and the bog swallowed a war whole. What the war left behind, the bog grew around: stone plates, reeds, a hook it found in the mud and never put down. The Maw does not remember the war. It remembers the quiet, and it has decided that quiet is worth a great deal of ground."
-        data-motive="To keep the garden. Everything on it, or off it."
-        data-flaw="It mistakes its patience for peace, and its ground for a border that everyone else agreed to."
-        data-relationship="It tolerates the other four the way a hill tolerates weather — and the hook is always a little closer than the words."
+        data-desc="To take the ravine back — the fen's guardian, wearing the drowned bridge on its back."
+        data-origin="Before the bridge was a bridge, the ravine was a fen, and the fen had a keeper. The war that drowned the Masons' lower works left its gift behind: ivory bridge-stones grown into a mossy back, reeds, amber fungus, and one rusted bronze hook that came off a drowned mason. The Maw does not remember the war. It remembers the quiet, and it has decided the quiet belongs to it."
+        data-motive="To take the ravine back."
+        data-flaw="It mistakes its patience for peace, and its ground for a border everyone agreed to."
+        data-relationship="The drones and the mouth both consider it a conversation. The drones keep notes, and lose."
         aria-expanded="false" aria-controls="reader">
         <span class="c-art"><span class="c-emb" aria-hidden="true">⚓</span><img src="./v2/art/bogmaw.webp" alt="Painted portrait of Bog Maw, a huge mossy green swamp creature with glowing yellow eyes, stone plates and a rusted bronze hook" loading="lazy" onerror="this.style.display='none'"></span>
         <span class="c-name">Bog Maw</span>
         <span class="c-title">The Garden's Patient Keeper</span>
-        <span class="c-desc">A mossy green bruiser with yellow eyes, ivory stone plates grown into its back, reeds and amber fungus in the gaps, and one rusted bronze hook.</span>
+        <span class="c-desc">To take the ravine back — the fen's guardian, wearing the drowned bridge on its back.</span>
         <span class="c-more">Read the story</span>
       </button>
       <button class="champ fade" type="button" data-key="tessera" style="--accent:#a98fd8"
         data-name="Tessera" data-title="The Clockmaker of Borrowed Time"
-        data-desc="A plum coat, segmented ivory-and-bronze armor, silver hair, amber goggles, mechanical gauntlets and a violet hourglass that ticks against her chest."
-        data-origin="Tessera keeps the forge's clocks, which is to say she keeps the lane. She was the first to measure the cooling — to hear it in the escapements, a half-beat less every century. Her hourglass does not count down to something. It counts what the lane still owes the fire, and she has spent a long time finding a way to make the numbers mean something."
-        data-motive="To settle the account before the last beat runs out."
+        data-desc="To wind it up again — the forge is a stopped clock, and she has the plans."
+        data-origin="Tessera read the Masons' plans and found the forge was a clock: two weights, a pendulum of light, stopped four hundred years ago. She is the first person in the garden who knows how to wind it. Her hourglass does not count down to the end — it counts what the lane still owes the fire. She would rewind people too, to save them, and she calls it mercy, and she is not wrong about the mechanics."
+        data-motive="To wind it up again."
         data-flaw="She trusts the mechanism over the people inside it, and the gears do not forgive surprises."
-        data-relationship="She times the other four's mistakes without asking to be thanked for the forecast."
+        data-relationship="SW4RM files her as its maker. She wants the record corrected; he wants the count closed; neither has said what they mean."
         aria-expanded="false" aria-controls="reader">
         <span class="c-art"><span class="c-emb" aria-hidden="true">⌛</span><img src="./v2/art/tessera.webp" alt="Painted portrait of Tessera, a clockwork battle mage in a plum coat with silver hair, amber goggles and a violet hourglass" loading="lazy" onerror="this.style.display='none'"></span>
         <span class="c-name">Tessera</span>
         <span class="c-title">The Clockmaker of Borrowed Time</span>
-        <span class="c-desc">A plum coat, segmented ivory-and-bronze armor, silver hair, amber goggles, mechanical gauntlets and a violet hourglass that ticks against her chest.</span>
+        <span class="c-desc">To wind it up again — the forge is a stopped clock, and she has the plans.</span>
         <span class="c-more">Read the story</span>
       </button>
     </div>
@@ -125,11 +126,13 @@
         <p class="eyebrow" id="reader-kicker">The story of</p>
         <h3 id="reader-name"></h3>
         <p class="r-title" id="reader-title"></p>
+        <p class="r-quote" id="reader-quote" hidden></p>
+        <p class="r-role" id="reader-role" hidden></p>
         <div class="r-blocks">
-          <div><h4>Origin</h4><p id="reader-origin"></p></div>
+          <div><h4>Origin</h4><div id="reader-origin"></div></div>
           <div><h4>What drives them</h4><p id="reader-motive"></p></div>
           <div><h4>The flaw</h4><p id="reader-flaw"></p></div>
-          <div><h4>The others</h4><p id="reader-relationship"></p></div>
+          <div><h4>The bond</h4><p id="reader-bond"></p></div>
         </div>
         <button class="btn" id="reader-close" type="button">Close</button>
       </div>
@@ -141,30 +144,43 @@
       <p class="eyebrow">The story so far</p>
       <h2 id="story-title">Three chapters of the Crystalforge</h2>
       <p class="band-sub">The lane has a history. This is the part the five still argue about.</p>
+      <p class="note lore-note">Editorial fiction — the chronicles are a story about the world, separate from the gameplay.</p>
     </header>
+    <div class="world fade" id="world-block">
+      <h3 id="world-title">The Crystalforge</h3>
+      <p class="world-sub" id="world-subtitle" hidden></p>
+      <div class="world-para" id="world-para">
+        <p>The Crystalforge was never a forge of metal. The Masons who raised it grew crystal the way gardeners grow trees: from two seeds, planted on either side of a ravine, fed with light for four hundred years. The seeds became the two hearths, one at each end of an ivory bridge, and the bridge became the only road between them. Then the Masons left, and nobody agrees why.</p>
+        <p>The garden took the ruin back and kept its colours: ivory stone, bronze gone green-gold, turquoise light under the moss, amber sap in the cracks. Two smaller crystals still stand off the bridge, the North Court and the South Court, and still do what they were built to do: the North sharpens whatever holds it, the South quickens.</p>
+        <p>Legend says whoever puts out the other hearth inherits the forge and everything it ever made. Five have come to collect. None of them wants the same thing.</p>
+      </div>
+    </div>
     <ol class="chapters" id="chapters">
       <li class="chapter fade" id="chapter-1">
         <span class="cnum" aria-hidden="true">01</span>
         <div class="cbody">
-          <h3>The Forge Cools</h3>
-          <p>For a thousand years the forge burned at the world's centre, and the garden grew around it in rings of ivory and bronze. Then the smiths stopped coming, one by one, and the heat began its long walk outward. Two cores were left burning — one at each end of the old road — and the road was all that was ever built to carry what the fire could not.</p>
-          <p class="hook">Five figures on the lane heard the first century of the cooling at once. They had been waiting for a reason. Now they had one.</p>
+          <img class="cimg" src="./media/chapter-1.webp" alt="" loading="lazy" onerror="this.remove()">
+          <h3>The Count</h3>
+          <p>Slab 406, filed as ruin, has moved again. Three drones are down; two are back; the ledger is still open. SW4RM has filed a new category for the slab, and for nothing else in the world: unclosed.</p>
+          <p class="hook">The lane is quiet the way a held count is quiet, and at the far end of the bridge someone is walking toward it.</p>
         </div>
       </li>
       <li class="chapter fade" id="chapter-2">
         <span class="cnum" aria-hidden="true">02</span>
         <div class="cbody">
-          <h3>The Courts Wake</h3>
-          <p>At either shoulder of the lane stand the Courts, the two plazas the old smiths paved with the forge's first light. The North Court remembers force, and grants it to whoever holds it. The South Court remembers speed, and grants that too. Neither was built for a team. Both were built to be taken, and both wake the moment the fight becomes worth having.</p>
-          <p class="hook">The first Court fell in the first hour, and the lane tilted — which was exactly what taking it was for.</p>
+          <img class="cimg" src="./media/chapter-2.webp" alt="" loading="lazy" onerror="this.remove()">
+          <h3>The Breath</h3>
+          <p>At the South Court the EmberKnight meets the Bog Maw. The guard holds for two seconds, falls against the quickened crystal, and stands up with someone else's breath in his chest.</p>
+          <p class="hook">Under the arch, Tessera clicks a stopwatch. "I could give it all back to him."</p>
         </div>
       </li>
       <li class="chapter fade" id="chapter-3">
         <span class="cnum" aria-hidden="true">03</span>
         <div class="cbody">
-          <h3>Five Reasons</h3>
-          <p>Every champion has a reason to be on the lane, and no two reasons fit the same hand. One is attention that became hunger. One is an oath that outlived its masters. One is a keeper who cannot say no. One is patience wearing stone. One is arithmetic with a deadline. The cores do not ask which reason is true.</p>
-          <p class="hook">The winner does not own the forge. The winner relights it — and the lane will be walked again.</p>
+          <img class="cimg" src="./media/chapter-3.webp" alt="" loading="lazy" onerror="this.remove()">
+          <h3>The Beat</h3>
+          <p>Tessera sets three traps on the bridge, and the five come to them all at once. The North crystal beats, and every thirty seconds the two hearths march out their ivory soldiers in fours — the same cadence the game already has.</p>
+          <p class="hook">One lane. Five reasons to fight.</p>
         </div>
       </li>
     </ol>
@@ -176,7 +192,7 @@
       <h2 id="trailer-title">The lane, in forty seconds</h2>
     </header>
     <figure class="trailer fade">
-      <video id="trailer-video" controls preload="metadata" playsinline poster="./media/trailer-poster.webp" aria-label="UltimateLegue trailer">
+      <video id="trailer-video" controls preload="none" playsinline poster="./media/trailer-poster.webp" aria-label="UltimateLegue trailer">
         <source src="./media/trailer.mp4" type="video/mp4">
         <track kind="captions" src="./media/trailer.vtt" srclang="en" label="English" default>
         Your browser cannot play this video.
@@ -197,32 +213,32 @@
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#dagger"></use></svg>
         <h3>1v1 or 3v3</h3>
-        <p>A private duel or a full squad, in online lobbies or against the bot brains — the same authoritative simulation either way.</p>
+        <p>A private duel or a full squad. Empty seats are filled by the bot brains; the same authoritative simulation runs either way.</p>
       </li>
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#swarm-q"></use></svg>
         <h3>Five distinct kits</h3>
-        <p>Drones or flame, healing light or bog iron, clockwork or storm — twenty abilities and five auto-attacks, each with its own language.</p>
+        <p>QWER abilities ranked across levels 1 to 12, plus D/F summoner spells — and an auto-attack that looks like no other's.</p>
       </li>
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#crystal"></use></svg>
         <h3>Draft with runes</h3>
-        <p>Pick your champion, then three runes from pages A, B or C. Your pages save, so your build is yours across matches.</p>
+        <p>Pick your champion and three of eight runes from pages A, B or C. Your pages save in the browser, so your build is yours.</p>
       </li>
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#coin"></use></svg>
         <h3>Gold, items, potions</h3>
-        <p>Kills pay. The shop carries permanent stat items and drinkable potions across six slots, buyable anywhere on the lane.</p>
+        <p>Gold from last hits, kills, assists and captures. Eighteen items across six slots, buyable anywhere on the lane.</p>
       </li>
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#storm"></use></svg>
         <h3>The Courts</h3>
-        <p>The North Court grants damage; the South grants haste. Hold one and the lane tilts — lose it and it respawns for the other side.</p>
+        <p>The North Court sharpens, the South quickens. Hold one for a hundred seconds of boon; lose it and it respawns for the other side.</p>
       </li>
       <li class="feature fade">
         <svg class="ficon" viewBox="0 0 64 64" aria-hidden="true"><use href="./v2/art/icons.svg#aegis"></use></svg>
-        <h3>Your controls, saved</h3>
-        <p>Every key remaps — abilities, spells, items, shop, stop — and your bindings persist in this browser.</p>
+        <h3>Free in your browser</h3>
+        <p>No install, no account — a WebGL2 browser is the whole requirement. Open a lobby, or practice against the bots first.</p>
       </li>
     </ul>
   </section>
@@ -230,8 +246,8 @@
   <section class="endcta" aria-labelledby="endcta-title">
     <h2 id="endcta-title">The lane is open.</h2>
     <p>Pick a champion. Choose your runes. Take the core.</p>
-    <a class="btn go big" href="./v2/">Play UltimateLegue</a>
-    <p class="fineprint">Free in your browser · WebGL2 · no install, no account</p>
+    <a class="btn go big" href="./v3/">Play UltimateLegue</a>
+    <p class="fineprint">UltimateLegue V3 · free in your browser · WebGL2 · no install, no account</p>
   </section>
 
 </main>
