@@ -1415,11 +1415,8 @@ mod tests {
     #[test]
     fn logical_trace_and_browser_binding_are_mode_equivalent_contracts() {
         fn same_thread_trace() -> OwnershipTrace {
-            let (owner, producer) = WorkerChannel::new(
-                WorkerConfig { max_iter: 64 },
-                WorkerMode::SameThread,
-            )
-            .unwrap();
+            let (owner, producer) =
+                WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
             let generation = 11;
             let outcome = owner.submit(request(generation, generation));
             let mut events = vec![OwnershipEvent::RequestSubmitted {
@@ -1443,9 +1440,7 @@ mod tests {
             });
             let disposition = OrbitDisposition::Applied;
             let returned_generation = response.generation();
-            owner
-                .return_credit(&mut response, disposition, 0)
-                .unwrap();
+            owner.return_credit(&mut response, disposition, 0).unwrap();
             events.push(OwnershipEvent::CreditReturned {
                 generation: returned_generation,
                 disposition,

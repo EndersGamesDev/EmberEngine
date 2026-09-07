@@ -808,10 +808,7 @@ pub(crate) struct OwnershipTrace {
 
 /// Removes wall measurements and reconciles the two transport epoch shapes.
 #[cfg(test)]
-pub(crate) fn normalized_facts(
-    facts: WorkerFacts,
-    browser_mode: bool,
-) -> NormalizedWorkerFacts {
+pub(crate) fn normalized_facts(facts: WorkerFacts, browser_mode: bool) -> NormalizedWorkerFacts {
     // The browser owner observes credit return as one transport callback. The queue lowering
     // records the accounting mutation and the slot transfer separately. Count both as the same
     // two-part logical transition in the cross-lowering trace epoch.
