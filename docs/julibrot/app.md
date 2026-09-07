@@ -401,7 +401,7 @@ Each homography row stores three coefficients and one zero; present computes it 
 
 The ring has three slots, `hot_stride=align_up(288,min_uniform_buffer_offset_alignment)`, total size `3·hot_stride`, one immutable bind group, and one 288-byte regional write per surface refresh.
 
-`SceneUniform` is exactly 160 bytes: grid/span at 0/16, sampled basis at 32/48, sampled `M` at 64/80/96 with the applied apron in byte 108, the relief-redraw stretch limit at 112, and otherwise zeroed value-pipeline lanes through 159; present owns one buffer for the main layer and one for the optional backdrop. Palette data lives only in the separate presentation shade uniform.
+`SceneUniform` is exactly 160 bytes: grid/span at 0/16, sampled basis at 32/48, sampled `M` at 64/80/96 with the applied apron in byte 108, then the relief-redraw guard enable, presentation-surface extent and one-pixel excess allowance at 112–124, with otherwise zeroed value-pipeline lanes through 159; present owns one buffer for the main layer and one for the optional backdrop. Palette data lives only in the separate presentation shade uniform.
 
 `SceneFrame` is `{scene_id:u64,pose:Pose,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,precision_mode:&'static str,measurement:SubmissionMeasurement}`; palette is absent because retained scenes are `Rgba32Float` values. `SubmissionMeasurement` is `{kind:SubmissionKind,id:u64,source_scene_id:Option<u64>,sample_class:SampleClass,precision_mode:&'static str,wall_ms:f64,fence_wait_ms:f64,polls:u32}`, with kind `Scene` or `Warp`.
 

@@ -178,27 +178,6 @@ pub fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
         || pure_height_or_fifth_distance(from, to)
 }
 
-/// Maximum local destination-pixel stretch admitted for one retained source texel.
-///
-/// The native oracle's source-texel reach is the sum of the projected source-texel and
-/// destination-pixel half diagonals. Multiplying that reach by `sqrt(2)` therefore recovers the
-/// projected source step plus one destination pixel of conservative raster headroom.
-pub fn relief_redraw_max_screen_stretch_px(
-    source: &SceneFrame,
-    destination: &Pose,
-) -> Option<f64> {
-    if source.extent.contains(&0) {
-        return None;
-    }
-    let zoom_scale = (destination.zoom_log2 - source.pose.zoom_log2).exp2();
-    let source_step = zoom_scale
-        * (f64::from(destination.grid_width) / f64::from(source.extent[0]))
-            .max(f64::from(destination.grid_height) / f64::from(source.extent[1]));
-    let source_texel_reach_px = core::f64::consts::FRAC_1_SQRT_2 * (source_step + 1.0);
-    let maximum = core::f64::consts::SQRT_2 * source_texel_reach_px;
-    maximum.is_finite().then_some(maximum)
-}
-
 fn neutral_five_camera(view: ViewControls) -> bool {
     view.camera
         .into_iter()

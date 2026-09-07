@@ -40,7 +40,7 @@ fn record_height(record: vec4<f32>) -> f32 {
 }
 ";
 const SCENE_BODY: &str = r"
-struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
+struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, @location(3) expected_stretch: f32, }
 struct Ambient5 { low: vec4<f32>, fifth: f32, }
 // A grid of width samples covers width pixels, so the mesh spanning their centres stops half a
 // pixel short of the frame on every side. The rasterizer's fill rule hides that on the left and
@@ -56,6 +56,11 @@ fn grid_screen(index: u32, count: u32) -> f32 {
     if (index == 0u) { return -centre; }
     if (index + 1u == count) { return centre; }
     return f32(index) + 0.5 - centre;
+}
+fn neighbouring_grid_screen(index: u32, count: u32) -> f32 {
+    if (count <= 1u) { return 0.0; }
+    if (index + 1u < count) { return grid_screen(index + 1u, count); }
+    return grid_screen(index - 1u, count);
 }
 fn rotate_12(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.y; out.low.y = pair.y * value.low.x + pair.x * value.low.y; return out; }
 fn rotate_13(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.z; out.low.z = pair.y * value.low.x + pair.x * value.low.z; return out; }
@@ -82,15 +87,44 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     rotated.fifth += hot.camera_translation_1.x;
     return rotated;
 }
-fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>) -> bool {
-    let maximum_stretch = scene.reserved_0.x;
-    if (maximum_stretch <= 0.0) { return false; }
+fn project_constant_height(screen: vec2<f32>, height: f32) -> vec3<f32> {
+    let homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, vec3<f32>(screen, 1.0)), dot(scene.screen_to_plane_row_1.xyz, vec3<f32>(screen, 1.0)), dot(scene.screen_to_plane_row_2.xyz, vec3<f32>(screen, 1.0)));
+    if (!all(vec3<bool>(finite(homogeneous.x), finite(homogeneous.y), finite(homogeneous.z))) || homogeneous.z <= 0.0) { return vec3<f32>(0.0); }
+    let plane_offset = homogeneous.xy / homogeneous.z;
+    if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return vec3<f32>(0.0); }
+    let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);
+    let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
+    let ambient = ambient_camera(Ambient5(display, height));
+    let distance_five = hot.view_scale.y;
+    let distance_four = hot.view_scale.z;
+    let denominator_five = distance_five - ambient.fifth;
+    if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) { return vec3<f32>(0.0); }
+    let projected_four = ambient.low * (distance_five / denominator_five);
+    let denominator_four = distance_four - projected_four.w;
+    if (denominator_four <= 1.0e-4) { return vec3<f32>(0.0); }
+    let world = projected_four.xyz * (distance_four / denominator_four);
+    let yawed = vec3<f32>(hot.observer_rotation.x * world.x + hot.observer_rotation.y * world.z, world.y, -hot.observer_rotation.y * world.x + hot.observer_rotation.x * world.z);
+    let view = vec3<f32>(yawed.x, hot.observer_rotation.z * yawed.y - hot.observer_rotation.w * yawed.z, hot.observer_rotation.w * yawed.y + hot.observer_rotation.z * yawed.z - distance_four);
+    if (-view.z <= 1.0e-4) { return vec3<f32>(0.0); }
+    let perspective_scale = hot.view_scale.w * distance_four * 0.5;
+    return vec3<f32>(vec2<f32>(perspective_scale * view.x / hot.view_scale.w, perspective_scale * view.y) / -view.z, 1.0);
+}
+fn maximum_singular_stretch(dx: vec2<f32>, dy: vec2<f32>) -> f32 {
+    let trace = dot(dx, dx) + dot(dy, dy);
+    let determinant = dx.x * dy.y - dx.y * dy.x;
+    let discriminant = max(trace * trace - 4.0 * determinant * determinant, 0.0);
+    return sqrt(max(0.5 * (trace + sqrt(discriminant)), 0.0));
+}
+fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>, expected_stretch: f32) -> bool {
+    if (scene.reserved_0.x <= 0.0) { return false; }
     let dx = dpdx(grid_coordinate);
     let dy = dpdy(grid_coordinate);
+    if (!finite(expected_stretch) || expected_stretch <= 0.0) { return true; }
     let trace = dot(dx, dx) + dot(dy, dy);
     let determinant = dx.x * dy.y - dx.y * dy.x;
     let discriminant = max(trace * trace - 4.0 * determinant * determinant, 0.0);
     let minimum_eigenvalue = max(0.5 * (trace - sqrt(discriminant)), 0.0);
+    let maximum_stretch = expected_stretch + scene.reserved_0.w;
     return !finite(minimum_eigenvalue) || minimum_eigenvalue * maximum_stretch * maximum_stretch < 1.0;
 }
 @vertex fn scene_vertex(@builtin(vertex_index) index: u32) -> SceneVertex {
@@ -99,16 +133,26 @@ fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>) -> bool {
     let record = load_escape(index);
     let screen_x = grid_screen(column, scene.grid.x);
     let screen_y = grid_screen(row, scene.grid.y);
+    let neighbour_x = neighbouring_grid_screen(column, scene.grid.x);
+    let neighbour_y = neighbouring_grid_screen(row, scene.grid.y);
     let direct_ndc = vec2<f32>(2.0 * screen_x / f32(scene.grid.x), 2.0 * screen_y / f32(scene.grid.y));
     var output: SceneVertex;
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
     output.valid = 1.0;
+    output.expected_stretch = 0.0;
     output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
     // With no lift every sample stays in the plane, and the projection restricted to the plane is
     // the screen-to-plane map's own inverse: direct_ndc IS that projection, not a stand-in for it.
     // The same holds for an edge-on map, which has no plane point anywhere to project.
-    if (scene.span.z != 0u || hot.view_scale.x == 0.0) { return output; }
+    if (scene.span.z != 0u || hot.view_scale.x == 0.0) {
+        if (scene.reserved_0.x > 0.0) {
+            let expected_x = abs(neighbour_x - screen_x) * scene.reserved_0.y / f32(scene.grid.x);
+            let expected_y = abs(neighbour_y - screen_y) * scene.reserved_0.z / f32(scene.grid.y);
+            output.expected_stretch = max(expected_x, expected_y);
+        }
+        return output;
+    }
     output.valid = 0.0;
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     // A horizon record is a pixel whose screen-to-plane denominator was not positive: the plane
@@ -157,10 +201,23 @@ fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>) -> bool {
     let aspect = hot.view_scale.w;
     let perspective_scale = aspect * distance_four * 0.5;
     output.position = vec4<f32>(perspective_scale * view.x / aspect, perspective_scale * view.y, clip_depth, -view.z);
+    if (scene.reserved_0.x > 0.0) {
+        let right = project_constant_height(vec2<f32>(neighbour_x, screen_y), height);
+        let above = project_constant_height(vec2<f32>(screen_x, neighbour_y), height);
+        if (right.z < 0.5 || above.z < 0.5) {
+            output.expected_stretch = -1.0;
+        } else {
+            let centre = output.position.xy / output.position.w;
+            let half_extent = 0.5 * scene.reserved_0.yz;
+            let dx = (right.xy - centre) * half_extent;
+            let dy = (above.xy - centre) * half_extent;
+            output.expected_stretch = maximum_singular_stretch(dx, dy);
+        }
+    }
     return output;
 }
 @fragment fn scene_fragment(input: SceneVertex) -> @location(0) vec4<f32> {
-    if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }
+    if (redraw_cell_is_stretched(input.grid_coordinate, input.expected_stretch)) { discard; }
     if (input.valid < 0.999999) { discard; }
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
@@ -359,12 +416,22 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("@vertex fn scene_vertex"));
         assert!(source.contains("let record = load_escape(index);"));
-        assert!(source.contains("fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>)"));
+        assert!(source.contains("fn project_constant_height(screen: vec2<f32>, height: f32)"));
+        assert!(source.contains(
+            "fn redraw_cell_is_stretched(grid_coordinate: vec2<f32>, expected_stretch: f32)"
+        ));
         assert!(source.contains("let dx = dpdx(grid_coordinate);"));
         assert!(source.contains("let dy = dpdy(grid_coordinate);"));
-        assert!(source.contains("let maximum_stretch = scene.reserved_0.x;"));
+        assert!(source.contains(
+            "let right = project_constant_height(vec2<f32>(neighbour_x, screen_y), height);"
+        ));
+        assert!(source.contains("let half_extent = 0.5 * scene.reserved_0.yz;"));
+        assert!(source.contains("output.expected_stretch = maximum_singular_stretch(dx, dy);"));
+        assert!(source.contains("let maximum_stretch = expected_stretch + scene.reserved_0.w;"));
         assert!(
-            source.contains("if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }")
+            source.contains(
+                "if (redraw_cell_is_stretched(input.grid_coordinate, input.expected_stretch)) { discard; }"
+            )
         );
         assert!(
             source.contains("let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;")

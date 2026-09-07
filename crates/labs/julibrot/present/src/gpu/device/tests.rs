@@ -713,7 +713,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     let retained_grid = ledger
         .retained_grid()
         .expect("retained frame owns its record grid");
-    let uniform = relief_scene_uniform(retained_grid, &sampled, &sampled.pose)
+    let uniform = relief_scene_uniform(retained_grid, &sampled, &sampled.pose, sampled.extent)
         .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
     assert_eq!(uniform.span[0], retained_grid.span.directory_index);
@@ -1023,7 +1023,9 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
         .clone();
     retained_grid.width /= 2;
     retained_grid.height /= 2;
-    assert!(relief_scene_uniform(&retained_grid, &sampled, &sampled.pose).is_err());
+    assert!(
+        relief_scene_uniform(&retained_grid, &sampled, &sampled.pose, sampled.extent).is_err()
+    );
 }
 
 #[test]
@@ -1039,7 +1041,7 @@ fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
             .directory_index,
         main.grid.span.directory_index
     );
-    assert!(relief_scene_uniform(&main.grid, &sampled, &sampled.pose).is_ok());
+    assert!(relief_scene_uniform(&main.grid, &sampled, &sampled.pose, sampled.extent).is_ok());
 }
 
 #[test]
@@ -1346,7 +1348,7 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     destination.zoom_log2 = 1.0;
     destination.centre_from_reference_px = [4.0, -2.0];
     destination.view.height_scale = 2.0;
-    let uniform = relief_scene_uniform(&grid, &source, &destination)
+    let uniform = relief_scene_uniform(&grid, &source, &destination, [960, 540])
         .expect("the reduced retained grid composes into the destination chart");
 
     assert_eq!(uniform.grid[..2], [8, 5]);
@@ -1370,8 +1372,7 @@ fn preview_relief_redraw_maps_the_delivery_lattice_into_the_destination_chart() 
     let display = uniform_chart.map(|coordinate| chart_scale * coordinate);
     assert!((display[0] - 0.75).abs() < 1.0e-6);
     assert!((display[1] + 0.775).abs() < 1.0e-6);
-    assert!((uniform.reserved_0[0] - 17.0).abs() < f32::EPSILON);
-    assert_eq!(uniform.reserved_0[1..], [0.0; 3]);
+    assert_eq!(uniform.reserved_0, [1.0, 960.0, 540.0, 1.0]);
 
     let redraw = crate::relief_redraw_source_pose(&source.pose, source.extent, &destination)
         .expect("the source delivery lattice composes into the destination pose");

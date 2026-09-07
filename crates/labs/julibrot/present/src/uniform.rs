@@ -73,7 +73,7 @@ pub struct SceneUniform {
     pub screen_to_plane_row_1: [f32; 4],
     /// Third padded row of the map; its fourth lane carries the applied sampling apron.
     pub screen_to_plane_row_2: [f32; 4],
-    /// Redraw stretch limit in x; the remaining value-pipeline words are zero.
+    /// Redraw guard, presentation extent, and one-pixel excess allowance; zero disables the guard.
     pub reserved_0: [f32; 4],
     /// Reserved value-pipeline lane; always zero.
     pub reserved_1: [f32; 4],

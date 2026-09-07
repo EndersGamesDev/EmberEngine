@@ -18,7 +18,7 @@ impl Presenter {
         if validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_err() {
             return Ok(false);
         }
-        let Ok(uniform) = relief_scene_uniform(grid, source, destination) else {
+        let Ok(uniform) = relief_scene_uniform(grid, source, destination, surface_extent) else {
             return Ok(false);
         };
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
@@ -35,7 +35,13 @@ impl Presenter {
     ) -> bool {
         self.ledger.retained_grid().is_some_and(|grid| {
             validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_ok()
-                && relief_scene_uniform(grid, source, destination).is_ok()
+                && relief_scene_uniform(
+                    grid,
+                    source,
+                    destination,
+                    [destination.grid_width, destination.grid_height],
+                )
+                .is_ok()
         })
     }
 }
@@ -61,6 +67,7 @@ pub(super) fn relief_scene_uniform(
     grid: &ember_julibrot_kernels::EscapeGrid,
     source: &crate::SceneFrame,
     destination: &Pose,
+    surface_extent: [u32; 2],
 ) -> Result<SceneUniform, PresentError> {
     if [grid.width, grid.height] != source.extent {
         return Err(PresentError::InvalidGrid {
@@ -94,21 +101,23 @@ pub(super) fn relief_scene_uniform(
         },
     })?;
     if !crate::planner::exact_relief_redraw_family(&source.pose, destination) {
-        let maximum = crate::planner::relief_redraw_max_screen_stretch_px(source, destination)
-            .ok_or(PresentError::Device {
-                operation: "derive relief redraw stretch limit",
-            })?;
         #[allow(
-            clippy::cast_possible_truncation,
-            reason = "the finite redraw stretch limit is narrowed once into the scene GPU ABI"
+            clippy::cast_precision_loss,
+            reason = "the checked presentation extent is narrowed once into the scene GPU ABI"
         )]
-        let maximum = maximum as f32;
-        if !maximum.is_finite() || maximum <= 0.0 {
+        let presentation_extent = [
+            surface_extent[0] as f32,
+            surface_extent[1] as f32,
+        ];
+        if presentation_extent
+            .into_iter()
+            .any(|value| !value.is_finite() || value <= 0.0)
+        {
             return Err(PresentError::Device {
-                operation: "pack relief redraw stretch limit",
+                operation: "pack relief redraw presentation extent",
             });
         }
-        uniform.reserved_0[0] = maximum;
+        uniform.reserved_0 = [1.0, presentation_extent[0], presentation_extent[1], 1.0];
     }
     Ok(uniform)
 }
