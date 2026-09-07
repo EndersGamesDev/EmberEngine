@@ -2638,11 +2638,8 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
             frame_loop.restart(37);
             frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
         }
-        presenter.forced_warp_kind = Some(measured_height_drag_plan(
-            row,
-            retained_height_scale,
-            4.0,
-        ));
+        presenter.forced_warp_kind =
+            Some(measured_height_drag_plan(row, retained_height_scale, 4.0));
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} settled scene id", row.name);

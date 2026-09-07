@@ -8,7 +8,10 @@ use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
 use crate::state::{PendingScene, SceneCompletion};
-use crate::{PresentFacts, SubmissionKind, SubmissionMeasurement};
+use crate::{
+    FrameReceipt, FrameState, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
+    WarpValidation,
+};
 
 #[test]
 fn glitch_census_sums_red_counts_and_ignores_row_padding() {
@@ -263,8 +266,7 @@ fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     let adapter = pollster::block_on(instance.request_adapter(&request(true)))
         .or_else(|| pollster::block_on(instance.request_adapter(&request(false))))
         .expect("a native GPU or software adapter is available for the presentation test");
-    let required =
-        wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
+    let required = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT;
     assert!(
         adapter
             .get_texture_format_features(wgpu::TextureFormat::Rgba32Float)
@@ -347,13 +349,8 @@ fn native_palette_presenter() -> (Presenter, Arc<wgpu::Device>) {
     presenter.facts.completed_scene_id = Some(completed.scene_id);
     let texture_index = usize::try_from(completed.texture_index)
         .expect("the retained texture index fits this process");
-    ensure_scene_texture(
-        &device,
-        &mut presenter.gpu,
-        texture_index,
-        completed.extent,
-    )
-    .expect("the retained value texture is allocated");
+    ensure_scene_texture(&device, &mut presenter.gpu, texture_index, completed.extent)
+        .expect("the retained value texture is allocated");
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Julibrot native retained-value encoder"),
     });
@@ -450,14 +447,9 @@ fn capture_native_palette(
 fn two_palettes_recolour_one_completed_scene_through_the_offscreen_route() {
     let (mut presenter, device) = native_palette_presenter();
     let next_scene_id = presenter.next_scene_id;
-    let (classic_receipt, classic) = capture_native_palette(
-        &mut presenter,
-        &device,
-        PaletteId::Classic,
-        101,
-    );
-    let (ice_receipt, ice) =
-        capture_native_palette(&mut presenter, &device, PaletteId::Ice, 102);
+    let (classic_receipt, classic) =
+        capture_native_palette(&mut presenter, &device, PaletteId::Classic, 101);
+    let (ice_receipt, ice) = capture_native_palette(&mut presenter, &device, PaletteId::Ice, 102);
 
     assert_eq!(classic_receipt.source_scene_id, Some(37));
     assert_eq!(ice_receipt.source_scene_id, classic_receipt.source_scene_id);

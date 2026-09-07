@@ -363,7 +363,9 @@ mod tests {
         assert!(source.contains("let dx = dpdx(grid_coordinate);"));
         assert!(source.contains("let dy = dpdy(grid_coordinate);"));
         assert!(source.contains("let maximum_stretch = scene.reserved_0.x;"));
-        assert!(source.contains("if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }"));
+        assert!(
+            source.contains("if (redraw_cell_is_stretched(input.grid_coordinate)) { discard; }")
+        );
         assert!(
             source.contains("let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;")
         );

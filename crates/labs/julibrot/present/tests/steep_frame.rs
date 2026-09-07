@@ -857,11 +857,7 @@ fn render_frame(pose: &Pose, records: &[[f32; 4]], rule: Rule, mapping: Mapping)
     }
 }
 
-fn fragment_maximum_stretch(
-    tri: [Vertex; 3],
-    weights: [f64; 3],
-    area: f64,
-) -> Option<f64> {
+fn fragment_maximum_stretch(tri: [Vertex; 3], weights: [f64; 3], area: f64) -> Option<f64> {
     let derivative_x = [
         (tri[1].y - tri[2].y) / area,
         (tri[2].y - tri[0].y) / area,
@@ -888,12 +884,12 @@ fn fragment_maximum_stretch(
             .fold(0.0, |sum, (weight, vertex)| {
                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
             });
-        let numerator_derivative = weight_derivatives.into_iter().zip(tri).fold(
-            0.0,
-            |sum, (weight, vertex)| {
+        let numerator_derivative = weight_derivatives
+            .into_iter()
+            .zip(tri)
+            .fold(0.0, |sum, (weight, vertex)| {
                 (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
-            },
-        );
+            });
         let reciprocal_derivative = weight_derivatives
             .into_iter()
             .zip(tri)
@@ -903,17 +899,13 @@ fn fragment_maximum_stretch(
         numerator_derivative.mul_add(reciprocal, -numerator * reciprocal_derivative)
             / (reciprocal * reciprocal)
     };
-    let dx = [
-        derivative(0, derivative_x),
-        derivative(1, derivative_x),
-    ];
-    let dy = [
-        derivative(0, derivative_y),
-        derivative(1, derivative_y),
-    ];
+    let dx = [derivative(0, derivative_x), derivative(1, derivative_x)];
+    let dy = [derivative(0, derivative_y), derivative(1, derivative_y)];
     let trace = dx[0] * dx[0] + dx[1] * dx[1] + dy[0] * dy[0] + dy[1] * dy[1];
     let determinant = dx[0].mul_add(dy[1], -dx[1] * dy[0]);
-    let discriminant = trace.mul_add(trace, -4.0 * determinant * determinant).max(0.0);
+    let discriminant = trace
+        .mul_add(trace, -4.0 * determinant * determinant)
+        .max(0.0);
     let minimum_eigenvalue = (0.5 * (trace - discriminant.sqrt())).max(0.0);
     if !minimum_eigenvalue.is_finite() || minimum_eigenvalue <= 0.0 {
         return None;

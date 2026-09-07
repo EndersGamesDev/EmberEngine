@@ -168,7 +168,7 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
 /// layer remains one fixed plane that the later perspectives and observer map projectively. Equal
 /// non-neutral cameras do not suffice because mixing the height axis generally destroys that
 /// fixed-plane relation.
-pub(crate) fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
+pub fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
     if [from.grid_width, from.grid_height] != [to.grid_width, to.grid_height] {
         return false;
     }
@@ -183,7 +183,7 @@ pub(crate) fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
 /// The native oracle's source-texel reach is the sum of the projected source-texel and
 /// destination-pixel half diagonals. Multiplying that reach by `sqrt(2)` therefore recovers the
 /// projected source step plus one destination pixel of conservative raster headroom.
-pub(crate) fn relief_redraw_max_screen_stretch_px(
+pub fn relief_redraw_max_screen_stretch_px(
     source: &SceneFrame,
     destination: &Pose,
 ) -> Option<f64> {
