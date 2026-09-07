@@ -5,16 +5,23 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),crypto=require('node:crypto');
 const {gameVersion}=require('./publish.cjs');
 const selected=gameVersion(process.env.LEAGUE_GAME_VERSION||'v1');
-const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
 const root=process.cwd(),out=path.join(root,selected==='v1'?'target/league-public-browser':`target/league-public-browser-${selected}`);
-const hubUrl='https://endersgamesdev.github.io/EmberEngine/';
+function proofBaseUrl(override){
+  if(override===undefined)return 'https://endersgamesdev.github.io/EmberEngine/';
+  assert(typeof override==='string'&&override.trim(),'LEAGUE_PUBLIC_BASE_URL must be a nonempty loopback URL');
+  const url=new URL(override);
+  assert(['http:','https:'].includes(url.protocol)&&['127.0.0.1','localhost','[::1]'].includes(url.hostname),'LEAGUE_PUBLIC_BASE_URL is test-only and must use loopback');
+  assert(!url.username&&!url.password&&!url.search&&!url.hash,'Loopback proof URL must not contain credentials, a query or a fragment');
+  if(!url.pathname.endsWith('/'))url.pathname+='/';
+  return url.href;
+}
+const hubUrl=proofBaseUrl(process.env.LEAGUE_PUBLIC_BASE_URL);
 const gameUrl=new URL(`games/league/${selected}/`,hubUrl).href;
-const started=Date.now(),report={gameVersion:selected,hubUrl,gameUrl,checks:[],errors:[],screenshots:[],passed:false};
+const started=Date.now(),report={gameVersion:selected,testOnlyLoopback:process.env.LEAGUE_PUBLIC_BASE_URL!==undefined,hubUrl,gameUrl,checks:[],errors:[],screenshots:[],passed:false};
 const lobbyName=`proof-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 // Never include the password in logs, result JSON, or screenshots of field values.
 const lobbyPassword=crypto.randomBytes(20).toString('hex');
 let browser,gamePage;
-const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const check=(condition,name)=>{assert(condition,name);report.checks.push(name);console.log('PASS '+name);};
 const snapshot=p=>p.evaluate(()=>JSON.parse(window.proofWasm.state_json()));
 async function click(p,selector){
@@ -25,13 +32,74 @@ async function capture(p,name){
   const file=path.join(out,name+'.png');
   await p.screenshot({path:file,fullPage:true});report.screenshots.push(file);
 }
-async function press(p,code){
+// Observed authoritative progress guarantees the engine had frames to consume
+// a physical press even when its renderer is slower than the old 80ms pulse.
+async function advance(p,seconds=.15){
+  const before=await snapshot(p);
+  assert(before.connected&&before.phase==='live'&&before.me?.alive,'Proof needs a live connected champion');
+  await p.waitForFunction(target=>{
+    const s=JSON.parse(window.proofWasm.state_json());
+    if(!s.connected||s.phase!=='live'||!s.me?.alive)throw new Error('Proof match stopped while waiting for input processing');
+    return s.secs>=target;
+  },before.secs+seconds,{timeout:15000});
+  return snapshot(p);
+}
+async function press(p,code,selector='#ember-root canvas'){
   for(const type of ['keydown','keyup']){
-    await p.evaluate(({type,code})=>document.querySelector('#ember-root canvas').dispatchEvent(new KeyboardEvent(type,{code,key:code.slice(3).toLowerCase(),bubbles:true,cancelable:true})),{type,code});
-    await pause(80);
+    await p.evaluate(({type,code,selector})=>document.querySelector(selector).dispatchEvent(new KeyboardEvent(type,{code,key:code.startsWith('Key')?code.slice(3).toLowerCase():code,bubbles:true,cancelable:true})),{type,code,selector});
+    await advance(p,type==='keydown'?.15:.1);
   }
 }
+async function point(p,button=null){
+  await p.evaluate(button=>{
+    const c=document.querySelector('#ember-root canvas'),r=c.getBoundingClientRect();
+    const init={bubbles:true,cancelable:true,pointerType:'mouse',pointerId:1,isPrimary:true,clientX:r.left+r.width*.72,clientY:r.top+r.height*.47,button:-1,buttons:0};
+    const move=new PointerEvent('pointermove',init);Object.defineProperty(move,'getCoalescedEvents',{value:()=>[move]});c.dispatchEvent(move);
+    if(button!==null)c.dispatchEvent(new PointerEvent('pointerdown',{...init,button,buttons:button===2?2:1}));
+  },button);
+  await advance(p);
+  if(button!==null){
+    await p.evaluate(button=>document.querySelector('#ember-root canvas').dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerType:'mouse',pointerId:1,button,buttons:0})),button);
+    await advance(p,.1);
+  }
+}
+async function visible(p,id,expected=true){
+  await p.waitForFunction(({id,expected})=>Boolean(document.getElementById(id)?.getClientRects().length)===expected,{id,expected},{timeout:15000});
+}
+async function v3Controls(p,commands){
+  const bindings=await p.evaluate(()=>JSON.parse(window.proofWasm.bindings_json()));
+  check(bindings.attackMove==='KeyA'&&bindings.stop==='KeyS','V3 publishes default A attack-move and S Stop bindings');
+  const beforeRight=await snapshot(p),moveCount=commands.filter(c=>c.a==='move').length;
+  await point(p,2);
+  await p.waitForFunction(before=>{const s=JSON.parse(window.proofWasm.state_json());return Math.hypot(s.me.x-before.me.x,s.me.z-before.me.z)>.1;},beforeRight,{timeout:15000});
+  check(commands.filter(c=>c.a==='move').length===moveCount+1,'one right-click moves through the authoritative Move command');
+  await press(p,'KeyS');await advance(p);
+  await point(p);
+  const beforeAttackMove=await snapshot(p),attackMoves=commands.filter(c=>c.a==='attack_move').length;
+  await press(p,'KeyA');
+  await p.waitForFunction(before=>{const s=JSON.parse(window.proofWasm.state_json());return Math.hypot(s.me.x-before.me.x,s.me.z-before.me.z)>.1;},beforeAttackMove,{timeout:15000});
+  check(commands.filter(c=>c.a==='attack_move').length===attackMoves+1,'one A press sends AttackMove and moves the authoritative champion');
+  await press(p,'KeyS');await advance(p);
+  await press(p,'Escape');await visible(p,'pause');
+  await click(p,'#btn-help');await visible(p,'help');
+  check(await p.evaluate(()=>{
+    const help=document.getElementById('help');
+    return help.innerText.includes('Right-click')&&help.innerText.includes('Attack-move')&&document.querySelectorAll('#guide-kits details').length===5&&document.querySelectorAll('#guide-kits article').length===20&&document.getElementById('guide-map').innerText.includes('core');
+  }),'Escape guide contains controls, objectives, five champion kits and all 20 abilities');
+  await capture(p,'public-guide');
+  await press(p,'Escape','#help');await visible(p,'help',false);await visible(p,'pause');
+  check(true,'Escape returns from the guide to the match menu');
+  await click(p,'#btn-keys3');await visible(p,'keys');
+  check(await p.evaluate(()=>{
+    const row=document.querySelector('#key-rows .krow[data-act="attackMove"]');
+    return row?.getClientRects().length&&/attack[ -]move/i.test(row.innerText)&&row.querySelector('.kset')&&row.querySelector('.kchip').textContent==='A';
+  }),'Escape keybindings expose the bindable Attack-move action');
+  await press(p,'Escape','#keys');await visible(p,'keys',false);await visible(p,'pause');
+  await press(p,'Escape','#pause');await visible(p,'pause',false);await advance(p);
+  check(true,'Escape backs out of keybindings and resumes the match');
+}
 async function main(){
+  const {chromium}=require(process.env.EMBER_QA_PLAYWRIGHT||'playwright');
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);
   fs.mkdirSync(out,{recursive:true});
   browser=await chromium.launch({channel:'msedge',headless:true,args:['--disable-webgpu','--disable-features=WebGPU','--enable-webgl','--ignore-gpu-blocklist']});
@@ -61,10 +129,10 @@ async function main(){
   gamePage=await context.newPage();
   gamePage.on('pageerror',error=>report.errors.push('game: '+error.message));
   gamePage.on('response',response=>{if(response.status()>=400)report.errors.push(`HTTP ${response.status()}: ${response.url()}`);});
-  const creates=[],joins=[];
+  const creates=[],joins=[],commands=[];
   gamePage.on('websocket',socket=>{
     socket.on('framesent',event=>{
-      try{const message=JSON.parse(String(event.payload));if(message.t==='create_lobby')creates.push({name:message.name,mode:message.mode,passwordProtected:typeof message.password==='string'&&message.password.length>0});}catch{}
+      try{const message=JSON.parse(String(event.payload));if(message.t==='create_lobby')creates.push({name:message.name,mode:message.mode,passwordProtected:typeof message.password==='string'&&message.password.length>0});if(message.t==='cmd')commands.push({a:message.a});}catch{}
     });
     socket.on('framereceived',event=>{
       try{const message=JSON.parse(String(event.payload));if(message.t==='joined')joins.push({name:message.lobby,mode:message.mode,slot:message.id});}catch{}
@@ -103,12 +171,13 @@ async function main(){
   await click(gamePage,'#abils [data-abil="0"] .up');
   await gamePage.waitForFunction(()=>JSON.parse(window.proofWasm.state_json()).me.rk[0]===1);
   check(true,'Q learns through the public HUD');
+  if(selected==='v3')await v3Controls(gamePage,commands);
   await gamePage.evaluate(()=>{
     const c=document.querySelector('#ember-root canvas'),r=c.getBoundingClientRect();
     const event=new PointerEvent('pointermove',{bubbles:true,cancelable:true,pointerType:'mouse',pointerId:1,isPrimary:true,clientX:r.left+r.width*.62,clientY:r.top+r.height*.43,button:-1,buttons:0});
     Object.defineProperty(event,'getCoalescedEvents',{value:()=>[event]});c.dispatchEvent(event);
   });
-  await pause(100);
+  await advance(gamePage);
   await press(gamePage,'KeyQ');
   await gamePage.waitForFunction(()=>JSON.parse(window.proofWasm.state_json()).me.cd[0]>0);
   const after=await snapshot(gamePage);
@@ -118,7 +187,7 @@ async function main(){
   report.finalState={mode:after.mode,slot:after.slot,phase:after.phase,connected:after.connected,champ:after.me.champ,level:after.me.lv,qRank:after.me.rk[0],qCooldown:after.me.cd[0]};
   check(report.errors.length===0,'public hub and game have no uncaught browser errors');
 }
-main().catch(error=>{report.failure=error.stack;console.error(error);process.exitCode=1;}).finally(async()=>{
+function run(){return main().catch(error=>{report.failure=error.stack;console.error(error);process.exitCode=1;}).finally(async()=>{
   if(report.failure&&gamePage&&!gamePage.isClosed())try{await capture(gamePage,'public-failure');}catch{}
   if(gamePage&&!gamePage.isClosed()){
     try{
@@ -140,3 +209,6 @@ main().catch(error=>{report.failure=error.stack;console.error(error);process.exi
   fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify(report,null,2));
 });
+}
+module.exports={proofBaseUrl};
+if(require.main===module)run();
