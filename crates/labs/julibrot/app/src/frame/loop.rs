@@ -540,7 +540,7 @@ fn optional_backdrop_plan(
 /// sequence without also changing the baseline driver that records each stage's concrete facts.
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct BrowserRefreshOrder<const STEP: u8>;
+struct BrowserRefreshOrder<const STEP: u8>;
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl BrowserRefreshOrder<0> {
@@ -1343,22 +1343,21 @@ mod browser {
                 relief_redraw,
                 self.presented_view_is_stale(viewer),
             );
-            let (refresh_order, scene_id) =
-                if defer_scene_for_redraw && self.active_backdrop_map.is_none() {
-                    (refresh_order.scene_considered(), None)
-                } else {
-                    self.submit_due_scene(
-                        refresh_order,
-                        viewer,
-                        hot.pose.object,
-                        hot.plane,
-                        hot.pose.map,
-                        hot.pose.centre_from_reference_px,
-                        slot,
-                        hot.state.epoch,
-                        now_ms,
-                    )?
-                };
+            let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {
+                None
+            } else {
+                self.submit_due_scene(
+                    viewer,
+                    hot.pose.object,
+                    hot.plane,
+                    hot.pose.map,
+                    hot.pose.centre_from_reference_px,
+                    slot,
+                    hot.state.epoch,
+                    now_ms,
+                )?
+            };
+            let refresh_order = refresh_order.scene_considered();
 
             let mut warp_id = None;
             // A redraw that defers the replacement scene is itself required progress. Stale-view
@@ -1372,9 +1371,10 @@ mod browser {
                 relief_redraw,
                 self.presenter.facts().in_flight_scene_id.is_some(),
             );
+            let _refresh_order = refresh_order.warp_considered();
             if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
-                match runtime.acquire_for_warp(refresh_order, self.loop_state.generation()) {
-                    Ok((_refresh_order, frame)) => {
+                match runtime.acquire_for_warp(self.loop_state.generation()) {
+                    Ok(frame) => {
                         let view = frame
                             .texture
                             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1431,8 +1431,6 @@ mod browser {
                     }
                     Err(error) => return Err(error),
                 }
-            } else {
-                let _refresh_order = refresh_order.warp_considered();
             }
             let status = if presented {
                 RefreshStatus::Presented

@@ -17,11 +17,10 @@ use super::super::schedule::{
     PresentedTier, PromotionAction, SETTLED_DETERMINISTIC_PROMOTION_ENABLED,
     STATIC_SETTLE_WINDOW_MS, SettledPromotion,
 };
-use crate::frame::BrowserRefreshOrder;
 use super::{
-    BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
-    REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel,
-    RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
+    BACKDROP_PRESENT_LEVEL, BrowserRefreshOrder, CoverageTurn, FenceRefusal, FrameLoop, LEVELS,
+    PresenterPoll, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity,
+    RefinementLevel, RefinementSchedule, RefusalClass, SceneMode, SubmissionKind,
     accepted_reference_facts, apply_precision_mode, arrival_is_current, backdrop_extent,
     coverage_pre_empts, defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
     hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
@@ -441,10 +440,9 @@ fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene(
     assert!(
         source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
     );
-    assert!(source.contains(concat!(
-        "let (refresh_order, scene_id) =\n",
-        "                if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
-    )));
+    assert!(source.contains(
+        "let scene_id = if defer_scene_for_redraw && self.active_backdrop_map.is_none() {"
+    ));
     assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
     assert!(source.contains(
         "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"
@@ -814,12 +812,7 @@ struct FakePresenter {
 }
 
 impl FakePresenter {
-    fn submit(
-        &mut self,
-        order: BrowserRefreshOrder<4>,
-        generation: u32,
-        level: RefinementLevel,
-    ) -> (BrowserRefreshOrder<5>, u64) {
+    fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
         self.next_id += 1;
         let scene = PendingFakeScene {
             id: self.next_id,
@@ -828,7 +821,7 @@ impl FakePresenter {
         };
         self.pending = Some(scene);
         self.submissions.push(level);
-        (order.scene_considered(), scene.id)
+        scene.id
     }
 
     fn write_hot_for_slot(&mut self, hold_refused_warp: bool, slot_order: u32) {
@@ -862,11 +855,7 @@ impl FakePresenter {
         });
     }
 
-    fn submit_warp(
-        &mut self,
-        order: BrowserRefreshOrder<5>,
-        generation: u32,
-    ) -> (BrowserRefreshOrder<6>, u64) {
+    fn submit_warp(&mut self, generation: u32) -> u64 {
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
         self.pending_warp_kind = self.warp_kind;
@@ -898,7 +887,7 @@ impl FakePresenter {
             self.capture = TraceCaptureState::InFlight;
         }
         self.warp_submissions.push(self.next_id);
-        (order.warp_considered(), self.next_id)
+        self.next_id
     }
 
     const fn arm_capture(&mut self) {
@@ -1186,13 +1175,7 @@ fn explicit_deterministic_mode_and_the_disabled_hook_do_not_promote() {
     assert_eq!(promotion.presented_tier(), PresentedTier::Fast);
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TraceSubmissionAction {
-    Scene { id: u64 },
-    Warp { id: u64 },
-}
-
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct TurnOutcome {
     scene_id: Option<u64>,
     warp_id: Option<u64>,
@@ -1203,7 +1186,6 @@ struct TurnOutcome {
     refused_scene_id: Option<u64>,
     refused_warp_id: Option<u64>,
     surface_action: TraceSurfaceAction,
-    submission_actions: Vec<TraceSubmissionAction>,
 }
 
 /// Drives the same typed stage protocol consumed by the production browser refresh.
@@ -1277,33 +1259,19 @@ fn drive_turn(
     let has_retained_scene = presenter.retained_scene.is_some();
     presenter.write_hot_for_slot(has_retained_scene, 0);
     let refresh_order = refresh_order.hot_written();
-    let (refresh_order, scene_id) = if !outcome.refused
+    if !outcome.refused
         && let Some(level) = frame_loop.due()
     {
-        let (refresh_order, id) =
-            presenter.submit(refresh_order, frame_loop.generation(), level);
+        let id = presenter.submit(frame_loop.generation(), level);
         frame_loop.submitted(id, level);
-        outcome
-            .submission_actions
-            .push(TraceSubmissionAction::Scene { id });
-        (refresh_order, Some(id))
-    } else {
-        (refresh_order.scene_considered(), None)
-    };
-    outcome.scene_id = scene_id;
-    let (_refresh_order, warp_id) =
-        if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
-            let (refresh_order, id) =
-                presenter.submit_warp(refresh_order, frame_loop.generation());
-            frame_loop.warp_submitted();
-            outcome
-                .submission_actions
-                .push(TraceSubmissionAction::Warp { id });
-            (refresh_order, Some(id))
-        } else {
-            (refresh_order.warp_considered(), None)
-        };
-    outcome.warp_id = warp_id;
+        outcome.scene_id = Some(id);
+    }
+    let refresh_order = refresh_order.scene_considered();
+    if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
+        outcome.warp_id = Some(presenter.submit_warp(frame_loop.generation()));
+        frame_loop.warp_submitted();
+    }
+    let _refresh_order = refresh_order.warp_considered();
     outcome
 }
 
@@ -1582,30 +1550,8 @@ fn named_frame_traces() -> Vec<FrameTraceTurn> {
     .collect()
 }
 
-fn simultaneous_submission_actions() -> Vec<TraceSubmissionAction> {
-    let mut frame_loop = FrameLoop::default();
-    frame_loop.accept_request(7, true);
-    assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false))));
-    let mut presenter = FakePresenter::default();
-    drive_turn(
-        &mut frame_loop,
-        &mut presenter,
-        FakeClock::default(),
-        FramePolicy::SingleFrameOnDemand,
-        true,
-    )
-    .submission_actions
-}
-
 #[test]
 fn named_frame_scenarios_match_frozen_complete_turn_records() {
-    assert_eq!(
-        simultaneous_submission_actions(),
-        vec![
-            TraceSubmissionAction::Scene { id: 1 },
-            TraceSubmissionAction::Warp { id: 2 },
-        ]
-    );
     let scenarios = [
         ("short", short_frame_trace as fn() -> Vec<FrameTraceTurn>),
         ("zoom", zoom_frame_trace),
@@ -2575,13 +2521,7 @@ fn edge_on_final_completes_once_then_stays_idle_in_both_scene_modes() {
         stamp_scene_level(&mut grid, &plan, scheduled);
 
         let mut presenter = FakePresenter::default();
-        let refresh_order = BrowserRefreshOrder::begin()
-            .capture_drained()
-            .capture_staged()
-            .fences_observed()
-            .hot_written();
-        let (_refresh_order, scene_id) =
-            presenter.submit(refresh_order, frame_loop.generation(), grid.level);
+        let scene_id = presenter.submit(frame_loop.generation(), grid.level);
         frame_loop.submitted(scene_id, scheduled);
         presenter.fire_completed_callback();
         let mut clock = FakeClock::default();

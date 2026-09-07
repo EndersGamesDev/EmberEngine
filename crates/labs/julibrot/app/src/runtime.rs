@@ -7,7 +7,6 @@ use ember_julibrot_present::{CLASSIC_PALETTE, FrameReadbackRoute, frame_readback
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::frame::BrowserRefreshOrder;
 use crate::{AppError, PendingSurface, SurfaceAction, SurfaceState};
 
 const STATUS_ID: &str = "status";
@@ -252,17 +251,14 @@ impl BrowserRuntime {
     /// claim that did not become a pending warp.
     pub(crate) fn acquire_for_warp(
         &mut self,
-        order: BrowserRefreshOrder<5>,
         generation: u32,
-    ) -> Result<(BrowserRefreshOrder<6>, wgpu::SurfaceTexture), AppError> {
-        let BrowserRefreshOrder = order;
+    ) -> Result<wgpu::SurfaceTexture, AppError> {
         self.check_device("surface acquisition")?;
         self.surfaces.claim(generation)?;
-        let frame = self.acquire_surface_texture().inspect_err(|_| {
+        self.acquire_surface_texture().inspect_err(|_| {
             let released = self.surfaces.release_unsubmitted(generation);
             debug_assert!(released, "failed acquisition must release its owner");
-        })?;
-        Ok((BrowserRefreshOrder, frame))
+        })
     }
 
     /// Retains an acquired image until present reports the matching warp terminal event.

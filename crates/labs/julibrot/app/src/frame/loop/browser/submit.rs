@@ -299,7 +299,6 @@ impl BrowserFrameLoop {
 
     pub(super) fn submit_due_scene(
         &mut self,
-        order: BrowserRefreshOrder<4>,
         viewer: &ViewerController,
         object: ObjectAngles,
         plane: Plane,
@@ -308,25 +307,24 @@ impl BrowserFrameLoop {
         slot: HotSlot,
         owner_epoch: u64,
         now_ms: f64,
-    ) -> Result<(BrowserRefreshOrder<5>, Option<u64>), AppError> {
+    ) -> Result<Option<u64>, AppError> {
         if matches!(map, PoseMap::Mapped(_))
             && (!self.submitted_references.is_empty()
                 || viewer.owner().navigation_pending_depth() != 0)
         {
-            return Ok((order.scene_considered(), None));
+            return Ok(None);
         }
         if !self.scene_ready(viewer.requested().zoom_log2) {
-            return Ok((order.scene_considered(), None));
+            return Ok(None);
         }
         if self.active_backdrop_map.is_some() {
-            let scene_id = self.submit_due_backdrop(viewer, plane, slot, owner_epoch, now_ms)?;
-            return Ok((order.scene_considered(), scene_id));
+            return self.submit_due_backdrop(viewer, plane, slot, owner_epoch, now_ms);
         }
         let Some(level) = self.loop_state.due() else {
-            return Ok((order.scene_considered(), None));
+            return Ok(None);
         };
         if self.prepared_level != Some(level) {
-            return Ok((order.scene_considered(), None));
+            return Ok(None);
         }
         if matches!(map, PoseMap::EdgeOn) {
             super::stamp_scene_level(&mut self.grid, &self.plan, level);
@@ -415,11 +413,9 @@ impl BrowserFrameLoop {
                 self.level_timings
                     .begin_scene(self.main.centre_revision, scene_id, level);
                 self.loop_state.submitted(scene_id, level);
-                Ok((order.scene_considered(), Some(scene_id)))
+                Ok(Some(scene_id))
             }
-            Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => {
-                Ok((order.scene_considered(), None))
-            }
+            Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
             Err(error) => Err(present_error(error)),
         }
     }
