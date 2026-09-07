@@ -242,9 +242,16 @@
       "desc": "Fight for the Crystalforge in a top-down browser arena. Five champions bring distinct abilities and auto attacks to an ivory bridge between rival cores. Claim the North and South Courts, earn gold, build six items and shape your rune page. Play alone with bots or join an online lobby. V3 adds right-click orders, bindable attack move and an Escape menu with fullscreen, controls and a complete tutorial. Discover the champions and their connected stories in the new trailer and world page.",
       "versions": [
         {
+          "v": "v4",
+          "path": "games/league/v4/",
+          "live": true,
+          "proto": 2,
+          "note": "Crystalforge environment pass: broad stone paving, layered plazas and clearer landmarks; open spell effects, order markers and confirmed combat feedback."
+        },
+        {
           "v": "v3",
           "path": "games/league/v3/",
-          "live": true,
+          "live": false,
           "proto": 2,
           "handover": true,
           "note": "Right-click move and attack, bindable attack move, ability animation takeover, and an Escape menu with fullscreen, key bindings and a complete new-player guide"

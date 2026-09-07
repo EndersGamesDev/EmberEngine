@@ -1,0 +1,1150 @@
+import { chooseHost, listLobbies, renderChip } from '../../../hosts.js';
+
+const ROOT = new URL('../../../', location);
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const readSaved = (key, fallback, store = localStorage) => { try { return JSON.parse(store.getItem(key)) ?? fallback; } catch { return fallback; } };
+const save = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+const ART = ['../v2/art/swarm.webp', '../v2/art/emberknight.webp', '../v2/art/hallow.webp', '../v2/art/bogmaw.webp', '../v2/art/tessera.webp'];
+const EMBLEM = ['◈', '♜', '✦', '⚓', '⌛'];
+const CHAMP_RGB = (c) => c.colour.map((x) => Math.round(x * 255)).join(',');
+const icon = (id) => `<svg class="emblem" viewBox="0 0 64 64" aria-hidden="true"><use href="../v2/art/icons.svg#${esc(id)}"></use></svg>`;
+function paintIcon(el, id) {
+  if (el.dataset.icon !== id) { el.innerHTML = icon(id); el.dataset.icon = id; }
+}
+
+let resolveLeagueReady;
+window.leagueReady = new Promise((resolve) => { resolveLeagueReady = resolve; });
+document.body.dataset.leagueBoot = 'loading';
+
+let wasm = null, PROTO = 0, DATA = null;
+let chosen = null, candidates = [], wrongProto = [];
+let launched = false, mode = 3, shopOpen = false, lastPhase = '', local = false, latest = null, lastAim = null, lastShop = '', pendingPick = null;
+
+try {
+  const m = await import('./pkg/league.js');
+  await m.default();
+  wasm = m;
+  PROTO = wasm.proto_version();
+  DATA = JSON.parse(wasm.data_json());
+} catch (e) {
+  wasm = null;
+  console.error(e);
+  const n = $('engine-note');
+  n.classList.add('bad');
+  n.textContent = 'The game could not load. Reload the page to try again.';
+  for (const id of ['btn-practice', 'btn-practice3', 'btn-create', 'btn-quick']) $(id).disabled = true;
+}
+
+// ---- keybindings -----------------------------------------------------------
+
+const ACTIONS = [
+  ['q', 'Q ability'], ['w', 'W ability'], ['e', 'E ability'], ['r', 'R ability'],
+  ['d', 'D spell'], ['f', 'F spell'],
+  ['item1', 'Item 1'], ['item2', 'Item 2'], ['item3', 'Item 3'],
+  ['item4', 'Item 4'], ['item5', 'Item 5'], ['item6', 'Item 6'],
+  ['stop', 'Stop moving'], ['shop', 'Open shop'], ['attackMove', 'Attack-move'],
+];
+const DEFAULT_KEYS = {
+  q: 'KeyQ', w: 'KeyW', e: 'KeyE', r: 'KeyR',
+  d: 'KeyD', f: 'KeyF',
+  item1: 'Digit1', item2: 'Digit2', item3: 'Digit3',
+  item4: 'Digit4', item5: 'Digit5', item6: 'Digit6',
+  stop: 'KeyS', shop: 'KeyB', attackMove: 'KeyA',
+};
+const RESERVED = new Set(['Escape', 'ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight']);
+const RESERVED_MSG = {
+  Escape: 'Esc is fixed for menus and cannot be remapped.',
+  ShiftLeft: 'Shift is the rank modifier and cannot be remapped.',
+  ShiftRight: 'Shift is the rank modifier and cannot be remapped.',
+  ControlLeft: 'Ctrl is the rank modifier and cannot be remapped.',
+  ControlRight: 'Ctrl is the rank modifier and cannot be remapped.',
+};
+
+function sanitizeKeys(raw) {
+  const out = { ...DEFAULT_KEYS };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const act of Object.keys(DEFAULT_KEYS)) {
+      const v = raw[act];
+      if (typeof v === 'string' && v.length > 0 && v.length < 32) out[act] = v;
+    }
+  }
+  return out;
+}
+let keys = sanitizeKeys(readSaved('ember-league-v3-keys', {}));
+const actionLabel = (act) => (ACTIONS.find(([a]) => a === act) ?? [act, act])[1];
+
+let keyOpts = null;
+function optionLabels() {
+  if (!keyOpts && wasm?.binding_options_json) {
+    try {
+      const v = JSON.parse(wasm.binding_options_json());
+      if (Array.isArray(v)) keyOpts = Object.fromEntries(v.map((o) => [o.code, o.label]));
+      else if (v && typeof v === 'object') keyOpts = Object.fromEntries(Object.entries(v).map(([c, o]) => [c, o && typeof o === 'object' ? o.label : o]));
+    } catch { keyOpts = null; }
+  }
+  return keyOpts;
+}
+function keyLabel(code) {
+  const opts = optionLabels();
+  if (opts?.[code]) return opts[code];
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (code.startsWith('Numpad')) return code.slice(6);
+  return code;
+}
+const hasBindingApi = () => typeof wasm?.set_bindings_json === 'function';
+const setEnabled = (v) => { try { wasm?.set_input_enabled?.(v); } catch {} };
+
+let keysOpen = false, listening = null, conflict = null;
+let bindingRecoveryNote = '';
+let keysReturnFocus = null;
+const typingTarget = (el) => !!el?.closest?.('input, textarea, select, [contenteditable="true"]');
+const visible = (id) => !$(id).classList.contains('hidden');
+function syncInputLock() {
+  setEnabled(!(keysOpen || visible('pause') || visible('help') || typingTarget(document.activeElement)));
+}
+document.addEventListener('focusin', syncInputLock);
+document.addEventListener('focusout', () => queueMicrotask(syncInputLock));
+const setKeyStatus = (text, bad = false) => {
+  const el = $('key-status');
+  el.textContent = text || '';
+  el.classList.toggle('bad', bad);
+};
+function applyKeys(next) {
+  if (!hasBindingApi()) throw new Error('keybindings are unavailable');
+  wasm.set_bindings_json(JSON.stringify(next));
+  keys = JSON.parse(wasm.bindings_json());
+}
+const persistKeys = () => save('ember-league-v3-keys', keys);
+
+function syncEngine() {
+  if (!hasBindingApi()) {
+    setKeyStatus('The engine binding update is not in this build yet — default keys are active.');
+    return;
+  }
+  try {
+    applyKeys({ ...keys });
+    setKeyStatus(bindingRecoveryNote, !!bindingRecoveryNote);
+  } catch (e) {
+    applyKeys({});
+    persistKeys();
+    bindingRecoveryNote = 'The saved bindings were invalid. Default keys have been restored.';
+    setKeyStatus(bindingRecoveryNote, true);
+  }
+}
+
+function paintKeys() {
+  $('key-rows').innerHTML = ACTIONS.map(([act, label]) => `
+    <div class="krow${listening === act ? ' listen' : ''}" data-act="${act}">
+      <span class="klabel">${label}</span>
+      <span class="kchip">${listening === act ? 'press…' : esc(keyLabel(keys[act]))}</span>
+      <button class="kset" data-act="${act}">${listening === act ? 'listening' : 'change'}</button>
+    </div>`).join('');
+  $('key-rows').querySelectorAll('.kset').forEach((b) => { b.onclick = () => startListening(b.dataset.act); });
+  const cf = $('key-conflict');
+  if (conflict) {
+    cf.classList.remove('hidden');
+    $('key-conflict-text').textContent = `${keyLabel(conflict.code)} is already bound to ${actionLabel(conflict.other)}.`;
+  } else {
+    cf.classList.add('hidden');
+  }
+}
+function startListening(act) {
+  listening = act;
+  conflict = null;
+  setKeyStatus(`Press any key for ${actionLabel(act)}…  (Esc cancels)`);
+  paintKeys();
+}
+function cancelListening() {
+  listening = null;
+  setKeyStatus('');
+  paintKeys();
+}
+function bindAction(act, code) {
+  if (keys[act] === code) {
+    listening = null;
+    setKeyStatus(`${actionLabel(act)} is already on ${keyLabel(code)}.`);
+    paintKeys();
+    return;
+  }
+  try {
+    applyKeys({ ...keys, [act]: code });
+    persistKeys();
+    setKeyStatus(`${actionLabel(act)} → ${keyLabel(code)}`);
+  } catch (e) {
+    setKeyStatus(`Engine rejected: ${String(e.message ?? e)}`, true);
+  }
+  listening = null;
+  paintKeys();
+  paintHudKeys();
+}
+function resolveConflict(take) {
+  if (!conflict) return;
+  const { act, code, other } = conflict;
+  const oldAct = keys[act];
+  if (take) {
+    try {
+      applyKeys({ ...keys, [act]: code, [other]: oldAct });
+      persistKeys();
+      setKeyStatus(`Swapped: ${actionLabel(act)} → ${keyLabel(code)}, ${actionLabel(other)} → ${keyLabel(oldAct)}.`);
+    } catch (e) {
+      setKeyStatus(`Engine rejected the swap: ${String(e.message ?? e)}`, true);
+    }
+  } else {
+    setKeyStatus('Kept the previous bindings.');
+  }
+  conflict = null;
+  paintKeys();
+  paintHudKeys();
+}
+function resetKeys() {
+  listening = null;
+  conflict = null;
+  try {
+    applyKeys({});
+    persistKeys();
+    setKeyStatus('Reset to defaults.');
+  } catch (e) {
+    setKeyStatus(`Engine rejected the reset: ${String(e.message ?? e)}`, true);
+  }
+  paintKeys();
+  paintHudKeys();
+}
+function paintHudKeys() {
+  const abilKey = ['q', 'w', 'e', 'r'], spellKey = ['d', 'f'];
+  document.querySelectorAll('#abils .slot').forEach((el) => {
+    const k = el.querySelector('.key');
+    if (k) k.textContent = keyLabel(keys[abilKey[Number(el.dataset.abil)]]);
+  });
+  document.querySelectorAll('#spells .slot').forEach((el) => {
+    const k = el.querySelector('.key');
+    if (k) k.textContent = keyLabel(keys[spellKey[Number(el.dataset.spell)]]);
+  });
+  document.querySelectorAll('#islots .slot').forEach((el) => {
+    const k = el.querySelector('.key');
+    if (k) k.textContent = keyLabel(keys[`item${Number(el.dataset.item) + 1}`]);
+  });
+  renderHelpKeys();
+  document.querySelectorAll('[data-key-label]').forEach(el => { el.textContent = keyLabel(keys[el.dataset.keyLabel]); });
+  $('btn-shop').textContent = `${shopOpen ? 'Close shop' : 'Shop'} [${keyLabel(keys.shop)}]`;
+  lastShop = '';
+}
+function openKeys() {
+  keysReturnFocus = document.activeElement;
+  keysOpen = true;
+  listening = null;
+  conflict = null;
+  syncEngine();
+  paintKeys();
+  $('keys').classList.remove('hidden');
+  syncInputLock();
+  $('btn-keys-close').focus({ preventScroll: true });
+}
+function closeKeys() {
+  if (!keysOpen) return;
+  keysOpen = false;
+  listening = null;
+  conflict = null;
+  $('keys').classList.add('hidden');
+  setKeyStatus(hasBindingApi() ? '' : 'The engine binding update is not in this build yet — default keys are active.');
+  keysReturnFocus?.focus?.({ preventScroll: true });
+  syncInputLock();
+}
+$('btn-keys').onclick = openKeys;
+$('btn-keys2').onclick = openKeys;
+$('btn-keys3').onclick = openKeys;
+$('btn-keys-close').onclick = closeKeys;
+$('btn-keys-reset').onclick = resetKeys;
+$('btn-conflict-take').onclick = () => resolveConflict(true);
+$('btn-conflict-keep').onclick = () => resolveConflict(false);
+
+addEventListener('keydown', (e) => {
+  if (!keysOpen) {
+    // Winit consumes canvas key defaults. Let Tab leave the field normally.
+    if (e.code === 'Tab' && e.target.matches?.('#ember-root canvas')) e.stopImmediatePropagation();
+    return;
+  }
+  if (listening) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.code === 'Escape') { cancelListening(); return; }
+    if (RESERVED.has(e.code) || !optionLabels()?.[e.code]) {
+      listening = null;
+      setKeyStatus(RESERVED_MSG[e.code] || 'That key is reserved by the browser or menus. Choose another key.', true);
+      paintKeys();
+      return;
+    }
+    const other = Object.keys(keys).find((a) => a !== listening && keys[a] === e.code);
+    if (other) {
+      conflict = { act: listening, code: e.code, other };
+      listening = null;
+      setKeyStatus('');
+      paintKeys();
+      return;
+    }
+    bindAction(listening, e.code);
+    return;
+  }
+  if (e.code === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeKeys(); }
+  if (e.code === 'Tab') {
+    const buttons = [...$('keys').querySelectorAll('button:not(:disabled)')].filter(el => el.getClientRects().length);
+    const i = buttons.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); buttons.at(-1)?.focus(); }
+    else if (!e.shiftKey && (i < 0 || i === buttons.length - 1)) { e.preventDefault(); buttons[0]?.focus(); }
+  }
+}, { capture: true });
+
+// ---- page keys (shop, menus, scroll) ---------------------------------------
+
+const typing = (e) => typingTarget(e.target);
+addEventListener('keydown', (e) => {
+  if (keysOpen) return;
+  const modal = visible('help') ? $('help') : visible('pause') ? $('pause') : null;
+  if (e.code === 'Tab' && modal) {
+    // Inputs (the sound mute and volume) and anything tabbable belong to the cycle too.
+    const controls = [...modal.querySelectorAll('button, a[href], summary, input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter(el => el.getClientRects().length && !el.disabled);
+    const index = controls.indexOf(document.activeElement);
+    if (e.shiftKey && index <= 0) { e.preventDefault(); controls.at(-1)?.focus(); }
+    else if (!e.shiftKey && (index < 0 || index === controls.length - 1)) { e.preventDefault(); controls[0]?.focus(); }
+    return;
+  }
+  if (e.code === 'Escape' && !e.repeat) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (visible('help')) { closeOverlay('help'); return; }
+    if (visible('pause')) { closePause(); return; }
+    if (shopOpen) { setShop(false); return; }
+    if (latest?.phase === 'live') openPause();
+    return;
+  }
+  if (typing(e)) return;
+  if (launched && Object.values(keys).includes(e.code)) e.preventDefault();
+  if (e.repeat || !launched) return;
+  if (e.code === keys.shop && !visible('pause') && !visible('help')) { e.preventDefault(); setShop(!shopOpen); return; }
+}, { capture: true });
+
+document.addEventListener('pointermove', (e) => {
+  if (!e.target.matches('#ember-root canvas')) return;
+  const r = e.target.getBoundingClientRect();
+  lastAim = [2 * (e.clientX - r.left) / r.width - 1, 1 - 2 * (e.clientY - r.top) / r.height];
+});
+document.addEventListener('contextmenu', (e) => { if (e.target.matches('#ember-root canvas')) e.preventDefault(); });
+
+// ---- menus ------------------------------------------------------------------
+
+const showStatus = (text) => { $('status-text').textContent = text; $('status').classList.toggle('hidden', !text); };
+$('btn-leave').onclick = $('btn-recover').onclick = $('btn-leave2').onclick = () => location.reload();
+const fail = (msg) => showStatus('Unable to start the game: ' + (msg || 'see browser console'));
+window.addEventListener('error', (e) => fail(e.message));
+window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+
+let guideReturnFocus = null;
+function openPause() {
+  $('pause').classList.remove('hidden');
+  syncFullscreen();
+  $('btn-resume').focus({ preventScroll: true });
+  syncInputLock();
+}
+function closePause() {
+  $('pause').classList.add('hidden');
+  document.querySelector('#ember-root canvas')?.focus({ preventScroll: true });
+  syncInputLock();
+}
+function openOverlay(id) {
+  guideReturnFocus = document.activeElement;
+  $(id).classList.remove('hidden');
+  $('btn-help-close').focus({ preventScroll: true });
+  syncInputLock();
+}
+function closeOverlay(id) {
+  $(id).classList.add('hidden');
+  guideReturnFocus?.focus?.({ preventScroll: true });
+  syncInputLock();
+}
+$('btn-resume').onclick = closePause;
+$('btn-menu').onclick = openPause;
+$('btn-help').onclick = () => openOverlay('help');
+$('btn-guide').onclick = () => openOverlay('help');
+$('btn-help-close').onclick = () => closeOverlay('help');
+
+function syncFullscreen() {
+  $('btn-fullscreen').textContent = document.fullscreenElement ? 'Exit fullscreen' : 'Enter fullscreen';
+}
+
+// ---- V4 confirmed feedback and gesture-gated sound --------------------------
+
+const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+const soundSaved = readSaved('ember-league-v4-sound', {});
+const sound = {
+  muted: soundSaved?.muted === true,
+  volume: Number.isFinite(soundSaved?.volume) ? Math.max(0, Math.min(1, soundSaved.volume)) : .35,
+  context: null, master: null, limiter: null, voices: new Set(),
+  last: -Infinity, kinds: new Map(), tokens: 6, refill: 0,
+};
+let feedbackSession = null, feedbackCursor = 0, discardFeedback = true, lastOwnLevel = null;
+const floatNodes = new Map(), readyStates = new Map(), readyUntil = new Map();
+const feedbackKinds = new Set(['damage', 'crit', 'heal', 'level']);
+const clamp01 = value => Math.max(0, Math.min(1, Number(value) || 0));
+
+function paintSoundSettings() {
+  $('sound-muted').checked = sound.muted;
+  $('sound-volume').value = Math.round(sound.volume * 100);
+  $('sound-volume-value').value = `${Math.round(sound.volume * 100)}%`;
+  $('sound-state').textContent = sound.muted || sound.volume === 0 ? 'Combat sounds are muted. Visual feedback stays on.'
+    : document.hidden ? 'Sound is paused while this tab is hidden.'
+    : sound.context?.state === 'running' ? 'Combat sound is on. Volume and mute save to this browser.'
+    : 'Sound starts with your next click or key press. No sound plays on page load.';
+  if (sound.master && sound.context) {
+    sound.master.gain.setTargetAtTime(sound.muted ? 0 : sound.volume * .2, sound.context.currentTime, .02);
+  }
+}
+function stopVoices() {
+  for (const voice of sound.voices) {
+    for (const oscillator of voice.oscillators) { try { oscillator.stop(); } catch {} }
+    for (const node of voice.nodes) { try { node.disconnect(); } catch {} }
+  }
+  sound.voices.clear();
+}
+async function unlockSound(event) {
+  if (!event?.isTrusted || !navigator.userActivation?.isActive || document.hidden || sound.muted || sound.volume === 0) return;
+  try {
+    if (!sound.context) {
+      const Audio = window.AudioContext || window.webkitAudioContext;
+      if (!Audio) { $('sound-state').textContent = 'Sound is unavailable in this browser. Visual feedback stays on.'; return; }
+      sound.context = new Audio({ latencyHint: 'interactive' });
+      sound.master = sound.context.createGain();
+      sound.master.gain.value = sound.volume * .2;
+      sound.limiter = sound.context.createDynamicsCompressor();
+      sound.limiter.threshold.value = -12;
+      sound.limiter.knee.value = 6; sound.limiter.ratio.value = 12;
+      sound.limiter.attack.value = .003; sound.limiter.release.value = .08;
+      sound.master.connect(sound.limiter).connect(sound.context.destination);
+      sound.context.onstatechange = paintSoundSettings;
+    }
+    if (sound.context.state === 'suspended') await sound.context.resume();
+    paintSoundSettings();
+  } catch { $('sound-state').textContent = 'Your browser paused sound. Click or press a key to try again.'; }
+}
+document.addEventListener('pointerdown', unlockSound, { capture: true, passive: true });
+document.addEventListener('keydown', event => { if (!event.repeat) unlockSound(event); }, { capture: true });
+function saveSound(event) {
+  sound.muted = $('sound-muted').checked;
+  sound.volume = clamp01(Number($('sound-volume').value) / 100);
+  save('ember-league-v4-sound', { muted: sound.muted, volume: sound.volume });
+  if (sound.muted || sound.volume === 0) stopVoices();
+  paintSoundSettings();
+  unlockSound(event);
+}
+$('sound-muted').addEventListener('change', saveSound);
+$('sound-volume').addEventListener('input', saveSound);
+paintSoundSettings();
+
+function playCue(kind, sx = .5, champ = 0) {
+  const context = sound.context;
+  if (!context || context.state !== 'running' || document.hidden || sound.muted || sound.volume <= 0) return;
+  const now = context.currentTime;
+  sound.tokens = Math.min(6, sound.tokens + Math.max(0, now - sound.refill) * 8); sound.refill = now;
+  const perKind = { attack: .1, hit: .1, crit: .18, cast: .15, hurt: .22, heal: .3, level: .8 };
+  if (!Object.hasOwn(perKind, kind) || sound.voices.size >= 6 || sound.tokens < 1 || now - sound.last < .04 || now - (sound.kinds.get(kind) ?? -Infinity) < perKind[kind]) return;
+  sound.tokens -= 1; sound.last = now; sound.kinds.set(kind, now);
+  const castPitch = [440, 220, 660, 160, 520][champ] || 440;
+  const [wave, start, end, duration, overtone] = {
+    attack: ['triangle', 150, 80, .075, 2], hit: ['triangle', 310, 105, .09, 2.3],
+    crit: ['triangle', 520, 150, .14, 1.5], cast: ['sine', castPitch, castPitch * 1.4, .17, 1.5],
+    hurt: ['triangle', 95, 48, .12, 1.4], heal: ['sine', 660, 880, .2, 1.5],
+    level: ['sine', 523, 1046, .28, 1.25],
+  }[kind];
+  const voice = { nodes: [], oscillators: [] };
+  let destination = sound.master;
+  if (typeof context.createStereoPanner === 'function') {
+    const pan = context.createStereoPanner();
+    pan.pan.value = motionPreference.matches ? 0 : (clamp01(sx) - .5) * .35;
+    pan.connect(destination); destination = pan; voice.nodes.push(pan);
+  }
+  for (const [ratio, strength] of [[1, .12], [overtone, .045]]) {
+    const oscillator = context.createOscillator(), envelope = context.createGain();
+    oscillator.type = wave;
+    oscillator.frequency.setValueAtTime(start * ratio, now);
+    oscillator.frequency.exponentialRampToValueAtTime(end * ratio, now + duration);
+    envelope.gain.setValueAtTime(.0001, now);
+    envelope.gain.linearRampToValueAtTime(strength, now + .006);
+    envelope.gain.exponentialRampToValueAtTime(.0001, now + duration);
+    oscillator.connect(envelope).connect(destination);
+    oscillator.start(now); oscillator.stop(now + duration + .015);
+    voice.nodes.push(oscillator, envelope); voice.oscillators.push(oscillator);
+  }
+  sound.voices.add(voice);
+  voice.oscillators[0].onended = () => { for (const node of voice.nodes) node.disconnect(); sound.voices.delete(voice); };
+}
+
+function clearFeedbackVisuals() {
+  for (const node of floatNodes.values()) node.remove();
+  floatNodes.clear();
+  $('action-feedback').classList.add('hidden');
+  $('target-panel').classList.add('hidden');
+  $('order-status').classList.add('hidden');
+  $('impact-frame').style.opacity = '0';
+  document.querySelectorAll('.ready-cue, .action-blocked').forEach(node => node.classList.remove('ready-cue', 'action-blocked'));
+  document.querySelectorAll('.ready-word').forEach(node => node.remove());
+  readyStates.clear(); readyUntil.clear();
+}
+document.addEventListener('visibilitychange', () => {
+  discardFeedback = true; lastOwnLevel = null; clearFeedbackVisuals(); stopVoices();
+  if (document.hidden && sound.context?.state === 'running') sound.context.suspend().catch(() => {});
+  paintSoundSettings();
+});
+motionPreference.addEventListener('change', () => { discardFeedback = true; clearFeedbackVisuals(); });
+window.addEventListener('pagehide', () => { stopVoices(); sound.context?.suspend().catch(() => {}); });
+
+function paintReadyCues(me, now) {
+  document.querySelectorAll('#abils .slot, #spells .slot').forEach(el => {
+    const ability = el.dataset.abil !== undefined;
+    const index = Number(ability ? el.dataset.abil : el.dataset.spell), key = `${ability ? 'a' : 's'}${index}`;
+    const cooldown = Number((ability ? me.cd : me.scd)?.[index]);
+    const rank = ability ? me.rk?.[index] : 1;
+    const before = readyStates.get(key);
+    // A crossing creates one deadline. Subsequent HUD polls never restart it.
+    if (before > .05 && cooldown <= .05 && rank && me.alive) readyUntil.set(key, now + 850);
+    readyStates.set(key, cooldown);
+    const ready = (readyUntil.get(key) || 0) > now && cooldown <= .05 && rank && me.alive;
+    el.classList.toggle('ready-cue', !!ready);
+    let word = el.querySelector('.ready-word');
+    if (ready && !word) { word = document.createElement('span'); word.className = 'ready-word'; word.textContent = 'READY'; el.append(word); }
+    else if (!ready) { word?.remove(); readyUntil.delete(key); }
+  });
+}
+
+function renderFeedback(h) {
+  const feedback = h.feedback, me = h.me, now = performance.now();
+  if (!feedback || h.phase !== 'live' || !me || document.hidden) { clearFeedbackVisuals(); return; }
+  const newSession = feedback.session !== feedbackSession;
+  if (newSession) { clearFeedbackVisuals(); feedbackSession = feedback.session; feedbackCursor = 0; lastOwnLevel = null; }
+  const skip = discardFeedback || newSession;
+  discardFeedback = false;
+  const priorCursor = feedbackCursor, active = new Set(), cues = [];
+  const events = Array.isArray(feedback.events) ? feedback.events.slice(-48) : [];
+  const textPriority = event => ({ level: 5, crit: 4, heal: 2, damage: event.unit === me.uid ? 3 : 1 }[event.kind] || 0);
+  const shown = new Set(events.filter(event => feedbackKinds.has(event.kind) && event.left > 0)
+    .sort((a, b) => textPriority(b) - textPriority(a) || b.id - a.id).slice(0, 14).map(event => `${feedback.session}:${event.id}`));
+  for (const [id, node] of floatNodes) if (!shown.has(id)) { node.remove(); floatNodes.delete(id); }
+  for (const event of events) {
+    if (!Number.isSafeInteger(event.id) || event.id < 1) continue;
+    feedbackCursor = Math.max(feedbackCursor, event.id);
+    if (event.confirmed !== true || !Number.isFinite(event.left) || !(event.left > 0) || !Number.isFinite(event.age) || event.age < 0 || !Number.isFinite(event.sx) || !Number.isFinite(event.sy) || event.sx < 0 || event.sx > 1 || event.sy < 0 || event.sy > 1) continue;
+    const fresh = !skip && event.id > priorCursor && event.age >= 0 && event.age < .3;
+    const ownSource = me.uid > 0 && event.source === me.uid;
+    const ownVictim = me.uid > 0 && event.unit === me.uid;
+    if (fresh) {
+      if (event.kind === 'damage' && ownVictim && Number.isFinite(event.amount) && event.amount > 0) cues.push(['hurt', event.sx]);
+      else if (ownSource && ['attack', 'hit', 'crit', 'cast', 'heal'].includes(event.kind)) cues.push([event.kind, event.sx]);
+      else if (event.kind === 'heal' && ownVictim) cues.push(['heal', event.sx]);
+    }
+    if (!feedbackKinds.has(event.kind) || skip) continue;
+    const id = `${feedback.session}:${event.id}`;
+    if (!shown.has(id)) continue;
+    let node = floatNodes.get(id);
+    if (!node && event.id <= priorCursor) continue; // Do not replay old/offscreen events.
+    if (!node && floatNodes.size >= 14) continue;
+    if (!node) {
+      node = document.createElement('span'); node.className = 'combat-float';
+      node.dataset.event = id; node.dataset.kind = event.kind;
+      node.classList.toggle('own', ownVictim); $('combat-text').append(node); floatNodes.set(id, node);
+    }
+    active.add(id);
+    // Same-id damage can grow during the short authoritative grouping window.
+    const text = event.kind === 'damage' && Number.isFinite(event.amount) && event.amount > 0 ? `−${Math.round(event.amount)}` : String(event.text || '');
+    if (node.textContent !== text) node.textContent = text;
+    const extra = { damage: 0, crit: 22, heal: 17, level: 36 }[event.kind];
+    if (!motionPreference.matches || !node.style.left) {
+      node.style.left = `${event.sx * 100}%`; node.style.top = `${event.sy * 100}%`;
+    }
+    node.style.setProperty('--rise', `${extra + (motionPreference.matches ? 0 : Math.min(1.1, event.age) * 28)}px`);
+    node.style.opacity = String(Math.min(1, event.left / .24));
+  }
+  for (const [id, node] of floatNodes) if (!active.has(id)) { node.remove(); floatNodes.delete(id); }
+  if (!skip && me.uid > 0 && lastOwnLevel?.uid === me.uid && me.lv > lastOwnLevel.level) cues.push(['level', .5]);
+  lastOwnLevel = { uid: me.uid, level: me.lv };
+  const cuePriority = { hurt: 7, level: 6, crit: 5, cast: 4, heal: 3, hit: 2, attack: 1 };
+  cues.sort((a, b) => cuePriority[b[0]] - cuePriority[a[0]]);
+  if (cues.length) playCue(cues[0][0], cues[0][1], me.champ);
+  const hint = feedback.unavailable, toast = $('action-feedback');
+  const hasHint = hint?.left > 0 && typeof hint.text === 'string';
+  toast.classList.toggle('hidden', !hasHint);
+  if (hasHint && toast.textContent !== hint.text) toast.textContent = hint.text;
+  document.querySelectorAll('#abils .slot').forEach(el => el.classList.toggle('action-blocked', hasHint && Number(el.dataset.abil) === hint.slot));
+  const target = feedback.target, hasTarget = target && target.hp > 0 && Number.isFinite(target.mh) && target.mh > 0;
+  $('target-panel').classList.toggle('hidden', !hasTarget);
+  if (hasTarget) {
+    $('target-name').textContent = target.name || 'Target';
+    $('target-hp').textContent = `${Math.ceil(target.hp)} / ${Math.ceil(target.mh)} HP`;
+    $('target-fill').style.width = `${clamp01(target.hp / target.mh) * 100}%`;
+  }
+  const order = feedback.order, orderText = { move: 'Moving', attack_move: 'Attack move', attack: 'Attack target' }[order?.kind];
+  $('order-status').classList.toggle('hidden', !(order?.left > 0 && orderText));
+  if (orderText) { $('order-status').textContent = orderText; $('order-status').dataset.order = order.kind; }
+  $('impact-frame').style.opacity = motionPreference.matches ? '0' : String(clamp01(feedback.impact));
+  paintReadyCues(me, now);
+}
+// Exit promises can settle before fullscreenchange. Preserve intent until
+// that event arrives, even if a following request to enter is refused.
+let requestedFullscreenExit = false;
+$('btn-fullscreen').onclick = async () => {
+  const button = $('btn-fullscreen'), note = $('fullscreen-note');
+  const exiting = Boolean(document.fullscreenElement);
+  button.disabled = true;
+  note.textContent = '';
+  try {
+    if (exiting) {
+      requestedFullscreenExit = true;
+      await document.exitFullscreen();
+    } else if (typeof document.documentElement.requestFullscreen === 'function') {
+      // Fullscreen the document so the guide and keybinding dialogs remain visible.
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    } else {
+      throw new Error('Fullscreen API unavailable');
+    }
+  } catch {
+    if (exiting) requestedFullscreenExit = false;
+    note.textContent = 'Fullscreen is unavailable or was blocked by your browser. You can continue playing in this window.';
+  } finally {
+    button.disabled = false;
+    syncFullscreen();
+  }
+};
+let wasFullscreen = Boolean(document.fullscreenElement);
+document.addEventListener('fullscreenchange', () => {
+  const active = Boolean(document.fullscreenElement);
+  const exited = wasFullscreen && !active;
+  wasFullscreen = active;
+  syncFullscreen();
+  // Browsers may consume Escape to exit fullscreen without a keydown event.
+  if (exited && !requestedFullscreenExit && latest?.phase === 'live') openPause();
+  if (exited) requestedFullscreenExit = false;
+});
+
+function renderHelpKeys() {
+  const k = (a) => `<b>${esc(keyLabel(keys[a]))}</b>`;
+  $('help-keys').innerHTML = `
+    <li><b>Right-click</b> clear ground to move or an enemy to follow and auto-attack. Left-click operates the UI.</li>
+    <li>${k('attackMove')} attack-moves toward the cursor, engaging nearby enemies.</li>
+    <li>${k('q')} ${k('w')} ${k('e')} ${k('r')} cast at the cursor.</li>
+    <li>${k('d')} ${k('f')} summoner spells at the cursor.</li>
+    <li>${k('item1')}–${k('item6')} use item slots (potions drink).</li>
+    <li>${k('stop')} stops movement and cancels the current attack order.</li>
+    <li><b>Shift</b>/<b>Ctrl</b> + ability key ranks it up; the <b>+</b> on a slot does the same.</li>
+    <li>${k('shop')} opens the shop. <b>Esc</b> closes an overlay or opens the match menu: fullscreen, keybindings and this guide.</li>`;
+}
+
+function renderGuide() {
+  const rules = DATA.rules;
+  $('guide-progression').textContent = `Start at level 1 with one unspent point and no learned abilities. Every level grants another point, up to level ${rules.maxLevel}. Each ability has three ranks. Q, W and E can use available points immediately; R ranks unlock at levels ${DATA.ultimateLevels.join(', ')} and still cost a point. Use the + on an ability, or hold Shift/Ctrl and press its bound key.`;
+  $('guide-courts').textContent = `The neutral North Court grants +12% damage. The South Court grants +15 haste and +15% earned gold. The team landing the final hit receives a ${rules.boonSeconds}-second boon; each living teammate also earns gold and experience. You can hold one boon at a time: taking the other replaces it. Courts respawn ${rules.courtRespawn} seconds after destruction. They do not attack back.`;
+  const tips = [
+    'Ranged drone attacks. Q needs a nearby enemy champion or minion; W pierces a line. E creates an untargetable five-second copy. R needs an enemy champion and creates three copies for eight seconds: the initial volley casts Q/W, then the copies auto-attack. E and R replace old copies; copies disappear if you die.',
+    'Melee flame slashes. Q places a tornado; W gives two seconds of immunity and a shield for four seconds from cast; E empowers attacks for four seconds. R first activates demon form, then allows three free R recasts to teleport to your cursor inside the field. The first press does not teleport.',
+    'Ranged petal attacks. Every ability chooses the living allied champion nearest your cursor among allies within 18 units, yourself included. Q heals, W speeds up, E shields. R marks an ally for five seconds and saves them from one lethal hit. Cast it before danger: it cannot revive an already-dead ally. In 1v1 all four abilities target you.',
+    'Melee claw attacks. Q stops on the first enemy champion or minion: champions are pulled and rooted; minions are damaged and slowed. W creates an aura that heals from damage dealt. E lunges to your cursor and hits nearby enemies. R damages and roots nearby enemies, with a simultaneous slow.',
+    'Ranged clockwork attacks. Q damages the first enemy hit. W plants a trap for up to forty seconds; you can maintain three. E blinks and speeds you up. R makes a zone that repeatedly damages and roots enemies, then detonates. Faraway ground targets clamp to the ability range.',
+  ];
+  $('guide-kits').innerHTML = DATA.champs.map((champ, index) => `<details><summary>${esc(champ.name)} <small>· ${esc(champ.title)}</small></summary><p>${esc(tips[index])}</p><p class="note">Base attack reach: ${champ.range} units · Base attack interval: ${champ.atkCd}s · Health: ${champ.hp} · Mana: ${champ.mana}</p>${['q', 'w', 'e', 'r'].map(action => { const ability = champ[action]; return `<article><h4>${action.toUpperCase()} · ${esc(ability.name)} <small>[<span data-key-label="${action}">${esc(keyLabel(keys[action]))}</span>]</small></h4><p>${esc(ability.desc)}</p><p class="note">Ranks 1 / 2 / 3 — mana ${ability.mana.join(' / ')} · base cooldown ${ability.cd.join(' / ')}s</p></article>`; }).join('')}</details>`).join('');
+  $('guide-spells').innerHTML = DATA.spells.map(spell => `<article><h4>${esc(spell.name)}</h4><p>${esc(spell.desc)} Cooldown: ${spell.cd}s. No mana cost.</p></article>`).join('') + '<p>Spells use independent cooldowns; ability haste does not shorten them. Flash travels up to seven units. Heal includes yourself and nearby allies. Smite can hit enemy minions and Courts, never champions or cores. Exhaust targets an enemy champion near the cursor.</p>';
+  $('guide-runes').innerHTML = DATA.runes.map(rune => `<article><h4>${esc(rune.name)}</h4><p>${esc(rune.desc)}</p></article>`).join('') + '<p>Riches increases earned gold, not your starting gold. Haste reduces ability cooldowns by the formula base cooldown × 100 / (100 + haste); it is not direct percentage reduction.</p>';
+  $('guide-items').innerHTML = DATA.items.map(item => `<article><h4>${esc(item.name)} · ${item.cost}g</h4><p>${esc(item.desc)}${item.charges ? ` ${item.charges} charges when purchased.` : ' Passive equipment; no key activation required.'}</p></article>`).join('');
+}
+
+// ---- shop -------------------------------------------------------------------
+
+function setShop(open) {
+  shopOpen = !!open && latest?.phase === 'live';
+  $('shop').classList.toggle('hidden', !shopOpen);
+  $('btn-shop').textContent = `${shopOpen ? 'Close shop' : 'Shop'} [${keyLabel(keys.shop)}]`;
+  wasm_cmd({ shop: shopOpen });
+  if (shopOpen) renderShop(latest?.me);
+}
+$('btn-shop').onclick = () => setShop(!shopOpen);
+
+// ---- engine commands --------------------------------------------------------
+
+function wasm_cmd(obj) {
+  try { wasm?.cmd_json(JSON.stringify(obj)); } catch (e) { console.error(e); }
+}
+function aimedCommand(kind, slot) {
+  const c = document.querySelector('#ember-root canvas');
+  wasm_cmd({ [kind]: slot, aim: lastAim, aspect: c ? c.clientWidth / c.clientHeight : 16 / 9 });
+}
+
+// ---- lobby ------------------------------------------------------------------
+
+const handleValue = () => {
+  const h = ($('handle').value || '').trim().slice(0, 20) || 'summoner';
+  $('handle').value = h;
+  try { localStorage.setItem('ember-league-handle', h); } catch {}
+  return h;
+};
+try { $('handle').value = localStorage.getItem('ember-league-handle') || 'summoner'; } catch { $('handle').value = 'summoner'; }
+
+async function discover() {
+  try {
+    const r = await chooseHost(ROOT.href, { game: 'league', proto: PROTO || null });
+    if (launched) return;
+    chosen = r.chosen;
+    candidates = r.candidates;
+    wrongProto = r.wrongProto || [];
+    for (const id of ['btn-create', 'btn-quick']) $(id).disabled = !wasm || !(chosen || candidates[0]);
+    renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+  } catch (e) { console.error(e); }
+}
+
+async function showLobbies() {
+  const list = $('lobbies');
+  if (!candidates.length) {
+    $('lobby-note').textContent = 'no league server is published right now — practice mode still works';
+    list.innerHTML = '';
+    return;
+  }
+  const lists = await Promise.all(candidates.map((c) => listLobbies(c.url, { proto: PROTO || 0 }).catch(() => [])));
+  if (launched) return;
+  const all = [];
+  candidates.forEach((host, i) => { for (const l of lists[i] || []) all.push({ host, lobby: l }); });
+  list.innerHTML = '';
+  if (!all.length) $('lobby-note').textContent = 'no open lobbies — create one';
+  for (const { host, lobby: l } of all) {
+    const li = document.createElement('li');
+    const go = document.createElement('button');
+    go.className = 'go';
+    go.textContent = l.racing ? 'in match' : l.players >= l.cap ? 'full' : 'join';
+    go.disabled = !!l.racing || l.players >= l.cap || !wasm;
+    go.onclick = () => {
+      const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
+      if (l.has_password && pass === null) return;
+      mode = l.mode || 3;
+      launchOnline(l.name, pass, false, host);
+    };
+    const name = document.createElement('b');
+    name.textContent = (l.name || '?') + (l.has_password ? ' 🔒' : '');
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${l.players}/${l.cap} · mode ${l.mode}v${l.mode} · host ${l.host || '?'}${l.racing ? ' · in match' : ''}`;
+    const tag = document.createElement('span');
+    tag.className = 'pill';
+    tag.textContent = host.name || 'server';
+    tag.title = host.url || '';
+    li.append(name, meta, tag, go);
+    list.appendChild(li);
+  }
+}
+
+function onlyHost(url) {
+  const entry = { name: '', league_ws: url, league_version: '', league_commit: '', updated: '' };
+  return { chosen: { ...entry, url }, candidates: [{ ...entry, url }], wrongProto: [] };
+}
+
+function launchOnline(lobby, password, create, host) {
+  if (!wasm || launched) return;
+  launched = true;
+  local = false;
+  $('stage').classList.add('drafting');
+  mode = mode === 1 ? 1 : 3;
+  $('menu').classList.add('hidden');
+  $('draft').classList.remove('hidden');
+  try {
+    wasm.start_online(JSON.stringify({
+      ws: host.url, handle: handleValue(), lobby,
+      password: password || '', create: !!create, mode,
+    }));
+  } catch (e) {
+    launched = false;
+    $('menu').classList.remove('hidden');
+    $('draft').classList.add('hidden');
+    $('stage').classList.remove('drafting');
+    const n = $('lobby-note');
+    n.classList.add('bad');
+    n.textContent = String(e);
+    return;
+  }
+  pollHud();
+}
+
+$('btn-create').onclick = () => {
+  const name = ($('newlobby').value || '').trim();
+  if (!name) { $('lobby-note').textContent = 'name the lobby first'; return; }
+  const host = chosen || candidates[0];
+  if (!host) { $('lobby-note').textContent = 'no server to host on'; return; }
+  mode = Number($('newmode').value);
+  launchOnline(name, $('newpass').value || '', true, host);
+};
+$('btn-refresh').onclick = async () => { await discover(); await showLobbies(); };
+$('btn-practice').onclick = () => launchLocal(1);
+$('btn-practice3').onclick = () => launchLocal(3);
+$('btn-quick').onclick = async () => {
+  const host = chosen || candidates[0];
+  if (!host) { $('lobby-note').textContent = 'no server right now'; return; }
+  const rows = await listLobbies(host.url, { proto: PROTO });
+  const open = (rows || []).filter((l) => !l.racing && !l.has_password && l.players < l.cap && l.mode === Number($('newmode').value));
+  if (!open.length) {
+    mode = Number($('newmode').value);
+    launchOnline('Quick ' + Math.random().toString(36).slice(2, 8), '', true, host);
+    return;
+  }
+  mode = open[0].mode;
+  launchOnline(open[0].name, null, false, host);
+};
+
+function launchLocal(m) {
+  if (!wasm || launched) return;
+  launched = true;
+  local = true;
+  mode = m;
+  $('stage').classList.add('drafting');
+  $('menu').classList.add('hidden');
+  $('draft').classList.remove('hidden');
+  try { wasm.start_local(m); pollHud(); } catch (e) { fail(e); }
+}
+
+// ---- draft ------------------------------------------------------------------
+
+let mySlot = 0, roster = [], picked = null, dSel = 0, fSel = 1, runes = [0, 1, 2];
+let draftFeedback = '';
+let pages = readSaved('ember-league-pages', { A: [0, 1, 2], B: [3, 4, 0], C: [5, 6, 7] });
+if (!pages || typeof pages !== 'object' || Array.isArray(pages)) pages = {};
+let curPage = 'A';
+let cardsBuilt = false;
+
+function buildDraftChrome() {
+  const opt = (v, t) => `<option value="${v}">${t}</option>`;
+  $('pickd').innerHTML = DATA.spells.map((s, i) => opt(i, s.name)).join('');
+  $('pickf').innerHTML = DATA.spells.map((s, i) => opt(i, s.name)).join('');
+  $('runebox').innerHTML = DATA.runes.map((r, i) =>
+    `<button class="rune" data-r="${i}" title="${esc(r.desc)}">${esc(r.name)}</button>`).join('');
+  $('runebox').querySelectorAll('.rune').forEach((el) => {
+    el.onclick = () => {
+      const i = Number(el.dataset.r);
+      runes = runes.includes(i) ? runes.filter((x) => x !== i) : [...(runes.length === 3 ? runes.slice(1) : runes), i];
+      pages[curPage] = [...runes];
+      save('ember-league-pages', pages);
+      sendPick();
+      paintRunes();
+    };
+  });
+  for (const p of ['A', 'B', 'C']) {
+    $('pg' + p).onclick = () => { curPage = p; runes = cleanRunes(pages[p] || [0, 1, 2]); sendPick(); paintRunes(); };
+  }
+  $('btn-start').onclick = () => { sendPick(); wasm_cmd({ start: true }); };
+  $('pickd').onchange = () => { dSel = Number($('pickd').value); if (dSel === fSel) fSel = (dSel + 1) % DATA.spells.length; $('pickf').value = fSel; sendPick(); };
+  $('pickf').onchange = () => { fSel = Number($('pickf').value); if (fSel === dSel) dSel = (fSel + 1) % DATA.spells.length; $('pickd').value = dSel; sendPick(); };
+  runes = cleanRunes(pages.A || [0, 1, 2]);
+  $('pickd').value = dSel;
+  $('pickf').value = fSel;
+}
+function cleanRunes(values) {
+  return Array.isArray(values) ? [...new Set(values)].filter((n) => Number.isInteger(n) && n >= 0 && n < DATA.runes.length).slice(0, 3) : [];
+}
+function paintRunes() {
+  for (const p of ['A', 'B', 'C']) $('pg' + p).classList.toggle('go', curPage === p);
+  $('runebox').querySelectorAll('.rune').forEach((el) => el.classList.toggle('on', runes.includes(Number(el.dataset.r))));
+}
+function sendPick() {
+  if (picked === null || runes.length !== 3 || !launched) return;
+  draftFeedback = '';
+  pendingPick = { champ: picked, d: dSel, f: fSel, runes: [...runes], at: performance.now(), noticeBefore: latest?.notice };
+  wasm_cmd({ pick: { champ: picked, d: dSel, f: fSel, runes } });
+}
+
+function buildCards() {
+  $('cards').innerHTML = DATA.champs.map((c, i) => `
+    <button class="card" data-c="${i}">
+      <span class="art"><span class="emb" style="color:rgb(${CHAMP_RGB(c)})" aria-hidden="true">${EMBLEM[i]}</span>
+      <img src="${ART[i]}" alt="" onerror="this.style.display='none'"></span>
+      <b style="color:rgb(${CHAMP_RGB(c)})">${c.name}</b>
+      <span class="title">${c.title}</span>
+      <div class="kit"><b>Q</b> ${c.q.name}<br><b>W</b> ${c.w.name}<br>
+      <b>E</b> ${c.e.name}<br><b>R</b> ${c.r.name}</div>
+    </button>`).join('');
+  $('cards').querySelectorAll('.card').forEach((el) => {
+    el.onclick = () => { if (el.disabled) return; picked = Number(el.dataset.c); buildCardsSel(); buildDetail(); sendPick(); };
+  });
+  cardsBuilt = true;
+}
+function buildCardsSel() {
+  if (!cardsBuilt) return;
+  const team = roster.find((r) => r.slot === mySlot)?.team;
+  const taken = new Set(roster.filter((r) => r.team === team && r.picked && r.slot !== mySlot).map((r) => r.champ));
+  $('cards').querySelectorAll('.card').forEach((el) => {
+    const i = Number(el.dataset.c);
+    el.classList.toggle('sel', i === picked);
+    el.classList.toggle('taken', taken.has(i));
+    el.disabled = taken.has(i);
+    el.setAttribute('aria-pressed', String(i === picked));
+  });
+}
+function buildDetail() {
+  const box = $('detail');
+  if (picked === null || !DATA.champs[picked]) {
+    box.innerHTML = '<p class="note">Pick a champion to inspect their kit.</p>';
+    return;
+  }
+  const c = DATA.champs[picked];
+  const row = (k, a) => `<div>${icon(`${c.key}-${k.toLowerCase()}`)}<span><b>${esc(keyLabel(keys[k.toLowerCase()]))}</b> ${a.name} <span class="cd">${a.cd.join(' / ')}s</span> — ${a.desc}</span></div>`;
+  box.innerHTML = `
+    <div class="dport"><span class="emb" style="color:rgb(${CHAMP_RGB(c)})" aria-hidden="true">${EMBLEM[picked]}</span>
+      <img src="${ART[picked]}" alt="" onerror="this.style.display='none'"></div>
+    <div>
+      <h3 class="dname" style="color:rgb(${CHAMP_RGB(c)})">${c.name}</h3>
+      <p class="dtitle">${c.title}</p>
+      <div class="dstat">
+        <span>HP <b>${c.hp}</b></span><span>Mana <b>${c.mana}</b></span><span>Move <b>${c.ms}</b></span>
+        <span>Damage <b>${c.ad}</b></span><span>Ability power <b>${c.ap}</b></span>
+        <span>Range <b>${Number(c.range.toFixed(2))}</b></span><span>Attack cd <b>${Number(c.atkCd.toFixed(2))}s</b></span>
+      </div>
+      <div class="dkit">${row('Q', c.q)}${row('W', c.w)}${row('E', c.e)}${row('R', c.r)}</div>
+    </div>`;
+}
+
+// ---- HUD --------------------------------------------------------------------
+
+const mini = $('mini'), mctx = mini.getContext('2d');
+
+function render(h) {
+  latest = h;
+  renderFeedback(h);
+  mySlot = h.slot ?? 0;
+  showStatus(h.notice || (!local && !h.connected ? 'Connecting to the server…' : ''));
+  $('stage-tools').classList.toggle('hidden', h.phase === 'select');
+  $('stage').classList.toggle('drafting', h.phase === 'select');
+  if (h.phase === 'select') {
+    $('menu').classList.add('hidden');
+    $('stage').classList.remove('hidden');
+    $('result').classList.add('hidden');
+    if (lastPhase !== 'select') { setShop(false); picked = null; pendingPick = null; draftFeedback = ''; buildDetail(); }
+    $('draft').classList.remove('hidden');
+    if (!cardsBuilt) { buildCards(); buildDetail(); }
+    roster = h.roster || [];
+    mySlot = h.slot ?? 0;
+    const me = roster.find((r) => r.slot === mySlot);
+    if (pendingPick && me?.picked && me.champ === pendingPick.champ && me.d === pendingPick.d && me.f === pendingPick.f && JSON.stringify(me.runes) === JSON.stringify(pendingPick.runes)) {
+      pendingPick = null;
+      draftFeedback = '';
+    }
+    if (pendingPick && ((h.notice && h.notice !== pendingPick.noticeBefore) || performance.now() - pendingPick.at > 3000)) {
+      draftFeedback = h.notice && h.notice !== pendingPick.noticeBefore ? h.notice : 'The server has not confirmed your pick. Choose a champion again.';
+      pendingPick = null;
+      picked = me?.picked ? me.champ : null;
+      buildDetail();
+    }
+    if (me?.picked && !pendingPick && runes.length === 3) {
+      picked = me.champ;
+      dSel = me.d;
+      fSel = me.f;
+      runes = cleanRunes(me.runes);
+    }
+    $('pickd').value = dSel;
+    $('pickf').value = fSel;
+    $('draft-left').textContent = Math.ceil(h.left || 0) + 's';
+    $('teams').innerHTML = [0, 1].map((t) => {
+      const row = roster.filter((r) => r.team === t).map((r) => {
+        const who = r.handle + (r.bot ? ' [bot]' : '') + (r.picked ? ' — ' + (DATA.champs[r.champ]?.name ?? '?') : ' — picking…');
+        return `<li>${esc(who)}${r.slot === mySlot ? ' (you)' : ''}</li>`;
+      }).join('');
+      return `<div><b style="color:${t ? 'var(--red)' : 'var(--blue)'}">${t ? 'RED' : 'BLUE'}</b><ul>${row}</ul></div>`;
+    }).join('');
+    const host = roster.filter((r) => !r.bot && r.connected).reduce((min, r) => Math.min(min, r.slot), Infinity);
+    const waiting = roster.some(r => !r.bot && !r.picked);
+    $('btn-start').disabled = !me || mySlot !== host || picked === null || runes.length !== 3 || waiting || (!local && !h.connected);
+    $('draft-note').textContent = h.notice || draftFeedback || (runes.length !== 3 ? `Choose ${3 - runes.length} more runes.`
+      : picked === null ? 'Pick a champion. Each team may pick a champion once; rivals may mirror picks.'
+      : mySlot !== host ? 'Ready. The lobby host can start; empty seats become bots.'
+      : waiting ? 'Waiting for every player to choose a champion.'
+      : 'Ready to start. Empty seats become bots; the countdown starts automatically.');
+    buildCardsSel();
+    paintRunes();
+    lastPhase = 'select';
+    return;
+  }
+  if (lastPhase !== h.phase) {
+    setShop(false);
+    closePause();
+    if (h.phase === 'live') requestAnimationFrame(() => document.querySelector('#ember-root canvas')?.focus({ preventScroll: true }));
+  }
+  $('draft').classList.add('hidden');
+  $('menu').classList.add('hidden');
+  $('stage').classList.remove('hidden');
+  $('result').classList.toggle('hidden', h.phase !== 'over');
+  if (h.phase === 'over') {
+    $('result-who').textContent = h.winner === 0 ? 'BLUE wins' : 'RED wins';
+    $('result-who').style.color = h.winner === 0 ? 'var(--blue)' : 'var(--red)';
+    $('result-stats').textContent = `kills ${h.kills[0]} — ${h.kills[1]}`;
+    $('result-countdown').textContent = `Next draft in ${Math.ceil(h.left || 0)}s`;
+  }
+  $('timer').textContent = fmtTime(h.secs || 0);
+  $('kills').textContent = `${h.kills?.[0] ?? 0} : ${h.kills?.[1] ?? 0}`;
+  const cores = h.cores || [];
+  const paintCore = (i, t) => {
+    const c = cores.find((x) => x.t === t);
+    if (!c) return;
+    const fill = i === 0 ? $('corehp0') : $('corehp1');
+    const txt = i === 0 ? $('coretxt0') : $('coretxt1');
+    fill.style.width = `${Math.max(0, 100 * c.hp / Math.max(1, c.mh))}%`;
+    txt.textContent = `${Math.max(0, Math.round(c.hp))}/${Math.round(c.mh)}`;
+  };
+  paintCore(0, 0);
+  paintCore(1, 1);
+  $('boons').textContent = (h.boon || []).map((b, i) =>
+    b ? `${b === 1 ? '⚔' : '⏲'} ${fmtTime(h.boonLeft?.[i] || 0)}` : '').join('  ').trim();
+  const me = h.me && typeof h.me === 'object' ? h.me : null;
+  if (me) {
+    const champ = me.champ ?? 0;
+    const img = $('portrait');
+    if (img.getAttribute('src') !== ART[champ]) img.src = ART[champ];
+    $('portrait-emb').textContent = EMBLEM[champ];
+    $('hp').style.width = `${Math.max(0, 100 * me.hp / Math.max(1, me.mh))}%`;
+    $('mn').style.width = `${Math.max(0, 100 * me.mn / Math.max(1, me.mm))}%`;
+    $('vitals').textContent = `${Math.ceil(me.hp)} HP · ${Math.floor(me.mn)} mana`;
+    $('lvl').textContent = `lv ${me.lv} · ${me.g} g` + (me.pt ? ` · ${me.pt} pts` : '');
+    $('respawn').classList.toggle('hidden', me.alive);
+    if (!me.alive) $('respawn').textContent = `respawn ${Math.ceil(me.resp)}s`;
+    document.querySelectorAll('#abils .slot').forEach((el) => {
+      const i = Number(el.dataset.abil);
+      const rank = me.rk[i];
+      const ability = DATA.champs[champ]?.[['q', 'w', 'e', 'r'][i]];
+      paintIcon(el.querySelector('.face'), `${DATA.champs[champ].key}-${['q','w','e','r'][i]}`);
+      el.classList.toggle('unlearned', !rank);
+      el.title = `${keyLabel(keys[['q','w','e','r'][i]])} · ${ability?.name || ''} — ${ability?.desc || ''} · ${ability?.mana?.[Math.max(0, rank - 1)] ?? '?'} mana · rank ${rank}/3. Click to cast at your last field cursor; + or rank-modifier + key ranks up.`;
+      el.querySelector('.rk').textContent = rank ? '●'.repeat(rank) : '';
+      const cd = el.querySelector('.cd');
+      if (!rank) { cd.classList.remove('hidden'); cd.textContent = i === 3 ? 'Lv 6' : 'Learn'; }
+      else if (me.cd[i] > 0.05) { cd.classList.remove('hidden'); cd.textContent = me.cd[i].toFixed(1); }
+      else cd.classList.add('hidden');
+      el.querySelector('.up').classList.toggle('hidden', !(me.pt > 0 && me.rk[i] < 3 && (i !== 3 || me.lv >= (DATA.ultimateLevels || [6, 9, 12])[me.rk[i]])));
+    });
+    document.querySelectorAll('#spells .slot').forEach((el) => {
+      const i = Number(el.dataset.spell);
+      const id = i === 0 ? me.d : me.f;
+      paintIcon(el.querySelector('.face'), DATA.spells[id].key);
+      el.title = `${DATA.spells[id]?.name} — ${DATA.spells[id]?.desc}`;
+      const cd = el.querySelector('.cd');
+      if (me.scd[i] > 0.5) { cd.classList.remove('hidden'); cd.textContent = Math.ceil(me.scd[i]); }
+      else cd.classList.add('hidden');
+    });
+    document.querySelectorAll('#islots .slot').forEach((el) => {
+      const i = Number(el.dataset.item);
+      const it = DATA.items.find((x) => x.id === me.items[i]);
+      const markup = `<span class="key">${esc(keyLabel(keys[`item${i + 1}`]))}</span>${it ? icon(it.key) : '<span class="empty-slot">·</span>'}${it?.charges ? `<small>${me.charges[i]}</small>` : ''}`;
+      if (el.dataset.markup !== markup) { el.innerHTML = markup; el.dataset.markup = markup; }
+      el.title = it ? `${it.name}${it.charges ? ' x' + me.charges[i] : ''}` : 'empty';
+    });
+    const st = me.stats;
+    $('stats').textContent = st ? `AD ${Math.round(st.ad)} · AP ${Math.round(st.ap)} · attacks/s ${st.attackSpeed.toFixed(2)} · crit ${Math.round(st.crit * 100)}% / ${Math.round(st.critd)}% · haste ${Math.round(st.haste * 100)}%` : '';
+  }
+  if (shopOpen) renderShop(me);
+  $('score-body').innerHTML = (h.roster || []).map((r) => {
+    const name = (r.handle || '?') + (r.bot ? ' [bot]' : '');
+    return `<tr><td style="color:${r.team ? 'var(--red)' : 'var(--blue)'}">${esc(name)}</td><td>${DATA.champs[r.champ]?.name ?? '—'}</td></tr>`;
+  }).join('');
+  $('feed').classList.toggle('hidden', !(h.feed || []).length);
+  $('feed').innerHTML = (h.feed || []).map((t) => `• ${esc(t)}`).join('<br>');
+  drawMini(h);
+  lastPhase = h.phase;
+}
+
+function renderShop(me) {
+  const s = $('shop');
+  if (!me) { s.textContent = 'The shop needs a live match.'; return; }
+  const signature = JSON.stringify([me.g, me.alive, me.items, me.charges]);
+  if (signature === lastShop) return;
+  lastShop = signature;
+  s.innerHTML = `<h4>Item shop</h4> <span class="kbd">${me.g} gold · buy anywhere · ${esc(keyLabel(keys.shop))} closes</span><p class="note">Permanent items grant passive stats. Use potion slots with your item keys.</p>` + DATA.items.map((it) => {
+    const owned = me.items.includes(it.id);
+    const refill = it.charges > 0 && me.items.some((id, i) => id === it.id && me.charges[i] < it.charges);
+    const room = me.items.includes(0) || refill;
+    const can = me.alive && me.g >= it.cost && room && (!owned || it.charges > 0);
+    const label = !me.alive ? 'Respawning' : owned && !it.charges ? 'Owned' : !room ? 'Full' : `${it.cost}g`;
+    return `<div class="it">${icon(it.key)}<button ${can ? '' : 'disabled'} data-buy="${it.id}">${refill ? 'Refill ' : ''}${label}</button><span class="d"><b>${esc(it.name)}</b> <span class="tier">TIER ${it.tier}</span><br>${esc(it.desc)}</span></div>`;
+  }).join('');
+  s.querySelectorAll('[data-buy]').forEach((b) => { b.onclick = () => wasm_cmd({ buy: Number(b.dataset.buy) }); });
+}
+
+function drawMini(h) {
+  mctx.clearRect(0, 0, mini.width, mini.height);
+  mctx.fillStyle = '#0d1017';
+  mctx.fillRect(0, 0, mini.width, mini.height);
+  const X = (x) => ((x + 70) / 140) * mini.width;
+  const Z = (z) => ((z + 40) / 80) * mini.height;
+  mctx.fillStyle = '#1d2233';
+  mctx.fillRect(X(-70), Z(-7), mini.width, Z(7) - Z(-7));
+  for (const u of (h.units || [])) {
+    const [k, t, x, z, hp, slot] = u;
+    if (k === 3) continue;
+    mctx.fillStyle = t === 2 ? '#b59a4a' : (t === 0 ? '#6ea0ff' : '#ff7a70');
+    if (k === 6 || k === 7) mctx.fillStyle = '#cfd6ff';
+    const r = (k === 0 ? 3 : k === 1 || k === 2 ? 1.6 : 4);
+    mctx.globalAlpha = k === 4 || k === 5 || k === 6 || k === 7 ? (hp / 100) : 1;
+    if (hp <= 0) mctx.globalAlpha = 0.15;
+    mctx.fillRect(X(x) - r / 2, Z(z) - r / 2, r, r);
+    mctx.globalAlpha = 1;
+    if (k === 0 && slot === mySlot) { mctx.strokeStyle = '#fff'; mctx.strokeRect(X(x) - 4, Z(z) - 4, 8, 8); }
+  }
+}
+
+function pollHud() {
+  if (pollHud.started) return;
+  pollHud.started = true;
+  let previous = 0;
+  const tick = (now) => {
+    if (now - previous < 50) { requestAnimationFrame(tick); return; }
+    previous = now;
+    try {
+      const h = JSON.parse(wasm.state_json());
+      render(h);
+    } catch (e) {
+      if (!pollHud.warned) { pollHud.warned = true; console.error(e); }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+document.querySelectorAll('#abils .slot').forEach((el) => {
+  el.addEventListener('click', (e) => {
+    const i = Number(el.dataset.abil);
+    if (e.target.closest('.up') || !latest?.me?.rk[i]) wasm_cmd({ rank: i });
+    else aimedCommand('cast', i);
+  });
+});
+document.querySelectorAll('#islots .slot').forEach((el) => {
+  el.addEventListener('click', () => wasm_cmd({ use: Number(el.dataset.item) }));
+});
+document.querySelectorAll('#spells .slot').forEach((el) => {
+  el.addEventListener('click', () => aimedCommand('spell', Number(el.dataset.spell)));
+});
+
+if (DATA) {
+  renderGuide();
+  buildDraftChrome();
+  buildDetail();
+  for (const id of ['btn-practice', 'btn-practice3']) $(id).disabled = false;
+  $('engine-note').textContent = '';
+  document.body.dataset.leagueBoot = 'ready';
+  syncEngine();
+  paintHudKeys();
+} else {
+  document.body.dataset.leagueBoot = 'failed';
+}
+resolveLeagueReady(wasm);
+
+// ---- boot -------------------------------------------------------------------
+
+const pending = readSaved('ember-pending', null, sessionStorage);
+try { sessionStorage.removeItem('ember-pending'); } catch {}
+await discover();
+if (pending && pending.ws && wasm) {
+  const h = onlyHost(pending.ws).chosen;
+  mode = pending.mode ? Number(pending.mode) : 3;
+  launchOnline(pending.lobby, pending.password, pending.action === 'create', h);
+} else {
+  await showLobbies();
+  setInterval(() => { if (!launched) showLobbies(); }, 10000);
+}

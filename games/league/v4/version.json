@@ -1,0 +1,9 @@
+{
+  "version": "r1799",
+  "gameVersion": "v4",
+  "commit": "bc7baa803052582985f30b44af32a4339fdb9c24",
+  "serverCommit": "cf4a95f0e206abc6ee519c98f4ea8478962dfdb4",
+  "serverVersion": "r1759",
+  "built": "2026-09-07T13:16:06.093Z",
+  "wasmSha256": "0e31cf22e8bd7990ef874622bbef202a18a8446cdc20441aedf332b3a54acc6c"
+}
