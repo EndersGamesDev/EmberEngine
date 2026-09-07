@@ -5,12 +5,6 @@ impl BrowserFrameLoop {
         self.owner_epoch
     }
 
-    /// Returns immutable presentation facts.
-    #[must_use]
-    pub fn present_facts(&self) -> ember_julibrot_present::PresentFacts {
-        self.presenter.facts()
-    }
-
     /// Borrows immutable presentation facts, including the fixed-capacity position ledger.
     #[must_use]
     pub fn present_facts_ref(&self) -> &ember_julibrot_present::PresentFacts {
