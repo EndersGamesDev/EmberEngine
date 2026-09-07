@@ -24,7 +24,7 @@ use league_core::proto::ProjSnap;
 use crate::scene::{
     MESH_BLADE, MESH_CONE, MESH_FRUSTUM, MESH_GEAR, MESH_OCTA, MESH_RING, MESH_SPHERE,
 };
-use crate::world::{FxLite, UnitLite};
+use crate::world::{FxLite, UnitLite, ZoneLite};
 
 const CYAN: Vec3 = Vec3::new(0.22, 1.0, 1.3);
 const BRONZE: Vec3 = Vec3::new(0.58, 0.29, 0.10);
@@ -64,11 +64,15 @@ fn rod(frame: &mut Frame, from: Vec3, to: Vec3, radius: f32, color: Vec3) {
 }
 
 fn ring(frame: &mut Frame, pos: Vec3, radius: f32, color: Vec3, rotation: Quat) {
+    if radius > 0.75 {
+        broken_ring(frame, pos, radius, color, rotation);
+        return;
+    }
     put(
         frame,
         MESH_RING,
         pos,
-        Vec3::new(radius, 1.0, radius),
+        Vec3::new(radius, 0.35, radius),
         color,
         rotation,
     );
@@ -76,6 +80,34 @@ fn ring(frame: &mut Frame, pos: Vec3, radius: f32, color: Vec3, rotation: Quat) 
 
 fn polar(center: Vec3, radius: f32, angle: f32) -> Vec3 {
     center + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius)
+}
+
+// The vertices sit on the real radius; only the gaps interrupt its outline.
+// Unlike scaling a torus, a wider area never makes these strokes thicker.
+fn broken_ring(frame: &mut Frame, center: Vec3, radius: f32, color: Vec3, rotation: Quat) {
+    for index in 0..12u8 {
+        let angle = TAU * f32::from(index) / 12.0;
+        let from = rotation * polar(Vec3::ZERO, radius, angle);
+        let to = rotation * polar(Vec3::ZERO, radius, angle + TAU / 12.0 * 0.68);
+        rod(frame, center + from, center + to, 0.028, color);
+    }
+}
+
+fn mote(frame: &mut Frame, position: Vec3, color: Vec3, size: Vec2, opacity: f32) {
+    if position.is_finite()
+        && color.is_finite()
+        && size.is_finite()
+        && opacity.is_finite()
+        && size.min_element() > 0.0
+        && opacity > 0.0
+    {
+        frame.particles.push(Particle {
+            position,
+            color: color.clamp(Vec3::ZERO, Vec3::ONE),
+            size,
+            opacity: opacity.clamp(0.0, 0.75),
+        });
+    }
 }
 
 fn arc(frame: &mut Frame, center: Vec3, radius: f32, angles: [f32; 2], color: Vec3, width: f32) {
@@ -108,12 +140,13 @@ fn sparks(frame: &mut Frame, center: Vec3, color: Vec3, age: f32, count: u8) {
         let angle = TAU * f32::from(index) / f32::from(count) + age * 2.0;
         let radius = 0.12 + age * (0.7 + f32::from(index % 3) * 0.18);
         let pos = polar(center, radius, angle) + Vec3::Y * (age * 1.2 - age * age * 0.7);
-        frame.particles.push(Particle {
-            position: pos,
+        mote(
+            frame,
+            pos,
             color,
-            size: Vec2::splat(0.24 * (1.0 - age) + 0.06),
-            opacity: 0.7 * (1.0 - age),
-        });
+            Vec2::splat(0.24 * (1.0 - age) + 0.06),
+            0.7 * (1.0 - age),
+        );
     }
 }
 
@@ -157,7 +190,7 @@ fn petals(frame: &mut Frame, center: Vec3, radius: f32, phase: f32, count: u8, c
             polar(center, radius, angle),
             angle + 0.35,
             radius * 0.75,
-            0.32,
+            0.16,
             color,
         );
     }
@@ -174,20 +207,34 @@ fn diamond(frame: &mut Frame, center: Vec3, radius: f32, yaw: f32, color: Vec3) 
 
 fn clock(frame: &mut Frame, center: Vec3, radius: f32, phase: f32) {
     ring(frame, center, radius, VIOLET, Quat::IDENTITY);
-    put(
-        frame,
-        MESH_GEAR,
-        center,
-        Vec3::new(radius * 0.46, 0.16, radius * 0.46),
-        BRONZE,
-        Quat::from_rotation_y(phase * 2.0),
-    );
+    if radius > 0.8 {
+        for index in 0..4u8 {
+            let angle = f32::from(index) * FRAC_PI_2 + phase * 0.15;
+            put(
+                frame,
+                MESH_GEAR,
+                polar(center, radius * 0.88, angle),
+                Vec3::new(0.18, 0.08, 0.18),
+                BRONZE,
+                Quat::from_rotation_y(phase * 2.0),
+            );
+        }
+    } else {
+        put(
+            frame,
+            MESH_GEAR,
+            center,
+            Vec3::new(radius * 0.46, 0.10, radius * 0.46),
+            BRONZE,
+            Quat::from_rotation_y(phase * 2.0),
+        );
+    }
     blade(
         frame,
         center + Vec3::Y * 0.08,
         phase,
         radius * 0.82,
-        0.13,
+        0.07,
         SILVER,
     );
     blade(
@@ -195,7 +242,7 @@ fn clock(frame: &mut Frame, center: Vec3, radius: f32, phase: f32) {
         center + Vec3::Y * 0.12,
         -phase * 0.6,
         radius * 0.57,
-        0.2,
+        0.10,
         IVORY,
     );
 }
@@ -330,6 +377,116 @@ pub fn draw_projectile(frame: &mut Frame, projectile: &ProjSnap, time: f32) {
     }
 }
 
+fn tornado_zone(frame: &mut Frame, center: Vec3, radius: f32, phase: f32) {
+    for strand in 0..2u8 {
+        let turn = phase * 2.4 + f32::from(strand) * PI;
+        for step in 0..7u8 {
+            let level = f32::from(step) / 7.0;
+            let next = f32::from(step + 1) / 7.0;
+            let from = polar(center, radius * (0.32 + level * 0.48), turn + level * TAU)
+                + Vec3::Y * (0.18 + level * 2.5);
+            let to = polar(center, radius * (0.32 + next * 0.48), turn + next * TAU)
+                + Vec3::Y * (0.18 + next * 2.5);
+            rod(frame, from, to, 0.024, FLAME * (0.6 + level * 0.25));
+        }
+    }
+    for index in 0..8u8 {
+        let rise = (phase * 0.23 + f32::from(index) / 8.0).fract();
+        let angle = phase * 2.4 + f32::from(index) * 2.4;
+        let pos =
+            polar(center, radius * (0.38 + rise * 0.44), angle) + Vec3::Y * (0.25 + rise * 2.55);
+        mote(
+            frame,
+            pos,
+            if index % 3 == 0 { HOT } else { FLAME },
+            Vec2::new(0.28 + rise * 0.22, 0.48 + rise * 0.38),
+            0.38 * (PI * rise).sin(),
+        );
+    }
+}
+
+/// Draw a persistent authoritative zone with an open center and its full radius.
+///
+/// The scene should skip its legacy zone renderer when this returns true.
+/// No local hit, expiry or damage tick is inferred from a zone's presence.
+pub fn draw_zone(frame: &mut Frame, zone: &ZoneLite, time: f32) -> bool {
+    let (kind, x, z, radius, spin) = *zone;
+    if kind > 3 {
+        return false;
+    }
+    if ![x, z, radius, spin, time].iter().all(|v| v.is_finite()) || radius <= 0.0 {
+        return true;
+    }
+    let center = Vec3::new(x, 0.12, z);
+    let phase = time.rem_euclid(120.0);
+    let color = if kind == 0 {
+        FLAME
+    } else if kind == 3 {
+        SLUDGE
+    } else {
+        VIOLET
+    };
+    if kind != 2 {
+        broken_ring(frame, center, radius, color * 0.8, Quat::IDENTITY);
+    }
+    match kind {
+        0 => tornado_zone(frame, center, radius, phase),
+        1 => {
+            for index in 0..4u8 {
+                let angle = f32::from(index) * FRAC_PI_2 + FRAC_PI_2 * 0.5;
+                let point = polar(center, radius * 0.88, angle);
+                put(
+                    frame,
+                    MESH_GEAR,
+                    point + Vec3::Y * 0.05,
+                    Vec3::new(0.18, 0.06, 0.18),
+                    BRONZE,
+                    Quat::from_rotation_y(spin * 0.3),
+                );
+                rod(
+                    frame,
+                    point,
+                    polar(center, radius * 0.72, angle),
+                    0.035,
+                    SILVER,
+                );
+                mote(frame, point + Vec3::Y * 0.22, VIOLET, Vec2::splat(0.2), 0.4);
+            }
+        }
+        2 => {
+            clock(frame, center, radius, phase * 0.65);
+            for index in 0..4u8 {
+                let angle = f32::from(index) * FRAC_PI_2;
+                let point = polar(center, radius * 0.95, angle);
+                rod(frame, point, point + Vec3::Y * 0.28, 0.035, IVORY);
+                mote(
+                    frame,
+                    point + Vec3::Y * (0.35 + 0.12 * (phase * 2.0).sin()),
+                    SILVER,
+                    Vec2::splat(0.24),
+                    0.35,
+                );
+            }
+        }
+        3 => {
+            for index in 0..8u8 {
+                let rise = (phase * 0.16 + f32::from(index) / 8.0).fract();
+                let angle = f32::from(index) * TAU / 8.0 + phase * 0.35;
+                let point = polar(center, radius * (0.58 + rise * 0.26), angle);
+                mote(
+                    frame,
+                    point + Vec3::Y * (0.15 + rise * 1.7),
+                    if index % 2 == 0 { SLUDGE } else { MINT * 0.6 },
+                    Vec2::new(0.3 + rise * 0.25, 0.45 + rise * 0.28),
+                    0.28 * (PI * rise).sin(),
+                );
+            }
+        }
+        _ => unreachable!(),
+    }
+    true
+}
+
 struct Cast {
     origin: Vec3,
     target: Vec3,
@@ -428,7 +585,14 @@ fn swarm_cast(frame: &mut Frame, cast: &Cast, slot: u8) {
 
 fn flame_sweep(frame: &mut Frame, center: Vec3, yaw: f32, age: f32, radius: f32) {
     let swing = yaw - 1.35 + age * 2.7;
-    blade(frame, center, swing, radius, 0.38 * (1.0 - age) + 0.12, HOT);
+    blade(
+        frame,
+        center,
+        swing,
+        radius,
+        0.18 * (1.0 - age) + 0.055,
+        HOT,
+    );
     arc(
         frame,
         center,
@@ -439,13 +603,12 @@ fn flame_sweep(frame: &mut Frame, center: Vec3, yaw: f32, age: f32, radius: f32)
     );
     for index in 0..3u8 {
         let pos = polar(center, radius * (0.45 + f32::from(index) * 0.2), swing);
-        put(
+        mote(
             frame,
-            MESH_CONE,
             pos + Vec3::Y * (0.15 + age * 0.2),
-            Vec3::new(0.10, 0.22 + 0.08 * f32::from(index), 0.10),
             FLAME,
-            Quat::IDENTITY,
+            Vec2::new(0.16, 0.32 + 0.09 * f32::from(index)),
+            0.45 * (1.0 - age),
         );
     }
 }
@@ -657,16 +820,15 @@ fn maw_cast(frame: &mut Frame, cast: &Cast, slot: u8) {
                 let angle = TAU * f32::from(index) / 3.0 + cast.age;
                 let pool = polar(cast.origin, 0.95 + cast.pulse * 0.4, angle);
                 ring(frame, pool, 0.45, SLUDGE, Quat::IDENTITY);
-                put(
+                mote(
                     frame,
-                    MESH_SPHERE,
                     pool + Vec3::Y * (0.18 + cast.age * 0.3),
-                    Vec3::new(0.22, 0.12, 0.22),
                     SLUDGE * 0.65,
-                    Quat::IDENTITY,
+                    Vec2::new(0.45, 0.28),
+                    0.34 * (1.0 - cast.age),
                 );
             }
-            sparks(frame, cast.origin + Vec3::Y * 0.4, SLUDGE, cast.age, 6);
+            sparks(frame, cast.origin + Vec3::Y * 0.4, SLUDGE, cast.age, 5);
         }
         2 => {
             for index in 0..4u8 {
@@ -792,9 +954,108 @@ fn cast_effect(frame: &mut Frame, cast: &Cast, champ: u8, ability: u8) {
     }
 }
 
-fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
-    let start = fx.v.rem_euclid(8.0) >= 4.0;
-    let pos = if start && matches!(fx.champ, 2 | 3) {
+fn contact_burst(frame: &mut Frame, champ: u8, center: Vec3, yaw: f32, age: f32, crit: bool) {
+    let age = age * 1.8;
+    if age >= 1.0 {
+        return;
+    }
+    let scale = if crit { 1.25 } else { 1.0 };
+    let fade = 1.0 - age;
+    let radius = (0.22 + age * 0.48) * scale;
+    match champ {
+        0 => {
+            for index in 0..3u8 {
+                let angle = f32::from(index) * TAU / 3.0 + 0.25;
+                rod(
+                    frame,
+                    polar(center, radius * 0.35, angle),
+                    polar(center, radius, angle),
+                    0.025 * fade + 0.008,
+                    CYAN * fade,
+                );
+            }
+        }
+        1 => {
+            for sign in [-1.0, 1.0] {
+                blade(
+                    frame,
+                    center,
+                    yaw + sign * 0.7,
+                    radius * 1.2,
+                    0.075 * fade,
+                    HOT * fade,
+                );
+            }
+        }
+        2 => {
+            petals(frame, center, radius * 0.7, age * 2.0, 4, IVORY * fade);
+            diamond(frame, center, radius * 0.65, yaw, MINT * fade);
+        }
+        3 => {
+            let side = Vec3::new(-yaw.sin(), 0.0, yaw.cos());
+            for index in 0..3u8 {
+                blade(
+                    frame,
+                    center + side * ((f32::from(index) - 1.0) * 0.15),
+                    yaw - 0.25,
+                    radius,
+                    0.065 * fade,
+                    IVORY * fade,
+                );
+            }
+        }
+        4 => {
+            clock(frame, center, radius * 0.6, age * 5.0);
+            for index in 0..2u8 {
+                let angle = f32::from(index) * PI + age;
+                blade(
+                    frame,
+                    polar(center, radius, angle),
+                    angle,
+                    0.15,
+                    0.05,
+                    SILVER * fade,
+                );
+            }
+        }
+        _ => return,
+    }
+    let color = [CYAN, HOT, MINT, SLUDGE, VIOLET][usize::from(champ)];
+    mote(
+        frame,
+        center,
+        color,
+        Vec2::splat((0.22 + fade * 0.25) * scale),
+        0.62 * fade * fade,
+    );
+    sparks(frame, center, color, age, 4);
+}
+
+// Area events announce an actual cast or detonation, not a hit on every body
+// inside. The full edge remains visible while sparse motes clear the center.
+fn area_pulse(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
+    if fx.v <= 0.0 {
+        return;
+    }
+    let color = [CYAN, FLAME, MINT, SLUDGE, VIOLET][usize::from(fx.champ)];
+    let fade = 1.0 - cast.age;
+    broken_ring(frame, cast.origin, fx.v, color * fade, Quat::IDENTITY);
+    for index in 0..6u8 {
+        let angle = f32::from(index) * TAU / 6.0 + cast.age * 0.7;
+        let radius = fx.v * (0.35 + cast.age * 0.55);
+        let point = polar(cast.origin, radius, angle) + Vec3::Y * (0.2 + cast.age * 0.9);
+        mote(
+            frame,
+            point,
+            color,
+            Vec2::new(0.28, 0.42 + cast.age * 0.18),
+            0.42 * fade,
+        );
+    }
+}
+
+fn launch_signature(frame: &mut Frame, fx: &FxLite, cast: &Cast, crit: bool) -> Vec3 {
+    let pos = if matches!(fx.champ, 2 | 3) {
         cast.forward(1.15) + Vec3::Y * 1.65
     } else {
         cast.origin + Vec3::Y * 0.9
@@ -825,11 +1086,7 @@ fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
             pos,
             cast.yaw,
             cast.age,
-            if fx.v.rem_euclid(2.0) >= 1.0 {
-                2.1
-            } else {
-                1.65
-            },
+            if crit { 2.1 } else { 1.65 },
         ),
         2 => {
             petals(frame, pos, 0.58 + cast.age * 0.7, -cast.age * 2.0, 4, IVORY);
@@ -837,7 +1094,7 @@ fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
         }
         3 => claw_strike(frame, pos, cast.yaw, cast.age),
         4 => {
-            clock(frame, pos, 0.3 + cast.age * 0.55, cast.age * 9.0);
+            clock(frame, pos, 0.28 + cast.age * 0.30, cast.age * 9.0);
             for index in 0..3u8 {
                 let angle = TAU * f32::from(index) / 3.0 + cast.age;
                 put(
@@ -852,8 +1109,41 @@ fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
         }
         _ => {}
     }
-    let color = [CYAN, HOT, IVORY, SLUDGE, VIOLET][usize::from(fx.champ)];
-    sparks(frame, pos, color, cast.age, 3);
+    pos
+}
+
+fn strike(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
+    let start = fx.v.rem_euclid(8.0) >= 4.0;
+    let crit = fx.v.rem_euclid(2.0) >= 1.0;
+    if !start {
+        // A point impact carries its actual contact position in x/z. x2/z2
+        // are absent endpoints here, so never aim it toward the world origin.
+        contact_burst(
+            frame,
+            fx.champ,
+            cast.origin + Vec3::Y * 0.85,
+            0.0,
+            cast.age,
+            crit,
+        );
+        return;
+    }
+    let pos = launch_signature(frame, fx, cast, crit);
+    if matches!(fx.champ, 1 | 3) {
+        // These two melee autos resolve contact immediately in do_attack;
+        // ranged starts must wait for a separate server point-impact event.
+        contact_burst(
+            frame,
+            fx.champ,
+            cast.target + Vec3::Y * 0.85,
+            cast.yaw,
+            cast.age,
+            crit,
+        );
+    } else {
+        let color = [CYAN, HOT, IVORY, SLUDGE, VIOLET][usize::from(fx.champ)];
+        sparks(frame, pos, color, cast.age, 2);
+    }
 }
 
 fn teleport(frame: &mut Frame, fx: &FxLite, cast: &Cast) {
@@ -931,7 +1221,7 @@ pub fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
     if fx.champ > 4 {
         return false;
     }
-    if ![fx.x, fx.z, fx.x2, fx.z2, age]
+    if ![fx.x, fx.z, fx.x2, fx.z2, fx.v, age]
         .iter()
         .all(|value| value.is_finite())
     {
@@ -945,6 +1235,7 @@ pub fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
     match fx.k {
         13 if fx.ability < 4 => cast_effect(frame, &cast, fx.champ, fx.ability),
         0 => strike(frame, fx, &cast),
+        2..=4 => area_pulse(frame, fx, &cast),
         1 if fx.champ == 0 => {
             // One coherent cyan beam with a thin white core. Its endpoints
             // come from the server, including each clone's separate laser.
@@ -958,7 +1249,16 @@ pub fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
                 0.035,
                 SILVER,
             );
-            sparks(frame, end, CYAN, age, 4);
+            // Beam endpoints are range limits, not confirmed contacts.
+            for along in [0.35, 0.7] {
+                mote(
+                    frame,
+                    start.lerp(end, along),
+                    CYAN,
+                    Vec2::splat(0.18),
+                    0.35 * (1.0 - age),
+                );
+            }
         }
         8 => teleport(frame, fx, &cast),
         9 | 12 if fx.champ == 2 && fx.ability < 4 => {
@@ -983,6 +1283,14 @@ pub fn draw_fx(frame: &mut Frame, fx: &FxLite, age: f32) -> bool {
                 cast.origin + dir * length + Vec3::Y * 0.75,
                 cast.yaw,
                 age * 8.0,
+            );
+            contact_burst(
+                frame,
+                fx.champ,
+                cast.target + Vec3::Y * 0.85,
+                cast.yaw,
+                age,
+                false,
             );
         }
         _ => return false,
@@ -1246,6 +1554,125 @@ mod tests {
         assert!((beam.position - half - start).length() < 0.001);
         assert!((beam.position + half - end).length() < 0.001);
         assert!(beam.scale.x < 0.2 && beam.scale.z < 0.2);
+        assert!(
+            frame
+                .particles
+                .iter()
+                .all(|p| p.position.distance(end) > 0.5)
+        );
+    }
+
+    #[test]
+    fn zone_edges_preserve_authoritative_radius_without_filled_bodies() {
+        for kind in 0..4 {
+            let mut signatures = Vec::new();
+            for time in [0.0, 1.2, 18.7] {
+                let mut frame = Frame::default();
+                let zone = (kind, 7.0, -3.0, 4.5, time * 0.7);
+                assert!(draw_zone(&mut frame, &zone, time));
+                valid(&frame, 32);
+                assert!(frame.particles.iter().all(|p| p.opacity <= 0.4));
+                assert!(
+                    !frame
+                        .instances
+                        .iter()
+                        .any(|i| i.mesh == MESH_CONE || i.mesh == MESH_RING)
+                );
+                for edge in frame.instances.iter().take(12) {
+                    assert_eq!(edge.mesh, MESH_FRUSTUM);
+                    assert!(edge.scale.x <= 0.03 && edge.scale.z <= 0.03);
+                    let half = edge.rot * Vec3::Y * edge.scale.y;
+                    for point in [edge.position - half, edge.position + half] {
+                        let distance = Vec2::new(point.x - zone.1, point.z - zone.2).length();
+                        assert!((distance - zone.3).abs() < 0.001);
+                    }
+                }
+                let signature = (geometry(&frame), frame.particles.clone());
+                assert!(!signatures.contains(&signature), "zone {kind} must animate");
+                signatures.push(signature);
+            }
+        }
+        let mut frame = Frame::default();
+        assert!(!draw_zone(&mut frame, &(9, 0.0, 0.0, 3.0, 0.0), 0.0));
+        for invalid in [f32::NAN, f32::INFINITY, -1.0, 0.0] {
+            assert!(draw_zone(&mut frame, &(0, 0.0, 0.0, invalid, 0.0), 0.0));
+        }
+        assert!(frame.instances.is_empty() && frame.particles.is_empty());
+    }
+
+    #[test]
+    fn attributed_area_events_do_not_fall_back_to_solid_cones_or_discs() {
+        for champ in 0..5 {
+            for kind in 2..=4 {
+                let mut fx = effect(champ, 0, kind);
+                fx.v = 6.5;
+                let mut frame = Frame::default();
+                assert!(draw_fx(&mut frame, &fx, 0.2));
+                valid(&frame, 12);
+                assert_eq!(frame.instances.len(), 12);
+                assert!(
+                    frame
+                        .instances
+                        .iter()
+                        .all(|i| i.mesh == MESH_FRUSTUM && i.scale.x < 0.03)
+                );
+                assert!(frame.particles.iter().all(|p| p.opacity < 0.5));
+            }
+        }
+    }
+
+    #[test]
+    fn launches_only_flash_contacts_when_the_authoritative_auto_is_melee() {
+        for champ in 0..5 {
+            let mut fx = effect(champ, 4, 0);
+            fx.x = -6.0;
+            fx.z = -3.0;
+            fx.x2 = 5.0;
+            fx.z2 = 2.0;
+            let mut frame = Frame::default();
+            assert!(draw_fx(&mut frame, &fx, 0.1));
+            valid(&frame, 20);
+            let target = Vec2::new(fx.x2, fx.z2);
+            let at_contact = frame
+                .particles
+                .iter()
+                .any(|p| Vec2::new(p.position.x, p.position.z).distance(target) < 0.5);
+            assert_eq!(at_contact, matches!(champ, 1 | 3));
+        }
+    }
+
+    #[test]
+    fn point_impacts_are_distinct_compact_and_ignore_absent_target_coordinates() {
+        let mut signatures = Vec::new();
+        for champ in 0..5 {
+            let mut fx = effect(champ, 4, 0);
+            fx.v = 0.0;
+            fx.x = 5.0;
+            fx.z = 2.0;
+            fx.x2 = 0.0;
+            fx.z2 = 0.0;
+            let mut frame = Frame::default();
+            assert!(draw_fx(&mut frame, &fx, 0.1));
+            valid(&frame, 12);
+            let center = Vec2::new(fx.x, fx.z);
+            assert!(
+                frame
+                    .particles
+                    .iter()
+                    .all(|p| { Vec2::new(p.position.x, p.position.z).distance(center) < 1.0 })
+            );
+            let signature = geometry(&frame);
+            assert!(!signatures.contains(&signature));
+            signatures.push(signature.clone());
+            fx.x2 = -30.0;
+            fx.z2 = -40.0;
+            let mut other = Frame::default();
+            assert!(draw_fx(&mut other, &fx, 0.1));
+            assert_eq!(signature, geometry(&other));
+            let mut late = Frame::default();
+            assert!(draw_fx(&mut late, &fx, 0.7));
+            assert!(late.instances.is_empty() && late.particles.is_empty());
+        }
     }
 
     #[test]
@@ -1459,10 +1886,7 @@ mod tests {
                     (source, champ, ability)
                 );
                 if ability == 2 && matches!(champ, 3 | 4) {
-                    assert!(
-                        (unit.x - cast.x).abs() > 1.0,
-                        "dash must move the actor"
-                    );
+                    assert!((unit.x - cast.x).abs() > 1.0, "dash must move the actor");
                 }
                 let mut attack = effect(champ, 4, 0);
                 attack.source = source;
@@ -1487,7 +1911,10 @@ mod tests {
         }]);
         world.push_fx(wire.into());
         assert_eq!(world.fx[0].source, 0);
-        assert_eq!(attack_pose(&world.units[0], &world.fx), AttackPose::default());
+        assert_eq!(
+            attack_pose(&world.units[0], &world.fx),
+            AttackPose::default()
+        );
         let mut frame = Frame::default();
         assert!(draw_fx(&mut frame, &world.fx[0], 0.3));
         assert!(!frame.instances.is_empty());
