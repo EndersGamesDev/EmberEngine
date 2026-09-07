@@ -34,7 +34,7 @@ use crate::{
 };
 use ember_julibrot_present::{
     LatticePair, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
-    WarpValidation, renders_same_picture,
+    WarpValidation, relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::ReferenceVerification;
 use ember_lab_heap::SpanArena;
@@ -2630,10 +2630,7 @@ fn measured_relief_source_covers_destination(
     requested: &Pose,
 ) -> bool {
     if plan.kind == WarpKind::ReliefRedraw {
-        return plan.source_valid
-            && plan
-                .lattice
-                .is_some_and(|lattice| lattice.covers_destination(plan.rows));
+        return plan.source_valid && relief_redraw_source_covers_destination(source, requested);
     }
     if !matches!(
         plan.refusal_reason,
@@ -2645,26 +2642,7 @@ fn measured_relief_source_covers_destination(
     ) {
         return false;
     }
-    let Ok(flat) = ember_julibrot_math::warp_matrix(&source.pose, requested) else {
-        return false;
-    };
-    let Some(delivery) = LatticePair::new(
-        source.extent,
-        [source.pose.grid_width, source.pose.grid_height],
-    ) else {
-        return false;
-    };
-    let Some(lattice) =
-        LatticePair::new(source.extent, [requested.grid_width, requested.grid_height])
-    else {
-        return false;
-    };
-    let Some(rows) = ember_julibrot_present::pack_homography_rows(
-        ember_julibrot_present::compose_homography(delivery.covering_map(), flat.inverse),
-    ) else {
-        return false;
-    };
-    lattice.covers_destination(rows)
+    relief_redraw_source_covers_destination(source, requested)
 }
 
 fn measured_relief_exposure_zoom_edit() -> Option<(u32, f64, Option<[f64; 2]>)> {
@@ -3146,9 +3124,7 @@ fn corner_box_redraw_and_final_make_bounded_progress_after_stale_recovery() {
             )
     });
     let corner_final = corner.iter().find(|turn| turn.completed_requested_final);
-    let centred_final = centred
-        .iter()
-        .find(|turn| turn.completed_requested_final);
+    let centred_final = centred.iter().find(|turn| turn.completed_requested_final);
     let final_presentation = corner_final.and_then(|completed| {
         corner.iter().find(|turn| {
             turn.turn > completed.turn && turn.presented == Some(WarpKind::AnchorHomography)

@@ -1430,17 +1430,14 @@ fn reproject_onto(frame: &crate::SceneFrame, to_pose: &Pose) -> crate::WarpPlan 
     )
 }
 
-/// Mirrors the app reproduction's retained-source coverage calculation.
+/// Independently reproduces record-chart containment so fixture decisions cannot drift silently.
 fn reproduced_source_covers_destination(
     plan: &crate::WarpPlan,
     source: &crate::SceneFrame,
     requested: &Pose,
 ) -> bool {
     if plan.kind == WarpKind::ReliefRedraw {
-        return plan.source_valid
-            && plan
-                .lattice
-                .is_some_and(|lattice| lattice.covers_destination(plan.rows));
+        return plan.source_valid && reproduced_chart_covers_destination(source, requested);
     }
     if !matches!(
         plan.refusal_reason,
@@ -1452,27 +1449,55 @@ fn reproduced_source_covers_destination(
     ) {
         return false;
     }
-    let Ok(flat) = ember_julibrot_math::warp_matrix(&source.pose, requested) else {
+    reproduced_chart_covers_destination(source, requested)
+}
+
+fn reproduced_chart_covers_destination(
+    source: &crate::SceneFrame,
+    requested: &Pose,
+) -> bool {
+    if source.extent.contains(&0) {
+        return false;
+    }
+    let Some(chart) = crate::planner::source_to_destination_chart(&source.pose, requested) else {
         return false;
     };
-    let Some(delivery) = crate::LatticePair::new(
-        source.extent,
-        [source.pose.grid_width, source.pose.grid_height],
-    ) else {
+    let determinant = chart[0].mul_add(chart[4], -chart[1] * chart[3]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
         return false;
-    };
-    let Some(lattice) =
-        crate::LatticePair::new(source.extent, [requested.grid_width, requested.grid_height])
-    else {
-        return false;
-    };
-    let Some(rows) = crate::pack_homography_rows(crate::compose_homography(
-        delivery.covering_map(),
-        flat.inverse,
-    )) else {
-        return false;
-    };
-    lattice.covers_destination(rows)
+    }
+    let source_half = [
+        f64::from(source.pose.grid_width) * 0.5
+            + crate::SOURCE_TEXEL_REACH_PX * f64::from(source.pose.grid_width)
+                / f64::from(source.extent[0]),
+        f64::from(source.pose.grid_height) * 0.5
+            + crate::SOURCE_TEXEL_REACH_PX * f64::from(source.pose.grid_height)
+                / f64::from(source.extent[1]),
+    ];
+    let destination_half = [
+        f64::from(requested.grid_width) * 0.5,
+        f64::from(requested.grid_height) * 0.5,
+    ];
+    [
+        [-destination_half[0], -destination_half[1]],
+        [destination_half[0], -destination_half[1]],
+        [-destination_half[0], destination_half[1]],
+        [destination_half[0], destination_half[1]],
+    ]
+    .into_iter()
+    .all(|destination| {
+        let translated = [
+            destination[0] - chart[2],
+            destination[1] - chart[5],
+        ];
+        let retained = [
+            chart[4].mul_add(translated[0], -chart[1] * translated[1]) / determinant,
+            (-chart[3]).mul_add(translated[0], chart[0] * translated[1]) / determinant,
+        ];
+        retained.iter().zip(source_half).all(|(value, half)| {
+            value.is_finite() && (-half..=half).contains(value)
+        })
+    })
 }
 
 fn assert_coverage_decision(
@@ -1500,9 +1525,12 @@ fn production_redraw_coverage_matches_the_reproduction_oracle() {
 
     let mut covered = pose_on(extent);
     covered.zoom_log2 = 1.0;
+    let mut in_bounds = covered;
+    // At this two-times zoom the inverse map sends the frame to x=0..480 and y=-270..0: its right
+    // and lower edges reach the retained boundary without crossing it.
+    in_bounds.centre_from_reference_px = [480.0, -270.0];
     let mut outside = covered;
-    // At this two-times zoom the inverse map sends the right edge to source x=540, sixty pixels
-    // beyond the source's +480 edge, and likewise crosses the lower edge in y.
+    // Sixty more source pixels of translation cross both retained boundaries.
     outside.centre_from_reference_px = [600.0, -360.0];
 
     let admitted_final_covered = crate::WarpPlan {
@@ -1514,6 +1542,11 @@ fn production_redraw_coverage_matches_the_reproduction_oracle() {
         kind: WarpKind::ReliefRedraw,
         destination_pose: Some(outside),
         ..reproject_onto(&final_source, &outside)
+    };
+    let admitted_final_in_bounds = crate::WarpPlan {
+        kind: WarpKind::ReliefRedraw,
+        destination_pose: Some(in_bounds),
+        ..reproject_onto(&final_source, &in_bounds)
     };
     let admitted_preview_covered = crate::WarpPlan {
         kind: WarpKind::ReliefRedraw,
@@ -1544,6 +1577,13 @@ fn production_redraw_coverage_matches_the_reproduction_oracle() {
         &admitted_final_covered,
         &final_source,
         &covered,
+        true,
+    );
+    assert_coverage_decision(
+        "Final admitted in-bounds translation",
+        &admitted_final_in_bounds,
+        &final_source,
+        &in_bounds,
         true,
     );
     assert_coverage_decision(
