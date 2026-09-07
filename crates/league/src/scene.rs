@@ -131,8 +131,10 @@ pub fn bar_tilt() -> Quat {
 pub fn garden_light(time: f32) -> Environment {
     let mut env = Environment::outdoor(Weather::Clear, time);
     env.sun_direction = Vec3::new(-0.48, 0.76, -0.42).normalize();
-    env.sun_color = Vec3::new(1.0, 0.84, 0.62);
-    env.sun_intensity = 0.92;
+    // Warm, but not so amber that jade moss turns olive: the ground palette
+    // is carried by the baked pictures, the sun only has to keep it green.
+    env.sun_color = Vec3::new(1.0, 0.90, 0.76);
+    env.sun_intensity = 0.96;
     env.sky_zenith = Vec3::new(0.065, 0.14, 0.16);
     env.sky_horizon = Vec3::new(0.36, 0.46, 0.40);
     env.cloud_coverage = 0.20;
@@ -877,18 +879,21 @@ fn push_core(frame: &mut Frame, u: &UnitLite, t: f32) {
         }
         return;
     }
+    // Taller spire, same footprint: the hearth is the landmark of its plaza
+    // and has to read from mid-lane, while every ground point stays inside
+    // the 2.4m pick radius (the test below checks the whole silhouette).
     prop(
         frame,
         MESH_OBELISK,
         u.x,
         u.z,
         if u.t == 0 { 0.0 } else { PI },
-        0.60,
+        0.72,
         0.88,
     );
     let bob = (t * 1.35).sin() * 0.11;
     frame.instances.push(
-        ins(v3(u.x, 3.55 + bob, u.z), v3(0.60, 0.82, 0.60), col)
+        ins(v3(u.x, 4.15 + bob, u.z), v3(0.66, 0.90, 0.66), col)
             .with_mesh(MESH_OCTA)
             .with_yaw(t * 0.22)
             .with_surface(0.28, 0.0),
@@ -962,12 +967,12 @@ fn push_court(frame: &mut Frame, u: &UnitLite, t: f32) {
         u.x,
         u.z,
         if u.z > 0.0 { -PI / 2.0 } else { PI / 2.0 },
-        0.40,
+        0.46,
         0.9,
     );
     frame.instances.push(
         ins(
-            v3(u.x, 2.55 + 0.09 * (t * 1.3).sin(), u.z),
+            v3(u.x, 2.85 + 0.09 * (t * 1.3).sin(), u.z),
             v3(0.42, 0.58, 0.42),
             color,
         )
