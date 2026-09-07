@@ -1,7 +1,7 @@
 use super::{EXPOSURE_FACT_STEPS, Pose, PoseMap, WarpKind};
 use crate::{
     LatticePair, PresentationLedgerEntry, SceneFrame, WarpRefusalReason, apply_homography,
-    compose_homography, identity_warp_rows, pack_homography_rows, solve_homography,
+    identity_warp_rows, solve_homography,
 };
 use ember_julibrot_math::warp_matrix;
 

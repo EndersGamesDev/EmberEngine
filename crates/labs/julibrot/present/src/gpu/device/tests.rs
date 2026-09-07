@@ -1452,10 +1452,7 @@ fn reproduced_source_covers_destination(
     reproduced_chart_covers_destination(source, requested)
 }
 
-fn reproduced_chart_covers_destination(
-    source: &crate::SceneFrame,
-    requested: &Pose,
-) -> bool {
+fn reproduced_chart_covers_destination(source: &crate::SceneFrame, requested: &Pose) -> bool {
     if source.extent.contains(&0) {
         return false;
     }
@@ -1466,13 +1463,17 @@ fn reproduced_chart_covers_destination(
     if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
         return false;
     }
+    let source_width = f64::from(source.pose.grid_width);
+    let source_height = f64::from(source.pose.grid_height);
     let source_half = [
-        f64::from(source.pose.grid_width) * 0.5
-            + crate::SOURCE_TEXEL_REACH_PX * f64::from(source.pose.grid_width)
-                / f64::from(source.extent[0]),
-        f64::from(source.pose.grid_height) * 0.5
-            + crate::SOURCE_TEXEL_REACH_PX * f64::from(source.pose.grid_height)
-                / f64::from(source.extent[1]),
+        crate::SOURCE_TEXEL_REACH_PX.mul_add(
+            source_width / f64::from(source.extent[0]),
+            source_width * 0.5,
+        ),
+        crate::SOURCE_TEXEL_REACH_PX.mul_add(
+            source_height / f64::from(source.extent[1]),
+            source_height * 0.5,
+        ),
     ];
     let destination_half = [
         f64::from(requested.grid_width) * 0.5,
@@ -1486,17 +1487,15 @@ fn reproduced_chart_covers_destination(
     ]
     .into_iter()
     .all(|destination| {
-        let translated = [
-            destination[0] - chart[2],
-            destination[1] - chart[5],
-        ];
+        let translated = [destination[0] - chart[2], destination[1] - chart[5]];
         let retained = [
             chart[4].mul_add(translated[0], -chart[1] * translated[1]) / determinant,
             (-chart[3]).mul_add(translated[0], chart[0] * translated[1]) / determinant,
         ];
-        retained.iter().zip(source_half).all(|(value, half)| {
-            value.is_finite() && (-half..=half).contains(value)
-        })
+        retained
+            .iter()
+            .zip(source_half)
+            .all(|(value, half)| value.is_finite() && (-half..=half).contains(value))
     })
 }
 
