@@ -157,6 +157,124 @@
 
 ## 3. Debt inventory
 
+### Classification basis
+
+**Verified.** The current backlog contains 81 Julibrot bullets, not 78: 14 under `julibrot-math-kernels`, 27 under `julibrot-present`, and 40 under `julibrot-app-web` (`docs/plans/backlog.md:212-300`).
+
+**Derived.** “Cleared-by-round-two” means a behaviour-preserving edit wholly within the round-two file set; “cleared-by-round-three” means stage-0 or stage-1 tile port work within the explicit round-three file set; “stays” means the defect, policy choice, platform measurement, or later tile stage remains after these rounds; and “obsolete” means the line records no remaining work. A row names the first seam blocked, then any coupled seam.
+
+### `julibrot-math-kernels` — 14 rows
+
+|Status|Row|Classification|Seam|Reason|
+|---|---|---|---|---|
+|Derived|MK-01, transposed ambient basis claim (`docs/plans/backlog.md:214`)|stays|J-11|Requires the named nonzero-rotation browser reproduction, not a structural refactor.|
+|Derived|MK-02, missing second horizon test (`docs/plans/backlog.md:215`)|stays|J-11|Changes or records projection acceptance semantics outside the round-two source set.|
+|Derived|MK-03, unconditional Interactive level (`docs/plans/backlog.md:216`)|stays|J-07|Removing a rung changes scheduling policy; round three retains the whole-grid arm.|
+|Derived|MK-04, perturbation test ignores precision mode (`docs/plans/backlog.md:217`)|stays|J-07|The test is outside both rounds' named files and fixes a correctness oracle rather than a seam.|
+|Derived|MK-05, verification digits owned by kernels (`docs/plans/backlog.md:218`)|stays|J-07|The constant and duplicate literal are outside the named round-two and round-three files.|
+|Derived|MK-06, duplicated `origins_share_slice` (`docs/plans/backlog.md:219`)|stays|J-01/J-11|The second implementation is in an out-of-scope present state module and the pose choice is unresolved.|
+|Derived|MK-07, incomplete exact-versus-fast corpus (`docs/plans/backlog.md:220`)|stays|J-07/J-11|Both rounds consume this oracle but do not define the missing cross-product.|
+|Derived|MK-08, single-record observation bound (`docs/plans/backlog.md:221`)|stays|J-07|Requires a math perturbation oracle outside both file sets.|
+|Derived|MK-09, no wasm32-wasip1 lane (`docs/plans/backlog.md:222`)|stays|J-02|This is platform coverage, not code in either refactoring round.|
+|Derived|MK-10, projection clamp is not model clipping (`docs/plans/backlog.md:223`)|stays|J-09|The model-space policy study remains unresolved.|
+|Derived|MK-11, no mesh sensitivity sweep (`docs/plans/backlog.md:224`)|stays|J-09/J-11|The evidence needed to replace apron policy is still absent after stage 1.|
+|Derived|MK-12, zoom-14 ground truth and rebasing (`docs/plans/backlog.md:225`)|stays|J-07/J-08|It combines an external measurement and undesigned numerical behavior.|
+|Derived|MK-13, no GPU texel-load timing path (`docs/plans/backlog.md:226`)|stays|J-07|Neither round adds timestamp capability or changes heap addressing.|
+|Derived|MK-14, browser valid-row residue proof (`docs/plans/backlog.md:227`)|stays|J-02/J-07|Requires both browser backends and is independent of port extraction.|
+
+### `julibrot-present` — 27 rows
+
+|Status|Row|Classification|Seam|Reason|
+|---|---|---|---|---|
+|Derived|P-01, submitted extent and pose unrelated (`docs/plans/backlog.md:231`)|stays|J-09/J-10|Adding rejection changes the submission contract and needs a correctness decision.|
+|Derived|P-02, scale invariant skipped on exposure (`docs/plans/backlog.md:232`)|stays|J-11|The exposure policy is undocumented and not behaviour-preserving.|
+|Derived|P-03, neutral height for refused records (`docs/plans/backlog.md:233`)|stays|J-09/J-11|The desired semantic height is undecided and the shader/mesh files are outside scope.|
+|Derived|P-04, clamped vertex still counted (`docs/plans/backlog.md:234`)|stays|J-09|The inconsistency lies in out-of-scope math footprint policy.|
+|Derived|P-05, zero-lift clip-w shortcut (`docs/plans/backlog.md:235`)|stays|J-09/J-11|The retained whole-grid planner still needs a separate correctness fix.|
+|Derived|P-06, height refusal abandons warp corpus (`docs/plans/backlog.md:236`)|stays|J-11|Replacing fail-closed behavior needs the missing two-direction corpus.|
+|Derived|P-07, exposed-fraction units unpinned (`docs/plans/backlog.md:237`)|stays|J-11|It is a missing adversarial fixture, not debt removed by extraction.|
+|Derived|P-08, tautological steep-row assertion (`docs/plans/backlog.md:238`)|stays|J-09|The native test file is outside the two edit sets.|
+|Derived|P-09, frame-oracle figures use its own records (`docs/plans/backlog.md:239`)|stays|J-09/J-11|Round-three parity consumes the oracle but does not make its source delivered data.|
+|Derived|P-10, frame-oracle arithmetic/clear mismatch (`docs/plans/backlog.md:240`)|stays|J-09/J-11|Binary32, clipping, and depth-clear semantics remain an oracle decision.|
+|Derived|P-11, no composed-backdrop frame oracle (`docs/plans/backlog.md:241`)|stays|J-11|Stage 1 retains one whole descriptor view; protected backdrop arrives later.|
+|Derived|P-12, brittle dynamic-offset source census (`docs/plans/backlog.md:242`)|cleared-by-round-two|J-05|Replace file-name counting with an assertion over actual HOT write records in device tests.|
+|Derived|P-13, unused planner parameters (`docs/plans/backlog.md:243`)|cleared-by-round-two|J-11|Remove the stale arguments after recording planner-result equality.|
+|Derived|P-14, unpinned scene clear-colour call site (`docs/plans/backlog.md:244`)|cleared-by-round-two|J-10|A device-test command-record assertion can pin the call without changing it.|
+|Derived|P-15, inverse-row only neutral (`docs/plans/backlog.md:245`)|cleared-by-round-three|J-09/J-11|Stage-1 full-target projection adds rotated and translated source self-reconstruction cases.|
+|Derived|P-16, unbounded texture reallocations (`docs/plans/backlog.md:246`)|stays|J-06/J-10|A ceiling is resource policy and stage 1 deliberately retains the whole-grid arm.|
+|Derived|P-17, split tile vocabulary (`docs/plans/backlog.md:247`)|cleared-by-round-three|J-06/J-08|Stage 0 establishes one engine-neutral tile-record vocabulary.|
+|Derived|P-18, no depth-bearing retained view (`docs/plans/backlog.md:248`)|cleared-by-round-three|J-08/J-11|This is exactly the stage-1 deliverable.|
+|Derived|P-19, narrow relief admission calibration (`docs/plans/backlog.md:249`)|stays|J-11|A broader native corpus remains necessary before policy changes.|
+|Derived|P-20, final-resolution records apron (`docs/plans/backlog.md:250`)|stays|J-06/J-11|This is later backdrop/cache policy, not stage 0 or 1.|
+|Derived|P-21, saturated-relief behavior undecided (`docs/plans/backlog.md:251`)|stays|J-09/J-11|The presentation policy remains an open study question.|
+|Derived|P-22, no browser palette readback (`docs/plans/backlog.md:252`)|stays|J-11|The captured oracle must run it, but neither refactor itself supplies a browser device.|
+|Derived|P-23, shade-only GPU time unavailable (`docs/plans/backlog.md:253`)|stays|J-11|The WebGL2 capability limit remains.|
+|Derived|P-24, relief-redraw horizon ring stays Clear (`docs/plans/backlog.md:254`)|stays|J-09/J-11|A status-producing destination path is a semantic extension beyond stage 1.|
+|Derived|P-25, partly-refused primitive capture (`docs/plans/backlog.md:255`)|stays|J-09/J-11|It remains a device measurement prerequisite.|
+|Derived|P-26, slow-morph browser census (`docs/plans/backlog.md:256`)|stays|J-11|It remains a served-browser measurement.|
+|Derived|P-27, diagonal streak device reproduction (`docs/plans/backlog.md:257`)|stays|J-09|The candidate mesh and shader files are outside both rounds.|
+
+### `julibrot-app-web` — 40 rows
+
+|Status|Row|Classification|Seam|Reason|
+|---|---|---|---|---|
+|Derived|A-01, integrated lockfile edge (`docs/plans/backlog.md:261`)|obsolete|J-11|The row states that the dependency adds no registry crate and names no remaining action.|
+|Derived|A-02, clear-only stamps requested view (`docs/plans/backlog.md:262`)|stays|J-11/J-12|Changing the stamp changes finished-picture semantics.|
+|Derived|A-03, freed main-grid field remains populated (`docs/plans/backlog.md:263`)|cleared-by-round-two|J-07/J-10|Make the field optional and take it on retirement, preserving the same frees and submissions.|
+|Derived|A-04, backdrop replan key omits delivered extent (`docs/plans/backlog.md:264`)|stays|J-07|Adding the key can change scheduling and scene output.|
+|Derived|A-05, lifted screen pan uses zero height (`docs/plans/backlog.md:265`)|stays|J-01/J-11|The correct navigation surface is a behavior decision.|
+|Derived|A-06, corner zoom waits on coverage-first backdrop (`docs/plans/backlog.md:266`)|stays|J-06/J-07|Demand-ordered scheduling is stage 4, beyond round three.|
+|Derived|A-07, delivered precision temporarily unavailable (`docs/plans/backlog.md:267`)|stays|J-03|Changing fact meaning is observable and needs a specified epoch source.|
+|Derived|A-08, rebase counts hard-coded absent (`docs/plans/backlog.md:268`)|stays|J-07|No current producer measures the values.|
+|Derived|A-09, newer present facts not forwarded (`docs/plans/backlog.md:269`)|stays|J-10/J-12|Round two requires unchanged facts, so new public fact fields remain separate work.|
+|Derived|A-10, held-frame facts not forwarded (`docs/plans/backlog.md:270`)|stays|J-10|It changes the browser fact schema.|
+|Derived|A-11, timing ledger lacks dispatch/transfer walls (`docs/plans/backlog.md:271`)|stays|J-07/J-10|The measurements do not exist and fence-observation semantics remain.|
+|Derived|A-12, no worker admission timestamp (`docs/plans/backlog.md:272`)|stays|J-02|It requires a frozen-wire revision.|
+|Derived|A-13, orbit response lacks escaped flag (`docs/plans/backlog.md:273`)|stays|J-02/J-03|It requires an ABI revision and changes acceptance evidence.|
+|Derived|A-14, repeated too-long reference requests (`docs/plans/backlog.md:274`)|stays|J-02/J-07|A pre-test changes producer policy.|
+|Derived|A-15, correction census not retained across navigation (`docs/plans/backlog.md:275`)|stays|J-03/J-07|Cross-navigation cache policy is not behaviour-preserving.|
+|Derived|A-16, correction consumes navigation generation (`docs/plans/backlog.md:276`)|stays|J-01/J-03|A new generation class changes the owner protocol.|
+|Derived|A-17, regional second-reference correction absent (`docs/plans/backlog.md:277`)|stays|J-07/J-08|This is a future rendering feature, not stage-1 reconstruction.|
+|Derived|A-18, deterministic promotion disabled (`docs/plans/backlog.md:278`)|stays|J-07|Activation changes scheduling and presented precision policy.|
+|Derived|A-19, presenter poll allocates a vector (`docs/plans/backlog.md:279`)|cleared-by-round-two|J-10/J-12|Change the app trait and loop to consume the existing fixed two-event return.|
+|Derived|A-20, worker clears all mutable return bytes (`docs/plans/backlog.md:280`)|stays|J-02|The implementation is in `worker/src/browser.rs`, outside round two.|
+|Derived|A-21, orbit uses individual byte stores (`docs/plans/backlog.md:281`)|stays|J-02|The implementation is in `worker/src/browser.rs`, outside round two.|
+|Derived|A-22, crosshair bignum work every refresh (`docs/plans/backlog.md:282`)|stays|J-01|The required browser profile is still missing.|
+|Derived|A-23, scalar page set reparses saved row (`docs/plans/backlog.md:283`)|stays|J-01|The JavaScript page is outside both edit sets.|
+|Derived|A-24, facts coupled by JSON names (`docs/plans/backlog.md:284`)|stays|J-01/J-12|The page and page-contract test are outside scope.|
+|Derived|A-25, text-based page-contract sprawl (`docs/plans/backlog.md:285`)|stays|J-01/J-12|Round-two trace work supplies evidence but cannot remove the out-of-scope harness.|
+|Derived|A-26, page cap option unpinned (`docs/plans/backlog.md:286`)|stays|J-07|The page-contract test is outside scope.|
+|Derived|A-27, horizon share unpublished (`docs/plans/backlog.md:287`)|stays|J-09/J-10|No current fact producer carries it and adding one changes facts.|
+|Derived|A-28, page mesh fact lacks dark/refused semantics (`docs/plans/backlog.md:288`)|stays|J-09/J-10|The public meaning remains undecided.|
+|Derived|A-29, drive-page census placement undecided (`docs/plans/backlog.md:289`)|stays|J-12|This is an ownership decision outside the Rust file set.|
+|Derived|A-30, hidden-tab timeout policy undecided (`docs/plans/backlog.md:290`)|stays|J-12|This is page scheduling policy.|
+|Derived|A-31, fake presenter does not drive capture/predicate (`docs/plans/backlog.md:291`)|cleared-by-round-two|J-10/J-12|Extend the existing in-scope fake to record armed copies and the finished predicate.|
+|Derived|A-32, wasm bridge duplicates codec layout (`docs/plans/backlog.md:292`)|stays|J-02|Both implementations named by the debt are outside round two's file set.|
+|Derived|A-33, plane axes frozen in worker layout (`docs/plans/backlog.md:293`)|stays|J-03|Retirement requires the deferred byte-layout revision.|
+|Derived|A-34, missing live timing-ledger run (`docs/plans/backlog.md:294`)|stays|J-07/J-12|It remains an external served-browser measurement.|
+|Derived|A-35, missing both-origin present runs (`docs/plans/backlog.md:295`)|stays|J-10/J-12|It remains an external browser/device campaign.|
+|Derived|A-36, deep-reference admission replay (`docs/plans/backlog.md:296`)|stays|J-02|It remains a browser policy measurement.|
+|Derived|A-37, shallow-bypass browser saving (`docs/plans/backlog.md:297`)|stays|J-07|It remains a browser measurement.|
+|Derived|A-38, edge-on scene-id resubmission (`docs/plans/backlog.md:298`)|stays|J-07/J-10|Adding a guard changes scheduling and needs the requested reproduction.|
+|Derived|A-39, saved height-refusal page path (`docs/plans/backlog.md:299`)|stays|J-01/J-12|It remains a served-page integration case.|
+|Derived|A-40, offscreen frame-copy device exercise (`docs/plans/backlog.md:300`)|stays|J-10/J-12|It remains a native-device or served-build measurement.|
+
+**Derived.** Totals are 6 cleared-by-round-two, 3 cleared-by-round-three, 71 stay, and 1 obsolete. The deliberately conservative rule is that adding an oracle in a refactoring round does not silently clear a correctness, policy, or platform item unless the bounded plan below includes the actual repair.
+
+### Debt absent from the backlog
+
+|Status|Unlisted debt|Seam|Disposition|
+|---|---|---|---|
+|Verified|The paired public edit entries `pan_px`/`drag_pan` and `zoom_about_crosshair`/`wheel_zoom` name one operation twice (`crates/labs/julibrot/app/src/state.rs:563-625`, `crates/labs/julibrot/app/src/state.rs:702-714`).|J-01|Round two removes the compatibility names after call-site and trace equality.|
+|Verified|Public `owner()`/`owner_mut()` lets app scheduling, saving, reference handling, and submission bypass `ViewerController` (`crates/labs/julibrot/app/src/state.rs:548-557`).|J-03|Round two replaces reach-through with narrow controller methods.|
+|Verified|`ChannelCore` and `OwnerCore` independently implement request, return, resize, credit, and facts transitions (`crates/labs/julibrot/worker/src/channel.rs:901-1098`, `crates/labs/julibrot/worker/src/endpoint.rs:158-730`).|J-02|Round two makes same-thread delivery a port over `OwnerCore`.|
+|Verified|Browser-owner construction reads worker URL and time from JavaScript globals (`crates/labs/julibrot/worker/src/browser_owner.rs:351-389`).|J-02|Round two injects both through construction while retaining current defaults at the app edge.|
+|Verified|`BrowserFrameLoop` stores every lower-slice runtime object and policy record in one browser-only coordinator (`crates/labs/julibrot/app/src/frame/loop.rs:672-772`).|J-04/J-12|Round two extracts replayable transactions, but the general graph compiler stays future work.|
+|Verified|The app, worker, and present harnesses retain events in unrelated fixture shapes and publish no checked-in cross-round trace (`crates/labs/julibrot/app/src/frame/loop/tests.rs:685-1124`, `crates/labs/julibrot/worker/src/channel.rs:1415-1460`, `crates/labs/julibrot/present/src/planner.rs:1001-1035`).|J-02/J-10/J-12|Round two creates the four oracle records before structural edits.|
+|Verified|Stage-0 tile records are duplicated and test-only, with no paired reconstruction allocation or live descriptor consumer (`crates/labs/julibrot/kernels/src/tile_job.rs:345-470`, `crates/labs/julibrot/present/src/tile.rs:313-443`).|J-06/J-08|Round three centralizes the records and makes one whole-view descriptor live.|
+|Verified|The fixed present-event return is hidden behind an allocating compatibility method in app (`crates/labs/julibrot/present/src/gpu/device/poll.rs:8-28`, `crates/labs/julibrot/app/src/frame/schedule.rs:277-282`).|J-10|Round two clears it together with A-19.|
+|Verified|The entire J-04 graph compiler has no current data product or consumer (`crates/labs/julibrot/app/src/frame/loop.rs:1120-1365`).|J-04|It stays aspirational after both rounds; a Julibrot work-set record is the prerequisite, not the compiler itself.|
+
 ## 4. Oracle for rounds two and three
 
 ## 5. Plan for rounds two and three
