@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/ember-camera",
     "crates/ember-client-net",
     "crates/ember-editor",
     "crates/ember-engine",
