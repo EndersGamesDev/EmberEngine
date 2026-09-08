@@ -617,6 +617,55 @@ mod tests {
         header.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [x[0], x[1], y[0], y[1]];
     }
 
+    fn byte_pin_pose() -> Pose {
+        Pose {
+            epoch: 11,
+            orbit_generation: 23,
+            plane: construct_plane(ObjectAngles::IDENTITY)
+                .expect("byte fixture has a finite plane"),
+            object: ObjectAngles::IDENTITY,
+            plane_origin: [1.0, -2.0, 0.5, -0.25],
+            zoom_log2: 4.0,
+            view: ViewControls::NEUTRAL,
+            grid_width: 256,
+            grid_height: 128,
+            map: PoseMap::Mapped(Homography::IDENTITY),
+            centre_from_reference_px: [0.0; 2],
+        }
+    }
+
+    fn expected_byte_pin_header() -> TilePoseHeader {
+        let mut expected = TilePoseHeader::zeroed();
+        expected.texels[TilePoseHeader::H00_IDENTITIES].lanes = [41.0, 42.0, 73.0, 1.0];
+        expected.texels[TilePoseHeader::H01_SPANS].lanes = [7.0, 8.0, 0.0, 9.0];
+        expected.texels[TilePoseHeader::H02_OBJECT_12_13].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H03_OBJECT_14_23].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H04_OBJECT_24_34].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H05_CAMERA_12_13].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H06_CAMERA_14_23].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H07_CAMERA_24_34].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H08_CAMERA_15_25].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H09_CAMERA_35_45].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H10_OBSERVER].lanes = [1.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H11_ORIGIN_HIGH].lanes = [1.0, -2.0, 0.5, -0.25];
+        expected.texels[TilePoseHeader::H12_ORIGIN_LOW].lanes = [0.0; 4];
+        expected.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes = [0.0; 4];
+        expected.texels[TilePoseHeader::H14_PROJECTION].lanes = [0.0, 0.0, 8.0, 8.0];
+        expected.texels[TilePoseHeader::H15_EXTENT_DENSITY].lanes = [4.0, 256.0, 128.0, 0.0];
+        expected.texels[TilePoseHeader::H16_SOURCE_RECT].lanes = [-3.0, 5.0, 64.0, 32.0];
+        expected.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [0.25, 0.0, -0.5, 0.0];
+        expected.texels[TilePoseHeader::H18_SOURCE_MAP_0].lanes = [1.0, 0.0, 0.0, 0.0];
+        expected.texels[TilePoseHeader::H19_SOURCE_MAP_1].lanes = [0.0, 1.0, 0.0, 0.0];
+        expected.texels[TilePoseHeader::H20_SOURCE_MAP_2].lanes = [0.0, 0.0, 1.0, 0.0];
+        expected.texels[TilePoseHeader::H21_BOUNDS].lanes = [1.0, 12.0, 0.01, 0.25];
+        expected.texels[TilePoseHeader::H22_QUALITY].lanes = [1.0, 2.0, 512.0, 37.0];
+        expected.texels[TilePoseHeader::H23_STATUS].lanes = [65_000.0, 3.0, 4.0, 2.0];
+        expected.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes = [0.015_625, 0.0, 192.0, 11.0];
+        expected.texels[TilePoseHeader::H25_PROVENANCE].lanes = [17.0, 23.0, 1.0, 5.0];
+        expected.texels[TilePoseHeader::H26_OWNERSHIP].lanes = [6.0, 2.0, 31.0, 32.0];
+        expected
+    }
+
     #[test]
     fn descriptor_header_pack_unpack_and_round_trip_preserve_source_pose() {
         let pose = pose();
@@ -654,6 +703,21 @@ mod tests {
         }
         assert_eq!([unpacked.grid_width, unpacked.grid_height], [960, 540]);
         assert!(header.reserved_lanes_are_zero());
+    }
+
+    #[test]
+    fn descriptor_header_packing_matches_all_512_expected_bytes() {
+        let pose = byte_pin_pose();
+        let rect = SourcePixelRect::from_extent(-3, 5, 64, 32);
+        let source = SourceIdentity::new(73, 11, 19);
+        let render = TileRenderKey::from_pose_and_source(&pose, rect, source);
+        let mut policy = policy_header();
+        set_anchor_delta(&mut policy, [0.25, -0.5]);
+        let packed = pack_descriptor_header(&render, &policy)
+            .expect("exact byte fixture descriptor packs");
+        let expected = expected_byte_pin_header();
+        assert_eq!(bytes_of(&packed), bytes_of(&expected));
+        assert_eq!(bytes_of(&packed).len(), TilePoseHeader::BYTE_SIZE);
     }
 
     #[test]
