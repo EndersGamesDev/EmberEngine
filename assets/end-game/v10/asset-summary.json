@@ -1,0 +1,35 @@
+{
+  "bodies": [
+    {
+      "file": "soldier.glb",
+      "bytes": 1587564,
+      "triangles": 13226,
+      "cloned_texture_gpu_bytes_with_mips": 5767064,
+      "sha256": "59a893544226dec8e7946583dc3a496b24f67301cd2a35e3461f86ea344dd0f1",
+      "sidecar_sha256": "502dcceb9633cb6719619ac79dfc823d66dd06504f97c259c7ff72b009bc725e"
+    },
+    {
+      "file": "hollow-knight.glb",
+      "bytes": 1652948,
+      "triangles": 10816,
+      "cloned_texture_gpu_bytes_with_mips": 5767064,
+      "sha256": "de5f64f38f5dfbc33382d7a7075d0f2079041d87d2299bdc752672899fa228d6",
+      "sidecar_sha256": "d9ab8730c6966d92e2570438f870cec5b3bbf2d9cf0679902fc190e176566524"
+    },
+    {
+      "file": "cyclops.glb",
+      "bytes": 1564084,
+      "triangles": 12974,
+      "cloned_texture_gpu_bytes_with_mips": 5767064,
+      "sha256": "861241c0abe05c7935a1ef5335e1848c5df73667dde202c75f233322b5b1188a",
+      "sidecar_sha256": "f65a994033b6b99ff291b05e294e1761f76f9cdb1947499691b7e18a22ed667e"
+    }
+  ],
+  "body_bytes": 4804596,
+  "body_triangles": 37016,
+  "body_texture_mip_bytes": 17301192,
+  "weapon_bytes": 355284,
+  "weapon_triangles": 1292,
+  "audio_bytes": 2816792,
+  "combined_body_weapon_texture_mip_bytes": 18699288
+}

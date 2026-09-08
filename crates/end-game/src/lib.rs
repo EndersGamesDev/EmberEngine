@@ -1,8 +1,10 @@
-//! End Game v9: a single-player Ember dungeon, native and WASM.
+//! End Game v10: a single-player Ember dungeon, native and WASM.
 mod camera;
 mod castle;
 mod cell;
+mod enemies;
 mod hands;
+mod quest;
 mod scene;
 mod sword_motion;
 mod warden;
@@ -89,6 +91,53 @@ mod tests {
         let paused_position = g.sim.position;
         g.update(&walking, STEP * 6.0);
         assert_eq!(g.sim.position, paused_position);
+    }
+
+    #[test]
+    fn castle_boss_contact_journal_and_ending_reach_the_shell() {
+        use end_game_core::enemies::{Enemy, EnemyAttack, EnemyKind};
+        let mut g = game();
+        g.sim.stage = 5;
+        g.sim.exit_open = 1.0;
+        g.sim.warden_health = 0.0;
+        g.sim.position = glam::Vec3::new(0.0, 0.0, -42.0);
+        for (kind, attack, cost) in [
+            (EnemyKind::HollowAxeKnight, EnemyAttack::Chop, 32.0),
+            (EnemyKind::Cyclops, EnemyAttack::Sweep, 38.0),
+        ] {
+            let mut enemy = Enemy::new(0, kind, glam::Vec3::new(0.0, 0.0, -44.0));
+            enemy.alerted = true;
+            enemy.start_attack(g.sim.position);
+            enemy.attack = attack;
+            g.sim.enemies = vec![enemy];
+            g.update(&InputState::default(), STEP);
+            let state: serde_json::Value =
+                HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+            assert_eq!(state["enemy"]["blockCost"], cost);
+        }
+        let mut boss = Enemy::new(0, EnemyKind::Cyclops, glam::Vec3::new(0.0, 0.0, -44.0));
+        boss.alerted = true;
+        boss.start_attack(g.sim.position);
+        boss.attack = EnemyAttack::Slam;
+        boss.elapsed = EnemyAttack::Slam.contact_time() - STEP;
+        g.sim.enemies = vec![boss];
+        g.sim.quest.inscription_read = true;
+        g.sim.quest.sequence = 2;
+        g.sim.quest.shrines_used = 5;
+        g.update(&InputState::default(), STEP);
+        let state: serde_json::Value = HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(state["enemy"]["boss"], true);
+        assert_eq!(state["enemy"]["maxHealth"], 360.0);
+        assert!(state["enemy"]["blockCost"].is_null());
+        assert_eq!(state["quest"]["shrinesUsed"], 2);
+        assert!(state["quest"]["journal"].as_array().unwrap().len() >= 3);
+        assert!(state["enemyCombat"]["hitEvent"].as_u64().unwrap() > 0);
+        assert_eq!(g.sim.health, 66.0);
+        assert!(g.feedback().rumbles.iter().any(|r| r.strong > 0.5));
+        g.sim.quest.escaped = true;
+        g.update(&InputState::default(), STEP);
+        let state: serde_json::Value = HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(state["finished"], true);
     }
 
     fn combat_game() -> Game {
@@ -623,7 +672,7 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
-            Ok("castle") => {
+            Ok("castle") | Ok("enemy") => {
                 let value = |key: &str, fallback: f32| {
                     std::env::var(key)
                         .ok()
@@ -644,6 +693,62 @@ pub fn run() {
                 game.sim.yaw = value("END_GAME_YAW", 0.0);
                 game.sim.pitch = value("END_GAME_PITCH", 0.1).clamp(-1.2, 1.15);
                 game.third_person = std::env::var("END_GAME_THIRD_PERSON").as_deref() == Ok("1");
+                game.sim.quest.gate_open = value("END_GAME_SALLY_OPEN", 0.0).clamp(0.0, 1.0);
+                game.sim.quest.gate_unlocked = game.sim.quest.gate_open > 0.0;
+                game.sim.quest.sequence = value("END_GAME_SEALS", 0.0).clamp(0.0, 3.0) as u8;
+                game.sim.quest.seal = std::env::var("END_GAME_CROWN").as_deref() == Ok("1");
+                if std::env::var("END_GAME_SCENE").as_deref() == Ok("enemy") {
+                    use end_game_core::enemies::{EnemyAttack, EnemyPhase};
+                    let id = value("END_GAME_ENEMY_ID", 8.0).clamp(0.0, 8.0) as usize;
+                    let enemy = &mut game.sim.enemies[id];
+                    let distance =
+                        value("END_GAME_ENEMY_DISTANCE", if id == 8 { 5.0 } else { 3.0 });
+                    game.sim.position = enemy.position + glam::Vec3::Z * distance;
+                    game.sim.yaw = 0.0;
+                    game.sim.pitch = value("END_GAME_PITCH", if id == 8 { 0.08 } else { -0.10 });
+                    enemy.start_attack(game.sim.position);
+                    match std::env::var("END_GAME_ENEMY_VIEW").as_deref() {
+                        Ok("side") => {
+                            game.sim.position = enemy.position + glam::Vec3::X * distance;
+                            game.sim.yaw = -std::f32::consts::FRAC_PI_2;
+                        }
+                        Ok("back") => {
+                            game.sim.position = enemy.position - glam::Vec3::Z * distance;
+                            game.sim.yaw = std::f32::consts::PI;
+                        }
+                        _ => {}
+                    }
+                    enemy.attack = match std::env::var("END_GAME_ENEMY_ATTACK").as_deref() {
+                        Ok("slam") => EnemyAttack::Slam,
+                        Ok("sweep") => EnemyAttack::Sweep,
+                        _ => enemy.attack,
+                    };
+                    enemy.elapsed = value("END_GAME_ACTION_TIME", enemy.attack.contact_time());
+                    enemy.walk_phase = value("END_GAME_WALK_PHASE", 0.0);
+                    enemy.phase_two = std::env::var("END_GAME_PHASE_TWO").as_deref() == Ok("1");
+                    enemy.phase = match std::env::var("END_GAME_ENEMY_PHASE").as_deref() {
+                        Ok("walk") => EnemyPhase::Hunting,
+                        Ok("idle") => EnemyPhase::Idle,
+                        Ok("dead") => {
+                            enemy.health = 0.0;
+                            EnemyPhase::Dead
+                        }
+                        Ok("stagger") => EnemyPhase::Staggered,
+                        _ => EnemyPhase::Attacking,
+                    };
+                    enemy.walk_blend = value(
+                        "END_GAME_WALK_BLEND",
+                        if enemy.phase == EnemyPhase::Hunting {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    )
+                    .clamp(0.0, 1.0);
+                }
+                if std::env::var("END_GAME_ENEMIES").as_deref() == Ok("none") {
+                    game.sim.enemies.clear();
+                }
             }
             Ok("guard") => {
                 use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
@@ -964,6 +1069,13 @@ impl EmberGame for Game {
             let old_event = self.sim.event;
             let old_impact = self.sim.combat.impact_event;
             let old_knife_hit = self.sim.warden_ai.hit_event;
+            let old_castle_hit = self
+                .sim
+                .castle_events
+                .events()
+                .filter(|e| e.kind == end_game_core::enemies::CastleEventKind::PlayerHit)
+                .last()
+                .map(|e| e.id);
             let old_block = self.sim.guard.block_event;
             let old_break = self.sim.guard.break_event;
             while self.accumulated >= STEP {
@@ -1002,6 +1114,14 @@ impl EmberGame for Game {
                 self.feedback.rumble(0.22, 0.42, 100);
             } else if self.sim.warden_ai.hit_event != old_knife_hit
                 && self.sim.warden_ai.hit_left > 0.0
+                || self
+                    .sim
+                    .castle_events
+                    .events()
+                    .filter(|e| e.kind == end_game_core::enemies::CastleEventKind::PlayerHit)
+                    .last()
+                    .map(|e| e.id)
+                    .is_some_and(|id| Some(id) != old_castle_hit)
             {
                 self.feedback.rumble(0.72, 0.55, 160);
             } else if self.sim.combat.impact_event != old_impact {
@@ -1022,6 +1142,40 @@ impl EmberGame for Game {
             self.accumulated = 0.0;
             UI.with(|u| u.borrow_mut().held = 0);
         }
+        let enemy = self.sim.focus_enemy().map(|enemy| {
+            use end_game_core::enemies::{EnemyKind, EnemyPhase};
+            let telegraph =
+                enemy.phase == EnemyPhase::Attacking && enemy.elapsed < enemy.attack.contact_time();
+            let cue = if telegraph {
+                if enemy.attack.guardable() {
+                    "Weapon raised — face it and guard, or dodge"
+                } else {
+                    "CRUSHING SLAM — dodge sideways; guard cannot stop it"
+                }
+            } else if enemy.phase == EnemyPhase::Attacking {
+                "Recovering — strike now"
+            } else if enemy.phase_two {
+                "Enraged — faster pursuit"
+            } else {
+                "Watch the weapon. Strike after its attack."
+            };
+            serde_json::json!({"name": enemy.kind.label(), "health": enemy.health,
+                "maxHealth": enemy.max_health, "boss": enemy.kind == EnemyKind::Cyclops,
+                "cue": cue, "unblockable": telegraph && !enemy.attack.guardable(),
+                "blockCost": if telegraph && enemy.attack.guardable() { Some(enemy.attack.block_cost()) } else { None }})
+        });
+        let castle_hit = self
+            .sim
+            .castle_events
+            .events()
+            .filter(|e| e.kind == end_game_core::enemies::CastleEventKind::PlayerHit)
+            .last();
+        let castle_attack = self
+            .sim
+            .castle_events
+            .events()
+            .filter(|e| e.kind == end_game_core::enemies::CastleEventKind::EnemyAttack)
+            .last();
         let state = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "stage": self.sim.stage, "objective": self.sim.objective(),
             "location": self.sim.location(),
@@ -1033,6 +1187,16 @@ impl EmberGame for Game {
             "position": self.sim.position.to_array(), "time": self.sim.time,
             "interacting": self.sim.interaction.is_some(),
             "finished": self.sim.finished(),
+            "enemy": enemy,
+            "enemyCombat": {"hitEvent":castle_hit.map_or(0,|e| e.id),
+                "attackEvent":castle_attack.map_or(0,|e| e.id),
+                "hitLeft":castle_hit.map_or(0.0,|e| (0.24 - (self.sim.time-e.time)).clamp(0.0,0.24))},
+            "quest": {"sequence":self.sim.quest.sequence,"seal":self.sim.quest.seal,
+                "journal":self.sim.quest.journal(),"shrinesUsed":self.sim.quest.shrines_used.count_ones(),
+                "checkpoint":self.sim.quest.checkpoint,"defeated":self.sim.defeated_count()},
+            "castleEvents":self.sim.castle_events.events().map(|e| serde_json::json!({
+                "id":e.id,"kind":e.kind.key(),"time":e.time
+            })).collect::<Vec<_>>(),
             "guard": {
                 "amount": self.sim.guard.amount, "ready": self.sim.guard.ready(),
                 "brokenLeft": self.sim.guard.broken_left, "impactLeft": self.sim.guard.impact_left,

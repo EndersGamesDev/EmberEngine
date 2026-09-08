@@ -270,13 +270,20 @@
       "id": "end-game",
       "title": "End Game",
       "tag": "single player · dark fantasy · controller + touch",
-      "desc": "Awaken in a castle dungeon, recover a key, claim the wolf greatsword and defeat the warden. Fight with heavy sword combos and directional blocking, then explore the basement passage, monumental great hall, garden, battlements and tower. Generated 3D assets, adaptive resolution, controller, keyboard and mouse, and touch controls.",
+      "desc": "Escape a dark fantasy castle: claim a greatsword, battle armed soldiers and hollow knights, defeat the cyclops Castellan, and follow ancient clues to break the last seal. Generated 3D characters and voices, heavy sword combos, blocking, adaptive resolution, and controller, keyboard and touch controls.",
       "versions": [
+        {
+          "v": "v10",
+          "version": "10.0.0",
+          "path": "games/end-game/v10/",
+          "live": true,
+          "note": "The Last Seal: armed soldiers, hollow knights, a cyclops boss and a castle escape mystery"
+        },
         {
           "v": "v9",
           "version": "9.0.0",
           "path": "games/end-game/v9/",
-          "live": true,
+          "live": false,
           "note": "Beyond the Dungeon: explore the great hall, garden, castle walls and climb the tower"
         },
         {

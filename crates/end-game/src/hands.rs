@@ -32,9 +32,38 @@ impl Placement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn triangle_touches_box(points: [Vec3; 3], half: Vec3) -> bool {
+        let edges = [
+            points[1] - points[0],
+            points[2] - points[1],
+            points[0] - points[2],
+        ];
+        let mut axes = vec![Vec3::X, Vec3::Y, Vec3::Z, edges[0].cross(edges[1])];
+        for edge in edges {
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                axes.push(edge.cross(axis));
+            }
+        }
+        for axis in axes {
+            if axis.length_squared() > 0.00000001 {
+                let p = points.map(|p| p.dot(axis));
+                let radius = axis.abs().dot(half);
+                if p.into_iter().fold(f32::INFINITY, f32::min) > radius
+                    || p.into_iter().fold(f32::NEG_INFINITY, f32::max) < -radius
+                {
+                    return false;
+                }
+            }
+        }
+        true
+    }
     #[test]
     fn pickup_contacts_are_reachable_without_stretching_or_sliding() {
         let hands = Hands::load(&mut Vec::new());
+        let blade = load_glb(include_bytes!(
+            "../../../assets/end-game/v3/wolf-greatsword.glb"
+        ))
+        .unwrap();
         for (kind, stage, crouched) in [
             (InteractionKind::Board, 0),
             (InteractionKind::Key, 1),
@@ -84,11 +113,43 @@ mod tests {
                     if elapsed >= 1.20 {
                         for i in 0..=20 {
                             let point = sword.point(Vec3::X * (1.85 * i as f32 / 20.0));
-                            if point.z < -4.0 {
+                            let local =
+                                Quat::from_rotation_y(0.18) * (point - Vec3::new(2.6, 0.59, -4.6));
+                            if local.x.abs() < 0.42 && local.z.abs() < 0.375 {
                                 assert!(
                                     point.y > 0.83,
                                     "blade swept through stone at {elapsed}: {point:?}"
                                 );
+                            }
+                        }
+                        // Test actual blade/guard triangles against both rotated
+                        // monolith volumes, including a 3 mm clearance margin.
+                        for part in &blade {
+                            for tri in part.mesh.vertices.chunks_exact(3) {
+                                let world = std::array::from_fn(|i| {
+                                    sword.point(Vec3::from_array(tri[i].pos))
+                                });
+                                for p in world {
+                                    assert!(
+                                        (v.rot.inverse() * (p - v.head)).z <= -0.10,
+                                        "pickup near-plane clip at {elapsed}: {p:?}"
+                                    );
+                                }
+                                for (center, half, yaw) in [
+                                    (Vec3::new(2.6, 0.23, -4.6), Vec3::new(0.5, 0.23, 0.45), 0.23),
+                                    (
+                                        Vec3::new(2.6, 0.59, -4.6),
+                                        Vec3::new(0.4, 0.22, 0.355),
+                                        0.18,
+                                    ),
+                                ] {
+                                    let local =
+                                        world.map(|p| Quat::from_rotation_y(yaw) * (p - center));
+                                    assert!(
+                                        !triangle_touches_box(local, half + Vec3::splat(0.003)),
+                                        "actual sword triangle touches plinth at {elapsed}, crouched{crouched}: {world:?}"
+                                    );
+                                }
                             }
                         }
                     }
@@ -484,7 +545,17 @@ impl Hands {
                     let pull = ease(1.20, 1.94, a.elapsed);
                     let mut lifted = standing_sword();
                     lifted.p.y += ease(1.02, 1.20, a.elapsed) * 0.14;
-                    let sword = lifted.mix(ready, pull);
+                    lifted.p.z -= ease(1.02, 1.20, a.elapsed) * 0.06;
+                    let mut sword = super::sword_motion::mix(lifted, ready, pull);
+                    // Clear the monolith before bringing the point into the low
+                    // carry. Both wrists follow the same smooth lift arc.
+                    sword.p.y += (pull * std::f32::consts::PI).sin() * 0.24;
+                    let eye_space = Placement {
+                        p: v.rot.inverse() * (sword.p - v.head),
+                        r: v.rot.inverse() * sword.r,
+                    };
+                    let safe = super::sword_motion::keep_blade_in_front(eye_space);
+                    sword.p = v.head + v.rot * safe.p;
                     m.sword = Some(sword);
                     self.sword_hands(&mut m, sword, a.reach());
                     for hand in &mut m.poses {

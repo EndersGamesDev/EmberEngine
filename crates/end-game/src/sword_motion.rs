@@ -9,8 +9,10 @@ use glam::{Mat3, Quat, Vec3};
 
 pub fn ready() -> Placement {
     Placement {
-        p: Vec3::new(0.07, -0.30, -0.40),
-        r: Quat::from_xyzw(0.29315, 0.48667, 0.32568, 0.75574).normalize(),
+        p: Vec3::new(0.20, -0.43, -0.55),
+        // Low, forward carry leaves the enemy's torso and quest markers clear.
+        // The flat is nearly horizontal, presenting the thin edge to the eye.
+        r: blade_frame(Vec3::new(0.57, 0.06, -0.819), Vec3::new(0.819, 0., 0.57)),
     }
 }
 fn direction(kind: StrikeKind) -> Vec3 {
@@ -51,7 +53,7 @@ fn blade_frame(length: Vec3, edge: Vec3) -> Quat {
     let edge = (edge - length * edge.dot(length)).normalize();
     Quat::from_mat3(&Mat3::from_cols(length, edge.cross(length), edge)).normalize()
 }
-fn mix(from: Placement, to: Placement, t: f32) -> Placement {
+pub(super) fn mix(from: Placement, to: Placement, t: f32) -> Placement {
     // A whole-quaternion slerp can swing the long blade behind the eye during
     // a 180-degree edge change. Swing the point along its short forward arc,
     // then turn the hilt around that axis while preparing the next cut.
@@ -161,7 +163,7 @@ pub fn sample_strike(strike: Strike, elapsed: f32) -> Placement {
     }
     keep_blade_in_front(pose)
 }
-fn keep_blade_in_front(mut p: Placement) -> Placement {
+pub(super) fn keep_blade_in_front(mut p: Placement) -> Placement {
     // Correct the shared weapon before IK; neither hand slides along its grip.
     let d = p.r * Vec3::X;
     let n = p.r * Vec3::Y;
@@ -217,6 +219,24 @@ pub fn weapon(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resting_blade_stays_below_the_central_view() {
+        let meshes = ember_engine::assets::load_glb(include_bytes!(
+            "../../../assets/end-game/v3/wolf-greatsword.glb"
+        ))
+        .unwrap();
+        for part in meshes {
+            for vertex in part.mesh.vertices {
+                if vertex.pos[0] > 0.10 {
+                    let p = ready().point(Vec3::from_array(vertex.pos));
+                    assert!(
+                        p.z < -0.10 && p.y / (-p.z) < -0.10,
+                        "idle blade obscures target center: {p:?}"
+                    );
+                }
+            }
+        }
+    }
     use end_game_core::combat::StrikeLink;
     const KINDS: [StrikeKind; 5] = [
         StrikeKind::Cut,

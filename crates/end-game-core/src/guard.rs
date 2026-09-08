@@ -45,13 +45,18 @@ impl Guard {
 
     /// Facing, range and obstruction are decided by the dungeon first.
     pub fn receive(&mut self, stamina: &mut f32, point: Vec3) -> GuardContact {
+        self.receive_cost(stamina, point, BLOCK_COST)
+    }
+
+    /// Castle weapons retain the same guard timing with an authored stamina cost.
+    pub fn receive_cost(&mut self, stamina: &mut f32, point: Vec3, cost: f32) -> GuardContact {
         if !self.ready() {
             return GuardContact::Open;
         }
         self.impact_point = point;
         self.impact_left = IMPACT_TIME;
-        if *stamina >= BLOCK_COST {
-            *stamina -= BLOCK_COST;
+        if *stamina >= cost {
+            *stamina -= cost;
             self.block_event = self.block_event.wrapping_add(1);
             GuardContact::Blocked
         } else {

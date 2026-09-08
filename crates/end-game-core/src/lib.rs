@@ -1,7 +1,10 @@
 //! End Game's local, fixed-step dungeon simulation. All lengths are metres.
 use glam::{Vec2, Vec3};
+#[cfg(test)]
+mod castle_tests;
 pub mod combat;
 pub mod dialogue;
+pub mod enemies;
 #[cfg(test)]
 mod exploration_tests;
 pub mod guard;
@@ -9,11 +12,16 @@ pub mod guard;
 mod guard_tests;
 pub mod interaction;
 pub mod layout;
+pub mod quest;
 pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use dialogue::{Dialogue, VoiceEvent, VoiceKind};
+pub use enemies::{
+    CastleEvent, CastleEventKind, CastleEvents, Enemy, EnemyAttack, EnemyKind, EnemyPhase,
+};
 pub use guard::{Guard, GuardContact};
 pub use interaction::{Interaction, InteractionKind};
+pub use quest::Quest;
 pub use warden::{Warden, WardenPhase};
 
 pub const STEP: f32 = 1.0 / 60.0;
@@ -273,6 +281,11 @@ pub struct Dungeon {
     /// Physical far-gate lift, separate from the sliding cell gate.
     pub exit_open: f32,
     pub grounded: bool,
+    pub enemies: Vec<Enemy>,
+    pub quest: Quest,
+    pub castle_events: CastleEvents,
+    enemy_turn: usize,
+    enemy_attack_wait: f32,
     explored: u32,
     pub board_open: f32,
     pub interaction: Option<Interaction>,
@@ -311,6 +324,11 @@ impl Default for Dungeon {
             gate_open: 0.0,
             exit_open: 0.0,
             grounded: true,
+            enemies: enemies::authored_enemies(),
+            quest: Quest::default(),
+            castle_events: CastleEvents::default(),
+            enemy_turn: 0,
+            enemy_attack_wait: 0.0,
             explored: 0,
             board_open: 0.0,
             interaction: None,
@@ -344,9 +362,9 @@ impl Default for Dungeon {
 }
 
 impl Dungeon {
-    /// V9 remains playable after escaping; exploration has no end overlay.
+    /// Basement escape remains playable; the ending requires the final west path.
     pub fn finished(&self) -> bool {
-        false
+        self.quest.escaped
     }
     pub fn escaped(&self) -> bool {
         self.stage >= 5
@@ -390,10 +408,7 @@ impl Dungeon {
             3 => "Pass the warden. Find the greatsword",
             4 if self.warden_health > 0.0 => "Defeat the warden, then break the far gate's chain",
             4 => "Break the chain on the far gate",
-            _ if self.explored_count() < TOTAL_EXPLORE_COUNT => {
-                "Explore the castle, garden and tower summit"
-            }
-            _ => "The castle is yours to explore",
+            _ => self.quest.objective(),
         }
     }
     pub fn distance(&self, x: f32, z: f32) -> f32 {
@@ -402,6 +417,9 @@ impl Dungeon {
     pub fn prompt(&self) -> &'static str {
         if self.interaction.is_some() {
             return "";
+        }
+        if self.stage >= 5 {
+            return self.quest_prompt();
         }
         match self.stage {
             0 if self.distance(-1.25, 2.1) < 1.6 => "Lift the loose floorboard",
@@ -419,6 +437,10 @@ impl Dungeon {
         self.event += 1;
     }
     pub fn interact(&mut self) {
+        if self.stage >= 5 {
+            self.interact_castle();
+            return;
+        }
         // Approaches are authored on the floor. Let an airborne player finish
         // their jump instead of interpolating them down through the furniture.
         if !self.on_surface() || self.velocity_y != 0.0 || self.prompt().is_empty() {
@@ -494,6 +516,9 @@ impl Dungeon {
         }
     }
     fn strike_contact(&mut self, kind: StrikeKind) {
+        if self.castle_sword_contact(kind) {
+            return;
+        }
         let forward = self.forward();
         let chain_distance = self.distance(0.0, -6.5);
         let chain_in_reach = self.stage == 4 && chain_distance < 2.0 && forward.z < -0.25;
@@ -686,6 +711,9 @@ impl Dungeon {
     }
 
     pub fn tick(&mut self, mut input: Controls) {
+        if self.finished() {
+            return;
+        }
         self.grounded = self.on_surface();
         if input.interact && self.interaction.is_none() {
             self.interact();
@@ -769,7 +797,7 @@ impl Dungeon {
             && (input.crouch
                 || !layout::occupied_with(
                     layout::castle(),
-                    &[self.exit_gate_bounds()],
+                    &[self.exit_gate_bounds(), self.quest.gate_bounds()],
                     self.position.to_array(),
                     layout::PLAYER_HEIGHT,
                     layout::PLAYER_RADIUS,
@@ -869,9 +897,20 @@ impl Dungeon {
                 layout::PLAYER_HEIGHT
             },
         };
+        let mut solids = vec![self.exit_gate_bounds(), self.quest.gate_bounds()];
+        if self.stage >= 5 {
+            for enemy in self.enemies.iter().filter(|e| e.alive()) {
+                let p = enemy.position;
+                let r = enemy.kind.radius();
+                solids.push(layout::Aabb::new(
+                    [p.x - r, p.y, p.z - r],
+                    [p.x + r, p.y + enemy.kind.height(), p.z + r],
+                ));
+            }
+        }
         layout::advance_body_with(
             layout::castle(),
-            &[self.exit_gate_bounds()],
+            &solids,
             &mut player,
             [delta.x, delta.z],
             STEP,
@@ -912,12 +951,18 @@ impl Dungeon {
             self.say("Your blade is somewhere beyond these bars.");
         }
         self.tick_warden(running);
+        self.tick_castle_enemies();
+        self.tick_quest();
         // A missed exterior collision must still finish a fall rather than
         // leaving the player dropping forever; reuse the existing death path.
         if self.position.y < -8.0 {
             self.health = 0.0;
         }
         if self.health <= 0.0 {
+            if self.quest.checkpoint {
+                self.respawn_castle();
+                return;
+            }
             let next_life = self.dialogue.life.wrapping_add(1);
             *self = Self::default();
             self.dialogue = Dialogue::new(next_life);

@@ -328,13 +328,44 @@ fn build_castle() -> Castle {
         Floor,
         Surface::Grass,
     );
-    for x in [[-25.6, -25.], [25., 25.6]] {
+    m.stone(
+        "garden.outerwall",
+        [25., 6., -102.6],
+        [25.6, 15.2, -63.4],
+        Garden,
+        Wall,
+    );
+    for z in [[-102.6, -81.2], [-78.8, -63.4]] {
         m.stone(
             "garden.outerwall",
-            [x[0], 6., -102.6],
-            [x[1], 15.2, -63.4],
+            [-25.6, 6., z[0]],
+            [-25., 15.2, z[1]],
             Garden,
             Wall,
+        );
+    }
+    m.stone(
+        "garden.sallylintel",
+        [-25.6, 9., -81.2],
+        [-25., 15.2, -78.8],
+        Garden,
+        Wall,
+    );
+    m.slab(
+        "garden.escape.path",
+        [-30., -25.],
+        [-81.2, -78.8],
+        6.,
+        Garden,
+        Floor,
+    );
+    for z in [[-81.45, -81.2], [-78.8, -78.55]] {
+        m.stone(
+            "garden.escape.rail",
+            [-30., 6., z[0]],
+            [-25.6, 8.3, z[1]],
+            Garden,
+            Rail,
         );
     }
     m.stone(

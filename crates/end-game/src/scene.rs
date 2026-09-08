@@ -6,16 +6,21 @@ use ember_engine::{
 use end_game_core::{Dungeon, Material};
 use glam::{Quat, Vec2, Vec3};
 
-fn castle_camera(target: Vec3, ideal: Vec3) -> Vec3 {
+fn castle_camera(target: Vec3, ideal: Vec3, gate: Option<end_game_core::layout::Aabb>) -> Vec3 {
     let steps = ((ideal - target).length() / 0.06).ceil().max(1.0) as usize;
     let mut safe = target.lerp(ideal, 0.005);
     for step in 1..=steps {
         let p = target.lerp(ideal, step as f32 / steps as f32);
-        let blocked = end_game_core::layout::castle().solids.iter().any(|solid| {
-            let min = Vec3::from_array(solid.bounds.min) - Vec3::splat(0.12);
-            let max = Vec3::from_array(solid.bounds.max) + Vec3::splat(0.12);
-            p.cmpge(min).all() && p.cmple(max).all()
-        });
+        let blocked = end_game_core::layout::castle()
+            .solids
+            .iter()
+            .map(|s| s.bounds)
+            .chain(gate)
+            .any(|bounds| {
+                let min = Vec3::from_array(bounds.min) - Vec3::splat(0.12);
+                let max = Vec3::from_array(bounds.max) + Vec3::splat(0.12);
+                p.cmpge(min).all() && p.cmple(max).all()
+            });
         if blocked {
             break;
         }
@@ -37,6 +42,8 @@ struct Prop {
 pub struct Scene {
     cell: Cell,
     castle: super::castle::CastleScene,
+    quest: super::quest::QuestScene,
+    enemies: super::enemies::EnemyScene,
     oak: u32,
     iron: u32,
     wolf: Model,
@@ -231,10 +238,14 @@ impl Scene {
             include_bytes!("../../../assets/end-game/v3/iron-key.glb"),
         );
         let castle = super::castle::CastleScene::build(&mut meshes, 2);
+        let quest = super::quest::QuestScene::load(&mut meshes, 2);
+        let enemies = super::enemies::EnemyScene::load(&mut meshes);
         (
             Self {
                 cell,
                 castle,
+                quest,
+                enemies,
                 oak: 1,
                 iron: 2,
                 wolf,
@@ -288,7 +299,11 @@ impl Scene {
                     (head.z + offset.z).clamp(-6.5, 4.6),
                 )
             } else {
-                castle_camera(target, head + offset + Vec3::Y * 0.25)
+                castle_camera(
+                    target,
+                    head + offset + Vec3::Y * 0.25,
+                    Some(game.quest.gate_bounds()),
+                )
             };
             Camera {
                 eye,
@@ -352,6 +367,8 @@ impl Scene {
         };
         self.castle.light(&mut frame, t);
         self.castle.draw(&mut frame, &self.torch, t);
+        self.quest.draw(&mut frame, game);
+        self.enemies.draw(&mut frame, game);
         let out = &mut frame.instances;
         if basement {
             self.cell.animate(out, t, game.gate_open);
@@ -676,7 +693,7 @@ impl Scene {
 mod tests {
     use super::*;
     #[test]
-    fn generated_props_decode_and_representative_frames_fit_the_v9_budget() {
+    fn generated_props_decode_and_representative_frames_fit_the_v10_budget() {
         let (scene, meshes) = Scene::build();
         for model in std::iter::once(&scene.cot).chain(scene.props.iter().map(|p| &p.model)) {
             for (id, _, _) in &model.ids {
@@ -706,7 +723,8 @@ mod tests {
                         meshes[i.mesh as usize - 1].vertices.len() / 3
                     }
                 })
-                .sum()
+                .sum::<usize>()
+                + frame.particles.len() * 2
         };
         let mut maximum = count(&scene.frame(&Dungeon::default(), false, 0.0));
         for position in [
@@ -716,13 +734,20 @@ mod tests {
             Vec3::new(0., 0., -21.),
             Vec3::new(0., 0., -27.),
             Vec3::new(0., 0., -38.),
+            Vec3::new(0., 0., -41.),
+            Vec3::new(7., 0., -44.),
             Vec3::new(0., 3., -59.),
             Vec3::new(0., 6., -66.),
             Vec3::new(0., 6., -80.),
+            Vec3::new(-7., 6., -77.9),
+            Vec3::new(-23., 6., -80.),
+            Vec3::new(-27., 6., -80.),
             Vec3::new(14., 6., -87.5),
             Vec3::new(18.5, 10., -97.),
             Vec3::new(24., 14., -80.),
+            Vec3::new(-24., 14., -84.),
             Vec3::new(16., 22., -90.),
+            Vec3::new(21., 22., -95.),
         ] {
             let mut local_max = 0;
             for yaw in 0..8 {
@@ -738,7 +763,7 @@ mod tests {
                     let triangles = count(&frame);
                     local_max = local_max.max(triangles);
                     assert!(
-                        triangles <= 260_000,
+                        triangles <= 300_000,
                         "{position:?}, yaw {yaw}, third {third_person}: {triangles}"
                     );
                     assert!(
@@ -747,26 +772,60 @@ mod tests {
                     );
                 }
             }
-            eprintln!("V9 position {position:?}: maximum {local_max} submitted triangles");
+            eprintln!("V10 position {position:?}: maximum {local_max} submitted triangles");
             maximum = maximum.max(local_max);
         }
+        for id in 0..9 {
+            let mut game = Dungeon::default();
+            game.stage = 5;
+            game.exit_open = 1.;
+            game.warden_health = 0.;
+            game.quest.sequence = 3;
+            let enemy = &mut game.enemies[id];
+            enemy.phase = end_game_core::enemies::EnemyPhase::Attacking;
+            enemy.elapsed = enemy.attack.contact_time();
+            if enemy.kind == end_game_core::enemies::EnemyKind::Cyclops {
+                enemy.attack = end_game_core::enemies::EnemyAttack::Slam;
+                enemy.elapsed = enemy.attack.windup_time();
+                enemy.phase_two = true;
+            }
+            game.position = enemy.position + Vec3::Z * if id == 8 { 5. } else { 3. };
+            let frame = scene.frame(&game, false, 0.);
+            let triangles = count(&frame);
+            assert!(
+                triangles <= 300_000,
+                "enemy {id} contact frame: {triangles}"
+            );
+            assert!(frame.particles.iter().all(|p| p.position.is_finite()));
+            maximum = maximum.max(triangles);
+        }
         eprintln!(
-            "V9 maximum frame triangles: {maximum}; unique mesh triangles: {}; texture bytes incl. mip estimate: {}",
+            "V10 maximum frame triangles: {maximum}; unique mesh triangles: {}; texture bytes incl. mip estimate: {}",
             meshes.iter().map(|m| m.vertices.len() / 3).sum::<usize>(),
             textures * 4 / 3
         );
-        assert!(maximum <= 260_000);
-        assert!(textures * 4 / 3 < 136 * 1024 * 1024);
+        assert!(maximum <= 300_000);
+        assert!(textures * 4 / 3 < 156 * 1024 * 1024);
     }
 
     #[test]
     fn castle_camera_stays_local_and_pulls_in_before_a_wall() {
         let target = Vec3::new(1.65, 1.3, -12.);
-        let eye = castle_camera(target, Vec3::new(4.0, 1.7, -12.));
+        let eye = castle_camera(target, Vec3::new(4.0, 1.7, -12.), None);
         assert!(eye.x < 1.89 && eye.x > target.x);
         assert!((eye.z + 12.).abs() < 0.001);
         let target = Vec3::new(0., 7.3, -80.);
         let ideal = target + Vec3::new(0.6, 0.4, 2.1);
-        assert!(castle_camera(target, ideal).distance(ideal) < 0.001);
+        assert!(castle_camera(target, ideal, None).distance(ideal) < 0.001);
+        let mut quest = end_game_core::quest::Quest::default();
+        let target = Vec3::new(-24.4, 7.3, -80.);
+        let ideal = Vec3::new(-26.3, 7.7, -80.);
+        let closed = castle_camera(target, ideal, Some(quest.gate_bounds()));
+        assert!(
+            closed.x > -24.88,
+            "camera passes through the closed sally port"
+        );
+        quest.gate_open = 1.;
+        assert!(castle_camera(target, ideal, Some(quest.gate_bounds())).distance(ideal) < 0.001);
     }
 }

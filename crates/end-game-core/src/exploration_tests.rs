@@ -6,6 +6,8 @@ fn explorer(position: Vec3) -> Dungeon {
         exit_open: 1.0,
         warden_health: 0.0,
         position,
+        // Pure traversal fixtures deliberately omit encounters.
+        enemies: Vec::new(),
         ..Dungeon::default()
     }
 }

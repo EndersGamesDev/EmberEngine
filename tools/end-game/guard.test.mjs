@@ -2,10 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {CastleDialogue} from '../../web/games/end-game/v10/castle-audio.js';
+import {renderCastle} from '../../web/games/end-game/v10/castle-ui.js';
 
 // Execute the actual shell with passive DOM/API doubles. No browser, display,
 // workstation input or audio playback is driven by these input regressions.
-const source=readFileSync(new URL('../../web/games/end-game/v9/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+const source=readFileSync(new URL('../../web/games/end-game/v10/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
 function fixture() {
   const nodes=new Map(), calls=[];
   class Element {
@@ -30,7 +32,8 @@ function fixture() {
     innerWidth:1000,innerHeight:700,devicePixelRatio:1,navigator:{getGamepads:()=>[],deviceMemory:4},
     Audio:class{play(){return Promise.resolve();}pause(){}},
     Quality:class{constructor(){this.scale=1;this.mode='auto';this.display={};}sample(){}clamp(){}},
-    VoiceAudio:class{resume(){}setVolume(){}preload(){}},
+    VoiceAudio:class{resume(){}setVolume(){}preload(){}stop(){}pause(){}ready(){return true;}play(){}},
+    CastleDialogue, renderCastle, CASTLE_LINES:{},
     WardenDialogue:class{setPaused(){}ingest(){}tick(){}finish(){}},__calls:calls});
   vm.runInContext(source,context);
   const run=code=>vm.runInContext(code,context);
@@ -94,6 +97,21 @@ test('block and break events are consumed every frame before the HUD throttle',(
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal').map(c=>c[1]),[false,true]);
 });
 
+test('ready guard uses the visible strike cost and warns separately for unblockable slams',()=>{
+  const f=fixture();
+  const show=(stamina,enemy)=>{
+    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify({version:'10.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:${stamina},objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,guard:{amount:1,ready:true,impactLeft:0,brokenLeft:0,blockEvent:0,breakEvent:0},enemy:${JSON.stringify(enemy)}});loop(100);`);
+    return f.get('guard-cue').textContent;
+  };
+  for(const cost of [32,38]) {
+    assert.match(show(cost-1,{blockCost:cost,unblockable:false}),new RegExp(`Low stamina.*${cost}`));
+    assert.doesNotMatch(show(cost,{blockCost:cost,unblockable:false}),/Low stamina/);
+  }
+  assert.match(show(100,{blockCost:null,unblockable:true}),/Crushing slam.*dodge/);
+  assert.match(show(27,null),/Low stamina.*28/);
+  assert.doesNotMatch(show(28,null),/Low stamina/);
+});
+
 test('castle exploration keeps controls active and shows location after escape',()=>{
   const f=fixture();
   f.get('complete').hidden=true;
@@ -105,4 +123,14 @@ test('castle exploration keeps controls active and shows location after escape',
   assert.equal(f.run('paused || ended'),false);
   f.strike.emit('pointerdown');
   assert.equal(f.calls.at(-1)[0],'action');
+});
+
+test('only final castle escape opens completion and stops new strikes',()=>{
+  const f=fixture();f.get('complete').hidden=true;
+  f.run(`api.state_json=()=>JSON.stringify({version:'10.0.0',time:100,stage:5,finished:true,form:'Wolf',health:66,stamina:80,objective:'You escaped the castle',location:'Backyard garden',exploration:{visited:7,total:7},prompt:'',event:7,footsteps:20});loop(100);`);
+  assert.equal(f.get('complete').hidden,false);
+  assert.equal(f.get('hud').hidden,true);
+  assert.equal(f.run('playing()'),false);
+  const actions=f.calls.filter(c=>c[0]==='action').length;
+  f.strike.emit('pointerdown');assert.equal(f.calls.filter(c=>c[0]==='action').length,actions);
 });

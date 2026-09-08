@@ -136,6 +136,7 @@ impl Strike {
 pub enum ImpactKind {
     Warden,
     Chain,
+    Enemy,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

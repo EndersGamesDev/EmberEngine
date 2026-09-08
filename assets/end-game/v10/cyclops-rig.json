@@ -1,0 +1,329 @@
+{
+  "schema_version": 1,
+  "units": "meters",
+  "facing": "-Z",
+  "up": "+Y",
+  "geometry_space": "standing bind coordinates; identity node transforms",
+  "height": 1.865,
+  "parts": [
+    {
+      "name": "enemy_pelvis",
+      "parent": null,
+      "pivot": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "enemy_torso",
+      "parent": "enemy_pelvis",
+      "pivot": [
+        0,
+        1.06,
+        0
+      ]
+    },
+    {
+      "name": "enemy_neck",
+      "parent": "enemy_torso",
+      "pivot": [
+        0,
+        1.52,
+        0
+      ]
+    },
+    {
+      "name": "enemy_head",
+      "parent": "enemy_neck",
+      "pivot": [
+        0,
+        1.6,
+        -0.002
+      ]
+    },
+    {
+      "name": "enemy_upperarm_r",
+      "parent": "enemy_torso",
+      "pivot": [
+        0.36,
+        1.46,
+        0
+      ],
+      "endpoint": [
+        0.36,
+        1.14,
+        0
+      ],
+      "length": 0.32
+    },
+    {
+      "name": "enemy_forearm_r",
+      "parent": "enemy_upperarm_r",
+      "pivot": [
+        0.36,
+        1.14,
+        0
+      ],
+      "endpoint": [
+        0.36,
+        0.85,
+        0
+      ],
+      "length": 0.29
+    },
+    {
+      "name": "enemy_hand_r",
+      "parent": "enemy_forearm_r",
+      "pivot": [
+        0.36,
+        0.85,
+        0
+      ],
+      "knife_socket": [
+        0.26,
+        0.782,
+        -0.012
+      ]
+    },
+    {
+      "name": "enemy_thigh_r",
+      "parent": "enemy_pelvis",
+      "pivot": [
+        0.17,
+        0.97,
+        0
+      ],
+      "endpoint": [
+        0.17,
+        0.54,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "enemy_shin_r",
+      "parent": "enemy_thigh_r",
+      "pivot": [
+        0.17,
+        0.54,
+        0
+      ],
+      "endpoint": [
+        0.17,
+        0.11,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "enemy_boot_r",
+      "parent": "enemy_shin_r",
+      "pivot": [
+        0.17,
+        0.11,
+        0
+      ],
+      "sole_y": 0.0
+    },
+    {
+      "name": "enemy_coat_r",
+      "parent": "enemy_thigh_r",
+      "pivot": [
+        0.17,
+        0.97,
+        0
+      ]
+    },
+    {
+      "name": "enemy_upperarm_l",
+      "parent": "enemy_torso",
+      "pivot": [
+        -0.36,
+        1.46,
+        0
+      ],
+      "endpoint": [
+        -0.36,
+        1.14,
+        0
+      ],
+      "length": 0.32
+    },
+    {
+      "name": "enemy_forearm_l",
+      "parent": "enemy_upperarm_l",
+      "pivot": [
+        -0.36,
+        1.14,
+        0
+      ],
+      "endpoint": [
+        -0.36,
+        0.85,
+        0
+      ],
+      "length": 0.29
+    },
+    {
+      "name": "enemy_hand_l",
+      "parent": "enemy_forearm_l",
+      "pivot": [
+        -0.36,
+        0.85,
+        0
+      ],
+      "knife_socket": null
+    },
+    {
+      "name": "enemy_thigh_l",
+      "parent": "enemy_pelvis",
+      "pivot": [
+        -0.17,
+        0.97,
+        0
+      ],
+      "endpoint": [
+        -0.17,
+        0.54,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "enemy_shin_l",
+      "parent": "enemy_thigh_l",
+      "pivot": [
+        -0.17,
+        0.54,
+        0
+      ],
+      "endpoint": [
+        -0.17,
+        0.11,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "enemy_boot_l",
+      "parent": "enemy_shin_l",
+      "pivot": [
+        -0.17,
+        0.11,
+        0
+      ],
+      "sole_y": 0.0
+    },
+    {
+      "name": "enemy_coat_l",
+      "parent": "enemy_thigh_l",
+      "pivot": [
+        -0.17,
+        0.97,
+        0
+      ]
+    }
+  ],
+  "source_method": "SDXL reference -> TRELLIS.2 sculpt -> rigid segmentation, closed convex part retopology with facial relief projection, RGB source rebake, bind retarget",
+  "source_joints": {
+    "pelvis": [
+      0,
+      1,
+      0
+    ],
+    "torso": [
+      0,
+      1.06,
+      0
+    ],
+    "neck": [
+      0,
+      1.52,
+      0
+    ],
+    "head": [
+      0,
+      1.6,
+      -0.002
+    ],
+    "upperarm_r": [
+      0.36,
+      1.49,
+      0.06
+    ],
+    "forearm_r": [
+      0.5,
+      1.22,
+      0.05
+    ],
+    "hand_r": [
+      0.515,
+      0.925,
+      -0.09
+    ],
+    "upperarm_l": [
+      -0.36,
+      1.49,
+      0.06
+    ],
+    "forearm_l": [
+      -0.5,
+      1.22,
+      0.05
+    ],
+    "hand_l": [
+      -0.515,
+      0.925,
+      -0.09
+    ],
+    "thigh_r": [
+      0.17,
+      0.99,
+      0.04
+    ],
+    "shin_r": [
+      0.2,
+      0.54,
+      0.04
+    ],
+    "boot_r": [
+      0.2,
+      0.13,
+      0.04
+    ],
+    "thigh_l": [
+      -0.17,
+      0.99,
+      0.04
+    ],
+    "shin_l": [
+      -0.2,
+      0.54,
+      0.04
+    ],
+    "boot_l": [
+      -0.2,
+      0.13,
+      0.04
+    ],
+    "coat_r": [
+      0.17,
+      0.97,
+      0
+    ],
+    "coat_l": [
+      -0.17,
+      0.97,
+      0
+    ]
+  },
+  "limits": "Single-view generated character; inferred back, rigid parts and fused fingers. Closed inner leg/joint covers use nearby generated material samples. Incidental held objects excluded; separately authored measured weapons.",
+  "oneeye_local": [
+    0,
+    1.729,
+    -0.17005222368240355
+  ],
+  "character": "cyclops",
+  "weapons_separate": true
+}
