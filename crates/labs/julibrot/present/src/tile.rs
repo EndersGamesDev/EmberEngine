@@ -107,6 +107,8 @@ pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
     let grid_width = unpack_unsigned(extent[1])?;
     let grid_height = unpack_unsigned(extent[2])?;
     let projection = header.texels[TilePoseHeader::H14_PROJECTION].lanes;
+    let camera_yaw = unpack_factor_pair(observer[..2].try_into().ok()?)?;
+    let camera_pitch = unpack_factor_pair(observer[2..].try_into().ok()?)?;
     let pose = Pose {
         epoch: 0,
         orbit_generation: unpack_unsigned(header.texels[TilePoseHeader::H25_PROVENANCE].lanes[1])?,
@@ -120,8 +122,8 @@ pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
         view: ViewControls {
             camera,
             camera_translation: unpack_translation(header),
-            camera_yaw: f64::from(observer[1]).atan2(f64::from(observer[0])),
-            camera_pitch: f64::from(observer[3]).atan2(f64::from(observer[2])),
+            camera_yaw,
+            camera_pitch,
             height_scale: f64::from(projection[1]),
             distance_five: f64::from(projection[2]),
             distance_four: f64::from(projection[3]),
@@ -333,13 +335,15 @@ fn unpack_angle_factors<const N: usize>(texels: &[DescriptorTexel]) -> Option<[f
             .iter()
             .flat_map(|texel| texel.lanes.as_chunks::<2>().0),
     ) {
-        let norm = f64::from(pair[0]).hypot(f64::from(pair[1]));
-        if (norm - 1.0).abs() > FACTOR_NORM_TOLERANCE {
-            return None;
-        }
-        *angle = f64::from(pair[1]).atan2(f64::from(pair[0]));
+        *angle = unpack_factor_pair(*pair)?;
     }
     Some(angles)
+}
+
+fn unpack_factor_pair([cosine, sine]: [f32; 2]) -> Option<f64> {
+    let norm = f64::from(cosine).hypot(f64::from(sine));
+    ((norm - 1.0).abs() <= FACTOR_NORM_TOLERANCE)
+        .then_some(f64::from(sine).atan2(f64::from(cosine)))
 }
 
 fn pack_split_array(values: [f64; 4]) -> Option<([f32; 4], [f32; 4])> {
@@ -675,6 +679,17 @@ mod tests {
         invalid_factor.texels[TilePoseHeader::H02_OBJECT_12_13].lanes[..2]
             .copy_from_slice(&[0.0; 2]);
         assert!(unpack_descriptor_header(&invalid_factor).is_none());
+
+        let packed = pack_descriptor_header(&render, &policy_header())
+            .expect("finite descriptor source pose packs");
+        let mut invalid_yaw = packed;
+        invalid_yaw.texels[TilePoseHeader::H10_OBSERVER].lanes[..2]
+            .copy_from_slice(&[0.0; 2]);
+        assert!(unpack_descriptor_header(&invalid_yaw).is_none());
+        let mut invalid_pitch = packed;
+        invalid_pitch.texels[TilePoseHeader::H10_OBSERVER].lanes[2..]
+            .copy_from_slice(&[0.0; 2]);
+        assert!(unpack_descriptor_header(&invalid_pitch).is_none());
     }
 
     #[test]
