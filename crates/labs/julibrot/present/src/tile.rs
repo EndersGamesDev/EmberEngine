@@ -931,10 +931,13 @@ mod tests {
             (projected.screen[0] - direct.screen[0]).hypot(projected.screen[1] - direct.screen[1]);
         assert!(target_error <= TARGET_PROJECTION_TOLERANCE_PX);
 
-        let without_delta = project_reconstructed_sample(&target, exact)
-            .expect("uncorrected finite mirror still projects");
-        let anchor_effect = (projected.screen[0] - without_delta.screen[0])
-            .hypot(projected.screen[1] - without_delta.screen[1]);
+        // Independent recomputation isolates 0.3031873096 px of H17 movement; the former
+        // unscaled baseline mixed zoom into the comparison and measured 28.7457515889 px.
+        let scaled_without_anchor = exact
+            .project_from_anchor(&target, [0.0; 2], 0.0)
+            .expect("zero-anchor maximal-zoom placement projects");
+        let anchor_effect = (projected.screen[0] - scaled_without_anchor.screen[0])
+            .hypot(projected.screen[1] - scaled_without_anchor.screen[1]);
         assert!(anchor_effect >= ANCHOR_EFFECT_MINIMUM_PX);
 
         let mut uncertified_policy = policy_header();
