@@ -8,14 +8,20 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ALLOWLIST="$HERE/julibrot-shader-allowlist.txt"
+VALIDATIONS="$HERE/julibrot-shader-validation-tests.txt"
 POLICY="$ROOT/docs/julibrot/shaders.md"
 LEGACY_FIXTURE_PATH="crates/labs/julibrot/present/src/shade_shader.rs"
 LEGACY_FIXTURE_SYMBOL="LEGACY_SHADE_SOURCE"
 
 declare -A ALLOWED=()
 declare -A DETECTED=()
+declare -A PRODUCTION_TEMPLATES=()
+declare -A TEMPLATE_FILES=()
+declare -A VALIDATED_TEMPLATES=()
 allowlist_count=0
 template_count=0
+production_template_count=0
+validation_count=0
 test_fixture_count=0
 failures=0
 
@@ -98,6 +104,80 @@ load_allowlist() {
     done < "$allowlist"
 }
 
+load_validation_pairs() {
+    local repo="$1"
+    local validations="$2"
+    local line_number=0 record template test_path template_symbol render_function test_function
+    local key runtime template_name
+    local -a fields=()
+
+    if [ ! -f "$validations" ]; then
+        report_failure "missing Julibrot shader validation pairs: $validations"
+        return
+    fi
+    runtime="$repo/crates/labs/julibrot/shader/src/runtime.rs"
+    if [ ! -f "$runtime" ]; then
+        report_failure "missing Julibrot shader runtime registry: $runtime"
+        return
+    fi
+
+    while IFS= read -r record || [ -n "$record" ]; do
+        line_number=$((line_number + 1))
+        case "$record" in
+            ''|'#'*) continue ;;
+        esac
+        fields=()
+        IFS='|' read -r -a fields <<< "$record"
+        if [ "${#fields[@]}" -ne 5 ]; then
+            report_failure "malformed shader validation line $line_number: $record"
+            continue
+        fi
+        template="${fields[0]}"
+        test_path="${fields[1]}"
+        template_symbol="${fields[2]}"
+        render_function="${fields[3]}"
+        test_function="${fields[4]}"
+        if [[ "$template" != crates/labs/julibrot/shader/templates/*.wgsl.jinja ]] \
+            || [[ "$template" = *-test.wgsl.jinja ]] \
+            || [[ "$test_path" != crates/labs/julibrot/*.rs ]] \
+            || [[ ! "$template_symbol" =~ ^[A-Z][A-Z0-9_]*$ ]] \
+            || [[ ! "$render_function" =~ ^[a-z][a-z0-9_]*$ ]] \
+            || [[ ! "$test_function" =~ ^[a-z][a-z0-9_]*$ ]]
+        then
+            report_failure "invalid shader validation line $line_number: $record"
+            continue
+        fi
+        key="$template"
+        if [ -n "${VALIDATED_TEMPLATES[$key]+present}" ]; then
+            report_failure "duplicate shader validation pair: $template"
+            continue
+        fi
+        if [ -z "${PRODUCTION_TEMPLATES[$template]+present}" ]; then
+            report_failure "stale shader validation pair for non-production template: $template"
+            continue
+        fi
+        template_name="${template##*/}"
+        if ! grep -Fq -- "pub const $template_symbol: &str = \"$template_name\";" "$runtime" \
+            || ! grep -Fq -- "($template_symbol," "$runtime"
+        then
+            report_failure "production template is absent from the runtime registry: $template"
+        fi
+        if [ ! -f "$repo/$test_path" ]; then
+            report_failure "shader validation test source is absent: $test_path"
+        elif ! grep -Eq -- "fn[[:space:]]+$test_function[[:space:]]*\(" "$repo/$test_path"; then
+            report_failure "shader validation test is absent: $test_path::$test_function"
+        elif ! grep -Fq -- "$render_function().expect" "$repo/$test_path"; then
+            report_failure "shader validation test does not render its production context: $test_path::$test_function"
+        elif ! grep -Fq -- 'naga::front::wgsl::parse_str' "$repo/$test_path" \
+            || ! grep -Fq -- '.validate(&module)' "$repo/$test_path"
+        then
+            report_failure "shader validation test does not validate with naga: $test_path::$test_function"
+        fi
+        VALIDATED_TEMPLATES["$key"]="$test_path::$test_function"
+        validation_count=$((validation_count + 1))
+    done < "$validations"
+}
+
 record_detected() {
     local kind="$1"
     local path="$2"
@@ -137,6 +217,7 @@ scan_shader_files() {
     while IFS= read -r path; do
         case "$path" in
             crates/labs/julibrot/shader/templates/*.wgsl.jinja)
+                TEMPLATE_FILES["$path"]=1
                 template_count=$((template_count + 1))
                 ;;
             crates/labs/julibrot/*.wgsl|crates/labs/julibrot/*.wgsl.jinja)
@@ -144,6 +225,56 @@ scan_shader_files() {
                 ;;
         esac
     done < <(git -C "$repo" ls-files)
+}
+
+scan_production_registry() {
+    local repo="$1"
+    local runtime match entry symbol source_symbol template_name template
+
+    runtime="$repo/crates/labs/julibrot/shader/src/runtime.rs"
+    if [ ! -f "$runtime" ]; then
+        report_failure "missing Julibrot shader runtime registry: $runtime"
+        return
+    fi
+    while IFS= read -r match; do
+        entry="${match#(}"
+        entry="${entry%)}"
+        symbol="${entry%%,*}"
+        symbol="${symbol//[[:space:]]/}"
+        source_symbol="${entry#*,}"
+        source_symbol="${source_symbol//[[:space:]]/}"
+        if [[ ! "$symbol" =~ ^[A-Z][A-Z0-9_]*_TEMPLATE$ ]] \
+            || [[ ! "$source_symbol" =~ ^[A-Z][A-Z0-9_]*_SOURCE$ ]]
+        then
+            report_failure "invalid production template registry entry: $match"
+            continue
+        fi
+        template_name="$(sed -n "s/^pub const $symbol: &str = \"\([^\"]*\.wgsl\.jinja\)\";$/\1/p" "$runtime")"
+        if [ -z "$template_name" ]; then
+            report_failure "production template registry symbol has no public template name: $symbol"
+            continue
+        fi
+        template="crates/labs/julibrot/shader/templates/$template_name"
+        if [ -n "${PRODUCTION_TEMPLATES[$template]+present}" ]; then
+            report_failure "duplicate production template registry entry: $template"
+            continue
+        fi
+        if [ -z "${TEMPLATE_FILES[$template]+present}" ]; then
+            report_failure "production template registry source is absent: $template"
+        fi
+        if [[ "$template" = *-test.wgsl.jinja ]]; then
+            report_failure "test-only template entered the production registry: $template"
+        fi
+        PRODUCTION_TEMPLATES["$template"]="$symbol"
+        production_template_count=$((production_template_count + 1))
+    done < <(
+        awk '/^const EMBEDDED_TEMPLATES:/ { registry = 1 } registry { print } registry && /\];/ { exit }' "$runtime" \
+            | tr '\n' ' ' \
+            | grep -o -E '\([[:space:]]*[A-Z][A-Z0-9_]*[[:space:]]*,[[:space:]]*[A-Z][A-Z0-9_]*[[:space:]]*\)'
+    )
+    if [ "$production_template_count" -eq 0 ]; then
+        report_failure "Julibrot shader production registry is empty"
+    fi
 }
 
 scan_inline_raw_strings() {
@@ -200,25 +331,54 @@ compare_inventory() {
     done < <(printf '%s\n' "${!ALLOWED[@]}" | sort)
 }
 
+compare_validation_inventory() {
+    local template
+
+    while IFS= read -r template; do
+        [ -n "$template" ] || continue
+        if [ -z "${VALIDATED_TEMPLATES[$template]+present}" ]; then
+            report_failure "production shader template lacks native validation test: $template"
+        fi
+    done < <(printf '%s\n' "${!PRODUCTION_TEMPLATES[@]}" | sort)
+
+    while IFS= read -r template; do
+        [ -n "$template" ] || continue
+        if [[ "$template" != *-test.wgsl.jinja ]] \
+            && [ -z "${PRODUCTION_TEMPLATES[$template]+present}" ]
+        then
+            report_failure "production template file is absent from the runtime registry: $template"
+        fi
+    done < <(printf '%s\n' "${!TEMPLATE_FILES[@]}" | sort)
+}
+
 check_repo() {
     local repo="$1"
     local allowlist="$2"
     local policy="$3"
+    local validations="$4"
 
     ALLOWED=()
     DETECTED=()
+    PRODUCTION_TEMPLATES=()
+    TEMPLATE_FILES=()
+    VALIDATED_TEMPLATES=()
     allowlist_count=0
     template_count=0
+    production_template_count=0
+    validation_count=0
     test_fixture_count=0
     failures=0
     load_allowlist "$allowlist" "$policy"
     scan_shader_files "$repo"
+    scan_production_registry "$repo"
+    load_validation_pairs "$repo" "$validations"
     scan_inline_raw_strings "$repo"
     scan_inline_quoted_wgsl "$repo"
     if [ "$test_fixture_count" -ne 1 ]; then
         report_failure "expected one cfg(test) legacy shade fixture; found $test_fixture_count"
     fi
     compare_inventory
+    compare_validation_inventory
     [ "$failures" -eq 0 ]
 }
 
@@ -228,9 +388,10 @@ expect_rejection() {
     local repo="$3"
     local allowlist="$4"
     local policy="$5"
+    local validations="$6"
     local output
 
-    if output="$(check_repo "$repo" "$allowlist" "$policy" 2>&1)"; then
+    if output="$(check_repo "$repo" "$allowlist" "$policy" "$validations" 2>&1)"; then
         printf 'SELF-TEST FAIL: %s was accepted\n' "$label" >&2
         return 1
     fi
@@ -248,25 +409,55 @@ write_migrated_shade_fixture() {
         '#[cfg(test)]' \
         'const LEGACY_SHADE_SOURCE: &str = r"' \
         '@fragment fn legacy_shade() {}' \
-        '";' > "$path"
+        '";' \
+        '#[test]' \
+        'fn shade_source_parses_and_validates() {' \
+        '    let shader = shade_shader().expect("production context renders");' \
+        '    let module = naga::front::wgsl::parse_str(shader.source()).expect("source parses");' \
+        '    validator.validate(&module).expect("source validates");' \
+        '}' > "$path"
+}
+
+write_test_runtime_registry() {
+    local path="$1"
+
+    if [ "${2:-}" = "with-new" ]; then
+        printf '%s\n' \
+            'pub const PRESENT_SHADE_TEMPLATE: &str = "present-shade.wgsl.jinja";' \
+            'const PRESENT_SHADE_SOURCE: &str = include_str!("../templates/present-shade.wgsl.jinja");' \
+            'pub const NEW_SHADE_TEMPLATE: &str = "new-shade.wgsl.jinja";' \
+            'const NEW_SHADE_SOURCE: &str = include_str!("../templates/new-shade.wgsl.jinja");' \
+            'const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[' \
+            '    (PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE),' \
+            '    (NEW_SHADE_TEMPLATE, NEW_SHADE_SOURCE),' \
+            '];' > "$path"
+    else
+        printf '%s\n' \
+            'pub const PRESENT_SHADE_TEMPLATE: &str = "present-shade.wgsl.jinja";' \
+            'const PRESENT_SHADE_SOURCE: &str = include_str!("../templates/present-shade.wgsl.jinja");' \
+            'const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[(PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE)];' \
+            > "$path"
+    fi
 }
 
 self_test() {
-    local started temporary repo allowlist policy
+    local started temporary repo allowlist policy validations
     started="$(date +%s)"
     temporary="$(mktemp -d -p "${TMPDIR:-/tmp}" ember-shadertest-XXXXXX)"
     SHADER_TEST_TMP="$temporary"
     trap '[ -z "${SHADER_TEST_TMP:-}" ] || rm -rf -- "$SHADER_TEST_TMP"' EXIT
     repo="$temporary/repo"
     allowlist="$repo/deploy/tests/julibrot-shader-allowlist.txt"
+    validations="$repo/deploy/tests/julibrot-shader-validation-tests.txt"
     policy="$repo/docs/julibrot/shaders.md"
 
     git -C "$temporary" init -q repo
     mkdir -p "$repo/crates/labs/julibrot/kernels/src"
     mkdir -p "$repo/crates/labs/julibrot/present/src"
-    mkdir -p "$repo/crates/labs/julibrot/shader/templates"
+    mkdir -p "$repo/crates/labs/julibrot/shader/src" "$repo/crates/labs/julibrot/shader/templates"
     mkdir -p "$repo/deploy/tests" "$repo/docs/julibrot"
     printf '%s\n' '{{ "PaletteUniform"|wgsl_type }}' > "$repo/crates/labs/julibrot/shader/templates/present-shade.wgsl.jinja"
+    write_test_runtime_registry "$repo/crates/labs/julibrot/shader/src/runtime.rs"
     write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     printf '%s\n' 'kernel body' > "$repo/crates/labs/julibrot/kernels/src/shallow.wgsl"
     printf '%s\n' 'const WARP_SHADER: &str = r"' '@vertex fn warp() {}' '";' > "$repo/crates/labs/julibrot/present/src/warp_shader.rs"
@@ -274,31 +465,47 @@ self_test() {
     printf '%s\n' \
         'inline|crates/labs/julibrot/present/src/warp_shader.rs|WARP_SHADER|JB-PRESENT-WARP' \
         'file|crates/labs/julibrot/kernels/src/shallow.wgsl|-|JB-KERNEL-SHALLOW' > "$allowlist"
+    printf '%s\n' \
+        'crates/labs/julibrot/shader/templates/present-shade.wgsl.jinja|crates/labs/julibrot/present/src/shade_shader.rs|PRESENT_SHADE_TEMPLATE|shade_shader|shade_source_parses_and_validates' \
+        > "$validations"
     git -C "$repo" add .
 
-    if ! check_repo "$repo" "$allowlist" "$policy"; then
+    if ! check_repo "$repo" "$allowlist" "$policy" "$validations"; then
         printf 'SELF-TEST FAIL: reviewed debt and migrated template were rejected\n' >&2
         return 1
     fi
 
+    printf '%s\n' '{{ "NewUniform"|wgsl_type }}' > "$repo/crates/labs/julibrot/shader/templates/new-shade.wgsl.jinja"
+    write_test_runtime_registry "$repo/crates/labs/julibrot/shader/src/runtime.rs" with-new
+    git -C "$repo" add crates/labs/julibrot/shader/templates/new-shade.wgsl.jinja
+    expect_rejection "an unpaired production template" "lacks native validation test" "$repo" "$allowlist" "$policy" "$validations" || return 1
+    git -C "$repo" rm -q -f crates/labs/julibrot/shader/templates/new-shade.wgsl.jinja
+    write_test_runtime_registry "$repo/crates/labs/julibrot/shader/src/runtime.rs"
+
+    sed -i '/validator.validate/d' "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+    expect_rejection "a validation pair without naga validation" "does not validate with naga" "$repo" "$allowlist" "$policy" "$validations" || return 1
+    write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+
     printf '%s\n' 'unlisted body' > "$repo/crates/labs/julibrot/present/src/new.wgsl"
     git -C "$repo" add crates/labs/julibrot/present/src/new.wgsl
-    expect_rejection "an unlisted .wgsl file" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "an unlisted .wgsl file" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" "$validations" || return 1
     git -C "$repo" rm -q -f crates/labs/julibrot/present/src/new.wgsl
 
     printf '%s\n' 'const NEW_SHADER: &str = r"' '@fragment fn fragment() {}' '";' > "$repo/crates/labs/julibrot/present/src/new_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/new_shader.rs
-    expect_rejection "an unlisted inline shader" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "an unlisted inline shader" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" "$validations" || return 1
     git -C "$repo" rm -q -f crates/labs/julibrot/present/src/new_shader.rs
 
     printf '%s\n' 'fn direct_shader() { ShaderSource::Wgsl(r"@vertex fn vertex() {}"); }' > "$repo/crates/labs/julibrot/present/src/direct_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/direct_shader.rs
-    expect_rejection "a direct inline ShaderSource literal" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "a direct inline ShaderSource literal" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" "$validations" || return 1
     git -C "$repo" rm -q -f crates/labs/julibrot/present/src/direct_shader.rs
 
     printf '%s\n' 'const SHADE_SHADER: &str = r"' '@fragment fn old_shade() {}' '";' > "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
-    expect_rejection "the migrated shade inline source" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "the migrated shade inline source" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" "$validations" || return 1
     write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
 
@@ -308,20 +515,20 @@ self_test() {
         '@fragment fn legacy_shade() {}' \
         '";' > "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
-    expect_rejection "an unguarded legacy fixture" "must carry #[cfg(test)]" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "an unguarded legacy fixture" "must carry #[cfg(test)]" "$repo" "$allowlist" "$policy" "$validations" || return 1
     write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
 
     printf '%s\n' 'file|crates/labs/julibrot/kernels/src/perturb.wgsl|-|JB-KERNEL-PERTURB' >> "$allowlist"
-    expect_rejection "a stale allowlist record" "stale Julibrot shader allowlist record" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "a stale allowlist record" "stale Julibrot shader allowlist record" "$repo" "$allowlist" "$policy" "$validations" || return 1
     sed -i '$d' "$allowlist"
 
     printf '%s\n' 'const NEW_SHADER: &str = r"' '@compute @workgroup_size(1) fn new_shader() {}' '";' > "$repo/crates/labs/julibrot/present/src/new_shader.rs"
     printf '%s\n' 'inline|crates/labs/julibrot/present/src/new_shader.rs|NEW_SHADER|JB-PRESENT-SCENE' >> "$allowlist"
     git -C "$repo" add crates/labs/julibrot/present/src/new_shader.rs
-    expect_rejection "an expanded allowlist" "shader allowlist may only shrink" "$repo" "$allowlist" "$policy" || return 1
+    expect_rejection "an expanded allowlist" "shader allowlist may only shrink" "$repo" "$allowlist" "$policy" "$validations" || return 1
 
-    printf 'SELF-TEST PASS: templates, pinned test fixture, closed debt, files, inline and direct sources, stale records and shrink-only ceiling, %ss\n' "$(( $(date +%s) - started ))"
+    printf 'SELF-TEST PASS: production validation pairs, templates, pinned test fixture, closed debt, files, inline and direct sources, stale records and shrink-only ceiling, %ss\n' "$(( $(date +%s) - started ))"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -332,8 +539,8 @@ fi
 [ "$#" -eq 0 ] || { printf 'usage: bash deploy/tests/test-shaders.sh [--self-test]\n' >&2; exit 2; }
 
 started="$(date +%s)"
-if check_repo "$ROOT" "$ALLOWLIST" "$POLICY"; then
-    printf 'SHADER CHECK PASS: %s production/test templates, %s pinned legacy test fixture, %s reviewed migration exceptions, %ss\n' "$template_count" "$test_fixture_count" "$allowlist_count" "$(( $(date +%s) - started ))"
+if check_repo "$ROOT" "$ALLOWLIST" "$POLICY" "$VALIDATIONS"; then
+    printf 'SHADER CHECK PASS: %s/%s production templates have native validation pairs, %s production/test templates, %s pinned legacy test fixture, %s reviewed migration exceptions, %ss\n' "$validation_count" "$production_template_count" "$template_count" "$test_fixture_count" "$allowlist_count" "$(( $(date +%s) - started ))"
 else
     status=$?
     printf 'SHADER CHECK FAIL: unrendered Julibrot shader source, %ss\n' "$(( $(date +%s) - started ))" >&2

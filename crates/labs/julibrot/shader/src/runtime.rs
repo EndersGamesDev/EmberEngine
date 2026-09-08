@@ -73,7 +73,10 @@ pub struct RenderedShader {
 }
 
 impl RenderedShader {
-    /// Returns the WGSL source accepted by naga.
+    /// Returns the rendered WGSL source.
+    ///
+    /// Native rendering has already validated this source with naga. On wasm, wgpu validates it
+    /// when the pipeline owner creates the shader module.
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
@@ -104,6 +107,7 @@ pub enum RenderError {
     /// Minijinja rejected or failed to render an embedded template.
     Template(minijinja::Error),
     /// Naga could not parse the rendered WGSL.
+    #[cfg(not(target_arch = "wasm32"))]
     WgslParse {
         /// Embedded template name.
         template: String,
@@ -113,6 +117,7 @@ pub enum RenderError {
         diagnostic: String,
     },
     /// Naga parsed the WGSL but rejected its shader semantics.
+    #[cfg(not(target_arch = "wasm32"))]
     WgslValidation {
         /// Embedded template name.
         template: String,
@@ -133,11 +138,13 @@ impl fmt::Display for RenderError {
                 write!(formatter, "WGSL constant `{name}` is not finite")
             }
             Self::Template(error) => write!(formatter, "shader template failed: {error:#}"),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::WgslParse {
                 template,
                 line,
                 diagnostic,
             } => write_naga_error(formatter, "WGSL parsing", template, *line, diagnostic),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::WgslValidation {
                 template,
                 line,
@@ -151,10 +158,9 @@ impl Error for RenderError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Template(error) => Some(error),
-            Self::ConflictingRegistration { .. }
-            | Self::NonFiniteConstant { .. }
-            | Self::WgslParse { .. }
-            | Self::WgslValidation { .. } => None,
+            Self::ConflictingRegistration { .. } | Self::NonFiniteConstant { .. } => None,
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::WgslParse { .. } | Self::WgslValidation { .. } => None,
         }
     }
 }
@@ -266,14 +272,19 @@ impl ShaderContext {
     }
 }
 
-/// Renders one embedded template and rejects WGSL that naga cannot parse or validate.
+/// Renders one embedded template and computes its stable source hash.
+///
+/// Native builds reject WGSL that naga cannot parse or validate. Wasm builds leave that validation
+/// to wgpu's shader-module creation so the browser does not pay for a duplicate validator path.
 ///
 /// # Errors
 ///
-/// Returns [`RenderError::Template`] for template failures, [`RenderError::WgslParse`] for WGSL
-/// syntax failures, or [`RenderError::WgslValidation`] for invalid shader semantics.
+/// Returns [`RenderError::Template`] for template failures. On native builds it also returns
+/// [`RenderError::WgslParse`] for WGSL syntax failures or [`RenderError::WgslValidation`] for
+/// invalid shader semantics.
 pub fn render(template_name: &str, context: &ShaderContext) -> Result<RenderedShader, RenderError> {
     let source = context.expand(template_name)?;
+    #[cfg(not(target_arch = "wasm32"))]
     validate_wgsl(template_name, &source)?;
     Ok(RenderedShader {
         hash: stable_hash(&source),
@@ -281,6 +292,7 @@ pub fn render(template_name: &str, context: &ShaderContext) -> Result<RenderedSh
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_naga_error(
     formatter: &mut fmt::Formatter<'_>,
     phase: &str,
@@ -300,6 +312,7 @@ fn write_naga_error(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_wgsl(template_name: &str, source: &str) -> Result<(), RenderError> {
     let module = naga::front::wgsl::parse_str(source).map_err(|error| RenderError::WgslParse {
         template: template_name.to_owned(),

@@ -1,4 +1,8 @@
 //! Rust-owned shader interface descriptions for the Julibrot lab.
+//!
+//! Native rendering parses and validates the result with naga. Wasm rendering returns the source
+//! and its stable hash; wgpu performs the browser path's single naga validation when it creates the
+//! shader module.
 
 #![deny(missing_docs)]
 

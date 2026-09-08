@@ -18,7 +18,9 @@ The Rust owner registers every CPU-visible shader struct, enum discriminant, bin
 
 Templates may hand-write control flow, arithmetic, entry-point bodies and shader-private stage plumbing. They may not hand-write a type, enum value, binding number or named constant that the CPU stores, uploads, decodes or uses to construct a layout; those declarations come through context filters from the same Rust items. Inline production WGSL strings and production `.wgsl` files are migration debt, never examples for new code.
 
-Every render uses Minijinja's strict undefined behavior and then Naga's WGSL parser and validator. An unregistered name fails during template rendering and names the missing item. A syntactic or semantic WGSL failure names the embedded template and, when Naga supplies a span, the rendered template line.
+Every render uses Minijinja's strict undefined behavior. Native renders then use Naga's WGSL parser and validator, so a syntactic or semantic failure names the embedded template and, when Naga supplies a span, the rendered template line. On wasm, rendering returns the source and stable hash before wgpu validates that source while creating the shader module; the browser therefore carries only the validator path it already needs.
+
+Every template in the production registry must have a native test that renders it with its production context and validates the result. The deployment checker rejects an unpaired production template or a pairing whose named test and explicit Naga validation are absent. This native coverage makes deferring the browser's validation to wgpu safe.
 
 ## Anti-drift oracle
 

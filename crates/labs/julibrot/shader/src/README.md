@@ -7,3 +7,5 @@
 `oracle.rs` tests every type and enum in its real `ShaderContext` registry. It compares naga's rendered struct offsets and sizes with the Rust metadata, including a padded `vec3`, compares rendered enum constants with Rust discriminants, and proves a missing type is named at render time.
 
 `present-shade.wgsl.jinja` is the first production template. Julibrot keeps this crate when a later lane builds a separate shared implementation for the remainder of the repository.
+
+The crate validates rendered WGSL directly on native targets. On wasm, wgpu validates the rendered source when the shader module is created; the deployment checker pairs each production template with a native production-context validation test.

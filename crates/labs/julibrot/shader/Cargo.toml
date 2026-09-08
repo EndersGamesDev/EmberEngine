@@ -9,6 +9,8 @@ template-debug = ["minijinja/debug"]
 [dependencies]
 bytemuck.workspace = true
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "deserialization", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "loop_controls"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in"] }
 
 [dev-dependencies]
