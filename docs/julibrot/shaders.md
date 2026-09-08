@@ -12,6 +12,8 @@ Runtime rendering is deliberate. It keeps context-dependent shader construction 
 
 `crates/labs/julibrot/shader` owns the Minijinja environment, the production template registry, `WgslType` and `WgslEnum` descriptions, `ShaderContext`, declaration filters, stable source hashing and Naga 24 parsing and validation. It has no global cache or mutable static state.
 
+Release builds keep Minijinja's complete shader code-generation set: built-ins, deserialization, macros, multiple templates, adjacent loop items, standard collections, Serde and loop controls. Only `debug` leaves the release wasm; native shader tests enable it directly and present tests enable the crate's `template-debug` feature so diagnostics retain template source context. `json`, `urlencode`, `unicode`, `custom_syntax`, `fuel`, `loader`, `preserve_order` and `speedups` remain disabled because no shader template needs them, and each is added when a template does.
+
 The Rust owner registers every CPU-visible shader struct, enum discriminant, bind-group and binding number, and named ABI or layout constant needed by a template. A pipeline creation retains one `RenderedShader`, including its stable hash, beside the pipeline. A changed context is rendered and retained as a new value.
 
 Templates may hand-write control flow, arithmetic, entry-point bodies and shader-private stage plumbing. They may not hand-write a type, enum value, binding number or named constant that the CPU stores, uploads, decodes or uses to construct a layout; those declarations come through context filters from the same Rust items. Inline production WGSL strings and production `.wgsl` files are migration debt, never examples for new code.

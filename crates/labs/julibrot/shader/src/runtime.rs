@@ -346,6 +346,7 @@ fn register_once<T: Copy + PartialEq>(
 
 fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderError> {
     let mut environment = Environment::empty();
+    #[cfg(any(test, feature = "template-debug"))]
     environment.set_debug(true);
     environment.set_keep_trailing_newline(true);
     environment.set_undefined_behavior(UndefinedBehavior::Strict);

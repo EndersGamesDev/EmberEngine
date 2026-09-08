@@ -14,6 +14,7 @@ thiserror.workspace = true
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 
 [dev-dependencies]
+ember-julibrot-shader = { path = "../shader", features = ["template-debug"] }
 naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in", "glsl-out"] }
 pollster.workspace = true
 
