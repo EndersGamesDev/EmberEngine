@@ -1,6 +1,6 @@
 {
   "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788780353",
+  "v": "1788894034",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -31,12 +31,12 @@
       "version": "r1511",
       "commit": "05aeea2b",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-06T19:31:55Z",
+      "updated": "2026-09-08T19:00:34Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
       "fire_commit": "86086a2",
-      "league_ws": "wss://hosting-spirit-primary-des.trycloudflare.com",
+      "league_ws": "wss://treasures-buy-front-emails.trycloudflare.com",
       "league_proto": 1,
       "league_version": "r1592",
       "league_commit": "2bc7dc98973acd5e0759967703fd2938c3195a20"
