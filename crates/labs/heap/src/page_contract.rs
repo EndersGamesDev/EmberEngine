@@ -8,9 +8,9 @@ const RUNTIME: &str = include_str!("lattice_gpu.rs");
 const CONTRACT: &str = include_str!("../../../../docs/gpu-heap-lattice.md");
 
 #[test]
-fn loader_is_v9_and_runtime_is_explicitly_gl_only() {
-    assert!(PAGE.contains("ember_lab_heap.js?v=9"));
-    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=9"));
+fn loader_is_v10_and_runtime_is_explicitly_gl_only() {
+    assert!(PAGE.contains("ember_lab_heap.js?v=10"));
+    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=10"));
     assert!(PAGE.contains("heap-lattice-v9"));
     assert!(!PAGE.contains("heap-lattice-v8"));
     assert!(RUNTIME.contains("backends: wgpu::Backends::GL"));
