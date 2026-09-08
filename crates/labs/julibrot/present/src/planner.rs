@@ -108,6 +108,20 @@ impl Warp {
     ) -> Result<(ReconstructedSample, ProjectedSample), ReprojectionError> {
         crate::tile::reconstruct_descriptor_sample(header, pair, source_pixel)
     }
+
+    /// Reconstructs one descriptor sample and evaluates the complete requested-pose chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid descriptor, failed source receipt, or target pole.
+    pub fn project_descriptor_sample(
+        header: &TilePoseHeader,
+        pair: &DescriptorSamplePair,
+        source_pixel: [f64; 2],
+        target: &Pose,
+    ) -> Result<ProjectedSample, ReprojectionError> {
+        crate::tile::project_descriptor_sample(header, pair, source_pixel, target)
+    }
 }
 
 fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {

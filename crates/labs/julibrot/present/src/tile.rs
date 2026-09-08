@@ -250,6 +250,21 @@ pub fn reconstruct_descriptor_sample(
     Ok((reconstructed, source_receipt))
 }
 
+/// Reconstructs one paired descriptor and projects it through an independently requested pose.
+///
+/// # Errors
+///
+/// Returns a typed refusal for an invalid descriptor, failed source receipt, or target pole.
+pub fn project_descriptor_sample(
+    header: &TilePoseHeader,
+    pair: &DescriptorSamplePair,
+    source_pixel: [f64; 2],
+    target: &Pose,
+) -> Result<ProjectedSample, ReprojectionError> {
+    let (reconstructed, _) = reconstruct_descriptor_sample(header, pair, source_pixel)?;
+    project_reconstructed_sample(target, reconstructed)
+}
+
 fn pack_extent_rect_and_map(
     render: &TileRenderKey,
     source_map: [ExactF64; 20],
@@ -471,6 +486,12 @@ mod tests {
     const SOURCE_PIXEL_RECEIPT_TOLERANCE_PX: f32 = 0.25;
     /// One millionth retains reconstructed ambient coordinates across descriptor f32 rounding.
     const SOURCE_COORDINATE_TOLERANCE: f64 = 0.000_001;
+    /// The descriptor study admits a target vertex only at or below one direct-f64 pixel.
+    const TARGET_PROJECTION_TOLERANCE_PX: f64 = 1.0;
+    /// A hundredth retains target linear depth across source-pose and S1 f32 rounding.
+    const TARGET_DEPTH_TOLERANCE: f64 = 0.01;
+    /// One hundred-thousandth retains normalized raster depth across descriptor rounding.
+    const TARGET_RASTER_DEPTH_TOLERANCE: f64 = 0.000_01;
 
     fn pose() -> Pose {
         let object = ObjectAngles {
@@ -527,6 +548,19 @@ mod tests {
         source.view.height_scale = 0.0;
         rebuild_map(&mut source);
         source
+    }
+
+    fn requested_pose() -> Pose {
+        let mut target = pose();
+        target.view.camera[2] += 0.09;
+        target.view.camera[7] -= 0.06;
+        target.view.camera_translation[3] += 0.125;
+        target.view.camera_yaw -= 0.08;
+        target.view.camera_pitch += 0.05;
+        target.view.distance_five = 6.5;
+        target.view.distance_four = 8.5;
+        rebuild_map(&mut target);
+        target
     }
 
     fn policy_header() -> TilePoseHeader {
@@ -687,5 +721,54 @@ mod tests {
         for (actual, expected) in reconstructed.ambient_four.into_iter().zip(exact.ambient_four) {
             assert!((actual - expected).abs() <= SOURCE_COORDINATE_TOLERANCE);
         }
+    }
+
+    #[test]
+    fn descriptor_requested_projection_matches_direct_f64_and_refuses_poles() {
+        let source = source_pose();
+        let target = requested_pose();
+        let source_pixel = [37.5, -21.5];
+        let record = EscapeGridRecord {
+            smooth_iter: 128.0,
+            escaped: 1.0,
+            rebase_count: 3.0,
+            status: 0.0,
+        };
+        let value = retained_value_sample(record, 512).expect("value record has a finite height");
+        let depth = source_depth_record(&source, source_pixel, value)
+            .expect("flat source sample has a finite depth receipt");
+        let rect = SourcePixelRect::from_extent(0, 0, source.grid_width, source.grid_height);
+        let render = TileRenderKey::from_pose(&source, rect);
+        let header = pack_descriptor_header(&render, &policy_header())
+            .expect("source descriptor header packs");
+        let pair = pack_descriptor_sample(record, depth).expect("source sample pair packs");
+
+        let exact = reconstruct_source_sample(&source, source_pixel, depth, value)
+            .expect("binary64 source fixture round-trips");
+        let direct = project_reconstructed_sample(&target, exact)
+            .expect("binary64 source sample projects to the requested pose");
+        let projected = project_descriptor_sample(&header, &pair, source_pixel, &target)
+            .expect("descriptor sample projects through the requested pose");
+        let target_error = (projected.screen[0] - direct.screen[0])
+            .hypot(projected.screen[1] - direct.screen[1]);
+        assert!(target_error <= TARGET_PROJECTION_TOLERANCE_PX);
+        assert!((projected.linear_depth - direct.linear_depth).abs() <= TARGET_DEPTH_TOLERANCE);
+        assert!(
+            (projected.raster_depth - direct.raster_depth).abs()
+                <= TARGET_RASTER_DEPTH_TOLERANCE
+        );
+
+        let mut edge = target;
+        edge.map = PoseMap::EdgeOn;
+        assert_eq!(
+            project_descriptor_sample(&header, &pair, source_pixel, &edge),
+            Err(ReprojectionError::ProjectionPole)
+        );
+        let mut pole = target;
+        pole.view.distance_four = ProjectedSample::POLE_EPSILON * 0.5;
+        assert_eq!(
+            project_descriptor_sample(&header, &pair, source_pixel, &pole),
+            Err(ReprojectionError::ProjectionPole)
+        );
     }
 }
