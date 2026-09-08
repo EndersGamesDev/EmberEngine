@@ -20,7 +20,8 @@ pub use navigation::{
     rotate_about, select_box, zoom_about,
 };
 pub use projection::{
-    PROJECT_RANGE_PIXELS, PROJECT_READOUT_ULPS, invert_perspective, project, reference_displacement,
+    PROJECT_PIXEL_TOLERANCE_PIXELS, PROJECT_RANGE_PIXELS, PROJECT_READOUT_LIMIT_PIXELS,
+    PROJECT_READOUT_ULPS, invert_perspective, project, reference_displacement,
 };
 pub use scale::{Scale, scale_for};
 pub use types::{

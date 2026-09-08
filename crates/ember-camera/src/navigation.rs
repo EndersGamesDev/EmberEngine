@@ -1,4 +1,5 @@
 use crate::frame::orientation_for_segment;
+use crate::projection::PROJECT_READOUT_LIMIT_PIXELS;
 use crate::{
     Basis, CameraError, Exponent, Fixed, MAX_EXPONENT_QUANTA, MIN_EXPONENT_QUANTA, Orientation,
     Scale, Screen, View, rebuild_basis, scale_for,
@@ -7,7 +8,9 @@ use crate::{
 /// Largest magnitude accepted at the floating-point pixel input boundary.
 ///
 /// A 2³¹-pixel magnitude covers every `u32` screen about its centre while fixed arithmetic retains
-/// ample room for exact differences and midpoints.
+/// ample room for exact differences and midpoints. [`click`] additionally admits the tiny
+/// [`crate::PROJECT_READOUT_LIMIT_PIXELS`] envelope so its own projected boundary points can be
+/// decoded again.
 pub const MAX_SCREEN_COORDINATE_PIXELS: i64 = 2_147_483_648;
 
 /// Maximum relative box-edge slack introduced by one exponent quantum.
@@ -21,6 +24,8 @@ pub const EXPONENT_QUANTUM_EDGE_TOLERANCE: f64 = 0.000_677_130_693_066_407_8;
 /// Pixel origin is the canvas centre, x points right, and y points up. Binary64 inputs are decoded
 /// by their bits, then all screen scaling, basis weighting, and centre additions use [`Fixed`].
 /// The basis and scale are rebuilt from the view so callers cannot provide a second source of truth.
+/// Nominal input is bounded by [`MAX_SCREEN_COORDINATE_PIXELS`]; the decoder also accepts the named
+/// projection-readout slack so `click(project(point))` closes at that boundary.
 ///
 /// # Errors
 ///
@@ -194,7 +199,7 @@ pub fn select_box<const N: usize, const LIMBS: usize>(
 fn fixed_screen_point<const LIMBS: usize>(
     screen_px: [f64; 2],
 ) -> Result<[Fixed<LIMBS>; 2], CameraError> {
-    let limit = Fixed::from_i64(MAX_SCREEN_COORDINATE_PIXELS)?;
+    let limit = Fixed::from_f64(PROJECT_READOUT_LIMIT_PIXELS)?;
     let mut converted = [Fixed::ZERO; 2];
     for (output, input) in converted.iter_mut().zip(screen_px) {
         *output = Fixed::from_f64(input)?;
@@ -300,7 +305,7 @@ mod tests {
     use super::{click, frame_points, pan, rotate_about, select_box, zoom_about};
     use crate::{
         CameraError, Exponent, Fixed, MAX_EXPONENT_QUANTA, MIN_EXPONENT_QUANTA, Orientation,
-        Screen, Turn, View, project,
+        PROJECT_READOUT_LIMIT_PIXELS, Screen, Turn, View, project,
     };
 
     /// Projection noise budget, below one thousandth of a render pixel.
@@ -415,8 +420,10 @@ mod tests {
         let screen = Screen::new(4, 4)?;
         let camera = view();
         assert!(click(&camera, screen, [2_147_483_648.0, 0.0]).is_ok());
+        assert!(click(&camera, screen, [PROJECT_READOUT_LIMIT_PIXELS, 0.0]).is_ok());
+        let first_refused = f64::from_bits(PROJECT_READOUT_LIMIT_PIXELS.to_bits() + 1);
         assert_eq!(
-            click(&camera, screen, [2_147_483_649.0, 0.0]),
+            click(&camera, screen, [first_refused, 0.0]),
             Err(CameraError::ScreenCoordinateOutOfRange)
         );
         Ok(())
