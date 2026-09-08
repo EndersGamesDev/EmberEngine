@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v6
+
+The Warden’s Voice adds four prerecorded reactions: audible cell footsteps, unlocking the gate, claiming the greatsword and the warden’s death. A twelve-second movement cooldown, once-per-life story events and a bounded event history prevent repetition and lost reactions. One-speaker playback gives story lines priority over barks and death priority over live speech; subtitles, ambience ducking, saved pause offsets, background-resume handling and respawn resets accompany the voice (`e8a7a6f7`).
+
+Four cached CPU Kokoro clips total 404,288 bytes, with exact source transcripts, phonemes, provenance and unclipped mono PCM waveforms. Fifty-seven core tests, twenty-one client tests, eleven dialogue tests, three resolution tests, JavaScript syntax, audio waveform/hash checks, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. The Idle-priority browser helper takes 7.69 seconds and produces a 24,167,561-byte WASM. Offline dictation recovers the first two lines exactly and the remaining clauses with documented word substitutions; this is not listening. Browser playback, physical devices, audible output, vibration and 5K frame pacing remain unverified (`e8a7a6f7`).
+
 ### End Game v5
 
 The Warden’s Knife replaces proximity damage with an enemy who wakes, stands, draws a knife, pursues around the corridor plinth and commits to a visible windup, contact and recovery. A knife strike deals 15 damage once when range, facing, height, walls, the sliding gate and dodge timing allow it. Heavy greatsword hits interrupt upright attacks; feet settle when movement stops, the chair stays behind, and death preserves a partial rise (`7d4dae50`).
