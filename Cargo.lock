@@ -1220,6 +1220,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-julibrot-shader"
+version = "1.0.2"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
 name = "ember-julibrot-worker"
 version = "1.0.4"
 dependencies = [

@@ -1,0 +1,7 @@
+# Julibrot shader templates
+
+`ember-julibrot-shader` is the Julibrot-local boundary between Rust-owned GPU interfaces and the WGSL submitted by the lab's kernel and presentation crates.
+
+It describes host-shareable Rust types and, as the migration advances, renders embedded Minijinja templates with Rust-owned types, enum values, bindings, and layout constants before validating the result with naga.
+
+The context owner retains each rendered shader beside the pipeline that consumes it. The crate has no global cache or mutable static state, so a changed context produces and retains a new rendering.

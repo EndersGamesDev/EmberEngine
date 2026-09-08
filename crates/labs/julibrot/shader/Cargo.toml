@@ -1,0 +1,10 @@
+[package]
+name = "ember-julibrot-shader"
+edition.workspace = true
+version = "1.0.2"
+
+[dependencies]
+bytemuck.workspace = true
+
+[lints]
+workspace = true
