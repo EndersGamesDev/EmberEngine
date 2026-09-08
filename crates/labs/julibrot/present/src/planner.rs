@@ -1021,7 +1021,7 @@ mod tests {
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
         Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION,
-        ViewControls, construct_plane, screen_to_plane,
+        ViewControls, construct_plane, retained_value_sample, screen_to_plane,
     };
 
     use super::*;
@@ -1030,6 +1030,10 @@ mod tests {
     const SWEEP_ANGLES: u32 = 256;
     const RELIEF_YAW: f64 = 0.349;
     const RELIEF_PITCH: f64 = 0.262;
+    /// F32 source factors and depth must return within one hundredth of a source pixel.
+    const FROZEN_SOURCE_PIXEL_TOLERANCE_PX: f32 = 0.01;
+    /// One hundredth of linear depth bounds every frozen row after S1 f32 rounding.
+    const FROZEN_SOURCE_DEPTH_TOLERANCE: f32 = 0.01;
 
     fn relief(theta: f64) -> ViewControls {
         let mut camera = [0.0; 10];
@@ -1745,6 +1749,50 @@ mod tests {
             .collect()
     }
 
+    fn round_trip_descriptor_witness(
+        case_name: &str,
+        pose: &Pose,
+        header: &TilePoseHeader,
+        coordinate: [f64; 2],
+        record: EscapeGridRecord,
+    ) -> bool {
+        let value = retained_value_sample(record, 4)
+            .unwrap_or_else(|error| panic!("{case_name} value: {error}"));
+        let source_local: [f64; 4] = core::array::from_fn(|axis| {
+            f64::from(pose.plane.basis_u[axis]).mul_add(
+                coordinate[0],
+                f64::from(pose.plane.basis_v[axis]) * coordinate[1],
+            )
+        });
+        let direct = ProjectedSample::from_local_point(pose, source_local, value)
+            .unwrap_or_else(|error| panic!("{case_name} direct source receipt: {error}"));
+        let depth = SourceDepthRecord {
+            a_f: coordinate[0],
+            b_f: coordinate[1],
+            zeta_f: direct.linear_depth,
+            valid: true,
+        };
+        let pair = Warp::pack_descriptor_sample(record, depth)
+            .unwrap_or_else(|| panic!("{case_name} source sample packs"));
+        let (_, round_trip) =
+            Warp::reconstruct_descriptor_sample(header, &pair, direct.screen).unwrap_or_else(
+                |error| panic!("{case_name} source sample round-trips: {error}"),
+            );
+        let pixel_error = (round_trip.screen[0] - direct.screen[0])
+            .hypot(round_trip.screen[1] - direct.screen[1]);
+        assert!(
+            pixel_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX),
+            "{case_name} source pixel moved by {pixel_error}"
+        );
+        assert!(
+            (round_trip.linear_depth - direct.linear_depth).abs()
+                <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE),
+            "{case_name} source depth moved"
+        );
+        record.escaped.to_bits() == 1.0_f32.to_bits()
+            && pose.view.height_scale.to_bits() << 1 != 0
+    }
+
     #[test]
     fn frozen_planner_corpus_round_trips_descriptor_source_poses() {
         use bytemuck::Zeroable;
@@ -1799,23 +1847,33 @@ mod tests {
     fn frozen_planner_corpus_round_trips_descriptor_source_samples() {
         use bytemuck::Zeroable;
 
-        /// F32 source factors and depth must return within one hundredth of a source pixel.
-        const FROZEN_SOURCE_PIXEL_TOLERANCE_PX: f32 = 0.01;
-        /// One hundredth of linear depth bounds every frozen row after S1 f32 rounding.
-        const FROZEN_SOURCE_DEPTH_TOLERANCE: f32 = 0.01;
-        /// Fifteen valid from/to poses remain after the frozen edge-on and zero-extent refusals.
-        const FROZEN_DESCRIPTOR_RECEIPTS: usize = 15;
+        /// Two witnesses over fifteen valid poses produce thirty frozen descriptor receipts.
+        const FROZEN_DESCRIPTOR_RECEIPTS: usize = 30;
+        /// Four valid measured-relief poses give the nonzero witness material source lift.
+        const FROZEN_LIFTED_RECEIPTS: usize = 4;
 
-        let value = RetainedValueSample {
-            record_height: -2.0,
-        };
-        let record = EscapeGridRecord {
-            smooth_iter: 0.0,
-            escaped: 0.0,
-            rebase_count: 0.0,
-            status: 0.0,
-        };
+        let witnesses = [
+            (
+                [0.0, 0.0],
+                EscapeGridRecord {
+                    smooth_iter: 0.0,
+                    escaped: 0.0,
+                    rebase_count: 0.0,
+                    status: 0.0,
+                },
+            ),
+            (
+                [0.125, -0.0625],
+                EscapeGridRecord {
+                    smooth_iter: 1.0,
+                    escaped: 1.0,
+                    rebase_count: 0.0,
+                    status: 0.0,
+                },
+            ),
+        ];
         let mut receipt_count = 0;
+        let mut lifted_receipt_count = 0;
         for case in named_planner_corpus() {
             for pose in [case.from_pose, case.to_pose] {
                 if pose.grid_width == 0
@@ -1824,23 +1882,6 @@ mod tests {
                 {
                     continue;
                 }
-                let direct_sample = ReconstructedSample {
-                    ambient_four: pose.plane_origin,
-                    source_local_four: [0.0; 4],
-                    source_zoom_log2: pose.zoom_log2,
-                    value,
-                };
-                let direct =
-                    ember_julibrot_math::project_reconstructed_sample(&pose, direct_sample)
-                        .unwrap_or_else(|error| {
-                            panic!("{} direct source receipt: {error}", case.name)
-                        });
-                let depth = SourceDepthRecord {
-                    a_f: 0.0,
-                    b_f: 0.0,
-                    zeta_f: direct.linear_depth,
-                    valid: true,
-                };
                 let mut template = TilePoseHeader::zeroed();
                 template.texels[TilePoseHeader::H21_BOUNDS].lanes = [
                     0.0,
@@ -1848,36 +1889,28 @@ mod tests {
                     FROZEN_SOURCE_DEPTH_TOLERANCE,
                     FROZEN_SOURCE_PIXEL_TOLERANCE_PX,
                 ];
-                template.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 1.0;
+                template.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 4.0;
                 let rect =
                     crate::SourcePixelRect::from_extent(0, 0, pose.grid_width, pose.grid_height);
                 let render = TileRenderKey::from_pose(&pose, rect);
                 let header = Warp::pack_descriptor_header(&render, &template)
                     .unwrap_or_else(|| panic!("{} source header packs", case.name));
-                let pair = Warp::pack_descriptor_sample(record, depth)
-                    .unwrap_or_else(|| panic!("{} source sample packs", case.name));
-                let (_, round_trip) =
-                    Warp::reconstruct_descriptor_sample(&header, &pair, direct.screen)
-                        .unwrap_or_else(|error| {
-                            panic!("{} source sample round-trips: {error}", case.name)
-                        });
-                let pixel_error = (round_trip.screen[0] - direct.screen[0])
-                    .hypot(round_trip.screen[1] - direct.screen[1]);
-                assert!(
-                    pixel_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX),
-                    "{} source pixel moved by {pixel_error}",
-                    case.name
-                );
-                assert!(
-                    (round_trip.linear_depth - direct.linear_depth).abs()
-                        <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE),
-                    "{} source depth moved",
-                    case.name
-                );
-                receipt_count += 1;
+                for (coordinate, record) in witnesses {
+                    if round_trip_descriptor_witness(
+                        case.name,
+                        &pose,
+                        &header,
+                        coordinate,
+                        record,
+                    ) {
+                        lifted_receipt_count += 1;
+                    }
+                    receipt_count += 1;
+                }
             }
         }
         assert_eq!(receipt_count, FROZEN_DESCRIPTOR_RECEIPTS);
+        assert_eq!(lifted_receipt_count, FROZEN_LIFTED_RECEIPTS);
     }
 
     #[test]
