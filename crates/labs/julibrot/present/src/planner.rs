@@ -1070,10 +1070,7 @@ mod tests {
         Pose {
             epoch: 1,
             orbit_generation: 4,
-            plane: Plane {
-                basis_u: [1.0, 0.0, 0.0, 0.0],
-                basis_v: [0.0, 1.0, 0.0, 0.0],
-            },
+            plane: Plane::CANONICAL_JULIA_PLANE,
             object,
             plane_origin: [0.0; 4],
             zoom_log2: 40.0,
@@ -1899,7 +1896,7 @@ mod tests {
 
     #[test]
     fn frozen_planner_corpus_projects_every_valid_pose_as_a_target() {
-        let canonical_julia_plane = pose(ViewControls::NEUTRAL, [0.0; 2]).plane;
+        let canonical_julia_plane = Plane::CANONICAL_JULIA_PLANE;
         let mut corpus_pose_count = 0;
         let mut target_count = 0;
         let mut canonical_count = 0;

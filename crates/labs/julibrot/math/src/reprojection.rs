@@ -3,16 +3,20 @@
 use thiserror::Error;
 
 use crate::{
-    EscapeGridRecord, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls, construct_plane,
+    EscapeGridRecord, ObjectAngles, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls,
+    construct_plane,
 };
 
 /// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
-/// Julia's canonical zero orthogonal components differ from the binary32 image of `cos(pi/2)` by
-/// less than one f32 epsilon, while a missing unit basis remains one unit away.
-const TARGET_PLANE_COMPONENT_TOLERANCE: f32 = f32::EPSILON;
 
 impl Plane {
+    /// Exact-zero Julia basis accepted alongside the independently constructed rounded plane.
+    pub const CANONICAL_JULIA_PLANE: Self = Self {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+
     /// Expands one two-dimensional chart coordinate through this plane's rounded basis.
     #[must_use]
     pub fn local_point(self, coordinate: [f64; 2]) -> [f64; 4] {
@@ -292,20 +296,9 @@ fn project_reconstructed_sample_from_anchor(
 ) -> Result<ProjectedSample, ReprojectionError> {
     let expected_plane =
         construct_plane(target.object).map_err(|_| ReprojectionError::InvalidTarget)?;
-    let plane_matches = target
-        .plane
-        .basis_u
-        .iter()
-        .chain(target.plane.basis_v.iter())
-        .zip(
-            expected_plane
-                .basis_u
-                .iter()
-                .chain(expected_plane.basis_v.iter()),
-        )
-        .all(|(actual, expected)| {
-            actual.is_finite() && (*actual - *expected).abs() <= TARGET_PLANE_COMPONENT_TOLERANCE
-        });
+    let plane_matches = target.plane == expected_plane
+        || (target.object == ObjectAngles::JULIA
+            && target.plane == Plane::CANONICAL_JULIA_PLANE);
     if !plane_matches {
         return Err(ReprojectionError::InvalidTarget);
     }
