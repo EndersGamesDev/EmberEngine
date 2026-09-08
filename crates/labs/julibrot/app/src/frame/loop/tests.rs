@@ -4,14 +4,18 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bytemuck::Zeroable as _;
 use ember_julibrot_kernels::{
-    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PairedOutputAllocation,
-    PerturbUniform, RefinementPlan, SampleStatus, perturb_scaled_pixel, plan_refinement,
+    DescriptorSamplePair, DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode,
+    PairedOutputAllocation, PairedTileSpanIdentities, PerturbUniform, RefinementPlan, SampleStatus,
+    SourceReconstructionUniform, SourceScreenRect, TileOutput, TileOutputCompletion,
+    TilePoseHeader, TileRenderKey, TileSpanIdentity, perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
     OrbitStep, Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ScaledPixelScale,
-    ViewControls, pixel_scale, precision_for, scale_split, screen_to_plane,
+    ViewControls, pixel_scale, precision_for, retained_value_sample, scale_split, screen_to_plane,
+    source_depth_record,
 };
 
 use super::super::schedule::{
@@ -1372,6 +1376,7 @@ struct FakePresenter {
     main_epoch: u64,
     kernel_submission: KernelSubmissionOwner<ReplayKernelSubmission>,
     kernel_main: Option<ReplayKernelGrid>,
+    kernel_reconstruction: Option<ReplayKernelGrid>,
     kernel_spare: Option<ReplayKernelGrid>,
     kernel_backdrop: Option<ReplayKernelGrid>,
     kernel_plan: Option<RefinementPlan>,
@@ -1492,20 +1497,40 @@ impl FakePresenter {
     }
 
     fn publish_kernel(&mut self, job: &KernelJob) {
-        let grid = match job.whole_grid().target {
-            KernelGridTarget::Main => self
-                .kernel_main
-                .get_or_insert_with(ReplayKernelGrid::default),
-            KernelGridTarget::Backdrop => self
-                .kernel_backdrop
-                .get_or_insert_with(ReplayKernelGrid::default),
-        };
-        let publication = match self
-            .kernel_submission
-            .submit((), std::slice::from_mut(grid), job)
-        {
-            Ok(publication) => publication,
-            Err(error) => match error {},
+        let target = job.whole_grid().target;
+        let publication = if job.whole_grid().paired_allocation.is_some() {
+            let value_grid = match target {
+                KernelGridTarget::Main => self.kernel_main.take().unwrap_or_default(),
+                KernelGridTarget::Backdrop => self.kernel_backdrop.take().unwrap_or_default(),
+            };
+            let reconstruction_grid = self.kernel_reconstruction.take().unwrap_or_default();
+            let mut grids = [value_grid, reconstruction_grid];
+            let publication = match self.kernel_submission.submit((), &mut grids, job) {
+                Ok(publication) => publication,
+                Err(error) => match error {},
+            };
+            match target {
+                KernelGridTarget::Main => self.kernel_main = Some(grids[0]),
+                KernelGridTarget::Backdrop => self.kernel_backdrop = Some(grids[0]),
+            }
+            self.kernel_reconstruction = Some(grids[1]);
+            publication
+        } else {
+            let grid = match target {
+                KernelGridTarget::Main => self
+                    .kernel_main
+                    .get_or_insert_with(ReplayKernelGrid::default),
+                KernelGridTarget::Backdrop => self
+                    .kernel_backdrop
+                    .get_or_insert_with(ReplayKernelGrid::default),
+            };
+            match self
+                .kernel_submission
+                .submit((), std::slice::from_mut(grid), job)
+            {
+                Ok(publication) => publication,
+                Err(error) => match error {},
+            }
         };
         let _facts = publication.into_facts();
         self.kernel_events
@@ -2456,6 +2481,36 @@ const fn backdrop_perturbation_replay_job() -> KernelJob {
     })
 }
 
+const fn paired_replay_allocation(generation: u32) -> PairedOutputAllocation {
+    PairedOutputAllocation {
+        generation,
+        spans: PairedTileSpanIdentities {
+            value: TileSpanIdentity::new(8, generation, 2_048),
+            reconstruction: TileSpanIdentity::new(9, generation, 2_048),
+        },
+        logical_bytes: 65_536,
+        reserved_bytes: 2_097_152,
+    }
+}
+
+const fn paired_reconstruction_uniform() -> SourceReconstructionUniform {
+    SourceReconstructionUniform {
+        camera_rotation_pairs: [[1.0, 0.0, 1.0, 0.0]; 5],
+        camera_translation: [[0.0; 4]; 2],
+        observer_rotation: [1.0, 0.0, 1.0, 0.0],
+        view_scale: [2.0, 8.0, 16.0, 0.0625],
+    }
+}
+
+const fn paired_replay_job(owner_epoch: u64, level: RefinementLevel, generation: u32) -> KernelJob {
+    let KernelJob::WholeGrid(mut job) = main_shallow_replay_job();
+    job.owner_epoch = owner_epoch;
+    job.level = level;
+    job.paired_allocation = Some(paired_replay_allocation(generation));
+    job.source_reconstruction = Some(paired_reconstruction_uniform());
+    KernelJob::WholeGrid(job)
+}
+
 fn kernel_turn_inputs() -> [KernelTurnInput; 2] {
     let extent = GridExtent {
         width: 64,
@@ -2768,6 +2823,137 @@ fn append_kernel_turn(output: &mut String, turn: &KernelTurn) {
     let _written = writeln!(output, "scene_id={:?}", turn.scene_id);
 }
 
+const fn tile_output_name(output: TileOutput) -> &'static str {
+    match output {
+        TileOutput::Value => "Value",
+        TileOutput::Reconstruction => "Reconstruction",
+    }
+}
+
+fn append_tile_span(output: &mut String, span: TileSpanIdentity) {
+    let _written = write!(
+        output,
+        "{}/{}/{}",
+        span.directory_index, span.generation, span.logical_len,
+    );
+}
+
+fn append_source_reconstruction(output: &mut String, source: &SourceReconstructionUniform) {
+    let _written = write!(output, "source camera_rotation_pair_bits=");
+    for (index, pair) in source.camera_rotation_pairs.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, "/");
+        }
+        append_f32_bits(output, pair);
+    }
+    let _written = write!(output, " camera_translation_bits=");
+    for (index, translation) in source.camera_translation.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, "/");
+        }
+        append_f32_bits(output, translation);
+    }
+    let _written = write!(output, " observer_rotation_bits=");
+    append_f32_bits(output, &source.observer_rotation);
+    let _written = write!(output, " view_scale_bits=");
+    append_f32_bits(output, &source.view_scale);
+    let _written = writeln!(output);
+}
+
+fn record_paired_kernel_submission() -> String {
+    let expected_allocation = paired_replay_allocation(7);
+    let job = paired_replay_job(42, RefinementLevel::Preview, 7);
+    let plan = plan_refinement(
+        GridExtent {
+            width: 64,
+            height: 32,
+        },
+        EscapeParams::new(512),
+        |_| true,
+    )
+    .expect("paired replay plan is admitted");
+    let mut owner = KernelSubmissionOwner::new(ReplayKernelSubmission {
+        grids: std::collections::VecDeque::from([replay_span(8, 7, 708), replay_span(9, 7, 709)]),
+        paired_allocations: std::collections::VecDeque::from([expected_allocation]),
+        ..ReplayKernelSubmission::default()
+    });
+    let allocated = owner
+        .allocate_grid_pair((), KernelGridTarget::Main, &plan, Some(7))
+        .expect("paired replay allocation is infallible");
+    assert_eq!(allocated.paired_allocation, Some(expected_allocation));
+    let transaction = allocated.transaction;
+    assert_ne!(transaction.spans[0], transaction.spans[1]);
+    let mut grids = allocated.grids;
+    let publication = owner
+        .submit((), &mut grids, &job)
+        .expect("paired replay submission is infallible");
+    assert_eq!(publication.job, job);
+    let receipt = publication
+        .paired_receipt
+        .expect("paired replay publishes one receipt");
+    let stale = TileOutputCompletion::new(6, TileOutput::Reconstruction);
+    assert_eq!(owner.observe_paired_completion(stale), Err(stale));
+    assert_eq!(owner.refused_completions, [stale]);
+
+    let mut output = String::new();
+    let _written = write!(output, "allocated target=Main first=");
+    append_kernel_span(
+        &mut output,
+        transaction.spans[0].expect("paired allocation has a value grid"),
+    );
+    let _written = write!(output, " second=");
+    append_kernel_span(
+        &mut output,
+        transaction.spans[1].expect("paired allocation has a reconstruction grid"),
+    );
+    let _written = writeln!(output);
+    let _written = write!(output, "published first=");
+    append_kernel_span(&mut output, publication.span);
+    let _written = writeln!(output);
+    append_whole_grid_job(&mut output, publication.job.whole_grid());
+    let allocation = receipt.allocation;
+    let _written = write!(output, "paired generation={} value=", allocation.generation);
+    append_tile_span(&mut output, allocation.spans.value);
+    let _written = write!(output, " reconstruction=");
+    append_tile_span(&mut output, allocation.spans.reconstruction);
+    let _written = writeln!(
+        output,
+        " logical_bytes={} reserved_bytes={}",
+        allocation.logical_bytes, allocation.reserved_bytes,
+    );
+    append_source_reconstruction(
+        &mut output,
+        publication
+            .job
+            .whole_grid()
+            .source_reconstruction
+            .as_ref()
+            .expect("paired job carries source reconstruction by value"),
+    );
+    for completion in receipt.completions {
+        let _written = writeln!(
+            output,
+            "completion generation={} output={}",
+            completion.generation,
+            tile_output_name(completion.output),
+        );
+    }
+    let _written = writeln!(
+        output,
+        "receipt generation={} outputs={},{}",
+        receipt.allocation.generation,
+        tile_output_name(receipt.completions[0].output),
+        tile_output_name(receipt.completions[1].output),
+    );
+    let _written = writeln!(
+        output,
+        "refused generation={} output={}",
+        stale.generation,
+        tile_output_name(stale.output),
+    );
+    output
+}
+
 #[test]
 fn native_refresh_replays_plain_kernel_submission_transactions() {
     let recorded = kernel_turn_inputs().map(record_kernel_submission_turn);
@@ -2867,6 +3053,124 @@ fn native_refresh_replays_plain_kernel_submission_transactions() {
             }
         )
     ));
+}
+
+const PAIRED_KERNEL_SUBMISSION_REPLAY_FIXTURE: &str = "\
+allocated target=Main first=8/4/7/708 second=9/4/7/709
+published first=8/4/7/708
+job owner_epoch=42 precision=PictureFast level=Preview requested=64x32 max_iter=512 bailout_bits=43800000
+plane basis_u_bits=[3f800000,00000000,00000000,00000000] basis_v_bits=[00000000,3f800000,00000000,00000000]
+map rows_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] inverse_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] condition_bits=3ff0000000000000 apron_bits=3ff0000000000000
+mode=Shallow centre_hi_bits=[3e800000,bf000000,00000000,3f800000] centre_lo_bits=[00000000,00000000,00000000,00000000] pixel_scale_bits=3e000000
+paired generation=7 value=8/7/2048 reconstruction=9/7/2048 logical_bytes=65536 reserved_bytes=2097152
+source camera_rotation_pair_bits=[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000] camera_translation_bits=[00000000,00000000,00000000,00000000]/[00000000,00000000,00000000,00000000] observer_rotation_bits=[3f800000,00000000,3f800000,00000000] view_scale_bits=[40000000,41000000,41800000,3d800000]
+completion generation=7 output=Value
+completion generation=7 output=Reconstruction
+receipt generation=7 outputs=Value,Reconstruction
+refused generation=6 output=Reconstruction
+";
+
+#[test]
+fn paired_kernel_submission_replay_is_additive_and_exact() {
+    let recorded = record_paired_kernel_submission();
+    assert_eq!(record_paired_kernel_submission(), recorded);
+    assert_eq!(recorded, PAIRED_KERNEL_SUBMISSION_REPLAY_FIXTURE);
+}
+
+#[test]
+fn paired_owner_withholds_receipt_until_both_current_completions_and_retains_stale() {
+    let job = paired_replay_job(42, RefinementLevel::Preview, 7);
+    let allocation = paired_replay_allocation(7);
+    let mut owner = KernelSubmissionOwner::new(ReplayKernelSubmission::default());
+    owner.paired_job = Some(job);
+    let stale = TileOutputCompletion::new(6, TileOutput::Reconstruction);
+    assert_eq!(owner.observe_paired_completion(stale), Err(stale));
+    assert_eq!(owner.refused_completions, [stale]);
+    assert_eq!(owner.paired_completions, [None, None]);
+    assert_eq!(owner.paired_receipt, None);
+
+    let value = TileOutputCompletion::new(7, TileOutput::Value);
+    assert_eq!(owner.observe_paired_completion(value), Ok(None));
+    assert_eq!(owner.paired_completions, [Some(value), None]);
+    assert_eq!(owner.paired_receipt, None);
+
+    let reconstruction = TileOutputCompletion::new(7, TileOutput::Reconstruction);
+    let receipt = owner
+        .observe_paired_completion(reconstruction)
+        .expect("current reconstruction completion is accepted")
+        .expect("both current completions make one receipt");
+    assert_eq!(receipt.allocation, allocation);
+    assert_eq!(receipt.completions, [value, reconstruction]);
+    assert_eq!(owner.paired_receipt, Some(receipt));
+    assert_eq!(owner.refused_completions, [stale]);
+}
+
+#[test]
+fn paired_reconstruction_span_reads_back_through_the_descriptor_path() {
+    /// S1 is binary32, and its declared H21 depth receipt admits one hundredth of source depth.
+    const S1_READBACK_DEPTH_TOLERANCE: f32 = 0.01;
+    /// Packed source factors and S1 lanes must reproduce this fixture within a quarter pixel.
+    const S1_READBACK_PIXEL_TOLERANCE_PX: f32 = 0.25;
+
+    let source = fake_scene_frame(
+        PendingFakeScene {
+            id: 1,
+            generation: 7,
+            level: RefinementLevel::Final,
+        },
+        1,
+    )
+    .pose;
+    let source_pixel = [0.0, 0.0];
+    let record = EscapeGridRecord {
+        smooth_iter: 1.0,
+        escaped: 1.0,
+        rebase_count: 0.0,
+        status: 0.0,
+    };
+    let value = retained_value_sample(record, 4).expect("readback value is finite");
+    let depth = source_depth_record(&source, source_pixel, value)
+        .expect("flat source sample has a depth receipt");
+    let render = TileRenderKey::from_pose(
+        &source,
+        SourceScreenRect::from_extent(0, 0, source.grid_width, source.grid_height),
+    );
+    let mut policy = TilePoseHeader::zeroed();
+    policy.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+        1.0,
+        12.0,
+        S1_READBACK_DEPTH_TOLERANCE,
+        S1_READBACK_PIXEL_TOLERANCE_PX,
+    ];
+    policy.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 4.0;
+    let header =
+        Warp::pack_descriptor_header(&render, &policy).expect("readback descriptor header packs");
+    let pair = Warp::pack_descriptor_sample(record, depth)
+        .expect("value and reconstruction records pack together");
+    let mut span_bytes = [0_u8; DescriptorSamplePair::BYTE_SIZE];
+    let (span_records, remainder) = span_bytes.as_chunks_mut::<16>();
+    assert_eq!(remainder.len(), 0);
+    let [value_record, reconstruction_record] = span_records else {
+        unreachable!("paired readback has exactly two descriptor records")
+    };
+    value_record.copy_from_slice(bytemuck::bytes_of(&pair.s0));
+    reconstruction_record.copy_from_slice(bytemuck::bytes_of(&pair.s1));
+    assert_eq!(&value_record[..], bytemuck::bytes_of(&pair.s0));
+    assert_eq!(&reconstruction_record[..], bytemuck::bytes_of(&pair.s1));
+    let readback: DescriptorSamplePair = bytemuck::pod_read_unaligned(&span_bytes);
+    assert_eq!(readback, pair);
+
+    let (reconstructed, source_receipt) =
+        Warp::reconstruct_descriptor_sample(&header, &readback, source_pixel)
+            .expect("S1 readback passes the R3-02 descriptor receipt");
+    let pixel_error = (source_receipt.screen[0] - source_pixel[0])
+        .hypot(source_receipt.screen[1] - source_pixel[1]);
+    assert!(pixel_error <= f64::from(S1_READBACK_PIXEL_TOLERANCE_PX));
+    assert!(
+        (source_receipt.linear_depth - depth.zeta_f).abs()
+            <= f64::from(S1_READBACK_DEPTH_TOLERANCE)
+    );
+    assert_eq!(reconstructed.value, value);
 }
 
 const WORKER_SERVICE_REPLAY_FIXTURE: &str = "\
@@ -4760,6 +5064,88 @@ fn assert_browser_surface_order(
             turn.turn
         );
     }
+}
+
+#[test]
+fn paired_kernel_in_flight_keeps_scene_before_warp_and_fence_observation_order() {
+    let job = paired_replay_job(1, RefinementLevel::Final, 7);
+    let mut fixture = FrameTraceFixture::completed("paired-output");
+    fixture.presenter.kernel_main = Some(replay_span(8, 7, 708));
+    fixture.presenter.kernel_reconstruction = Some(replay_span(9, 7, 709));
+    fixture.presenter.kernel_job = Some(job);
+    fixture.record_turn(true);
+
+    assert!(matches!(
+        fixture.presenter.kernel_events.as_slice(),
+        [KernelSubmissionEvent::Published(publication)]
+            if publication.job == job
+                && matches!(
+                    publication.paired_receipt,
+                    Some(receipt)
+                        if receipt.allocation == paired_replay_allocation(7)
+                            && receipt.completions
+                                == [
+                                    TileOutputCompletion::new(7, TileOutput::Value),
+                                    TileOutputCompletion::new(7, TileOutput::Reconstruction),
+                                ]
+                )
+    ));
+    let first_turn = &fixture.trace.browser_turns[0];
+    let scene_submission = first_turn
+        .actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                BrowserAction::Submitted {
+                    kind: SubmissionKind::Scene,
+                    id: 1,
+                }
+            )
+        })
+        .expect("paired turn submits scene one");
+    let warp_submission = first_turn
+        .actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                BrowserAction::Submitted {
+                    kind: SubmissionKind::Warp,
+                    id: 2,
+                }
+            )
+        })
+        .expect("paired turn submits warp two");
+    assert!(scene_submission < warp_submission);
+
+    fixture.complete_scene();
+    fixture.complete_warp();
+    fixture.advance();
+    fixture.record_turn(false);
+    assert_eq!(
+        fixture.trace.frame_turns[1].fence_observations,
+        [
+            TraceFenceObservation {
+                order: 0,
+                kind: TraceFenceKind::Scene,
+                id: 1,
+                result: TraceFenceResult::SceneCompleted {
+                    generation: 7,
+                    level: RefinementLevel::Final,
+                },
+            },
+            TraceFenceObservation {
+                order: 1,
+                kind: TraceFenceKind::Warp,
+                id: 2,
+                result: TraceFenceResult::WarpCompleted {
+                    kind: Some(WarpKind::ClearOnly),
+                    source_scene_id: None,
+                },
+            },
+        ]
+    );
 }
 
 #[test]

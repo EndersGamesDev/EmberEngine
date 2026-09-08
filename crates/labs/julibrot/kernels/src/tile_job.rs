@@ -2549,6 +2549,10 @@ mod tests {
             None
         );
         assert_eq!(
+            DescriptorCostLedger::paired_sample_logical_bytes(u64::MAX),
+            None
+        );
+        assert_eq!(
             DescriptorCostLedger::ACTIVE_PREFIX_RECORDS
                 + DescriptorCostLedger::HEADER_SLOTS * TilePoseHeader::TEXELS as u64
                 + DescriptorCostLedger::OWNERSHIP_RECORDS,

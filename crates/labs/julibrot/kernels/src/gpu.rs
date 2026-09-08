@@ -1349,6 +1349,7 @@ const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: Refinem
 mod tests {
     use std::time::Instant;
 
+    use ember_julibrot_math::{CentreSplit, Homography, Plane};
     use ember_lab_heap::{
         DataSpan, DialectLimits, DispatchPlan, RegisteredKernel, SpanArena, StaticHeaders,
     };
@@ -1361,9 +1362,9 @@ mod tests {
         reconstruction_kernel_body, value_uniform_declaration,
     };
     use crate::{
-        EscapeParams, GridExtent, KernelError, ReferenceOrbitInput, RefinementLevel,
-        ShallowUniform, SourceReconstructionUniform, perturbation_kernel, plan_refinement,
-        shallow_kernel,
+        DescriptorSamplePair, DescriptorTexel, EscapeParams, GridExtent, KernelError,
+        ReferenceOrbitInput, RefinementLevel, ShallowUniform, SourceReconstructionUniform,
+        escape_shallow_pixel, perturbation_kernel, plan_refinement, shallow_kernel,
     };
 
     struct NativeDispatchHarness {
@@ -1511,6 +1512,67 @@ mod tests {
             )
             .expect("paired perturbation uniform size fits u32")
         );
+    }
+
+    #[test]
+    fn paired_s0_layout_matches_single_span_layout_over_cpu_mirror_corpus() {
+        const FROZEN_PLANNER_EXTENTS: [GridExtent; 3] = [
+            GridExtent {
+                width: 1,
+                height: 1,
+            },
+            GridExtent {
+                width: 64,
+                height: 32,
+            },
+            GridExtent {
+                width: 257,
+                height: 129,
+            },
+        ];
+        let plane = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        };
+        let centre = CentreSplit {
+            hi: [0.25, -0.5, 0.0, 1.0],
+            lo: [0.0; 4],
+        };
+        for requested_extent in FROZEN_PLANNER_EXTENTS {
+            let (_, plan) = app_main_pair_plan(requested_extent);
+            for selected in plan.levels {
+                let uniform = ShallowUniform::pack(
+                    plane,
+                    &Homography::IDENTITY,
+                    centre,
+                    0.125,
+                    selected.extent,
+                    EscapeParams::new(selected.iteration_cap),
+                    selected.level,
+                )
+                .expect("frozen planner level packs");
+                let final_index = selected.extent.width * selected.extent.height - 1;
+                for index in [0, final_index / 2, final_index] {
+                    let record = escape_shallow_pixel(&uniform, index)
+                        .expect("frozen planner sample evaluates")
+                        .record;
+                    let lanes = [
+                        record.smooth_iter,
+                        record.escaped,
+                        record.rebase_count,
+                        record.status,
+                    ];
+                    let paired = DescriptorSamplePair::new(lanes, [0.0; 4]);
+                    let old_single = DescriptorTexel { lanes };
+                    assert_eq!(
+                        bytemuck::bytes_of(&paired.s0),
+                        bytemuck::bytes_of(&old_single),
+                        "{requested_extent:?} {:?} sample {index}",
+                        selected.level,
+                    );
+                }
+            }
+        }
     }
 
     #[test]
