@@ -10,22 +10,17 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PY="${PYTHON:-python3}"
 
-case "${1:-}" in
-    "") ;;
-    --self-test) ;;
-    *)
-        echo "usage: $0 [--self-test]" >&2
-        exit 2
-        ;;
-esac
-
-"$PY" - "$REPO" "${1:-}" <<'PY'
+"$PY" - "$REPO" "$0" "$@" <<'PY'
 import re
 import subprocess
 import sys
+import time
 
 
-repo, mode = sys.argv[1:]
+repo, script, *arguments = sys.argv[1:]
+started = time.monotonic_ns()
+files_scanned = 0
+hits = 0
 
 date = r"(?:\s*(?:[-—]\s*)?(?:\(\s*)?\d{4}-\d{2}-\d{2}(?:\s*\))?)?"
 state = r"(?:done|completed|shipped)"
@@ -60,6 +55,7 @@ EXCEPTIONS = {
 
 
 def self_test():
+    global hits
     cases = [
         ("- [x] released the map", "checked task"),
         ("  * [X] published the bundle", "checked task"),
@@ -79,6 +75,7 @@ def self_test():
         actual = forbidden(line)
         if actual != expected:
             failures.append(f"{line!r}: got {actual!r}, want {expected!r}")
+    hits = len(failures)
     if failures:
         for failure in failures:
             print(f"SELF-TEST FAIL: {failure}", file=sys.stderr)
@@ -87,52 +84,74 @@ def self_test():
     return 0
 
 
-if mode == "--self-test":
-    raise SystemExit(self_test())
+def scan():
+    global files_scanned, hits
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.md"],
+        cwd=repo,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.split(b"\0")
 
-tracked = subprocess.run(
-    ["git", "ls-files", "-z", "--", "*.md"],
-    cwd=repo,
-    check=True,
-    stdout=subprocess.PIPE,
-).stdout.split(b"\0")
+    findings = []
+    used_exceptions = set()
+    for raw_path in tracked:
+        if not raw_path:
+            continue
+        path = raw_path.decode("utf-8", errors="surrogateescape")
+        if path == "CHANGELOG.md":
+            continue
+        files_scanned += 1
+        with open(f"{repo}/{path}", encoding="utf-8") as source:
+            for number, raw_line in enumerate(source, 1):
+                line = raw_line.rstrip("\n")
+                kind = forbidden(line)
+                if kind is None:
+                    continue
+                key = (path, number, line)
+                if key in EXCEPTIONS:
+                    used_exceptions.add(key)
+                    continue
+                findings.append((path, number, line, kind))
 
-findings = []
-used_exceptions = set()
-for raw_path in tracked:
-    if not raw_path:
-        continue
-    path = raw_path.decode("utf-8", errors="surrogateescape")
-    if path == "CHANGELOG.md":
-        continue
-    with open(f"{repo}/{path}", encoding="utf-8") as source:
-        for number, raw_line in enumerate(source, 1):
-            line = raw_line.rstrip("\n")
-            kind = forbidden(line)
-            if kind is None:
-                continue
-            key = (path, number, line)
-            if key in EXCEPTIONS:
-                used_exceptions.add(key)
-                continue
-            findings.append((path, number, line, kind))
+    stale = set(EXCEPTIONS) - used_exceptions
+    hits = len(findings) + len(stale)
+    for path, number, line in sorted(stale):
+        print(
+            f"STALE EXCEPTION {path}:{number}: {line!r}: {EXCEPTIONS[(path, number, line)]}",
+            file=sys.stderr,
+        )
+    for path, number, line, kind in findings:
+        print(f"{path}:{number}: {kind}: {line!r}", file=sys.stderr)
 
-stale = set(EXCEPTIONS) - used_exceptions
-for path, number, line in sorted(stale):
+    if stale or findings:
+        print(
+            f"done-list scan failed: {len(findings)} finding(s), "
+            f"{len(stale)} stale exception(s)",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+def main():
+    if len(arguments) > 1 or (arguments and arguments[0] != "--self-test"):
+        print(f"usage: {script} [--self-test]", file=sys.stderr)
+        return 2
+    if arguments:
+        return self_test()
+    return scan()
+
+
+try:
+    exit_code = main()
+finally:
+    elapsed_ms = (time.monotonic_ns() - started) // 1_000_000
     print(
-        f"STALE EXCEPTION {path}:{number}: {line!r}: {EXCEPTIONS[(path, number, line)]}",
-        file=sys.stderr,
+        f"test-done-lists: {files_scanned} files scanned, "
+        f"{hits} findings, wall {elapsed_ms} ms"
     )
-for path, number, line, kind in findings:
-    print(f"{path}:{number}: {kind}: {line!r}", file=sys.stderr)
 
-if stale or findings:
-    print(
-        f"done-list scan failed: {len(findings)} finding(s), "
-        f"{len(stale)} stale exception(s)",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-print(f"done-list scan: {len(tracked) - 1} tracked Markdown path(s), no findings")
+raise SystemExit(exit_code)
 PY
