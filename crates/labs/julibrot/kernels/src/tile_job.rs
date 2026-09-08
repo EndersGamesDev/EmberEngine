@@ -27,6 +27,29 @@
 //! |Positive zero|432|80|`H27-H31`|
 //! |`smooth_iter,escaped,rebase_count,status`|0|16|`S0[k]`|
 //! |`a_F,b_F,zeta_F,validity`|16|16|`S1[k]`|
+//!
+//! The version-one invalidation matrix is complete and keeps index work distinct from current presentation:
+//!
+//! |State|Event|Result|
+//! |-----|-----|------|
+//! |Keep|Camera|Query footprint; reproject|
+//! |Keep|Translation|Query footprint; reproject|
+//! |Keep|Height|Query footprint; reproject|
+//! |Keep|DistanceFive|Query footprint; reproject|
+//! |Keep|DistanceFour|Query footprint; reproject|
+//! |Keep|Observer|Query footprint; reproject|
+//! |Keep|Zoom|Query footprint; reproject|
+//! |Keep|Extent|Query footprint; reproject|
+//! |Keep|PlanePreservingObject|Transform chart; reproject|
+//! |Keep|InPlaneOrigin|Transform chart; reproject|
+//! |Keep|Display|No index action; shade current|
+//! |NewPartition|SliceTilt|New slice index; hold|
+//! |NewPartition|OutOfPlaneOrigin|New slice index; hold|
+//! |NewPartition|IterationCap|New MAIN index; hold|
+//! |NewPartition|FormulaAbi|New MAIN index; hold|
+//! |NewPartition|Precision|New MAIN index; hold|
+//! |NewPartition|RecordAbi|New MAIN index; hold|
+//! |NewPartition|MainGeneration|New MAIN index; hold|
 
 use core::cmp::Ordering;
 use core::hash::{Hash, Hasher};
@@ -982,6 +1005,10 @@ impl DescriptorCostLedger {
     pub const OWNERSHIP_RECORDS: u64 = 63_424;
     /// Total records in one shared 256-square descriptor page.
     pub const DESCRIPTOR_PAGE_RECORDS: u64 = 256 * 256;
+    /// Exact physical bytes in one DATA page.
+    pub const DATA_PAGE_BYTES: u64 = Self::DESCRIPTOR_PAGE_RECORDS * Self::TEXEL_BYTES;
+    /// Physical sample pages retained by each complete tile.
+    pub const SAMPLE_PAGES_PER_TILE: u32 = 2;
     /// Bytes in the paired sample columns for one tile.
     pub const SAMPLE_BYTES_PER_TILE: u64 = 2 * Self::TEXEL_BYTES * Self::SAMPLES_PER_TILE;
     /// Bytes in one pose header.
@@ -994,6 +1021,12 @@ impl DescriptorCostLedger {
     #[must_use]
     pub const fn logical_bytes(tile_count: u64) -> Option<u64> {
         Self::LOGICAL_BYTES_PER_TILE.checked_mul(tile_count)
+    }
+
+    /// Computes exact physical DATA allocation for a page count.
+    #[must_use]
+    pub const fn physical_data_bytes(page_count: u64) -> Option<u64> {
+        Self::DATA_PAGE_BYTES.checked_mul(page_count)
     }
 }
 
@@ -1310,6 +1343,8 @@ pub enum RenderControlChange {
     OutOfPlaneOrigin,
     /// Delivered iteration-cap change.
     IterationCap,
+    /// Formula-semantics ABI change.
+    FormulaAbi,
     /// Precision-policy change.
     Precision,
     /// Escape-record ABI change.
@@ -1323,6 +1358,27 @@ impl RenderControlChange {
     pub const VERSION: u32 = 1;
     /// Exact encoded byte size.
     pub const BYTE_SIZE: usize = 4;
+    /// Every event in stable matrix order.
+    pub const ALL: [Self; 18] = [
+        Self::Camera,
+        Self::Translation,
+        Self::Height,
+        Self::DistanceFive,
+        Self::DistanceFour,
+        Self::Observer,
+        Self::Zoom,
+        Self::Extent,
+        Self::PlanePreservingObject,
+        Self::InPlaneOrigin,
+        Self::Display,
+        Self::SliceTilt,
+        Self::OutOfPlaneOrigin,
+        Self::IterationCap,
+        Self::FormulaAbi,
+        Self::Precision,
+        Self::RecordAbi,
+        Self::MainGeneration,
+    ];
 }
 
 /// Semantic effect of one control-class change on resident rendered content.
@@ -1350,6 +1406,8 @@ pub enum TransitionPresentation {
     Reproject = 0,
     /// Prior content may remain only as an unchanged held frame.
     HoldPrevious = 1,
+    /// Existing fragments are shaded again with current display inputs.
+    ShadeCurrent = 2,
 }
 
 impl TransitionPresentation {
@@ -1377,6 +1435,7 @@ pub const fn tile_invalidation(change: RenderControlChange) -> TileInvalidation 
         RenderControlChange::SliceTilt
         | RenderControlChange::OutOfPlaneOrigin
         | RenderControlChange::IterationCap
+        | RenderControlChange::FormulaAbi
         | RenderControlChange::Precision
         | RenderControlChange::RecordAbi
         | RenderControlChange::MainGeneration => TileInvalidation::NewPartition,
@@ -1386,6 +1445,9 @@ pub const fn tile_invalidation(change: RenderControlChange) -> TileInvalidation 
 /// Returns the only honest transitional presentation for one invalidation row.
 #[must_use]
 pub const fn transition_presentation(change: RenderControlChange) -> TransitionPresentation {
+    if matches!(change, RenderControlChange::Display) {
+        return TransitionPresentation::ShadeCurrent;
+    }
     match tile_invalidation(change) {
         TileInvalidation::Keep => TransitionPresentation::Reproject,
         TileInvalidation::NewPartition => TransitionPresentation::HoldPrevious,
@@ -1601,11 +1663,19 @@ impl ReferenceLeaseSet {
 
 /// Exact logical descriptor-record cost for a resident tile count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
 pub struct ResidentTileCost {
     pub tile_count: u32,
     pub sample_bytes: u64,
     pub header_bytes: u64,
     pub logical_bytes: u64,
+}
+
+impl ResidentTileCost {
+    /// Cost-record schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 32;
 }
 
 /// Computes the exact logical cost-table row for `tile_count` tiles of `geometry`.
@@ -1649,6 +1719,7 @@ pub fn resident_tile_cost(tile_count: u32) -> Result<ResidentTileCost, TileJobEr
 
 /// Derived capacity facts for a protected-backdrop resident profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
 pub struct ResidentTileProfile {
     pub total_tiles: u32,
     pub backdrop_tiles: u32,
@@ -1663,6 +1734,17 @@ pub struct ResidentTileProfile {
 }
 
 impl ResidentTileProfile {
+    /// Resident-profile schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 72;
+
+    /// Returns exact physical DATA bytes for this delivered profile.
+    #[must_use]
+    pub const fn physical_data_bytes(self) -> Option<u64> {
+        DescriptorCostLedger::physical_data_bytes(self.total_data_pages as u64)
+    }
+
     /// Derives the page and span-directory requirements for the version-one two-page tile ABI.
     ///
     /// # Errors
@@ -1677,7 +1759,7 @@ impl ResidentTileProfile {
             .checked_sub(backdrop_tiles)
             .ok_or(TileJobError::InvalidResidentProfile)?;
         let sample_pages = total_tiles
-            .checked_mul(2)
+            .checked_mul(DescriptorCostLedger::SAMPLE_PAGES_PER_TILE)
             .ok_or(TileJobError::ArithmeticOverflow)?;
         let descriptor_pages = 1_u32;
         let total_data_pages = sample_pages
@@ -2185,6 +2267,8 @@ mod tests {
         assert_record!(RenderControlChange, 1, 4);
         assert_record!(TileInvalidation, 1, 4);
         assert_record!(TransitionPresentation, 1, 4);
+        assert_record!(ResidentTileCost, 1, 32);
+        assert_record!(ResidentTileProfile, 1, 72);
         assert_eq!(align_of::<DescriptorTexel>(), 16);
         assert_eq!(align_of::<TilePoseHeader>(), 16);
         assert_eq!(DescriptorCostLedger::ABI_VERSION, 1);
@@ -2210,6 +2294,8 @@ mod tests {
         assert_eq!(DescriptorCostLedger::HEADER_SLOTS, 64);
         assert_eq!(DescriptorCostLedger::OWNERSHIP_RECORDS, 63_424);
         assert_eq!(DescriptorCostLedger::DESCRIPTOR_PAGE_RECORDS, 65_536);
+        assert_eq!(DescriptorCostLedger::DATA_PAGE_BYTES, 1_048_576);
+        assert_eq!(DescriptorCostLedger::SAMPLE_PAGES_PER_TILE, 2);
         assert_eq!(
             DescriptorCostLedger::ACTIVE_PREFIX_RECORDS
                 + DescriptorCostLedger::HEADER_SLOTS * TilePoseHeader::TEXELS as u64
@@ -2334,6 +2420,92 @@ mod tests {
         assert_eq!(cell, cell);
     }
 
+    fn verify_quality_permutations(
+        candidates: &mut [TileQuality],
+        remaining: usize,
+        expected: TileQuality,
+        permutation_count: &mut u32,
+    ) {
+        if remaining == 1 {
+            assert_eq!(
+                select_same_surface_owner(candidates.iter().copied()),
+                Some(expected)
+            );
+            *permutation_count += 1;
+            return;
+        }
+        for index in 0..remaining {
+            verify_quality_permutations(candidates, remaining - 1, expected, permutation_count);
+            let swap_index = if remaining.is_multiple_of(2) {
+                index
+            } else {
+                0
+            };
+            candidates.swap(swap_index, remaining - 1);
+        }
+    }
+
+    #[test]
+    fn every_same_surface_quality_corpus_permutation_has_one_owner() {
+        let winner = TileQuality {
+            residency: TileResidency::Detail,
+            rung: TileRung::Final,
+            density: ExactF64::new(2.0),
+            error: ExactF64::new(0.01),
+            age: 9,
+            tile_id: 7,
+        };
+        let mut corpus = [
+            TileQuality {
+                residency: TileResidency::Backdrop,
+                rung: TileRung::Final,
+                density: ExactF64::new(4_096.0),
+                error: ExactF64::new(0.0),
+                age: u64::MAX,
+                tile_id: 1,
+            },
+            TileQuality {
+                rung: TileRung::Preview,
+                density: ExactF64::new(4_096.0),
+                error: ExactF64::new(0.0),
+                age: u64::MAX,
+                tile_id: 1,
+                ..winner
+            },
+            TileQuality {
+                rung: TileRung::Interactive,
+                density: ExactF64::new(4_096.0),
+                error: ExactF64::new(0.0),
+                age: u64::MAX,
+                tile_id: 1,
+                ..winner
+            },
+            TileQuality {
+                density: ExactF64::new(1.0),
+                error: ExactF64::new(0.0),
+                age: u64::MAX,
+                tile_id: 1,
+                ..winner
+            },
+            TileQuality {
+                error: ExactF64::new(0.02),
+                age: u64::MAX,
+                tile_id: 1,
+                ..winner
+            },
+            TileQuality { age: 8, ..winner },
+            TileQuality {
+                tile_id: 8,
+                ..winner
+            },
+            winner,
+        ];
+        let mut permutation_count = 0;
+        let remaining = corpus.len();
+        verify_quality_permutations(&mut corpus, remaining, winner, &mut permutation_count);
+        assert_eq!(permutation_count, 40_320);
+    }
+
     #[test]
     fn invalidation_matrix_covers_reprojection_and_partition_transitions() {
         let keep = [
@@ -2347,12 +2519,12 @@ mod tests {
             RenderControlChange::Extent,
             RenderControlChange::PlanePreservingObject,
             RenderControlChange::InPlaneOrigin,
-            RenderControlChange::Display,
         ];
         let partition = [
             RenderControlChange::SliceTilt,
             RenderControlChange::OutOfPlaneOrigin,
             RenderControlChange::IterationCap,
+            RenderControlChange::FormulaAbi,
             RenderControlChange::Precision,
             RenderControlChange::RecordAbi,
             RenderControlChange::MainGeneration,
@@ -2370,6 +2542,144 @@ mod tests {
                 transition_presentation(change),
                 TransitionPresentation::HoldPrevious
             );
+        }
+        assert_eq!(
+            tile_invalidation(RenderControlChange::Display),
+            TileInvalidation::Keep
+        );
+        assert_eq!(
+            transition_presentation(RenderControlChange::Display),
+            TransitionPresentation::ShadeCurrent
+        );
+    }
+
+    const EXPECTED_INVALIDATION_MATRIX: [(
+        RenderControlChange,
+        TileInvalidation,
+        TransitionPresentation,
+        &str,
+    ); 18] = [
+        (
+            RenderControlChange::Camera,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Camera|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Translation,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Translation|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Height,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Height|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::DistanceFive,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|DistanceFive|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::DistanceFour,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|DistanceFour|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Observer,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Observer|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Zoom,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Zoom|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Extent,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Extent|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::PlanePreservingObject,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|PlanePreservingObject|Transform chart; reproject|",
+        ),
+        (
+            RenderControlChange::InPlaneOrigin,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|InPlaneOrigin|Transform chart; reproject|",
+        ),
+        (
+            RenderControlChange::Display,
+            TileInvalidation::Keep,
+            TransitionPresentation::ShadeCurrent,
+            "//! |Keep|Display|No index action; shade current|",
+        ),
+        (
+            RenderControlChange::SliceTilt,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|SliceTilt|New slice index; hold|",
+        ),
+        (
+            RenderControlChange::OutOfPlaneOrigin,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|OutOfPlaneOrigin|New slice index; hold|",
+        ),
+        (
+            RenderControlChange::IterationCap,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|IterationCap|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::FormulaAbi,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|FormulaAbi|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::Precision,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|Precision|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::RecordAbi,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|RecordAbi|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::MainGeneration,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|MainGeneration|New MAIN index; hold|",
+        ),
+    ];
+
+    #[test]
+    fn module_invalidation_matrix_pins_every_state_event_and_result() {
+        assert_eq!(
+            EXPECTED_INVALIDATION_MATRIX.map(|(event, _, _, _)| event),
+            RenderControlChange::ALL
+        );
+        let source = include_str!("tile_job.rs");
+        for (event, state, result, documented_row) in EXPECTED_INVALIDATION_MATRIX {
+            assert_eq!(tile_invalidation(event), state);
+            assert_eq!(transition_presentation(event), result);
+            assert!(source.contains(documented_row));
         }
     }
 
@@ -2495,6 +2805,29 @@ mod tests {
                 expanded.minimum_span_capacity,
             ),
             (56, 12, 44, 112, 120, 113, 128)
+        );
+    }
+
+    #[test]
+    fn frozen_profiles_pin_physical_bytes_and_overflow_refusals() {
+        let constrained = ResidentTileProfile::constrained().expect("constrained profile fits");
+        assert_eq!(constrained.physical_data_bytes(), Some(67_108_864));
+        assert_eq!(constrained.cost.logical_bytes, 58_734_592);
+        let expanded = ResidentTileProfile::expanded().expect("expanded profile fits");
+        assert_eq!(expanded.physical_data_bytes(), Some(125_829_120));
+        assert_eq!(expanded.cost.logical_bytes, 117_469_184);
+
+        assert_eq!(DescriptorCostLedger::logical_bytes(u64::MAX), None);
+        assert_eq!(DescriptorCostLedger::physical_data_bytes(u64::MAX), None);
+        let largest_geometry =
+            TileGeometry::new(u32::MAX, 1, 0).expect("largest one-row geometry fits");
+        assert_eq!(
+            tile_cost(largest_geometry, u32::MAX),
+            Err(TileJobError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            ResidentTileProfile::new(u32::MAX, 0, 0),
+            Err(TileJobError::ArithmeticOverflow)
         );
     }
 }

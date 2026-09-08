@@ -1,9 +1,9 @@
 //! Compatibility re-exports for the kernels-owned rendered-tile record vocabulary.
 
 use ember_julibrot_math::{
-    EscapeGridRecord, Homography, ObjectAngles, Pose, PoseMap, ProjectedSample,
+    EscapeGridRecord, Homography, ObjectAngles, Plane, Pose, PoseMap, ProjectedSample,
     ReconstructedSample, ReprojectionError, SourceDepthRecord, ViewControls, construct_plane,
-    project_reconstructed_sample, retained_value_sample,
+    plane_chart_relation, project_reconstructed_sample, retained_value_sample,
 };
 
 pub use ember_julibrot_kernels::{
@@ -19,6 +19,129 @@ use crate::planner::invert_3x3;
 const EXACT_INTEGER_LIMIT: f32 = 16_777_216.0;
 /// Four f32 ulps admit a sine/cosine pair after independent lane rounding.
 const FACTOR_NORM_TOLERANCE: f64 = 4.768_371_582_031_25e-7;
+const SLICE_DETERMINANT_EPSILON: f64 = 1.0e-12;
+/// A binary32 × binary32 × binary64 product has at most 101 significant bits. Requiring an
+/// unbiased exponent of at least -974 keeps its lowest possible exact bit at the binary64
+/// subnormal floor, -1074, where the fused residual remains representable.
+const MIN_ERROR_FREE_TRIPLE_MAGNITUDE: f64 = f64::from_bits(49_u64 << 52);
+
+/// Certified affine chart transform between two parameterizations of one sampled slice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SliceChartTransform {
+    /// Row-major two-dimensional map from source to canonical coordinates.
+    pub chart_map: [f64; 4],
+    /// Source-origin offset expressed in canonical chart coordinates.
+    pub origin_offset: [f64; 2],
+    /// Certified semantic distance outside the canonical plane; zero for every accepted slice.
+    pub out_of_plane_error: f64,
+    /// Maximum admitted semantic out-of-plane error; exactly zero in version one.
+    pub maximum_error: f64,
+}
+
+impl SliceChartTransform {
+    /// Slice-transform schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 64;
+
+    /// Maps one source chart coordinate into the certified canonical chart.
+    #[must_use]
+    pub const fn map_source_coordinate(&self, source: [f64; 2]) -> [f64; 2] {
+        [
+            self.chart_map[0].mul_add(
+                source[0],
+                self.chart_map[1].mul_add(source[1], self.origin_offset[0]),
+            ),
+            self.chart_map[2].mul_add(
+                source[0],
+                self.chart_map[3].mul_add(source[1], self.origin_offset[1]),
+            ),
+        ]
+    }
+}
+
+/// One retained descriptor sample and the source pixel whose receipt it must reproduce.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct DescriptorFootprintSample {
+    /// Centred source-screen pixel coordinate.
+    pub source_pixel: [f64; 2],
+    /// Paired value and lifted-position descriptor records.
+    pub descriptor: DescriptorSamplePair,
+}
+
+impl DescriptorFootprintSample {
+    /// Footprint-input schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 48;
+}
+
+/// Conservative canonical chart bounds and delivered local sample-density interval.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct DerivedChartFootprint {
+    /// Canonical slice whose chart contains the bounds.
+    pub slice: SliceIdentity,
+    /// Outward-rounded lower chart coordinate after declared error.
+    pub conservative_minimum: [f64; 2],
+    /// Outward-rounded upper chart coordinate after declared error.
+    pub conservative_maximum: [f64; 2],
+    /// Outward-rounded minimum samples per canonical chart unit.
+    pub density_minimum: f64,
+    /// Outward-rounded maximum samples per canonical chart unit.
+    pub density_maximum: f64,
+    /// Conservative canonical-coordinate error applied on every bound edge.
+    pub coordinate_error: f64,
+    /// Number of valid reconstructed samples contributing to the bounds.
+    pub valid_sample_count: u32,
+}
+
+impl DerivedChartFootprint {
+    /// Derived-footprint schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 128;
+
+    /// Reports whether the conservative rectangle covers a canonical chart coordinate.
+    #[must_use]
+    pub fn contains(&self, coordinate: [f64; 2]) -> bool {
+        coordinate.into_iter().enumerate().all(|(axis, value)| {
+            (self.conservative_minimum[axis]..=self.conservative_maximum[axis]).contains(&value)
+        })
+    }
+}
+
+/// Certifies that source and canonical identities name the same sampled affine slice.
+///
+/// The bases must pass the shared once-rounded plane relation. Every three-axis minor of the
+/// canonical basis and the exact stored origin delta must then vanish under error-free dyadic
+/// expansion arithmetic. The source chart scale is validated but never relaxes that proof.
+#[must_use]
+pub fn certify_same_slice(
+    source: SliceIdentity,
+    canonical: SliceIdentity,
+    source_chart_scale: f64,
+) -> Option<SliceChartTransform> {
+    if !source_chart_scale.is_finite() || source_chart_scale <= 0.0 {
+        return None;
+    }
+    let (source_plane, source_origin) = unpack_slice_identity(source)?;
+    let (canonical_plane, canonical_origin) = unpack_slice_identity(canonical)?;
+    let relation = plane_chart_relation(source_plane, canonical_plane)?;
+    if !origin_delta_lies_in_plane(canonical_plane, source_origin, canonical_origin)? {
+        return None;
+    }
+    let origin_delta = core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
+    let (origin_offset, _) = project_vector_to_plane(canonical_plane, origin_delta)?;
+    Some(SliceChartTransform {
+        chart_map: relation.chart_map,
+        origin_offset,
+        out_of_plane_error: 0.0,
+        maximum_error: 0.0,
+    })
+}
 
 /// Packs the source-pose lanes while preserving supplied policy and lifetime lanes.
 pub fn pack_descriptor_header(
@@ -278,6 +401,618 @@ pub fn project_descriptor_sample(
     )
 }
 
+/// Derives conservative canonical chart bounds and local density from valid descriptor samples.
+///
+/// Invalid visibility records do not contribute a surface point. Every contributing record must
+/// pass the stage-0 source reconstruction receipt before it can widen the derived footprint.
+/// `source_content` is the authoritative full content key bound to the descriptor allocation;
+/// `content` names the canonical slice into which that source is being indexed.
+///
+/// # Errors
+///
+/// Returns a typed refusal for mismatched content provenance, an uncertified slice, an invalid
+/// sample, or a corpus containing no valid reconstructed surface sample.
+pub fn derive_chart_footprint(
+    source_content: &TileContentKey,
+    content: &TileContentKey,
+    header: &TilePoseHeader,
+    samples: &[DescriptorFootprintSample],
+) -> Result<DerivedChartFootprint, ReprojectionError> {
+    let source = unpack_descriptor_header(header).ok_or(ReprojectionError::InvalidSource)?;
+    let source_slice = SliceIdentity::new(source.plane, source.plane_origin);
+    if !descriptor_matches_content(source_content, content, source_slice, header) {
+        return Err(ReprojectionError::InvalidSource);
+    }
+    let source_chart_scale = source_chart_scale(&source).ok_or(ReprojectionError::InvalidSource)?;
+    let transform = certify_same_slice(source_slice, content.slice, source_chart_scale)
+        .ok_or(ReprojectionError::InvalidTarget)?;
+    let source_coordinate_error = f64::from(header.texels[TilePoseHeader::H21_BOUNDS].lanes[2]);
+    let coordinate_error = canonical_coordinate_error(transform, source_coordinate_error)
+        .ok_or(ReprojectionError::InvalidSource)?;
+
+    let mut footprint = ChartFootprintAccumulator::new();
+    for sample in samples {
+        let (_, depth) = unpack_descriptor_sample(&sample.descriptor)?;
+        if !depth.valid {
+            continue;
+        }
+        let (reconstructed, _) =
+            reconstruct_descriptor_sample(header, &sample.descriptor, sample.source_pixel)?;
+        let (source_coordinate, residual) =
+            project_ambient_to_slice(source_slice, reconstructed.ambient_four)
+                .ok_or(ReprojectionError::InvalidSource)?;
+        if residual > source_coordinate_error {
+            return Err(ReprojectionError::InvalidSource);
+        }
+        let canonical_coordinate = transform.map_source_coordinate(source_coordinate);
+        let density = source_density_interval(&source, sample.source_pixel)
+            .ok_or(ReprojectionError::InvalidSource)?;
+        footprint.include(canonical_coordinate, density)?;
+    }
+    footprint.finish(content.slice, coordinate_error)
+}
+
+struct ChartFootprintAccumulator {
+    minimum: [f64; 2],
+    maximum: [f64; 2],
+    density_minimum: f64,
+    density_maximum: f64,
+    valid_sample_count: u32,
+}
+
+impl ChartFootprintAccumulator {
+    const fn new() -> Self {
+        Self {
+            minimum: [f64::INFINITY; 2],
+            maximum: [f64::NEG_INFINITY; 2],
+            density_minimum: f64::INFINITY,
+            density_maximum: 0.0,
+            valid_sample_count: 0,
+        }
+    }
+
+    fn include(
+        &mut self,
+        coordinate: [f64; 2],
+        density: [f64; 2],
+    ) -> Result<(), ReprojectionError> {
+        if !coordinate.into_iter().chain(density).all(f64::is_finite)
+            || density[0] <= 0.0
+            || density[1] < density[0]
+        {
+            return Err(ReprojectionError::InvalidSource);
+        }
+        for ((minimum, maximum), value) in self
+            .minimum
+            .iter_mut()
+            .zip(&mut self.maximum)
+            .zip(coordinate)
+        {
+            *minimum = minimum.min(value);
+            *maximum = maximum.max(value);
+        }
+        self.density_minimum = self.density_minimum.min(density[0]);
+        self.density_maximum = self.density_maximum.max(density[1]);
+        self.valid_sample_count = self
+            .valid_sample_count
+            .checked_add(1)
+            .ok_or(ReprojectionError::InvalidSource)?;
+        Ok(())
+    }
+
+    fn finish(
+        self,
+        slice: SliceIdentity,
+        coordinate_error: f64,
+    ) -> Result<DerivedChartFootprint, ReprojectionError> {
+        if self.valid_sample_count == 0 {
+            return Err(ReprojectionError::InvalidSource);
+        }
+        Ok(DerivedChartFootprint {
+            slice,
+            conservative_minimum: self
+                .minimum
+                .map(|value| (value - coordinate_error).next_down()),
+            conservative_maximum: self
+                .maximum
+                .map(|value| (value + coordinate_error).next_up()),
+            density_minimum: self.density_minimum,
+            density_maximum: self.density_maximum,
+            coordinate_error,
+            valid_sample_count: self.valid_sample_count,
+        })
+    }
+}
+
+fn descriptor_matches_content(
+    source_content: &TileContentKey,
+    canonical_content: &TileContentKey,
+    source_slice: SliceIdentity,
+    header: &TilePoseHeader,
+) -> bool {
+    let quality = header.texels[TilePoseHeader::H22_QUALITY].lanes;
+    let provenance = header.texels[TilePoseHeader::H25_PROVENANCE].lanes;
+    let expected_content = TileContentKey {
+        slice: canonical_content.slice,
+        ..*source_content
+    };
+    source_content.version == TileContentKey::VERSION
+        && source_content.slice == source_slice
+        && *canonical_content == expected_content
+        && unpack_unsigned(quality[2]) == Some(source_content.iteration_cap)
+        && unpack_unsigned(provenance[1]) == Some(source_content.main_generation)
+        && unpack_unsigned(provenance[2]) == Some(source_content.record_abi)
+        && unpack_unsigned(provenance[3]) == Some(source_content.reference_generation)
+}
+
+fn source_chart_scale(source: &Pose) -> Option<f64> {
+    let PoseMap::Mapped(map) = source.map else {
+        return None;
+    };
+    if source.grid_width == 0 {
+        return None;
+    }
+    let scale = 4.0 * map.apron_scale / f64::from(source.grid_width);
+    (scale.is_finite() && scale > 0.0).then_some(scale)
+}
+
+/// Closed binary64 interval whose arithmetic expands every nearest-rounded result by one
+/// representable value toward each infinity.
+#[derive(Clone, Copy)]
+struct DirectedInterval {
+    lower: f64,
+    upper: f64,
+}
+
+impl DirectedInterval {
+    const fn point(value: f64) -> Option<Self> {
+        if value.is_finite() {
+            Some(Self {
+                lower: value,
+                upper: value,
+            })
+        } else {
+            None
+        }
+    }
+
+    const fn contains_zero(self) -> bool {
+        self.lower <= 0.0 && self.upper >= 0.0
+    }
+
+    const fn negated(self) -> Self {
+        Self {
+            lower: -self.upper,
+            upper: -self.lower,
+        }
+    }
+
+    fn add(self, addend: Self) -> Option<Self> {
+        outward_interval([self.lower + addend.lower, self.upper + addend.upper])
+    }
+
+    fn subtract(self, subtrahend: Self) -> Option<Self> {
+        outward_interval([self.lower - subtrahend.upper, self.upper - subtrahend.lower])
+    }
+
+    fn multiply(self, multiplier: Self) -> Option<Self> {
+        outward_interval([
+            self.lower * multiplier.lower,
+            self.lower * multiplier.upper,
+            self.upper * multiplier.lower,
+            self.upper * multiplier.upper,
+        ])
+    }
+
+    fn divide(self, divisor: Self) -> Option<Self> {
+        if divisor.contains_zero() {
+            return None;
+        }
+        outward_interval([
+            self.lower / divisor.lower,
+            self.lower / divisor.upper,
+            self.upper / divisor.lower,
+            self.upper / divisor.upper,
+        ])
+    }
+
+    fn mul_add(self, multiplier: Self, addend: Self) -> Option<Self> {
+        outward_interval([
+            self.lower.mul_add(multiplier.lower, addend.lower),
+            self.lower.mul_add(multiplier.lower, addend.upper),
+            self.lower.mul_add(multiplier.upper, addend.lower),
+            self.lower.mul_add(multiplier.upper, addend.upper),
+            self.upper.mul_add(multiplier.lower, addend.lower),
+            self.upper.mul_add(multiplier.lower, addend.upper),
+            self.upper.mul_add(multiplier.upper, addend.lower),
+            self.upper.mul_add(multiplier.upper, addend.upper),
+        ])
+    }
+
+    const fn absolute(self) -> Self {
+        if self.contains_zero() {
+            Self {
+                lower: 0.0,
+                upper: self.lower.abs().max(self.upper.abs()),
+            }
+        } else {
+            Self {
+                lower: self.lower.abs().min(self.upper.abs()),
+                upper: self.lower.abs().max(self.upper.abs()),
+            }
+        }
+    }
+
+    fn hypot(self, other: Self) -> Option<Self> {
+        let left = self.absolute();
+        let right = other.absolute();
+        left.multiply(left)?
+            .add(right.multiply(right)?)?
+            .square_root()
+    }
+
+    fn square_root(self) -> Option<Self> {
+        if self.upper < 0.0 {
+            return None;
+        }
+        outward_interval([self.lower.max(0.0).sqrt(), self.upper.sqrt()]).map(|interval| Self {
+            lower: interval.lower.max(0.0),
+            upper: interval.upper,
+        })
+    }
+}
+
+fn outward_interval(values: impl IntoIterator<Item = f64>) -> Option<DirectedInterval> {
+    let mut values = values.into_iter();
+    let first = values.next()?;
+    if !first.is_finite() {
+        return None;
+    }
+    let mut lower = first;
+    let mut upper = first;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        lower = lower.min(value);
+        upper = upper.max(value);
+    }
+    let interval = DirectedInterval {
+        lower: lower.next_down(),
+        upper: upper.next_up(),
+    };
+    (interval.lower.is_finite() && interval.upper.is_finite()).then_some(interval)
+}
+
+fn source_density_interval(source: &Pose, pixel: [f64; 2]) -> Option<[f64; 2]> {
+    let PoseMap::Mapped(map) = source.map else {
+        return None;
+    };
+    if source.grid_width == 0 {
+        return None;
+    }
+    let [
+        first,
+        second,
+        third,
+        fourth,
+        fifth,
+        sixth,
+        seventh,
+        eighth,
+        ninth,
+    ] = map.rows.map(DirectedInterval::point);
+    let coefficients = [
+        first?, second?, third?, fourth?, fifth?, sixth?, seventh?, eighth?, ninth?,
+    ];
+    let four = DirectedInterval::point(4.0)?;
+    let width = DirectedInterval::point(f64::from(source.grid_width))?;
+    let scale = four
+        .multiply(DirectedInterval::point(map.apron_scale)?)?
+        .divide(width)?;
+    let jacobian = density_jacobian(&coefficients, scale, pixel)?;
+    density_from_jacobian(jacobian)
+}
+
+fn density_jacobian(
+    coefficients: &[DirectedInterval; 9],
+    scale: DirectedInterval,
+    pixel: [f64; 2],
+) -> Option<[DirectedInterval; 4]> {
+    let [x, y] = pixel.map(DirectedInterval::point);
+    let x = x?;
+    let y = y?;
+    let denominator = coefficients[6].mul_add(x, coefficients[7].mul_add(y, coefficients[8])?)?;
+    if denominator.lower <= 0.0 {
+        return None;
+    }
+    let numerator_x = coefficients[0].mul_add(x, coefficients[1].mul_add(y, coefficients[2])?)?;
+    let numerator_y = coefficients[3].mul_add(x, coefficients[4].mul_add(y, coefficients[5])?)?;
+    let denominator_squared = denominator.multiply(denominator)?;
+    Some([
+        scale
+            .multiply(coefficients[0].mul_add(
+                denominator,
+                numerator_x.multiply(coefficients[6])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[1].mul_add(
+                denominator,
+                numerator_x.multiply(coefficients[7])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[3].mul_add(
+                denominator,
+                numerator_y.multiply(coefficients[6])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[4].mul_add(
+                denominator,
+                numerator_y.multiply(coefficients[7])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+    ])
+}
+
+fn density_from_jacobian(jacobian: [DirectedInterval; 4]) -> Option<[f64; 2]> {
+    let horizontal_metric = jacobian[0].mul_add(jacobian[0], jacobian[2].multiply(jacobian[2])?)?;
+    let mixed_metric = jacobian[0].mul_add(jacobian[1], jacobian[2].multiply(jacobian[3])?)?;
+    let vertical_metric = jacobian[1].mul_add(jacobian[1], jacobian[3].multiply(jacobian[3])?)?;
+    let two = DirectedInterval::point(2.0)?;
+    let discriminant = horizontal_metric
+        .subtract(vertical_metric)?
+        .hypot(two.multiply(mixed_metric)?)?;
+    let metric_sum = horizontal_metric.add(vertical_metric)?.add(discriminant)?;
+    let sigma_maximum = DirectedInterval::point(0.5)?
+        .multiply(metric_sum)?
+        .square_root()?;
+    if sigma_maximum.contains_zero() {
+        return None;
+    }
+    let determinant =
+        jacobian[0].mul_add(jacobian[3], jacobian[1].multiply(jacobian[2])?.negated())?;
+    if determinant.contains_zero() {
+        return None;
+    }
+    let sigma_minimum = determinant.absolute().divide(sigma_maximum)?;
+    if sigma_minimum.contains_zero() {
+        return None;
+    }
+    let one = DirectedInterval::point(1.0)?;
+    let minimum_density = one.divide(sigma_maximum)?;
+    let maximum_density = one.divide(sigma_minimum)?;
+    (minimum_density.lower > 0.0 && maximum_density.upper >= minimum_density.lower)
+        .then_some([minimum_density.lower, maximum_density.upper])
+}
+
+fn canonical_coordinate_error(transform: SliceChartTransform, source_error: f64) -> Option<f64> {
+    if !source_error.is_finite() || source_error < 0.0 {
+        return None;
+    }
+    let row_norm = transform.chart_map[..2]
+        .iter()
+        .map(|value| value.abs())
+        .sum::<f64>()
+        .max(
+            transform.chart_map[2..]
+                .iter()
+                .map(|value| value.abs())
+                .sum(),
+        );
+    let error = source_error.mul_add(row_norm, transform.out_of_plane_error);
+    error.is_finite().then_some(error)
+}
+
+fn unpack_slice_identity(slice: SliceIdentity) -> Option<(Plane, [f64; 4])> {
+    let plane = Plane {
+        basis_u: slice.basis_u.map(ExactF32::get),
+        basis_v: slice.basis_v.map(ExactF32::get),
+    };
+    let origin = slice.origin.map(ExactF64::get);
+    plane
+        .basis_u
+        .into_iter()
+        .chain(plane.basis_v)
+        .map(f64::from)
+        .chain(origin)
+        .all(f64::is_finite)
+        .then_some((plane, origin))
+}
+
+fn project_ambient_to_slice(slice: SliceIdentity, ambient: [f64; 4]) -> Option<([f64; 2], f64)> {
+    let (plane, origin) = unpack_slice_identity(slice)?;
+    let relative = core::array::from_fn(|axis| ambient[axis] - origin[axis]);
+    project_vector_to_plane(plane, relative)
+}
+
+fn project_vector_to_plane(plane: Plane, vector: [f64; 4]) -> Option<([f64; 2], f64)> {
+    if !vector.into_iter().all(f64::is_finite) {
+        return None;
+    }
+    let basis_u = plane.basis_u.map(f64::from);
+    let basis_v = plane.basis_v.map(f64::from);
+    let primary_gram = dot_four(basis_u, basis_u);
+    let mixed_gram = dot_four(basis_u, basis_v);
+    let secondary_gram = dot_four(basis_v, basis_v);
+    let determinant = primary_gram.mul_add(secondary_gram, -mixed_gram * mixed_gram);
+    if !determinant.is_finite() || determinant.abs() <= SLICE_DETERMINANT_EPSILON {
+        return None;
+    }
+    let dot_u = dot_four(vector, basis_u);
+    let dot_v = dot_four(vector, basis_v);
+    let coordinate = [
+        dot_u.mul_add(secondary_gram, -dot_v * mixed_gram) / determinant,
+        dot_v.mul_add(primary_gram, -dot_u * mixed_gram) / determinant,
+    ];
+    let projected = plane.local_point(coordinate);
+    let residual = vector
+        .into_iter()
+        .zip(projected)
+        .map(|(value, projected)| (value - projected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    coordinate
+        .into_iter()
+        .chain([residual])
+        .all(f64::is_finite)
+        .then_some((coordinate, residual))
+}
+
+fn origin_delta_lies_in_plane(
+    plane: Plane,
+    source_origin: [f64; 4],
+    canonical_origin: [f64; 4],
+) -> Option<bool> {
+    const AXIS_TRIPLES: [[usize; 3]; 4] = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]];
+
+    for axes in AXIS_TRIPLES {
+        if !exact_plane_minor_is_zero(plane, source_origin, canonical_origin, axes)? {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+fn exact_plane_minor_is_zero(
+    plane: Plane,
+    source_origin: [f64; 4],
+    canonical_origin: [f64; 4],
+    axes: [usize; 3],
+) -> Option<bool> {
+    let mut expansion = Vec::with_capacity(24);
+    let [first, second, third] = axes;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[first],
+        plane.basis_v[second],
+        source_origin[third],
+        canonical_origin[third],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[second],
+        plane.basis_v[third],
+        source_origin[first],
+        canonical_origin[first],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[third],
+        plane.basis_v[first],
+        source_origin[second],
+        canonical_origin[second],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[first],
+        plane.basis_v[third],
+        source_origin[second],
+        canonical_origin[second],
+        true,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[second],
+        plane.basis_v[first],
+        source_origin[third],
+        canonical_origin[third],
+        true,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[third],
+        plane.basis_v[second],
+        source_origin[first],
+        canonical_origin[first],
+        true,
+    )?;
+    Some(expansion.is_empty())
+}
+
+fn add_origin_delta_product(
+    expansion: &mut Vec<f64>,
+    basis_left: f32,
+    basis_right: f32,
+    source_origin: f64,
+    canonical_origin: f64,
+    negative: bool,
+) -> Option<()> {
+    add_exact_triple_product(expansion, basis_left, basis_right, source_origin, negative)?;
+    add_exact_triple_product(
+        expansion,
+        basis_left,
+        basis_right,
+        canonical_origin,
+        !negative,
+    )
+}
+
+fn add_exact_triple_product(
+    expansion: &mut Vec<f64>,
+    basis_left: f32,
+    basis_right: f32,
+    origin: f64,
+    negative: bool,
+) -> Option<()> {
+    let basis_product = f64::from(basis_left) * f64::from(basis_right);
+    if basis_product == 0.0 || origin == 0.0 {
+        return Some(());
+    }
+    let product = basis_product * origin;
+    if !product.is_normal() || product.abs() < MIN_ERROR_FREE_TRIPLE_MAGNITUDE {
+        return None;
+    }
+    let roundoff = basis_product.mul_add(origin, -product);
+    let sign = if negative { -1.0 } else { 1.0 };
+    add_expansion_component(expansion, sign * roundoff)?;
+    add_expansion_component(expansion, sign * product)
+}
+
+fn add_expansion_component(expansion: &mut Vec<f64>, component: f64) -> Option<()> {
+    if component == 0.0 {
+        return Some(());
+    }
+    let previous = core::mem::take(expansion);
+    let mut grown = Vec::with_capacity(previous.len() + 1);
+    let mut total = component;
+    for value in previous {
+        let (sum, roundoff) = error_free_sum(total, value)?;
+        if roundoff != 0.0 {
+            grown.push(roundoff);
+        }
+        total = sum;
+    }
+    if total != 0.0 {
+        grown.push(total);
+    }
+    *expansion = grown;
+    Some(())
+}
+
+const fn error_free_sum(accumulator: f64, addend: f64) -> Option<(f64, f64)> {
+    let sum = accumulator + addend;
+    if !sum.is_finite() {
+        return None;
+    }
+    let rounded_addend = sum - accumulator;
+    let restored_accumulator = sum - rounded_addend;
+    let addend_error = addend - rounded_addend;
+    let accumulator_error = accumulator - restored_accumulator;
+    Some((sum, accumulator_error + addend_error))
+}
+
+fn dot_four(left: [f64; 4], right: [f64; 4]) -> f64 {
+    left.into_iter()
+        .zip(right)
+        .fold(0.0, |sum, (left, right)| left.mul_add(right, sum))
+}
+
 fn pack_extent_rect_and_map(
     render: &TileRenderKey,
     source_map: [ExactF64; 20],
@@ -493,11 +1228,13 @@ fn unpack_translation(header: &TilePoseHeader) -> [f64; 5] {
 
 #[cfg(test)]
 mod tests {
+    use core::mem::size_of;
+
     use bytemuck::{Zeroable, bytes_of};
     use ember_julibrot_kernels::SourceIdentity;
     use ember_julibrot_math::{
-        ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, reconstruct_source_sample,
-        screen_to_plane, source_depth_record,
+        ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
+        reconstruct_source_sample, screen_to_plane, source_depth_record,
     };
 
     use super::*;
@@ -523,6 +1260,20 @@ mod tests {
     const MAXIMAL_DESCRIPTOR_ZOOM_LOG2: f64 = 1000.25;
     /// A quarter-pixel exact anchor delta must have a material projected effect.
     const ANCHOR_EFFECT_MINIMUM_PX: f64 = 0.1;
+    /// The identity density chain has fewer than 128 outward-rounded endpoint operations; at
+    /// density 64 each endpoint ulp is 64 binary64 epsilon units.
+    const IDENTITY_DENSITY_INTERVAL_BOUND: f64 = 8_192.0 * f64::EPSILON;
+    const FOOTPRINT_CORPUS: [[f64; 2]; 9] = [
+        [-95.5, -47.25],
+        [0.25, -47.25],
+        [95.75, -47.25],
+        [-95.5, 0.5],
+        [0.25, 0.5],
+        [95.75, 0.5],
+        [-95.5, 47.75],
+        [0.25, 47.75],
+        [95.75, 47.75],
+    ];
 
     fn pose() -> Pose {
         let object = ObjectAngles {
@@ -612,6 +1363,55 @@ mod tests {
         header
     }
 
+    fn footprint_header(source: &Pose) -> TilePoseHeader {
+        let rect = SourcePixelRect::from_extent(0, 0, source.grid_width, source.grid_height);
+        let render = TileRenderKey::from_pose(source, rect);
+        pack_descriptor_header(&render, &policy_header())
+            .expect("frozen footprint source header packs")
+    }
+
+    fn footprint_content(source: &Pose, slice: SliceIdentity) -> TileContentKey {
+        TileContentKey {
+            version: TileContentKey::VERSION,
+            slice,
+            main_generation: source.orbit_generation,
+            iteration_cap: 512,
+            formula_abi: 1,
+            precision_mode: PrecisionMode::PictureFast,
+            record_abi: 1,
+            reference_generation: 5,
+        }
+    }
+
+    fn footprint_sample(source: &Pose, source_pixel: [f64; 2]) -> DescriptorFootprintSample {
+        let record = EscapeGridRecord {
+            smooth_iter: 128.0,
+            escaped: 1.0,
+            rebase_count: 3.0,
+            status: 0.0,
+        };
+        let value = retained_value_sample(record, 512).expect("footprint value is finite");
+        let depth = source_depth_record(source, source_pixel, value)
+            .expect("footprint source receipt is finite");
+        let descriptor = pack_descriptor_sample(record, depth).expect("footprint sample packs");
+        DescriptorFootprintSample {
+            source_pixel,
+            descriptor,
+        }
+    }
+
+    fn rotated_footprint_slice(source: &Pose) -> SliceIdentity {
+        const DIAGONAL: f32 = 0.707_106_77;
+        let plane = Plane {
+            basis_u: [0.0, 0.0, DIAGONAL, DIAGONAL],
+            basis_v: [0.0, 0.0, -DIAGONAL, DIAGONAL],
+        };
+        let mut origin = source.plane_origin;
+        origin[2] += 0.25;
+        origin[3] -= 0.5;
+        SliceIdentity::new(plane, origin)
+    }
+
     fn set_anchor_delta(header: &mut TilePoseHeader, delta: [f64; 2]) {
         let x = pack_split(delta[0]).expect("finite exact anchor x splits");
         let y = pack_split(delta[1]).expect("finite exact anchor y splits");
@@ -633,6 +1433,21 @@ mod tests {
             map: PoseMap::Mapped(Homography::IDENTITY),
             centre_from_reference_px: [0.0; 2],
         }
+    }
+
+    fn footprint_source_pose() -> Pose {
+        let mut source = byte_pin_pose();
+        source.view = ViewControls::MANDELBROT_FLAT;
+        rebuild_map(&mut source);
+        source
+    }
+
+    fn rounded_density_source_pose() -> Pose {
+        let mut source = footprint_source_pose();
+        source.view.camera[0] = 0.17;
+        source.view.camera[1] += 0.1;
+        rebuild_map(&mut source);
+        source
     }
 
     fn expected_byte_pin_header() -> TilePoseHeader {
@@ -665,6 +1480,257 @@ mod tests {
         expected.texels[TilePoseHeader::H25_PROVENANCE].lanes = [17.0, 23.0, 1.0, 5.0];
         expected.texels[TilePoseHeader::H26_OWNERSHIP].lanes = [6.0, 2.0, 31.0, 32.0];
         expected
+    }
+
+    #[test]
+    fn slice_chart_transform_has_pinned_version_and_size() {
+        assert_eq!(SliceChartTransform::VERSION, 1);
+        assert_eq!(SliceChartTransform::BYTE_SIZE, 64);
+        assert_eq!(size_of::<SliceChartTransform>(), 64);
+    }
+
+    #[test]
+    fn footprint_records_have_pinned_versions_and_sizes() {
+        assert_eq!(DescriptorFootprintSample::VERSION, 1);
+        assert_eq!(DescriptorFootprintSample::BYTE_SIZE, 48);
+        assert_eq!(size_of::<DescriptorFootprintSample>(), 48);
+        assert_eq!(DerivedChartFootprint::VERSION, 1);
+        assert_eq!(DerivedChartFootprint::BYTE_SIZE, 128);
+        assert_eq!(size_of::<DerivedChartFootprint>(), 128);
+    }
+
+    #[test]
+    fn derived_footprint_conservatively_covers_every_reconstructed_corpus_sample() {
+        let source = footprint_source_pose();
+        let header = footprint_header(&source);
+        let slice = rotated_footprint_slice(&source);
+        let source_content = footprint_content(
+            &source,
+            SliceIdentity::new(source.plane, source.plane_origin),
+        );
+        let content = footprint_content(&source, slice);
+        let samples = FOOTPRINT_CORPUS.map(|pixel| footprint_sample(&source, pixel));
+        let footprint = derive_chart_footprint(&source_content, &content, &header, &samples)
+            .expect("same-slice corpus derives one footprint");
+        assert_eq!(footprint.slice, slice);
+        assert_eq!(footprint.valid_sample_count, 9);
+
+        let source_error = f64::from(SOURCE_DEPTH_RECEIPT_TOLERANCE);
+        let expected_error = source_error * 2.0_f64.sqrt();
+        assert!((footprint.coordinate_error - expected_error).abs() <= 4.0 * f64::EPSILON);
+        assert!(footprint.density_minimum < 64.0);
+        assert!(footprint.density_maximum > 64.0);
+        assert!(64.0 - footprint.density_minimum <= IDENTITY_DENSITY_INTERVAL_BOUND);
+        assert!(footprint.density_maximum - 64.0 <= IDENTITY_DENSITY_INTERVAL_BOUND);
+
+        for sample in samples {
+            let (reconstructed, _) =
+                reconstruct_descriptor_sample(&header, &sample.descriptor, sample.source_pixel)
+                    .expect("frozen corpus sample reconstructs");
+            let (coordinate, residual) =
+                project_ambient_to_slice(slice, reconstructed.ambient_four)
+                    .expect("reconstructed sample maps into the canonical chart");
+            assert!(residual <= footprint.coordinate_error);
+            assert!(footprint.contains(coordinate));
+            for ((minimum, maximum), value) in footprint
+                .conservative_minimum
+                .iter()
+                .zip(&footprint.conservative_maximum)
+                .zip(coordinate)
+            {
+                assert!(*minimum <= value - source_error);
+                assert!(*maximum >= value + source_error);
+            }
+        }
+    }
+
+    #[test]
+    fn density_interval_covers_multi_operation_rounding_regression() {
+        const EXACT_MINIMUM_FLOOR: f64 = f64::from_bits(0x4050_4fd2_1e53_46e3);
+        const EXACT_MAXIMUM_CEILING: f64 = f64::from_bits(0x4050_9345_fbf6_67bf);
+
+        // The reviewer's packed projective tuple is stopped by the R3-02 SourceRoundTrip receipt
+        // before density. This pose-derived map crosses that gate while rotation and
+        // foreshortening exercise the complete non-identity density chain.
+        let source = rounded_density_source_pose();
+        let header = footprint_header(&source);
+        let slice = SliceIdentity::new(source.plane, source.plane_origin);
+        let content = footprint_content(&source, slice);
+        let source_pixel = [95.75, 47.75];
+        let samples = [footprint_sample(&source, source_pixel)];
+        let footprint = derive_chart_footprint(&content, &content, &header, &samples)
+            .expect("pose-derived source derives one density interval");
+
+        // Exact arithmetic over the packed map puts the lower endpoint above the floor and the
+        // upper endpoint below the ceiling, so covering both constants proves outwardness.
+        assert!(footprint.density_minimum <= EXACT_MINIMUM_FLOOR);
+        assert!(footprint.density_maximum >= EXACT_MAXIMUM_CEILING);
+        assert!(footprint.density_minimum > 65.24);
+        assert!(footprint.density_maximum < 66.31);
+    }
+
+    #[test]
+    fn directed_interval_hypot_encloses_exact_value_when_scalar_forms_differ() {
+        const EXACT_VALUE_FLOOR: f64 = f64::from_bits(0x3fc2_1a18_51ff_630a);
+        const EXACT_VALUE_CEILING: f64 = f64::from_bits(0x3fc2_1a18_51ff_630b);
+
+        let input = 0.1_f64;
+        let platform_value = input.hypot(input);
+        let squared = input * input;
+        let square_sum_value = (squared + squared).sqrt();
+        assert_eq!(platform_value.to_bits(), EXACT_VALUE_FLOOR.to_bits());
+        assert_eq!(square_sum_value.to_bits(), EXACT_VALUE_CEILING.to_bits());
+        assert_ne!(platform_value.to_bits(), square_sum_value.to_bits());
+
+        let point = DirectedInterval::point(input).expect("finite interval point");
+        let enclosure = point.hypot(point).expect("finite composed hypot interval");
+        assert!(enclosure.lower <= EXACT_VALUE_FLOOR);
+        assert!(enclosure.upper >= EXACT_VALUE_CEILING);
+    }
+
+    #[test]
+    fn density_interval_refuses_zero_denominator_and_determinant_intervals() {
+        let mut source = footprint_source_pose();
+        source.map = PoseMap::Mapped(Homography {
+            rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            ..Homography::IDENTITY
+        });
+        assert!(source_density_interval(&source, [0.0; 2]).is_none());
+
+        source.map = PoseMap::Mapped(Homography {
+            rows: [1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ..Homography::IDENTITY
+        });
+        assert!(source_density_interval(&source, [0.0; 2]).is_none());
+    }
+
+    #[test]
+    fn footprint_derivation_skips_holes_and_refuses_corrupt_or_mismatched_inputs() {
+        let source = footprint_source_pose();
+        let header = footprint_header(&source);
+        let source_content = footprint_content(
+            &source,
+            SliceIdentity::new(source.plane, source.plane_origin),
+        );
+        let content = footprint_content(&source, rotated_footprint_slice(&source));
+        let samples = FOOTPRINT_CORPUS.map(|pixel| footprint_sample(&source, pixel));
+        let mut with_hole = samples;
+        with_hole[4].descriptor.s1.lanes[3] = 0.0;
+        let footprint = derive_chart_footprint(&source_content, &content, &header, &with_hole)
+            .expect("one visibility hole leaves a conservative footprint");
+        assert_eq!(footprint.valid_sample_count, 8);
+
+        let all_holes = samples.map(|mut sample| {
+            sample.descriptor.s1.lanes[3] = 0.0;
+            sample
+        });
+        assert_eq!(
+            derive_chart_footprint(&source_content, &content, &header, &all_holes),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let mut corrupt = samples;
+        corrupt[0].descriptor.s1.lanes[3] = 0.5;
+        assert_eq!(
+            derive_chart_footprint(&source_content, &content, &header, &corrupt),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_main = TileContentKey {
+            main_generation: content.main_generation + 1,
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &wrong_main, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_formula = TileContentKey {
+            formula_abi: content.formula_abi + 1,
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &wrong_formula, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_precision = TileContentKey {
+            precision_mode: PrecisionMode::Deterministic,
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &wrong_precision, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_source = TileContentKey {
+            slice: content.slice,
+            ..source_content
+        };
+        assert_eq!(
+            derive_chart_footprint(&wrong_source, &content, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let tilted = TileContentKey {
+            slice: SliceIdentity::new(Plane::CANONICAL_JULIA_PLANE, source.plane_origin),
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &tilted, &header, &samples),
+            Err(ReprojectionError::InvalidTarget)
+        );
+    }
+
+    #[test]
+    fn same_slice_certification_maps_in_plane_origins_and_refuses_tilts() {
+        let source_plane = Plane::CANONICAL_JULIA_PLANE;
+        let canonical_plane = Plane {
+            basis_u: [0.0, 1.0, 0.0, 0.0],
+            basis_v: [-1.0, 0.0, 0.0, 0.0],
+        };
+        let source_origin = [3.0, -2.0, 0.0, 0.0];
+        let canonical_origin = [1.0, 4.0, 0.0, 0.0];
+        let source = SliceIdentity::new(source_plane, source_origin);
+        let canonical = SliceIdentity::new(canonical_plane, canonical_origin);
+        let transform = certify_same_slice(source, canonical, 0.01)
+            .expect("rotated basis and in-plane origin remain the same slice");
+        for (actual, expected) in transform.chart_map.into_iter().zip([0.0, 1.0, -1.0, 0.0]) {
+            assert!((actual - expected).abs() <= f64::EPSILON);
+        }
+        assert_eq!(transform.origin_offset, [-6.0, -2.0]);
+        assert_eq!(transform.out_of_plane_error, 0.0);
+        assert_eq!(transform.maximum_error, 0.0);
+
+        let source_coordinate = [0.25, -0.75];
+        let source_local = source_plane.local_point(source_coordinate);
+        let ambient: [f64; 4] =
+            core::array::from_fn(|axis| source_origin[axis] + source_local[axis]);
+        let relative: [f64; 4] =
+            core::array::from_fn(|axis| ambient[axis] - canonical_origin[axis]);
+        let (direct, residual) = project_vector_to_plane(canonical_plane, relative)
+            .expect("same-slice ambient point has canonical coordinates");
+        assert_eq!(residual, 0.0);
+        for (actual, expected) in transform
+            .map_source_coordinate(source_coordinate)
+            .into_iter()
+            .zip(direct)
+        {
+            assert!((actual - expected).abs() <= 4.0 * f64::EPSILON);
+        }
+
+        let boundary = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5, 0.0]);
+        assert!(certify_same_slice(source, boundary, 1.0).is_none());
+        let in_plane_boundary = SliceIdentity::new(canonical_plane, [1.5, 4.0, 0.0, 0.0]);
+        let in_plane_transform = certify_same_slice(source, in_plane_boundary, 1.0)
+            .expect("half-source-sample in-plane pan remains the same slice");
+        assert_eq!(in_plane_transform.out_of_plane_error, 0.0);
+        assert_eq!(in_plane_transform.maximum_error, 0.0);
+        let beyond = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5_f64.next_up(), 0.0]);
+        assert!(certify_same_slice(source, beyond, 1.0).is_none());
+
+        let tilted = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 0.0, 1.0, 0.0],
+        };
+        let tilted = SliceIdentity::new(tilted, canonical_origin);
+        assert!(certify_same_slice(source, tilted, 0.01).is_none());
+        assert!(certify_same_slice(source, canonical, 0.0).is_none());
+        assert!(certify_same_slice(source, canonical, f64::NAN).is_none());
     }
 
     #[test]

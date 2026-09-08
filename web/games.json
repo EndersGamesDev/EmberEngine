@@ -374,7 +374,7 @@
       "versions": [
         {
           "v": "v1",
-          "version": "1.0.1",
+          "version": "1.0.2",
           "path": "labs/julibrot/",
           "live": true,
           "note": "updated slice viewer: saved-view application, retained frames across partition changes, and visible limits and measurements"
