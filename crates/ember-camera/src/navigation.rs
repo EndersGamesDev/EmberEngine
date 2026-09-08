@@ -119,7 +119,8 @@ pub fn rotate_about<const N: usize, const LIMBS: usize>(
 ///
 /// The centre is their fixed-point midpoint, dropping one lowest bit toward negative infinity when
 /// the sum is odd. The new `u` follows the segment, the previous `v` is made orthonormal to it, and
-/// the deepest exponent whose width and height still contain both basis separations is selected.
+/// the deepest exponent whose width and height still contain both centred endpoint projections is
+/// selected.
 ///
 /// # Errors
 ///
@@ -138,15 +139,15 @@ pub fn frame_points<const N: usize, const LIMBS: usize>(
     if segment.iter().all(Fixed::is_zero) {
         return Err(CameraError::EmptySelection);
     }
-    let orientation = orientation_for_segment(view, &segment)?;
-    let basis = rebuild_basis(&orientation)?;
-    let horizontal_span = axis_separation(&segment, &basis.u)?.abs_checked()?;
-    let vertical_span = axis_separation(&segment, &basis.v)?.abs_checked()?;
-    let exponent = deepest_fitting_exponent(screen, &horizontal_span, &vertical_span)?;
     let mut centre = [Fixed::ZERO; N];
     for ((output, first), second) in centre.iter_mut().zip(point_one).zip(point_two) {
         *output = first.midpoint_floor(second)?;
     }
+    let orientation = orientation_for_segment(view, &segment)?;
+    let basis = rebuild_basis(&orientation)?;
+    let horizontal_span = centred_axis_span(point_one, point_two, &centre, &basis.u)?;
+    let vertical_span = centred_axis_span(point_one, point_two, &centre, &basis.v)?;
+    let exponent = deepest_fitting_exponent(screen, &horizontal_span, &vertical_span)?;
     *view = View::new(centre, exponent, orientation);
     Ok(())
 }
@@ -245,13 +246,26 @@ fn offset_from_parts<const N: usize, const LIMBS: usize>(
     Ok(offset)
 }
 
-fn axis_separation<const N: usize, const LIMBS: usize>(
-    segment: &[Fixed<LIMBS>; N],
+fn centred_axis_span<const N: usize, const LIMBS: usize>(
+    point_one: &[Fixed<LIMBS>; N],
+    point_two: &[Fixed<LIMBS>; N],
+    centre: &[Fixed<LIMBS>; N],
+    axis: &[f64; N],
+) -> Result<Fixed<LIMBS>, CameraError> {
+    let first_distance = axis_displacement(point_one, centre, axis)?.abs_checked()?;
+    let second_distance = axis_displacement(point_two, centre, axis)?.abs_checked()?;
+    core::cmp::max(first_distance, second_distance).mul_small(2)
+}
+
+fn axis_displacement<const N: usize, const LIMBS: usize>(
+    point: &[Fixed<LIMBS>; N],
+    centre: &[Fixed<LIMBS>; N],
     axis: &[f64; N],
 ) -> Result<Fixed<LIMBS>, CameraError> {
     let mut separation = Fixed::ZERO;
-    for (coordinate, component) in segment.iter().zip(axis) {
-        let weighted = coordinate.mul(&Fixed::from_f64(*component)?)?;
+    for ((coordinate, origin), component) in point.iter().zip(centre).zip(axis) {
+        let displacement = coordinate.sub(origin)?;
+        let weighted = displacement.mul(&Fixed::from_f64(*component)?)?;
         separation = separation.add(&weighted)?;
     }
     Ok(separation)
@@ -409,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_points_is_reproducible() -> Result<(), CameraError> {
+    fn frame_points_repeats_and_contains_floor_asymmetry() -> Result<(), CameraError> {
         let screen = Screen::new(960, 540)?;
         let point_one = [
             Fixed::from_i64(-2)?,
@@ -430,6 +444,16 @@ mod tests {
         frame_points(&mut first, &point_one, &point_two, screen)?;
         frame_points(&mut second, &point_one, &point_two, screen)?;
         assert_eq!(first, second);
+
+        let screen = Screen::new(5, 5)?;
+        let endpoint = Fixed::<2>::from_le_bytes([1_u64.to_le_bytes(), 4_u64.to_le_bytes()]);
+        let first = [Fixed::ZERO, Fixed::ZERO];
+        let second = [endpoint, Fixed::ZERO];
+        let mut view = View::new(first, Exponent::ZERO, Orientation::IDENTITY);
+
+        frame_points(&mut view, &first, &second, screen)?;
+        let right_edge = click(&view, screen, [2.5, 0.0])?;
+        assert!(right_edge[0] >= second[0]);
         Ok(())
     }
 
