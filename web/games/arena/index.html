@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Killshot — Ember</title>
+<meta name="description" content="Killshot is Ember's online first-person shooter for up to eight players: eight weapons, three hand-authored maps, five hit points, and it runs in your browser.">
+<link rel="stylesheet" href="./landing.css">
+</head>
+<body>
+
+<header class="site">
+  <a class="back" href="../../">&larr; games</a>
+  <span class="mark">KILLSHOT</span>
+  <span class="ver">v31</span>
+  <a class="play-top" href="./v31/">Play</a>
+</header>
+
+<section class="hero">
+  <div class="hero-art" role="presentation"></div>
+  <div class="hero-veil" role="presentation"></div>
+  <div class="hero-copy">
+    <h1>KILLSHOT</h1>
+    <p class="kicker">v31 &middot; Breach-12</p>
+    <p class="lede">An online first-person shooter for up to eight players. Eight weapons, three hand-authored maps, five hit points &mdash; and it runs in your browser.</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="./v31/">Play v31</a>
+      <a class="btn" href="#trailer">Watch the trailer</a>
+    </div>
+  </div>
+</section>
+
+<section id="trailer" class="band">
+  <header class="band-head">
+    <h2>The trailer</h2>
+    <p>Forty seconds of what the game actually is.</p>
+  </header>
+  <figure class="trailer">
+    <video id="trailer-video" controls preload="none" playsinline poster="./media/trailer-poster.jpg" aria-label="Killshot v31 trailer">
+      <source src="./media/trailer.mp4" type="video/mp4">
+      <track kind="captions" src="./media/trailer.vtt" srclang="en" label="English" default>
+      Your browser cannot play this video.
+    </video>
+    <figcaption>
+      Gameplay recorded from the real v31 client running in a browser. The cinematic shots, the narration and the music are generated; the narration describes only what the game does. English captions included.
+    </figcaption>
+  </figure>
+</section>
+
+<section id="arsenal" class="band alt">
+  <header class="band-head">
+    <h2>Eight weapons</h2>
+    <p>You spawn with the sidearm. Six of the other seven hang in <b>?</b> blocks above your head &mdash; jump so your head hits one from below and a random gun drops out with one magazine and one reserve. When it runs dry the sidearm is back.</p>
+  </header>
+  <div class="grid guns">
+    <article class="gun"><h3>Sidearm</h3><p class="tag">the one you always have</p><ul><li>6 rounds, endless reserve</li><li>280 m/s &middot; 30 m</li><li>the only gun that never runs out</li></ul></article>
+    <article class="gun"><h3>Vityaz</h3><p class="tag">SMG</p><ul><li>30 rounds, 60 in reserve</li><li>380 m/s &middot; 40 m</li><li>fastest fire rate in the game</li></ul></article>
+    <article class="gun"><h3>AK-47</h3><p class="tag">rifle</p><ul><li>30 rounds, 30 in reserve</li><li>715 m/s &middot; 80 m</li><li>1.5&times; sight</li></ul></article>
+    <article class="gun"><h3>M4</h3><p class="tag">rifle &middot; custom loadout only</p><ul><li>30 rounds, 30 in reserve</li><li>880 m/s &middot; 80 m</li><li>tightest cone of any automatic</li></ul></article>
+    <article class="gun"><h3>Revolver</h3><p class="tag">hand cannon</p><ul><li>6 rounds, 12 in reserve</li><li>two damage a shot</li><li>real bullet drop</li></ul></article>
+    <article class="gun"><h3>Sniper</h3><p class="tag">long gun</p><ul><li>5 rounds, 5 in reserve</li><li>900 m/s &middot; 120 m</li><li>pierces one body and keeps going</li><li>6&times; scope</li></ul></article>
+    <article class="gun"><h3>RPG-7</h3><p class="tag">rocket</p><ul><li>one in the tube, 2 in reserve</li><li>3 m splash &mdash; it hurts you too</li><li>leaves at 120 m/s, accelerates to 300</li></ul></article>
+    <article class="gun new"><h3>Breach-12</h3><p class="tag">new in v31 &middot; shotgun</p><ul><li>six shells, 24 in reserve</li><li>eight pellets a shell</li><li>0.85 s cycle, 2.8 s reload</li><li>pellets stop at 25 m</li></ul></article>
+  </div>
+</section>
+
+<section id="maps" class="band">
+  <header class="band-head">
+    <h2>Three maps</h2>
+    <p>Hand-authored, picked per lobby.</p>
+  </header>
+  <div class="grid maps">
+    <article class="map"><h3>Breakwater Harbor</h3><p>96 &times; 96 m and vertical: port buildings you can walk into, rooftop routes above the quay, and the gantry cranes on the skyline.</p></article>
+    <article class="map"><h3>Freight Yard</h3><p>A rail yard at golden hour. Two trains of containers, an open yard between them, a loading dock, and backlots to spawn in.</p></article>
+    <article class="map"><h3>Trench City</h3><p>The fought-over European square: stone facades, cobbles, and tunnel mouths with a <b>?</b> block at each one.</p></article>
+  </div>
+</section>
+
+<section id="moves" class="band alt">
+  <header class="band-head">
+    <h2>How it plays</h2>
+  </header>
+  <div class="grid facts">
+    <article><h3>Five hit points</h3><p>A body takes five. A headshot ends it outright, so aim high &mdash; and crouching shrinks your own hitbox.</p></article>
+    <article><h3>Slide and kick</h3><p>Sprint, then press crouch while you are still moving, and you slide; jump out of it to carry the speed. In the air, hold crouch at a wall to slide it or kick off it &mdash; kicks chain <em>between opposing walls</em>, never twice off the same face.</p></article>
+    <article><h3>Shield and blade</h3><p>Q raises a Roman scutum that sends a bullet back at whoever fired it and detonates a rocket. E cuts with the Murasama, which kills outright and goes straight through a raised shield.</p></article>
+    <article><h3>Three modes</h3><p>Free for all to 20 frags, team deathmatch to 30, or king of the hill to 60. Every round ends, names a winner, and restarts with the scores reset and every block re-armed.</p></article>
+    <article><h3>Your kit, until you die</h3><p>Guns you pick up stay in slots 1&ndash;9 until you go down. A circular timer counts your reload, and LIFE and ammunition sit on the HUD where you can read them at a glance.</p></article>
+    <article><h3>Classic or Custom</h3><p>Classic starts everyone with the sidearm. Custom lets the host choose one starting weapon for the whole lobby, independently of the mode.</p></article>
+  </div>
+</section>
+
+<section class="endcta">
+  <h2>It runs in your browser.</h2>
+  <p>No install, no account. WebGL2 and a keyboard, or a gamepad on Chromium.</p>
+  <a class="btn primary big" href="./v31/">Play Killshot v31</a>
+</section>
+
+<footer class="site-foot">
+  <p>Killshot runs on <a href="../../">Ember</a>, one engine and one wasm bundle. <a href="../../">All games</a></p>
+</footer>
+
+<script src="./landing.js"></script>
+</body>
+</html>

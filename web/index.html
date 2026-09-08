@@ -399,6 +399,18 @@
         story.style.cssText = 'color:#72d5b5;font-size:.82rem;margin-top:10px;display:inline-block;text-underline-offset:3px';
         card.append(story);
       }
+      /* game-landing-link:v1 — the generic form. The league block above is left
+         byte-identical on purpose: tools/league/publish-landing.cjs patches the
+         PUBLISHED hub by asserting on that exact substring, so rewriting it
+         here would break the league release. This block reads `landing` from
+         games.json instead, and skips league because it is handled above. */
+      if (g.landing && g.id !== 'league') {
+        const landing = document.createElement('a');
+        landing.href = g.landing;
+        landing.textContent = 'Story & trailer';
+        landing.style.cssText = 'color:#ffb74d;font-size:.82rem;margin-top:10px;display:inline-block;text-underline-offset:3px';
+        card.append(landing);
+      }
       cards.append(card);
     }
 

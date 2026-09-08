@@ -1,0 +1,21 @@
+{
+  "voice": "bm_george",
+  "speed": 0.86,
+  "note": "The narration. Every claim here was checked against crates/arena-core before it was recorded; see tools/trailer/README.md. The same text is spoken by Kokoro on adler40 and shown as captions, so this file is the single source for both.",
+  "lines": [
+    "Killshot. An online shooter for up to eight players.",
+    "Three hand-authored maps. Eight weapons. Five hit points.",
+    "You spawn with a sidearm. The rest you take from the blocks overhead.",
+    "Slide, sprint, and kick between the walls.",
+    "Version thirty-one adds the Breach-twelve. Six shells, eight pellets each.",
+    "Killshot. It runs in your browser."
+  ],
+  "captions": [
+    "Killshot. An online shooter for up to eight players.",
+    "Three hand-authored maps. Eight weapons. Five hit points.",
+    "You spawn with a sidearm. The rest you take from the blocks overhead.",
+    "Slide, sprint, and kick between the walls.",
+    "Version 31 adds the Breach-12. Six shells, eight pellets each.",
+    "Killshot. It runs in your browser."
+  ]
+}
