@@ -252,7 +252,11 @@ impl Dungeon {
             return false;
         }
         // The cot has a physical footprint, not only a picture.
-        if (-2.8..=-1.7).contains(&x) && (2.55..=4.55).contains(&z) {
+        if (-2.9..=-1.6).contains(&x) && (2.35..=4.75).contains(&z) {
+            return false;
+        }
+        // V2 furnishings stay in the corners, with clearance around their visible solids.
+        if ((2.18..=3.0).contains(&x) && z > 4.10) || ((-1.89..=-0.97).contains(&x) && z > 4.10) {
             return false;
         }
         true

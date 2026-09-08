@@ -7,7 +7,7 @@ Push-Location -LiteralPath $root
 try {
     if ($TargetDir) { $env:CARGO_TARGET_DIR = [IO.Path]::GetFullPath($TargetDir) }
     $artifacts = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $root 'target' }
-    cargo test --locked -p end-game-core
+    cargo test --locked -p end-game-core -p end-game --lib
     if ($LASTEXITCODE -ne 0) { throw 'Dungeon simulation tests failed' }
     node --test tools/end-game/quality.test.mjs
     if ($LASTEXITCODE -ne 0) { throw 'Resolution controller tests failed' }

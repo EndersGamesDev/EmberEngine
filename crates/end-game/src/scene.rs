@@ -9,6 +9,13 @@ use glam::{Quat, Vec2, Vec3};
 pub struct Model {
     pub ids: Vec<(u32, Vec3, Option<Material>)>,
 }
+struct Prop {
+    model: Model,
+    position: Vec3,
+    rot: Quat,
+    material: Material,
+    sway: bool,
+}
 pub struct Scene {
     cell: Cell,
     oak: u32,
@@ -19,6 +26,7 @@ pub struct Scene {
     warden: Model,
     cot: Model,
     torch: Model,
+    props: Vec<Prop>,
 }
 
 use super::cell::{Cell, hash};
@@ -144,12 +152,66 @@ impl Scene {
         );
         let cot = model(
             &mut meshes,
-            include_bytes!("../../../assets/end-game/v1/cot.glb"),
+            include_bytes!("../../../assets/end-game/v2/cot-detailed.glb"),
         );
         let torch = model(
             &mut meshes,
             include_bytes!("../../../assets/end-game/v1/torch.glb"),
         );
+        let specs: &[(&[u8], Vec3, f32, Material, bool)] = &[
+            (
+                include_bytes!("../../../assets/end-game/v2/bucket.glb"),
+                Vec3::new(2.58, 0.0, 4.54),
+                -0.35,
+                Material::Oak,
+                false,
+            ),
+            (
+                include_bytes!("../../../assets/end-game/v2/chain-shackle.glb"),
+                Vec3::new(-2.94, 1.94, 1.38),
+                std::f32::consts::FRAC_PI_2,
+                Material::Iron,
+                true,
+            ),
+            (
+                include_bytes!("../../../assets/end-game/v2/hanging-rag.glb"),
+                Vec3::new(-2.94, 1.76, 4.65),
+                std::f32::consts::FRAC_PI_2,
+                Material::Cloth,
+                true,
+            ),
+            (
+                include_bytes!("../../../assets/end-game/v2/drain-grate.glb"),
+                Vec3::new(2.5, 0.004, 1.05),
+                0.0,
+                Material::Iron,
+                false,
+            ),
+            (
+                include_bytes!("../../../assets/end-game/v2/candle-stool.glb"),
+                Vec3::new(-1.42, 0.0, 4.58),
+                0.0,
+                Material::Oak,
+                false,
+            ),
+            (
+                include_bytes!("../../../assets/end-game/v2/straw-scatter.glb"),
+                Vec3::new(-1.74, 0.01, 2.72),
+                0.15,
+                Material::Cloth,
+                false,
+            ),
+        ];
+        let props = specs
+            .iter()
+            .map(|(bytes, position, yaw, material, sway)| Prop {
+                model: model(&mut meshes, bytes),
+                position: *position,
+                rot: Quat::from_rotation_y(*yaw),
+                material: *material,
+                sway: *sway,
+            })
+            .collect();
         (
             Self {
                 cell,
@@ -161,6 +223,7 @@ impl Scene {
                 warden,
                 cot,
                 torch,
+                props,
             },
             meshes,
         )
@@ -231,14 +294,12 @@ impl Scene {
                 radius: 7.0,
             };
         }
-        if game.stage < 4 {
-            env.lights[3] = PointLight {
-                position: Vec3::new(2.6, 1.2, -4.6),
-                color: Vec3::new(0.22, 0.48, 1.0),
-                intensity: 2.0,
-                radius: 3.0,
-            };
-        }
+        env.lights[3] = PointLight {
+            position: Vec3::new(-1.417, 0.928, 4.578),
+            color: Vec3::new(1.0, 0.67, 0.32),
+            intensity: 1.0 * flicker,
+            radius: 3.6,
+        };
         let mut frame = Frame {
             camera,
             environment: env,
@@ -251,6 +312,31 @@ impl Scene {
         };
         let out = &mut frame.instances;
         self.cell.animate(out, t, game.gate_open);
+        for prop in &self.props {
+            let motion = if prop.sway {
+                Quat::from_rotation_x((t * 1.3 + prop.position.z).sin() * 0.025)
+            } else {
+                Quat::IDENTITY
+            };
+            draw_model(
+                out,
+                &prop.model,
+                prop.position,
+                1.0,
+                prop.rot * motion,
+                prop.material,
+                false,
+            );
+        }
+        for i in 0..5 {
+            let phase = (t * 1.7 + i as f32 * 0.2).fract();
+            frame.particles.push(Particle {
+                position: Vec3::new(-1.417 + (t * 5.0).sin() * 0.008, 0.94 + phase * 0.11, 4.578),
+                color: Vec3::new(1.0, 0.63 + phase * 0.25, 0.20),
+                size: Vec2::new(0.028 * (1.0 - phase) + 0.008, 0.062 * (1.0 - phase) + 0.015),
+                opacity: (1.0 - phase) * 0.86,
+            });
+        }
         draw_model(
             out,
             &self.cot,
@@ -445,24 +531,28 @@ impl Scene {
             });
         }
         for i in 0..5 {
-            let phase = (t * 0.47 + i as f32 * 0.21).fract();
+            let age = (t + i as f32 * 0.43).rem_euclid(2.1);
+            let impact = (2.0 * 3.15 / end_game_core::GRAVITY).sqrt();
             let x = 2.60 + (hash(i * 91) - 0.5) * 0.18;
             let z = 4.46 + (hash(i * 19) - 0.5) * 0.14;
-            frame.particles.push(Particle {
-                position: Vec3::new(x, 3.15 * (1.0 - phase * phase), z),
-                color: Vec3::new(0.48, 0.64, 0.72),
-                size: Vec2::new(0.012, 0.035),
-                opacity: 0.58,
-            });
-            if phase > 0.84 {
-                let radius = (phase - 0.84) * 0.8;
+            if age <= impact {
+                frame.particles.push(Particle {
+                    position: Vec3::new(x, 3.15 - 0.5 * end_game_core::GRAVITY * age * age, z),
+                    color: Vec3::new(0.48, 0.64, 0.72),
+                    size: Vec2::new(0.012, 0.035),
+                    opacity: 0.58,
+                });
+            }
+            let splash = age - impact;
+            if (0.0..0.32).contains(&splash) {
+                let radius = splash * 0.4;
                 for point in 0..10 {
                     let a = point as f32 * std::f32::consts::TAU / 10.0;
                     frame.particles.push(Particle {
                         position: Vec3::new(x + a.cos() * radius, 0.014, z + a.sin() * radius),
                         color: Vec3::new(0.25, 0.37, 0.41),
                         size: Vec2::splat(0.013),
-                        opacity: (1.0 - phase) * 1.8,
+                        opacity: (1.0 - splash / 0.32) * 0.28,
                     });
                 }
             }
@@ -480,5 +570,49 @@ impl Scene {
             }
         }
         frame
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn generated_props_decode_and_the_cell_fits_its_render_budget() {
+        let (scene, meshes) = Scene::build();
+        for model in std::iter::once(&scene.cot).chain(scene.props.iter().map(|p| &p.model)) {
+            for (id, _, _) in &model.ids {
+                let mesh = &meshes[*id as usize - 1];
+                assert!(mesh.texture.is_some(), "generated prop lost its RGB8 atlas");
+                assert!(
+                    mesh.vertices
+                        .iter()
+                        .all(|v| Vec3::from_array(v.pos).is_finite()
+                            && Vec3::from_array(v.normal).is_finite())
+                );
+            }
+        }
+        let textures: usize = meshes
+            .iter()
+            .filter_map(|m| m.texture.as_ref())
+            .map(|t| t.rgba8.len())
+            .sum();
+        let frame = scene.frame(&Dungeon::default(), false, 0.0);
+        let triangles: usize = frame
+            .instances
+            .iter()
+            .map(|i| {
+                if i.mesh == 0 {
+                    12
+                } else {
+                    meshes[i.mesh as usize - 1].vertices.len() / 3
+                }
+            })
+            .sum();
+        eprintln!(
+            "V2 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            textures * 4 / 3
+        );
+        assert!(triangles < 220_000);
+        assert!(textures * 4 / 3 < 120 * 1024 * 1024);
     }
 }

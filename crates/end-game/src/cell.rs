@@ -21,13 +21,20 @@ struct Kit {
     vertices: Vec<MeshVertex>,
     seed: u32,
     wood: bool,
+    rough: bool,
+    uv_origin: Vec3,
+    uv_inverse: Quat,
 }
 
 impl Kit {
     fn polygon(&mut self, points: &[Vec3], outward: Vec3, uv_seed: u32) {
         let offset = Vec2::new(hash(uv_seed) * 11.0, hash(uv_seed + 63) * 13.0);
-        let abs = outward.abs();
+        let wood = self.wood;
+        let origin = self.uv_origin;
+        let inverse = self.uv_inverse;
+        let abs = if wood { inverse * outward } else { outward }.abs();
         let project = |p: Vec3| {
+            let p = if wood { inverse * (p - origin) } else { p };
             // Physical texel density, including the narrow faces and bevels.
             if abs.y >= abs.x && abs.y >= abs.z {
                 Vec2::new(p.x, p.z)
@@ -45,7 +52,6 @@ impl Kit {
             .iter()
             .map(|p| project(*p))
             .fold(Vec2::splat(f32::NEG_INFINITY), Vec2::max);
-        let wood = self.wood;
         let uv = |p: Vec3| {
             let p = project(p);
             if wood {
@@ -81,10 +87,31 @@ impl Kit {
     }
 
     fn block(&mut self, center: Vec3, size: Vec3, rot: Quat, bevel: f32) {
+        self.uv_origin = center;
+        self.uv_inverse = rot.conjugate();
         self.seed += 1;
         let seed = self.seed;
         let h = size * 0.5;
         let b = bevel.min(h.min_element() * 0.4);
+        let rough = self.rough;
+        let transform = |p: Vec3| {
+            let p = if rough {
+                // Shared vertices get identical small chips, keeping the surface closed.
+                let k = ((p.x * 8192.0).round() as i32 as u32).wrapping_mul(71)
+                    ^ ((p.y * 8192.0).round() as i32 as u32).wrapping_mul(919)
+                    ^ ((p.z * 8192.0).round() as i32 as u32).wrapping_mul(179);
+                p + (Vec3::new(
+                    hash(k.wrapping_add(seed)),
+                    hash(k.wrapping_add(seed + 23)),
+                    hash(k.wrapping_add(seed + 41)),
+                ) - Vec3::splat(0.5))
+                    * b
+                    * 0.6
+            } else {
+                p
+            };
+            center + rot * p
+        };
         let axes = [Vec3::X, Vec3::Y, Vec3::Z];
         // Six broad faces, twelve bevel strips and eight clipped corners form a closed solid.
         for axis in 0..3 {
@@ -95,9 +122,9 @@ impl Kit {
                 let c = n * h[axis];
                 let mut p = Vec::new();
                 for (a, d) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-                    p.push(
-                        center + rot * (c + axes[u] * a * (h[u] - b) + axes[v] * d * (h[v] - b)),
-                    );
+                    p.push(transform(
+                        c + axes[u] * a * (h[u] - b) + axes[v] * d * (h[v] - b),
+                    ));
                 }
                 self.polygon(&p, rot * n, seed);
             }
@@ -116,7 +143,7 @@ impl Kit {
                         let p = axes[axis] * end * (h[axis] - b)
                             + axes[u] * a * (h[u] - if face == 0 { 0.0 } else { b })
                             + axes[v] * d * (h[v] - if face == 0 { b } else { 0.0 });
-                        points.push(center + rot * p);
+                        points.push(transform(p));
                     }
                     self.polygon(&points, rot * n, seed);
                 }
@@ -131,7 +158,7 @@ impl Kit {
                         Vec3::new(h.x - b, h.y, h.z - b),
                         Vec3::new(h.x - b, h.y - b, h.z),
                     ]
-                    .map(|p| center + rot * (p * signs));
+                    .map(|p| transform(p * signs));
                     self.polygon(&points, rot * signs, seed);
                 }
             }
@@ -221,17 +248,19 @@ fn wall(kit: &mut [Kit; 3], origin: Vec3, rot: Quat, width: f32, height: f32, wi
 
 fn arch(kit: &mut Kit, center: Vec3, radius: Vec2, depth: f32, width: f32, rot: Quat, count: u32) {
     for i in 0..count {
-        let a = std::f32::consts::PI * (i as f32 + 0.5) / count as f32;
-        let p = center + rot * Vec3::new(a.cos() * radius.x, a.sin() * radius.y, 0.0);
-        // Radially fitted voussoirs: true silhouettes and relief, not a painted arch.
+        let sample = |j: u32| {
+            let a = std::f32::consts::PI * j as f32 / count as f32;
+            Vec2::new(a.cos() * radius.x, a.sin() * radius.y)
+        };
+        let (a, b) = (sample(i), sample(i + 1));
+        let middle = (a + b) * 0.5;
+        let tangent = b - a;
+        let p = center + rot * middle.extend(0.0);
+        // Segment lengths and normals follow the ellipse, including its tight springings.
         kit.block(
             p,
-            Vec3::new(
-                width,
-                std::f32::consts::PI * radius.x / count as f32 * 0.96,
-                depth,
-            ),
-            rot * Quat::from_rotation_z(a),
+            Vec3::new(width, tangent.length() * 0.96, depth),
+            rot * Quat::from_rotation_z(tangent.y.atan2(tangent.x) - std::f32::consts::FRAC_PI_2),
             0.018,
         );
     }
@@ -241,6 +270,7 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
     let identity = Quat::IDENTITY;
     let mut stone: [Kit; 3] = std::array::from_fn(|i| Kit {
         seed: 910 + i as u32 * 509,
+        rough: true,
         ..Kit::default()
     });
     let mut oak = Kit {
@@ -529,6 +559,49 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
             );
         }
     }
+    // Close the barrel vault with fitted, textured courses behind its projecting ribs.
+    for course in 0..15 {
+        arch(
+            &mut stone[0],
+            Vec3::new(0.0, 1.6, -0.20 - course as f32 * 0.49),
+            Vec2::new(5.04, 2.66),
+            0.478,
+            0.14,
+            identity,
+            43,
+        );
+    }
+    for i in 0..48 {
+        let point = |j: u32, z: f32| {
+            let a = j as f32 * std::f32::consts::PI / 48.0;
+            Vec3::new(a.cos() * 5.20, 1.6 + a.sin() * 2.92, z)
+        };
+        mortar.polygon(
+            &[
+                point(i, 0.05),
+                point(i + 1, 0.05),
+                point(i + 1, -7.5),
+                point(i, -7.5),
+            ],
+            -(point(i, -3.5) - Vec3::new(0.0, 1.6, -3.5)),
+            713,
+        );
+    }
+    // Backing behind the arched exit also seals the space between its leaves.
+    mortar.block(
+        Vec3::new(0.0, 2.2, -7.45),
+        Vec3::new(10.5, 4.5, 0.22),
+        identity,
+        0.0,
+    );
+    wall(
+        &mut stone,
+        Vec3::new(0.0, 2.85, -7.12),
+        identity,
+        2.02,
+        1.35,
+        false,
+    );
     // Exit's carved surround and aged planked leaves.
     arch(
         &mut stone[1],
@@ -762,12 +835,11 @@ impl Cell {
         let pose = ((time * 5.0) as usize) % self.cloth.len();
         out.push(
             Instance::new(
-                Vec3::new(-2.78, 1.76, 4.65),
-                Vec3::ONE,
+                Vec3::new(-2.25, 0.72, 2.47),
+                Vec3::new(1.0, 0.65, 1.0),
                 Vec3::new(0.24, 0.205, 0.14),
             )
             .with_mesh(self.cloth[pose])
-            .with_rot(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
             .with_surface(1.0, 0.0),
         );
         out.push(
