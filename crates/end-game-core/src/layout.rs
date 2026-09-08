@@ -81,6 +81,75 @@ pub struct Solid {
     pub zone: Zone,
     pub kind: SolidKind,
 }
+/// Strike-only measured planes matching the basement's rendered stone shell.
+/// Navigation retains its established furniture rules; these never add a new
+/// invisible movement barrier. Rough block faces vary by at most a few cm.
+#[derive(Clone, Copy, Debug)]
+pub struct StrikeSurface {
+    pub bounds: Aabb,
+    pub material: Surface,
+    pub persistent: bool,
+}
+pub fn basement_strike_surfaces() -> &'static [StrikeSurface] {
+    const PLANES: &[StrikeSurface] = &[
+        StrikeSurface {
+            bounds: Aabb::new([-3.25, 0., -0.075], [-3.015, 3.65, 5.175]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([3.015, 0., -0.075], [3.25, 3.65, 5.175]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-3.25, 0., 4.985], [3.25, 2.10, 5.4]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-3.25, 2.10, 4.985], [-0.52, 3.65, 5.4]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([0.52, 2.10, 4.985], [3.25, 3.65, 5.4]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-0.52, 3.15, 4.985], [0.52, 3.65, 5.4]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-5.3, 0., -7.125], [-5.015, 4.2, 0.125]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([5.015, 0., -7.125], [5.3, 4.2, 0.125]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-5.02, 0., 0.005], [-3.22, 4., 0.275]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([3.22, 0., 0.005], [5.02, 4., 0.275]),
+            material: Surface::Stone,
+            persistent: true,
+        },
+        StrikeSurface {
+            bounds: Aabb::new([-3., -0.05, 0.2], [3., 0.015, 5.]),
+            material: Surface::Timber,
+            persistent: true,
+        },
+    ];
+    PLANES
+}
 #[derive(Clone, Copy, Debug)]
 pub struct PropPlacement {
     pub name: &'static str,

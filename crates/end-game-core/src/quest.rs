@@ -368,7 +368,13 @@ impl Dungeon {
         self.hit_cooldown = 0.;
         self.interaction = None;
         self.attack_time = 0.;
+        let sword_events = (self.combat.swing_event, self.combat.impact_event);
         self.combat = Combat::default();
+        self.combat.swing_event = sword_events.0;
+        self.combat.impact_event = sword_events.1;
+        self.surface_impacts.clear();
+        self.air_heavy_used = false;
+        self.strike_frame = None;
         self.guard = Guard::default();
         self.enemy_attack_wait = 1.;
         self.step_distance = 0.;

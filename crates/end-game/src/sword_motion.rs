@@ -1,179 +1,42 @@
-//! Edge-leading cuts in eye space; both articulated hands share the hilt transform.
-//!
-//! Fiore's descending/rising cuts and Meyer's linked openings inform the paths;
-//! input rhythms remain game choreography. Asset +X is length, +/-Z are edges,
-//! and +/-Y are flats (V3 greatsword-rig.json).
+//! Client placement/guard adapter for the shared collision-visible sword path.
 use super::hands::Placement;
-use end_game_core::combat::{Combat, Recovery, Strike, StrikeKind};
-use glam::{Mat3, Quat, Vec3};
+use end_game_core::blade::{self, BladePose};
+use end_game_core::blade::{blade_frame, smooth};
+use end_game_core::combat::{Combat, Recovery, Strike};
+#[cfg(test)]
+use end_game_core::{
+    blade::{angles, direction},
+    combat::StrikeKind,
+};
+use glam::{Quat, Vec3};
 
-pub fn ready() -> Placement {
+fn placement(p: BladePose) -> Placement {
     Placement {
-        p: Vec3::new(0.20, -0.43, -0.55),
-        // Low, forward carry leaves the enemy's torso and quest markers clear.
-        // The flat is nearly horizontal, presenting the thin edge to the eye.
-        r: blade_frame(Vec3::new(0.57, 0.06, -0.819), Vec3::new(0.819, 0., 0.57)),
+        p: p.position,
+        r: p.rotation,
     }
 }
-fn direction(kind: StrikeKind) -> Vec3 {
-    match kind {
-        StrikeKind::Cut => Vec3::new(-0.68, -0.7332, 0.0),
-        StrikeKind::Backhand => Vec3::new(0.985, 0.174, 0.0),
-        StrikeKind::Finisher => Vec3::new(0.62, -0.7846, 0.0),
-        StrikeKind::Overhead => -Vec3::Y,
-        StrikeKind::Rising => Vec3::new(0.60, 0.80, 0.0),
+fn blade_pose(p: Placement) -> BladePose {
+    BladePose {
+        position: p.p,
+        rotation: p.r,
     }
-    .normalize()
 }
-fn angles(kind: StrikeKind) -> (f32, f32) {
-    let (wind, follow): (f32, f32) = match kind {
-        StrikeKind::Cut => (-60.0, 58.0),
-        StrikeKind::Backhand => (-58.0, 58.0),
-        StrikeKind::Finisher => (-65.0, 62.0),
-        StrikeKind::Overhead => (-62.0, 62.0),
-        StrikeKind::Rising => (-60.0, 66.0),
-    };
-    (wind.to_radians(), follow.to_radians())
-}
-fn smooth(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-}
-fn hermite(a: f32, b: f32, va: f32, vb: f32, duration: f32, t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    let t2 = t * t;
-    let t3 = t2 * t;
-    (2.0 * t3 - 3.0 * t2 + 1.0) * a
-        + (t3 - 2.0 * t2 + t) * duration * va
-        + (-2.0 * t3 + 3.0 * t2) * b
-        + (t3 - t2) * duration * vb
-}
-fn blade_frame(length: Vec3, edge: Vec3) -> Quat {
-    let length = length.normalize();
-    let edge = (edge - length * edge.dot(length)).normalize();
-    Quat::from_mat3(&Mat3::from_cols(length, edge.cross(length), edge)).normalize()
+pub fn ready() -> Placement {
+    placement(blade::ready())
 }
 pub(super) fn mix(from: Placement, to: Placement, t: f32) -> Placement {
-    // A whole-quaternion slerp can swing the long blade behind the eye during
-    // a 180-degree edge change. Swing the point along its short forward arc,
-    // then turn the hilt around that axis while preparing the next cut.
-    let t = t.clamp(0.0, 1.0);
-    let swing = Quat::from_rotation_arc(from.r * Vec3::X, to.r * Vec3::X);
-    let twist = (swing * from.r).conjugate() * to.r;
-    Placement {
-        p: from.p.lerp(to.p, t),
-        r: (Quat::IDENTITY.slerp(swing, t) * from.r * Quat::IDENTITY.slerp(twist, t)).normalize(),
-    }
+    placement(blade::mix(blade_pose(from), blade_pose(to), t))
 }
-fn cut_pose(kind: StrikeKind, angle: f32) -> Placement {
-    let travel = direction(kind);
-    let length = -Vec3::Z * angle.cos() + travel * angle.sin();
-    let edge = travel * angle.cos() + Vec3::Z * angle.sin();
-    // Backhand uses the opposite edge. Roll changes occur while chambering,
-    // never through contact: the blade's flat normal stays constant in the cut.
-    let edge_sign = if kind == StrikeKind::Backhand {
-        -1.0
-    } else {
-        1.0
-    };
-    keep_blade_in_front(Placement {
-        p: Vec3::new(0.0, -0.25, -0.47) + travel * (angle * 0.075),
-        r: blade_frame(length, edge * edge_sign),
-    })
+pub(super) fn keep_blade_in_front(p: Placement) -> Placement {
+    placement(blade::keep_blade_in_front(blade_pose(p)))
 }
-fn chamber(previous: StrikeKind, next: StrikeKind) -> Placement {
-    let from = cut_pose(previous, angles(previous).1);
-    let to = cut_pose(next, angles(next).0);
-    keep_blade_in_front(mix(from, to, 0.30))
+pub fn sample_strike(strike: Strike, elapsed: f32) -> Placement {
+    placement(blade::strike_sample(strike, elapsed))
 }
-fn link_strength(previous: StrikeKind, at: f32) -> f32 {
-    // A press in the final frame must not force an entire chamber into that
-    // frame. Preserve the partial return and let the next preparation finish it.
-    smooth((previous.duration() - at.max(previous.follow_end())) / 0.18)
-}
-fn entry(previous: StrikeKind, next: StrikeKind, at: f32) -> Placement {
-    keep_blade_in_front(mix(
-        ready(),
-        chamber(previous, next),
-        link_strength(previous, at),
-    ))
-}
-fn base_sample(strike: Strike, elapsed: f32) -> Placement {
-    let kind = strike.kind;
-    let (wind, follow) = angles(kind);
-    let w = kind.windup_time();
-    let c = kind.contact_time();
-    let f = kind.follow_end();
-    if elapsed < w {
-        let start = strike
-            .previous
-            .map_or_else(ready, |p| entry(p, kind, strike.previous_link_at));
-        return keep_blade_in_front(mix(start, cut_pose(kind, wind), smooth(elapsed / w)));
-    }
-    if elapsed <= f {
-        // One shared contact velocity joins acceleration and deceleration.
-        // Below 3x each segment average keeps the blade angle monotonic.
-        let speed = ((-wind / (c - w)).min(follow / (f - c))) * 2.4;
-        let angle = if elapsed < c {
-            hermite(wind, 0.0, 0.0, speed, c - w, (elapsed - w) / (c - w))
-        } else {
-            hermite(0.0, follow, speed, 0.0, f - c, (elapsed - c) / (f - c))
-        };
-        return cut_pose(kind, angle);
-    }
-    keep_blade_in_front(mix(
-        cut_pose(kind, follow),
-        ready(),
-        smooth((elapsed - f) / (kind.duration() - f)),
-    ))
-}
-
-/// Standalone strike, also useful for contact/geometry fixtures.
 #[cfg(test)]
 pub fn sample(kind: StrikeKind, elapsed: f32) -> Placement {
     sample_strike(Strike::new(kind), elapsed)
-}
-/// A late press starts with zero blend weight at the exact current pose.
-/// Linked recovery ends in the next chamber, whose first sample matches.
-pub fn sample_strike(strike: Strike, elapsed: f32) -> Placement {
-    let mut pose = base_sample(strike, elapsed);
-    if let Some(link) = strike.link {
-        let begin = strike.kind.follow_end().max(link.at);
-        let duration = strike.kind.duration();
-        if link.cancelled_at.is_some_and(|at| at <= begin) {
-            return pose;
-        }
-        if duration > begin {
-            pose = mix(
-                pose,
-                chamber(strike.kind, link.next),
-                smooth((elapsed - begin) / (duration - begin))
-                    * link_strength(strike.kind, link.at),
-            );
-        }
-        if let Some(cancelled) = link.cancelled_at {
-            if duration > cancelled {
-                pose = mix(
-                    pose,
-                    ready(),
-                    smooth((elapsed - cancelled) / (duration - cancelled)),
-                );
-            }
-        }
-    }
-    keep_blade_in_front(pose)
-}
-pub(super) fn keep_blade_in_front(mut p: Placement) -> Placement {
-    // Correct the shared weapon before IK; neither hand slides along its grip.
-    let d = p.r * Vec3::X;
-    let n = p.r * Vec3::Y;
-    let w = p.r * Vec3::Z;
-    let pommel = -0.37 * d.z + 0.027;
-    let guard = 0.05 * d.z.abs() + 0.212 * w.z.abs() + 0.03 * n.z.abs();
-    let blade =
-        if d.z < 0.0 { 0.02 * d.z } else { 1.85 * d.z } + 0.13 * w.z.abs() + 0.013 * n.z.abs();
-    p.p.z = p.p.z.min(-0.15 - pommel.max(guard).max(blade));
-    p
 }
 /// Angled chest cover, with the strong near the hands toward an incoming knife.
 /// A short deflection keeps the blade interposed between threat and body.
@@ -238,12 +101,13 @@ mod tests {
         }
     }
     use end_game_core::combat::StrikeLink;
-    const KINDS: [StrikeKind; 5] = [
+    const KINDS: [StrikeKind; 6] = [
         StrikeKind::Cut,
         StrikeKind::Backhand,
         StrikeKind::Finisher,
         StrikeKind::Overhead,
         StrikeKind::Rising,
+        StrikeKind::JumpHeavy,
     ];
     fn near(a: Placement, b: Placement) {
         assert!(
@@ -499,6 +363,59 @@ mod tests {
                         Quat::IDENTITY,
                     ),
                     "guard release into cut",
+                );
+            }
+        }
+    }
+    #[test]
+    fn contact_rebound_is_continuous_and_preserves_queued_entry() {
+        for kind in KINDS {
+            for stop in [
+                kind.windup_time() + 0.02,
+                kind.contact_time(),
+                kind.follow_end() - 0.01,
+            ] {
+                let original = Strike {
+                    link: Some(StrikeLink {
+                        next: StrikeKind::Backhand,
+                        at: 0.1,
+                        cancelled_at: None,
+                    }),
+                    ..Strike::new(kind)
+                };
+                let stopped = Strike {
+                    surface_stop: Some(stop),
+                    ..original
+                };
+                near(sample_strike(original, stop), sample_strike(stopped, stop));
+                near(
+                    sample_strike(original, kind.duration()),
+                    sample_strike(stopped, kind.duration()),
+                );
+                let mut previous = sample_strike(stopped, stop);
+                for i in 1..=180 {
+                    let at = stop + (kind.duration() - stop) * i as f32 / 180.;
+                    let pose = sample_strike(stopped, at);
+                    assert!(
+                        pose.p.distance(previous.p) < 0.04
+                            && pose.r.angle_between(previous.r) < 0.18,
+                        "{kind:?} rebound jumps at{at}"
+                    );
+                    previous = pose;
+                }
+            }
+        }
+        // A normal standing landing can hold the full blade at follow-through.
+        let pose = sample(StrikeKind::JumpHeavy, StrikeKind::JumpHeavy.follow_end());
+        let meshes = ember_engine::assets::load_glb(include_bytes!(
+            "../../../assets/end-game/v3/wolf-greatsword.glb"
+        ))
+        .unwrap();
+        for part in meshes {
+            for vertex in part.mesh.vertices {
+                assert!(
+                    1.65 + pose.point(Vec3::from_array(vertex.pos)).y >= 0.005,
+                    "jumping follow enters floor"
                 );
             }
         }

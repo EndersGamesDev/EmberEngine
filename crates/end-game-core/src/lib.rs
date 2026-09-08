@@ -1,5 +1,6 @@
 //! End Game's local, fixed-step dungeon simulation. All lengths are metres.
 use glam::{Vec2, Vec3};
+pub mod blade;
 #[cfg(test)]
 mod castle_tests;
 pub mod combat;
@@ -13,6 +14,7 @@ mod guard_tests;
 pub mod interaction;
 pub mod layout;
 pub mod quest;
+pub mod sword;
 pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use dialogue::{Dialogue, VoiceEvent, VoiceKind};
@@ -22,6 +24,7 @@ pub use enemies::{
 pub use guard::{Guard, GuardContact};
 pub use interaction::{Interaction, InteractionKind};
 pub use quest::Quest;
+pub use sword::{AimTarget, HitReaction, HitZone, SurfaceImpact, SurfaceImpacts};
 pub use warden::{Warden, WardenPhase};
 
 pub const STEP: f32 = 1.0 / 60.0;
@@ -263,6 +266,7 @@ pub struct Controls {
     pub jump: bool,
     pub interact: bool,
     pub attack: bool,
+    pub heavy: bool,
     pub block: bool,
     pub dodge: bool,
     pub transform: bool,
@@ -292,6 +296,9 @@ pub struct Dungeon {
     pub werewolf: bool,
     pub transformation: f32,
     pub combat: Combat,
+    pub surface_impacts: SurfaceImpacts,
+    air_heavy_used: bool,
+    strike_frame: Option<sword::SwordFrame>,
     pub guard: Guard,
     /// Compatibility timer: active sword duration remaining, or unarmed cooldown.
     pub attack_time: f32,
@@ -335,6 +342,9 @@ impl Default for Dungeon {
             werewolf: false,
             transformation: 0.0,
             combat: Combat::default(),
+            surface_impacts: SurfaceImpacts::default(),
+            air_heavy_used: false,
+            strike_frame: None,
             guard: Guard::default(),
             attack_time: 0.0,
             crouched: false,
@@ -428,6 +438,7 @@ impl Dungeon {
             3 if self.distance(2.6, -4.6) < 1.9 || self.distance(2.6, -2.95) < 1.25 => {
                 "Draw the greatsword from stone"
             }
+            4 if self.distance(0.0, -6.5) < 1.45 => "Step back for a clear cut at the chain",
             4 if self.distance(0.0, -6.5) < 2.0 => "Strike the gate's chain",
             _ => "",
         }
@@ -515,55 +526,13 @@ impl Dungeon {
             }
         }
     }
+    #[cfg(test)]
     fn strike_contact(&mut self, kind: StrikeKind) {
-        if self.castle_sword_contact(kind) {
-            return;
-        }
-        let forward = self.forward();
-        let chain_distance = self.distance(0.0, -6.5);
-        let chain_in_reach = self.stage == 4 && chain_distance < 2.0 && forward.z < -0.25;
-        let to_warden = Vec3::new(
-            self.warden.x - self.position.x,
-            0.0,
-            self.warden.y - self.position.z,
+        self.sword_contact_window(
+            Strike::new(kind),
+            kind.contact_time() - STEP,
+            kind.contact_time() + STEP,
         );
-        let warden_distance = to_warden.length();
-        // One contact sample hits the nearest eligible target, never both.
-        if self.warden_health > 0.0
-            && warden_distance < 2.7
-            && forward.dot(to_warden.normalize_or_zero()) > 0.15
-            && (!chain_in_reach || warden_distance < chain_distance)
-        {
-            self.warden_health = (self.warden_health
-                - kind.damage() * if self.werewolf { 1.25 } else { 1.0 })
-            .max(0.0);
-            self.alert = 1.0;
-            self.warden_ai
-                .on_sword_hit(kind.heavy(), self.warden_health == 0.0);
-            if self.warden_health == 0.0 {
-                self.dialogue.emit(VoiceKind::WardenDeath, self.time);
-            }
-            self.combat.impact(
-                kind,
-                ImpactKind::Warden,
-                Vec3::new(self.warden.x, 1.1, self.warden.y),
-            );
-            self.say(if self.warden_health == 0.0 {
-                "The warden falls."
-            } else {
-                "Iron meets iron."
-            });
-        } else if chain_in_reach {
-            self.combat
-                .impact(kind, ImpactKind::Chain, Vec3::new(0.0, 1.05, -6.88));
-            if self.warden_health <= 0.0 {
-                self.stage = 5;
-                self.combat.clear_queue();
-                self.say("The chain breaks. The far gate rises.");
-            } else {
-                self.say("The warden still holds this dungeon. Defeat him first.");
-            }
-        }
     }
     fn can_stand(&self, x: f32, z: f32) -> bool {
         if !(-6.65..=4.68).contains(&z) {
@@ -741,12 +710,43 @@ impl Dungeon {
             input = Controls::default();
         }
         let old_swing = self.combat.swing_event;
-        let progress = self.combat.tick(
-            self.stage >= 4 && !was_interacting && input.attack && !input.block,
+        if self.grounded {
+            self.air_heavy_used = false;
+        }
+        let heavy_allowed = self.stage >= 4
+            && !was_interacting
+            && input.heavy
+            && !input.block
+            && self.dodge_time == 0.0
+            && !(self.air_heavy_used && !self.grounded);
+        let jump_heavy = heavy_allowed && input.jump && self.grounded;
+        let can_jump_heavy = jump_heavy
+            && self.combat.finished()
+            && self.stamina >= StrikeKind::JumpHeavy.stamina_cost() + 12.0;
+        if jump_heavy && !can_jump_heavy {
+            input.jump = false;
+        }
+        if can_jump_heavy {
+            self.velocity_y = 4.1;
+            self.grounded = false;
+            self.stamina -= 12.0;
+            input.jump = false;
+        }
+        let progress = self.combat.tick_requests(
+            self.stage >= 4 && !was_interacting && input.attack && !input.heavy && !input.block,
+            heavy_allowed && (!jump_heavy || can_jump_heavy),
+            !self.grounded,
             &mut self.stamina,
         );
         if self.combat.swing_event != old_swing {
             self.event += 1;
+            if self
+                .combat
+                .active
+                .is_some_and(|s| s.kind == StrikeKind::JumpHeavy)
+            {
+                self.air_heavy_used = true;
+            }
         }
         self.attack_time = if self.stage >= 4 {
             self.combat.remaining()
@@ -755,12 +755,6 @@ impl Dungeon {
         };
         if progress.frozen {
             return;
-        }
-        if let Some(kind) = progress.contact {
-            self.strike_contact(kind);
-            if self.combat.hitstop_left > 0.0 {
-                return;
-            }
         }
         self.time += STEP;
         self.dialogue.advance();
@@ -950,6 +944,18 @@ impl Dungeon {
             self.event += 1;
             self.say("Your blade is somewhere beyond these bars.");
         }
+        if let Some((strike, from, to)) = progress.sweep {
+            self.sword_contact_window(strike, from, to);
+        }
+        self.strike_frame = Some(
+            self.combat
+                .sweep
+                .map(|s| s.contact_fraction.map_or(s.to, |f| s.frame(f)))
+                .unwrap_or_else(|| self.sword_motion_frame()),
+        );
+        if self.combat.hitstop_left > 0.0 {
+            return;
+        }
         self.tick_warden(running);
         self.tick_castle_enemies();
         self.tick_quest();
@@ -1048,7 +1054,7 @@ mod tests {
         // V9 adds defeating the warden as an explicit exit prerequisite.
         s.warden_health = 0.0;
         s.warden_ai.die();
-        s.position = Vec3::new(0.0, 0.0, -5.4);
+        s.position = Vec3::new(0.0, 0.0, -4.9);
         s.tick(Controls {
             attack: true,
             ..Controls::default()
@@ -1153,6 +1159,7 @@ mod tests {
                 jump: true,
                 interact: true,
                 attack: true,
+                heavy: true,
                 block: true,
                 dodge: true,
                 transform: true,
@@ -1464,7 +1471,7 @@ mod tests {
         // exercised separately by the exit prerequisite regression.
         s.warden_health = 0.0;
         s.warden_ai.die();
-        walk(&mut s, 0.0, -5.5);
+        walk(&mut s, 0.0, -4.9);
         s.yaw = 0.0;
         s.tick(Controls {
             attack: true,
@@ -1499,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    fn each_strike_damages_once_at_contact_with_the_current_form_multiplier() {
+    fn each_strike_damages_once_during_active_blade_window_with_form_multiplier() {
         for kind in [
             StrikeKind::Cut,
             StrikeKind::Backhand,
@@ -1515,9 +1522,16 @@ mod tests {
                     ..Dungeon::default()
                 };
                 s.combat.active = Some(Strike::new(kind));
+                let mut contacts = 0;
                 for tick in 1..=180 {
+                    let old_impact = s.combat.impact_event;
                     s.tick(Controls::default());
-                    if tick as f32 * STEP + 0.00001 < kind.contact_time() {
+                    if s.combat.impact_event != old_impact
+                        && s.combat.impact_kind == Some(ImpactKind::Warden)
+                    {
+                        contacts += 1;
+                    }
+                    if tick as f32 * STEP + 0.00001 < kind.windup_time() {
                         assert_eq!(s.warden_health, 100.0);
                         assert_eq!(s.combat.impact_event, 0);
                     }
@@ -1526,8 +1540,8 @@ mod tests {
                     s.warden_health,
                     100.0 - kind.damage() * if werewolf { 1.25 } else { 1.0 }
                 );
-                assert_eq!(s.combat.impact_event, 1);
-                assert_eq!(s.combat.impact_kind, Some(ImpactKind::Warden));
+                assert_eq!(contacts, 1);
+                assert!(s.warden_ai.reaction.is_some());
                 assert_eq!(s.combat.impact_strike, Some(kind));
             }
         }
@@ -1545,7 +1559,7 @@ mod tests {
             attack: true,
             ..Controls::default()
         });
-        for _ in 0..25 {
+        for _ in 0..30 {
             s.tick(Controls::default());
         }
         assert!(s.combat.active.unwrap().contact_done);
@@ -1582,14 +1596,16 @@ mod tests {
             }
         }
         assert_eq!(s.warden_health, 72.0);
-        assert_eq!(s.combat.impact_point, Vec3::new(0.0, 1.1, -4.8));
+        assert!((s.combat.impact_point.z + 4.8).abs() < 0.35);
+        assert!(s.combat.impact_point.y > 0.6);
+        assert!(s.combat.impact_zone.is_some());
     }
 
     #[test]
     fn real_hitstop_freezes_world_motion_while_buffering_the_next_strike() {
         let mut s = Dungeon {
             stage: 4,
-            position: Vec3::new(-2.9, 0.0, -1.5),
+            position: Vec3::new(-2.9, 0.0, -2.2),
             velocity_y: 0.4,
             ..Dungeon::default()
         };
@@ -1629,7 +1645,12 @@ mod tests {
             assert_eq!(s.health, frozen.health);
         }
         assert_eq!(frozen_ticks, 4);
-        assert_eq!(s.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        let next = if frozen.combat.rhythm_age().unwrap() + STEP <= 0.30001 {
+            StrikeKind::Backhand
+        } else {
+            StrikeKind::Overhead
+        };
+        assert_eq!(s.combat.queued(), [Some(next), None]);
         s.tick(Controls {
             movement: Vec2::X,
             ..Controls::default()
@@ -1642,7 +1663,7 @@ mod tests {
     fn gate_impact_clears_buffer_and_recovers_into_free_exploration() {
         let mut s = Dungeon {
             stage: 4,
-            position: Vec3::new(0.0, 0.0, -5.4),
+            position: Vec3::new(0.0, 0.0, -4.9),
             warden_health: 0.0,
             ..Dungeon::default()
         };

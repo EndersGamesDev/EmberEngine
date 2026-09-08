@@ -209,13 +209,18 @@ mod tests {
             StrikeKind::Finisher,
             StrikeKind::Overhead,
             StrikeKind::Rising,
+            StrikeKind::JumpHeavy,
         ] {
             for tick in 0..=(kind.duration() * 120.0).ceil() as u32 {
                 let elapsed = tick as f32 / 120.0;
-                for pitch in [-1.2, 0.0, 1.15] {
+                for (pitch, crouched) in [-1.2, 0.0, 1.15]
+                    .into_iter()
+                    .flat_map(|pitch| [(pitch, false), (pitch, true)])
+                {
                     let mut game = Dungeon::default();
                     game.stage = 4;
                     game.pitch = pitch;
+                    game.crouched = crouched;
                     game.combat.active = Some(Strike {
                         kind,
                         elapsed,
@@ -254,6 +259,230 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn camera_recoil_does_not_move_the_shared_contact_sword() {
+        use end_game_core::{
+            blade,
+            combat::{Strike, StrikeKind},
+        };
+        let hands = Hands::load(&mut Vec::new());
+        let mut game = Dungeon::default();
+        game.stage = 4;
+        game.pitch = -0.35;
+        for crouched in [false, true] {
+            game.crouched = crouched;
+            for kind in [
+                StrikeKind::Cut,
+                StrikeKind::Backhand,
+                StrikeKind::Finisher,
+                StrikeKind::JumpHeavy,
+            ] {
+                let strike = Strike {
+                    elapsed: kind.contact_time(),
+                    ..Strike::new(kind)
+                };
+                game.combat.active = Some(strike);
+                game.combat.impact_left = 0.15;
+                game.combat.impact_strength = 1.;
+                let mut camera = view(&game, 0.);
+                camera.head.y -= 0.20;
+                let m = hands.motion(&game, &camera);
+                let physical = combat_view(&game);
+                let local = blade::strike_sample(strike, strike.elapsed);
+                let sword = m.sword.unwrap();
+                for x in [blade::BLADE_ROOT, 1., blade::BLADE_TIP] {
+                    assert!(
+                        sword
+                            .point(Vec3::X * x)
+                            .distance(physical.head + physical.rot * local.point(Vec3::X * x))
+                            < 0.00001
+                    );
+                }
+                assert!(
+                    hands
+                        .skeleton_pose(&physical, &m)
+                        .1
+                        .iter()
+                        .all(|arm| arm.reached)
+                );
+            }
+        }
+    }
+    #[test]
+    fn stair_offsets_blend_outside_contact_and_across_failed_links() {
+        use end_game_core::combat::{Recovery, Strike, StrikeKind, StrikeLink};
+        let mut game = Dungeon::default();
+        game.stage = 4;
+        let mut camera = view(&game, 0.);
+        camera.head.y -= 0.20;
+        let kind = StrikeKind::Cut;
+        for linked in [false, true] {
+            let strike = Strike {
+                link: linked.then_some(StrikeLink {
+                    next: StrikeKind::Backhand,
+                    at: 0.1,
+                    cancelled_at: None,
+                }),
+                ..Strike::new(kind)
+            };
+            game.combat.active = Some(strike);
+            assert!(motion_view(&game, &camera).head.distance(camera.head) < 0.00001);
+            let mut previous = motion_view(&game, &camera).head;
+            for tick in 1..=120 {
+                game.combat.active.as_mut().unwrap().elapsed = kind.duration() * tick as f32 / 120.;
+                let frame = motion_view(&game, &camera);
+                let max_speed =
+                    0.20 * 1.875 / kind.windup_time().min(kind.duration() - kind.follow_end());
+                assert!(
+                    frame.head.distance(previous) <= max_speed * kind.duration() / 120. + 0.00001
+                );
+                if (kind.windup_time()..=kind.follow_end())
+                    .contains(&game.combat.active.unwrap().elapsed)
+                {
+                    assert!(frame.head.distance(combat_view(&game).head) < 0.00001);
+                }
+                previous = frame.head;
+            }
+            if linked {
+                let previous_head = motion_view(&game, &camera).head;
+                let reached = game.combat.active.take().unwrap();
+                game.combat.recovery = Some(Recovery {
+                    strike: reached,
+                    elapsed: 0.,
+                });
+                assert!(motion_view(&game, &camera).head.distance(previous_head) < 0.00001);
+                game.combat.recovery.as_mut().unwrap().elapsed = Recovery::DURATION;
+                assert!(motion_view(&game, &camera).head.distance(camera.head) < 0.00001);
+                game.combat.recovery = None;
+            } else {
+                game.combat.active = None;
+                assert!(motion_view(&game, &camera).head.distance(previous) < 0.00001);
+            }
+        }
+    }
+    #[test]
+    fn frozen_turn_contact_and_wall_rebound_keep_the_detected_world_frame() {
+        use end_game_core::{
+            combat::{Strike, StrikeKind},
+            sword::{SwordFrame, SwordSweep},
+        };
+        let mut game = Dungeon::default();
+        game.stage = 4;
+        let kind = StrikeKind::Cut;
+        let start = kind.contact_time() - 0.012;
+        let end = kind.contact_time() + 0.004;
+        let mut strike = Strike::new(kind);
+        strike.elapsed = start + (end - start) * 0.4;
+        strike.contact_at = Some(strike.elapsed);
+        let from = SwordFrame {
+            eye: game.position + Vec3::Y * 1.65 - Vec3::X * 0.3,
+            rotation: Quat::from_rotation_y(-0.5),
+        };
+        let to = SwordFrame {
+            eye: game.position + Vec3::Y * 1.65,
+            rotation: Quat::IDENTITY,
+        };
+        let sweep = SwordSweep {
+            strike,
+            start,
+            end,
+            from,
+            to,
+            contact_fraction: Some(0.4),
+        };
+        game.combat.active = Some(strike);
+        game.combat.sweep = Some(sweep);
+        game.combat.impact_frame = Some(sweep.frame(0.4));
+        let contact = combat_view(&game);
+        assert!(contact.head.distance(sweep.frame(0.4).eye) < 0.00001);
+        let hands = Hands::load(&mut Vec::new());
+        let v = view(&game, 0.);
+        let item = hands.motion(&game, &v).sword.unwrap();
+        let actual = sweep.world_sample(0.4);
+        assert!(
+            item.p.distance(actual.position) < 0.00001
+                && item.r.abs_diff_eq(actual.rotation, 0.00001)
+        );
+        strike.surface_stop = Some(strike.elapsed);
+        game.combat.active = Some(strike);
+        game.combat.sweep = None;
+        assert!(combat_view(&game).head.distance(contact.head) < 0.00001);
+        let mut previous = combat_view(&game);
+        for tick in 1..=20 {
+            game.combat.active.as_mut().unwrap().elapsed =
+                strike.elapsed + 0.10 * tick as f32 / 20.;
+            let current = combat_view(&game);
+            assert!(
+                current.head.distance(previous.head) < 0.018
+                    && current.rot.angle_between(previous.rot) < 0.03
+            );
+            previous = current;
+        }
+        assert!(
+            previous.head.distance(to.eye) < 0.00001
+                && previous.rot.abs_diff_eq(to.rotation, 0.00001)
+        );
+    }
+    #[test]
+    fn resumed_body_hit_uses_the_shared_gradual_sweep_endpoint() {
+        use end_game_core::{
+            combat::{Strike, StrikeKind},
+            sword::{SwordFrame, SwordSweep},
+        };
+        let hands = Hands::load(&mut Vec::new());
+        let mut game = Dungeon::default();
+        game.stage = 4;
+        let kind = StrikeKind::Cut;
+        let contact_at = kind.contact_time() - 0.01;
+        let mut strike = Strike {
+            elapsed: contact_at,
+            contact_at: Some(contact_at),
+            contact_done: true,
+            ..Strike::new(kind)
+        };
+        let contact = SwordFrame {
+            eye: game.position + Vec3::Y * 1.65 - Vec3::X * 0.18,
+            rotation: Quat::from_rotation_y(-0.30),
+        };
+        game.combat.active = Some(strike);
+        game.combat.impact_frame = Some(contact);
+        let mut previous = contact;
+        for tick in 1..=6 {
+            let start = strike.elapsed;
+            strike.elapsed = contact_at + tick as f32 * end_game_core::STEP;
+            game.combat.active = Some(strike);
+            let target = game.sword_motion_frame();
+            let sweep = SwordSweep {
+                strike,
+                start,
+                end: strike.elapsed,
+                from: previous,
+                to: target,
+                contact_fraction: None,
+            };
+            game.combat.sweep = Some(sweep);
+            let rendered = combat_view(&game);
+            assert!(
+                rendered.head.distance(target.eye) < 0.00001
+                    && rendered.rot.abs_diff_eq(target.rotation, 0.00001)
+            );
+            assert!(
+                rendered.head.distance(previous.eye) < 0.057
+                    && rendered.rot.angle_between(previous.rotation) < 0.094
+            );
+            let pose = hands.motion(&game, &view(&game, 0.)).sword.unwrap();
+            let expected = sweep.world_sample(1.);
+            assert!(
+                pose.p.distance(expected.position) < 0.00001
+                    && pose.r.abs_diff_eq(expected.rotation, 0.00001)
+            );
+            previous = target;
+        }
+        assert!(
+            previous.eye.distance(game.position + Vec3::Y * 1.65) < 0.00001
+                && previous.rotation.abs_diff_eq(Quat::IDENTITY, 0.00001)
+        );
+    }
 }
 pub struct View {
     pub head: Vec3,
@@ -263,6 +492,68 @@ pub struct View {
     pub rot: Quat,
     pub body_rot: Quat,
     pub yaw: f32,
+}
+/// Unshaken eye frame shared with core blade collision during a committed cut.
+pub fn combat_view(game: &Dungeon) -> View {
+    // Contact and catch-up belong to the simulation. Prefer its actual last
+    // sweep endpoint during the active window, including between fixed ticks.
+    let physical = game.sword_motion_frame();
+    let frozen = game
+        .combat
+        .sweep
+        .filter(|s| {
+            game.combat.active.is_some_and(|a| {
+                a.kind == s.strike.kind
+                    && a.elapsed + 0.00001 >= s.start
+                    && a.elapsed <= s.end + 0.00001
+            })
+        })
+        .map(|s| s.frame(s.contact_fraction.unwrap_or(1.)))
+        .unwrap_or(physical);
+    let rot = frozen.rotation;
+    View {
+        head: frozen.eye,
+        forward: rot * Vec3::NEG_Z,
+        right: rot * Vec3::X,
+        up: rot * Vec3::Y,
+        rot,
+        body_rot: rot,
+        yaw: game.yaw,
+    }
+}
+/// Blend visual camera offsets only outside the contact window. A linked cut
+/// retains the physical anchor; a final recovery rejoins the smoothed carry.
+pub fn motion_view(game: &Dungeon, presentation: &View) -> View {
+    use end_game_core::blade::smooth;
+    let weight = if let Some(strike) = game.combat.active {
+        let entry = if strike.previous.is_some() {
+            1.
+        } else {
+            smooth(strike.elapsed / strike.kind.windup_time())
+        };
+        let exit_begin = strike.link.map_or(Some(strike.kind.follow_end()), |link| {
+            link.cancelled_at.map(|at| at.max(strike.kind.follow_end()))
+        });
+        entry
+            * exit_begin.map_or(1., |begin| {
+                1. - smooth((strike.elapsed - begin) / (strike.kind.duration() - begin).max(0.001))
+            })
+    } else if let Some(recovery) = game.combat.recovery {
+        1. - smooth(recovery.elapsed / end_game_core::combat::Recovery::DURATION)
+    } else {
+        0.
+    };
+    let physical = combat_view(game);
+    let rot = presentation.rot.slerp(physical.rot, weight);
+    View {
+        head: presentation.head.lerp(physical.head, weight),
+        forward: rot * Vec3::NEG_Z,
+        right: rot * Vec3::X,
+        up: rot * Vec3::Y,
+        rot,
+        body_rot: presentation.body_rot.slerp(physical.body_rot, weight),
+        yaw: presentation.yaw,
+    }
 }
 pub fn view(game: &Dungeon, wake: f32) -> View {
     let focus = game.interaction.map_or(0.0, |a| a.focus());
@@ -440,6 +731,8 @@ impl Hands {
         }
     }
     pub fn motion(&self, game: &Dungeon, v: &View) -> Motion {
+        let motion_view = motion_view(game, v);
+        let v = &motion_view;
         let bob = (game.time * 1.7).sin() * 0.006;
         let neutral = Quat::from_rotation_y(FRAC_PI_2 - v.yaw);
         let poses = std::array::from_fn(|side| HandPose {

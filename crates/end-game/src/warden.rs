@@ -1,9 +1,9 @@
 //! Articulated prison warden. Every motion is evaluated from the fixed-step AI state.
-use ember_engine::{assets::load_glb, Instance, MeshData};
+use ember_engine::{Instance, MeshData, assets::load_glb};
 use end_game_core::{
-    interaction::ease,
-    warden::{WardenPhase, KNIFE_CONTACT, KNIFE_DURATION, KNIFE_FOLLOW, KNIFE_WINDUP},
     Dungeon,
+    interaction::ease,
+    warden::{KNIFE_CONTACT, KNIFE_DURATION, KNIFE_FOLLOW, KNIFE_WINDUP, WardenPhase},
 };
 use glam::{Quat, Vec3};
 use serde_json::Value;
@@ -175,6 +175,13 @@ impl WardenRig {
         let walking = ai.walk_blend * (1.0 - dead);
         let walk = ai.walk_phase;
         let flinch = ai.flinch_amount();
+        let reaction = ai.reaction_pose().map(|mut r| {
+            if ai.phase == WardenPhase::Dead {
+                r.elapsed += ai.elapsed;
+            }
+            r
+        });
+        let response = super::marks::response(reaction, ai.yaw, 1. - dead);
         let doze = 1.0 - stand;
         let breath = (game.time * 1.35).sin();
         let (anticipation, contact, recovery, attack_weight) =
@@ -202,6 +209,7 @@ impl WardenRig {
             - loaded * 0.015;
         pelvis.z += loaded * 0.018 - driven * 0.040;
         pelvis = pelvis.lerp(Vec3::new(0.0, 0.30, -0.18), dead);
+        pelvis += response.hip;
         joints[0] = Joint {
             p: pelvis,
             r: Quat::from_rotation_y(-walking * walk.sin() * 0.025)
@@ -224,6 +232,9 @@ impl WardenRig {
                 * Quat::from_rotation_y(twist)
                 * Quat::from_rotation_z(walking * walk.sin() * 0.015),
         );
+        let chest_rotation = joints[1].r;
+        joints[1].r *= super::marks::response_rotation(response.torso);
+        let response_rotation = joints[1].r * chest_rotation.conjugate();
         joints[2] = joints[1].child(
             self.parts[2].pivot - self.parts[1].pivot,
             Quat::from_rotation_y(-twist * 0.55)
@@ -234,7 +245,8 @@ impl WardenRig {
             Quat::from_rotation_x(
                 -0.32 * doze - stand * 0.035 + flinch * 0.15 - dead * 0.165
                     + (game.time * 0.78).sin() * 0.026 * doze * (1.0 - dead),
-            ) * Quat::from_rotation_z(0.12 * doze * (1.0 - dead)),
+            ) * Quat::from_rotation_z(0.12 * doze * (1.0 - dead))
+                * super::marks::response_rotation(response.head),
         );
 
         // Boots remain planted throughout the rise. Only a walking swing foot lifts.
@@ -365,6 +377,9 @@ impl WardenRig {
                 },
                 dead,
             );
+            targets[side].p =
+                joints[1].p + response_rotation * (targets[side].p + response.hip - joints[1].p);
+            targets[side].r = response_rotation * targets[side].r;
             let shoulder = joints[1].point(self.parts[upper].pivot - self.parts[1].pivot);
             // Transport an outward bend from a downward reference arm. Unlike
             // a fixed world pole, it cannot become parallel to the arm while a
@@ -522,9 +537,11 @@ mod tests {
         assert_same_pose(&idle, &rig.pose(&game).0);
         game.warden_ai.elapsed = KNIFE_CONTACT;
         let contact = rig.pose(&game).0;
-        assert!(contact[6]
-            .p
-            .abs_diff_eq(Vec3::new(0.02, 1.27, -0.50), 0.0001));
+        assert!(
+            contact[6]
+                .p
+                .abs_diff_eq(Vec3::new(0.02, 1.27, -0.50), 0.0001)
+        );
         for tick in 0..=86 {
             game.warden_ai.elapsed = tick as f32 * end_game_core::STEP;
             let (joints, chains) = rig.pose(&game);
@@ -649,7 +666,13 @@ mod tests {
                         );
                     }
                     for (index, (a, b)) in previous.iter().zip(joints).enumerate() {
-                        assert!(a.p.distance(b.p) < 0.09, "{} jumps at interrupted attack {time}, killed {killed}, tick {tick}: {:?} -> {:?}", NAMES[index], a.p, b.p);
+                        assert!(
+                            a.p.distance(b.p) < 0.09,
+                            "{} jumps at interrupted attack {time}, killed {killed}, tick {tick}: {:?} -> {:?}",
+                            NAMES[index],
+                            a.p,
+                            b.p
+                        );
                     }
                     let socket = joints[6].point(rig.parts[KNIFE].pivot - rig.parts[6].pivot);
                     assert!(socket.distance(joints[KNIFE].p) < 0.0001);
@@ -788,12 +811,76 @@ mod tests {
                 let mut instances = Vec::new();
                 rig.draw(&mut instances, &game);
                 assert_eq!(instances.len(), 20);
-                assert!(instances
-                    .iter()
-                    .all(|p| p.position.is_finite() && p.rot.is_finite()));
-                assert!(instances[CHAIR]
-                    .position
-                    .abs_diff_eq(INITIAL_POSITION, 1e-6));
+                assert!(
+                    instances
+                        .iter()
+                        .all(|p| p.position.is_finite() && p.rot.is_finite())
+                );
+                assert!(
+                    instances[CHAIR]
+                        .position
+                        .abs_diff_eq(INITIAL_POSITION, 1e-6)
+                );
+            }
+        }
+    }
+    #[test]
+    fn anatomical_response_keeps_warden_grips_and_death_origin_continuous() {
+        use end_game_core::{HitReaction, HitZone};
+        let rig = WardenRig::load(&mut Vec::new());
+        for zone in [
+            HitZone::Head,
+            HitZone::LeftTorso,
+            HitZone::RightTorso,
+            HitZone::LeftLeg,
+            HitZone::RightLeg,
+        ] {
+            let mut game = Dungeon::default();
+            game.warden_ai.phase = WardenPhase::Attacking;
+            game.warden_ai.elapsed = KNIFE_WINDUP;
+            let original = rig.pose(&game).0;
+            game.warden_ai.reaction = Some(HitReaction {
+                id: 1,
+                time: 0.,
+                zone,
+                point: Vec3::Y,
+                direction: Vec3::new(-0.68, -0.73, 0.).normalize(),
+                strength: 0.85,
+                elapsed: 0.,
+                origin: [Vec3::ZERO; 5],
+            });
+            let hit = rig.pose(&game).0;
+            for (a, b) in original.iter().zip(hit) {
+                assert!(a.p.distance(b.p) < 0.00001 && a.r.abs_diff_eq(b.r, 0.00001));
+            }
+            for tick in 0..=42 {
+                game.warden_ai.reaction.as_mut().unwrap().elapsed = tick as f32 / 120.;
+                let (joints, chains) = rig.pose(&game);
+                assert!(chains.iter().all(|c| c.reached), "{zone:?} t{tick}");
+                for boot in [9, 16] {
+                    assert!((joints[boot].p.y - rig.parts[boot].pivot.y).abs() < 0.0001);
+                }
+            }
+            game.warden_ai.reaction.as_mut().unwrap().elapsed = 0.06;
+            let before = rig.pose(&game).0;
+            let origin = game.warden_ai.reaction.unwrap().vectors();
+            game.warden_ai.reaction = Some(HitReaction {
+                id: 2,
+                time: 0.06,
+                zone: HitZone::Head,
+                point: Vec3::Y,
+                direction: Vec3::X,
+                strength: 0.85,
+                elapsed: 0.,
+                origin,
+            });
+            game.warden_ai.on_sword_hit(true, true);
+            let after = rig.pose(&game).0;
+            for (a, b) in before.iter().zip(after) {
+                assert!(
+                    a.p.distance(b.p) < 0.00001 && a.r.abs_diff_eq(b.r, 0.00001),
+                    "warden {zone:?} fatal response origin"
+                );
             }
         }
     }

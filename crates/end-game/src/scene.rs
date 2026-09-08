@@ -44,6 +44,7 @@ pub struct Scene {
     castle: super::castle::CastleScene,
     quest: super::quest::QuestScene,
     enemies: super::enemies::EnemyScene,
+    marks: super::marks::Marks,
     oak: u32,
     iron: u32,
     wolf: Model,
@@ -240,12 +241,14 @@ impl Scene {
         let castle = super::castle::CastleScene::build(&mut meshes, 2);
         let quest = super::quest::QuestScene::load(&mut meshes, 2);
         let enemies = super::enemies::EnemyScene::load(&mut meshes);
+        let marks = super::marks::Marks::load(&mut meshes);
         (
             Self {
                 cell,
                 castle,
                 quest,
                 enemies,
+                marks,
                 oak: 1,
                 iron: 2,
                 wolf,
@@ -280,6 +283,7 @@ impl Scene {
         presentation.head += Vec3::Y * camera_lift;
         let head = presentation.head;
         let view = presentation.forward;
+        let hand_view = super::hands::motion_view(game, &presentation);
         let motion = self.hands.motion(game, &presentation);
         let transform_view = game.transformation > 0.0;
         let see_hero = (third_person || transform_view)
@@ -369,6 +373,7 @@ impl Scene {
         self.castle.draw(&mut frame, &self.torch, t);
         self.quest.draw(&mut frame, game);
         self.enemies.draw(&mut frame, game);
+        self.marks.draw_surfaces(&mut frame, game);
         let out = &mut frame.instances;
         if basement {
             self.cell.animate(out, t, game.gate_open);
@@ -555,7 +560,7 @@ impl Scene {
                 );
             }
         } else {
-            self.hands.draw(out, &presentation, &motion);
+            self.hands.draw(out, &hand_view, &motion);
             if let Some(sword) = motion.sword {
                 draw_model(
                     out,
@@ -571,17 +576,33 @@ impl Scene {
         if game.combat.impact_left > 0.0 {
             let age = game.combat.impact_duration() - game.combat.impact_left;
             for i in 0..22u32 {
-                let direction = Vec3::new(
-                    hash(i * 17) * 2.0 - 1.0,
-                    hash(i * 97) * 1.3 + 0.25,
-                    hash(i * 71) * 2.0 - 1.0,
-                )
-                .normalize();
+                let normal = game.combat.impact_normal.try_normalize().unwrap_or(Vec3::Y);
+                let tangent = game
+                    .combat
+                    .impact_tangent
+                    .try_normalize()
+                    .unwrap_or_else(|| normal.any_orthonormal_vector());
+                let direction = (normal * (0.35 + hash(i * 97))
+                    + tangent * (hash(i * 17) * 2.0 - 1.0)
+                    + normal.cross(tangent) * (hash(i * 71) * 2.0 - 1.0))
+                    .normalize();
+                let masonry = matches!(
+                    game.combat.impact_surface,
+                    Some(
+                        end_game_core::layout::Surface::Stone
+                            | end_game_core::layout::Surface::Paving
+                    )
+                );
                 frame.particles.push(Particle {
                     position: game.combat.impact_point
+                        + normal * if masonry { 0.03 } else { 0.005 }
                         + direction * age * (1.1 + hash(i * 39) * 2.2)
                         - Vec3::Y * 4.905 * age * age,
-                    color: Vec3::new(0.95, 0.66 + hash(i) * 0.2, 0.32),
+                    color: if masonry {
+                        Vec3::new(0.47, 0.42, 0.33)
+                    } else {
+                        Vec3::new(0.95, 0.66 + hash(i) * 0.2, 0.32)
+                    },
                     size: Vec2::splat(0.009 + hash(i * 11) * 0.016),
                     opacity: (game.combat.impact_left / game.combat.impact_duration())
                         .clamp(0.0, 1.0)
@@ -607,24 +628,22 @@ impl Scene {
                 });
             }
         }
-        // A sparse, short-lived steel-colored trail makes the fast cut readable.
+        // Sample the actual within-tick world sweep, including player yaw and
+        // translation. Historical local poses under the latest yaw hide turns.
         if !see_hero {
-            if let Some(strike) = game.combat.active {
-                if strike.elapsed >= strike.kind.windup_time()
-                    && strike.elapsed < strike.kind.follow_end() + 0.045
+            if let (Some(strike), Some(sweep)) = (game.combat.active, game.combat.sweep) {
+                if strike.surface_stop.is_none()
+                    && !(strike.landing_wait && strike.elapsed >= strike.kind.follow_end())
                 {
-                    for age in [0.02, 0.04, 0.06] {
-                        let pose = super::sword_motion::sample_strike(
-                            strike,
-                            (strike.elapsed - age).max(0.0),
-                        );
+                    let end = sweep.contact_fraction.unwrap_or(1.);
+                    for fraction in [0.0, 0.33, 0.66] {
+                        let pose = sweep.world_sample(fraction * end);
                         for i in 1..=7 {
-                            let point = pose.point(Vec3::X * (i as f32 * 0.24));
                             frame.particles.push(Particle {
-                                position: head + presentation.rot * point,
+                                position: pose.point(Vec3::X * (i as f32 * 0.24)),
                                 color: Vec3::new(0.49, 0.55, 0.60),
                                 size: Vec2::splat(0.028),
-                                opacity: (1.0 - age / 0.08) * 0.12,
+                                opacity: 0.045 + fraction * 0.055,
                             });
                         }
                     }
@@ -693,7 +712,7 @@ impl Scene {
 mod tests {
     use super::*;
     #[test]
-    fn generated_props_decode_and_representative_frames_fit_the_v10_budget() {
+    fn generated_props_decode_and_representative_frames_fit_the_v11_budget() {
         let (scene, meshes) = Scene::build();
         for model in std::iter::once(&scene.cot).chain(scene.props.iter().map(|p| &p.model)) {
             for (id, _, _) in &model.ids {
@@ -772,7 +791,7 @@ mod tests {
                     );
                 }
             }
-            eprintln!("V10 position {position:?}: maximum {local_max} submitted triangles");
+            eprintln!("V11 position {position:?}: maximum {local_max} submitted triangles");
             maximum = maximum.max(local_max);
         }
         for id in 0..9 {
@@ -799,8 +818,25 @@ mod tests {
             assert!(frame.particles.iter().all(|p| p.position.is_finite()));
             maximum = maximum.max(triangles);
         }
+        // Even a saturated surface ring plus one attached mark on every body
+        // remains inside the submitted budget; each stamp is only eight tris.
+        let mut saturated = Frame::default();
+        for i in 0..74 {
+            scene.marks.stamp(
+                &mut saturated,
+                Vec3::new(i as f32 * 0.01, 0., 0.),
+                Vec3::Y,
+                Vec3::X,
+                0.25,
+                0.015,
+                false,
+            );
+        }
+        let mark_triangles = count(&saturated);
+        assert_eq!(mark_triangles, 74 * 8);
+        maximum += mark_triangles;
         eprintln!(
-            "V10 maximum frame triangles: {maximum}; unique mesh triangles: {}; texture bytes incl. mip estimate: {}",
+            "V11 maximum frame triangles: {maximum}; unique mesh triangles: {}; texture bytes incl. mip estimate: {}",
             meshes.iter().map(|m| m.vertices.len() / 3).sum::<usize>(),
             textures * 4 / 3
         );

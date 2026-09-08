@@ -26,6 +26,8 @@ pub enum WardenPhase {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Warden {
+    pub reaction: Option<crate::HitReaction>,
+    death_reaction: Option<crate::HitReaction>,
     pub phase: WardenPhase,
     /// Seconds in the current phase, excluding pause and global hitstop.
     pub elapsed: f32,
@@ -51,6 +53,8 @@ pub struct Warden {
 impl Default for Warden {
     fn default() -> Self {
         Self {
+            reaction: None,
+            death_reaction: None,
             phase: WardenPhase::Sleeping,
             elapsed: 0.0,
             yaw: std::f32::consts::PI,
@@ -75,6 +79,13 @@ fn ease(start: f32, end: f32, time: f32) -> f32 {
 }
 
 impl Warden {
+    pub fn reaction_pose(&self) -> Option<crate::HitReaction> {
+        if self.phase == WardenPhase::Dead {
+            self.death_reaction
+        } else {
+            self.reaction
+        }
+    }
     pub fn stand_amount(&self) -> f32 {
         match self.phase {
             WardenPhase::Sleeping => 0.0,
@@ -150,6 +161,7 @@ impl Warden {
         if self.phase != WardenPhase::Dead {
             let attack = self.attack_pose();
             self.death_stand = self.stand_amount();
+            self.death_reaction = self.reaction;
             self.death_knife = self.knife_draw();
             self.enter(WardenPhase::Dead);
             self.interrupted_attack = attack;
@@ -212,6 +224,9 @@ impl Warden {
     /// Advance only on an unfrozen simulation tick. True requests exactly one
     /// world contact sample; a miss is consumed just like a successful contact.
     pub(crate) fn advance(&mut self) -> bool {
+        if let Some(r) = &mut self.reaction {
+            r.elapsed += STEP;
+        }
         self.elapsed += STEP;
         self.walk_blend = (self.walk_blend - STEP * 5.0).max(0.0);
         self.hit_left = (self.hit_left - STEP).max(0.0);

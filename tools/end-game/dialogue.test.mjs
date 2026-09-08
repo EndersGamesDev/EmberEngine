@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {WardenDialogue, VoiceAudio, LINES} from '../../web/games/end-game/v10/dialogue.js';
+import {WardenDialogue, VoiceAudio, LINES} from '../../web/games/end-game/v11/dialogue.js';
 
 function fixture(ready=true) {
   const calls=[], captions=[];

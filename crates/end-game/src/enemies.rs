@@ -19,6 +19,7 @@ use end_game_core::{
 };
 use glam::{Mat3, Quat, Vec2, Vec3};
 use serde_json::Value;
+use std::sync::Mutex;
 
 const BODY: [&str; 18] = [
     "pelvis",
@@ -91,6 +92,7 @@ struct Part {
     mesh: u32,
     pivot: Vec3,
     floor_points: Vec<Vec3>,
+    triangles: Vec<[Vec3; 3]>,
 }
 struct Weapon {
     name: String,
@@ -107,6 +109,18 @@ struct Rig {
 }
 pub struct EnemyScene {
     rigs: [Rig; 3],
+    marks: super::marks::Marks,
+    armor_marks: Mutex<Vec<ArmorMark>>,
+}
+#[derive(Clone, Copy, Debug)]
+struct ArmorMark {
+    life: u32,
+    enemy: usize,
+    event: u32,
+    part: usize,
+    point: Vec3,
+    normal: Vec3,
+    tangent: Vec3,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -359,11 +373,37 @@ impl Rig {
                 } else {
                     Vec::new()
                 };
+                let triangles = if matches!(
+                    *suffix,
+                    "head"
+                        | "torso"
+                        | "thigh_l"
+                        | "thigh_r"
+                        | "shin_l"
+                        | "shin_r"
+                        | "coat_l"
+                        | "coat_r"
+                ) {
+                    part.mesh
+                        .vertices
+                        .chunks_exact(3)
+                        .map(|v| {
+                            [
+                                Vec3::from_array(v[0].pos),
+                                Vec3::from_array(v[1].pos),
+                                Vec3::from_array(v[2].pos),
+                            ]
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 meshes.push(part.mesh);
                 Part {
                     mesh: meshes.len() as u32,
                     pivot: vec(&row["pivot"]),
                     floor_points,
+                    triangles,
                 }
             })
             .collect();
@@ -413,12 +453,25 @@ impl Rig {
         });
         let heavy = matches!(e.kind, EnemyKind::HollowAxeKnight | EnemyKind::Cyclops);
         let flinch = e.flinch_amount() * 0.045;
+        let reaction = if e.phase == EnemyPhase::Dead {
+            e.interrupted
+                .and_then(|p| p.reaction)
+                .or(e.reaction)
+                .map(|mut r| {
+                    r.elapsed += e.elapsed;
+                    r
+                })
+        } else {
+            e.reaction
+        };
+        let response = super::marks::response(reaction, e.yaw, 1. - dead);
         let mut pelvis = Vec3::new(
             walking * walk.sin() * 0.02,
             0.978 - walking * (0.055 + 0.004 * (walk * 2.).cos()) + breath * 0.002 - loaded * 0.018,
             loaded * 0.02 - driven * if heavy { 0.055 } else { 0.035 },
         );
         pelvis = pelvis.lerp(Vec3::new(0., 0.40, -0.15), dead);
+        pelvis += response.hip;
         let mut joints = [Joint::IDENTITY; 18];
         joints[0] = Joint {
             p: pelvis,
@@ -435,13 +488,17 @@ impl Rig {
             self.parts[1].pivot - self.parts[0].pivot,
             Quat::from_rotation_x(lean) * Quat::from_rotation_y(twist),
         );
+        let chest_rotation = joints[1].r;
+        joints[1].r *= super::marks::response_rotation(response.torso);
+        let response_rotation = joints[1].r * chest_rotation.conjugate();
         joints[2] = joints[1].child(
             self.parts[2].pivot - self.parts[1].pivot,
             Quat::from_rotation_y(-twist * 0.55) * Quat::from_rotation_x(0.03 - dead * 0.30),
         );
         joints[3] = joints[2].child(
             self.parts[3].pivot - self.parts[2].pivot,
-            Quat::from_rotation_x(-0.02 + flinch - dead * 0.15),
+            Quat::from_rotation_x(-0.02 + flinch - dead * 0.15)
+                * super::marks::response_rotation(response.head),
         );
         let mut chains = [Chain {
             middle: Vec3::ZERO,
@@ -512,6 +569,8 @@ impl Rig {
         let dropped = Grip::new(Vec3::new(0.10, drop_height, -0.43), 0., 0., 0.);
         grip = grip.mix(dropped, dead);
         let mut weapon = grip.joint();
+        weapon.p = joints[1].p + response_rotation * (weapon.p + response.hip - joints[1].p);
+        weapon.r = response_rotation * weapon.r;
         if e.phase == EnemyPhase::Dead {
             if let Some(w) = self.weapon(e.kind) {
                 let bottom = w
@@ -550,6 +609,10 @@ impl Rig {
                 r: Quat::from_rotation_x(0.30 * (1. - dead)),
             }
         };
+        if self.weapon(e.kind).and_then(|w| w.support).is_none() {
+            left.p = joints[1].p + response_rotation * (left.p + response.hip - joints[1].p);
+            left.r = response_rotation * left.r;
+        }
         // As the body collapses the support hand releases, while the primary
         // wrist retains the weapon through the fall without a detached prop.
         let mut released = joints[1].point(self.parts[11].pivot - self.parts[1].pivot)
@@ -630,7 +693,11 @@ impl EnemyScene {
             }]
             .add_weapon(meshes, bytes, row);
         }
-        Self { rigs }
+        Self {
+            rigs,
+            marks: super::marks::Marks::load(meshes),
+            armor_marks: Mutex::new(Vec::new()),
+        }
     }
     fn rig(&self, kind: EnemyKind) -> &Rig {
         &self.rigs[match kind {
@@ -639,7 +706,98 @@ impl EnemyScene {
             EnemyKind::Cyclops => 2,
         }]
     }
+    fn armor_mark(
+        &self,
+        frame: &mut Frame,
+        game: &Dungeon,
+        e: &Enemy,
+        rig: &Rig,
+        joints: &[Joint; 18],
+    ) {
+        let Some(hit) = e.reaction else {
+            return;
+        };
+        let root = Quat::from_rotation_y(-e.yaw);
+        let scale = e.kind.height() / BIND_HEIGHT;
+        let mut marks = self.armor_marks.lock().expect("armor mark cache");
+        marks.retain(|m| m.life == game.dialogue.life);
+        let existing = marks.iter().position(|m| m.enemy == e.id);
+        if existing.is_none_or(|i| marks[i].event != hit.id) {
+            let indices: &[usize] = match hit.zone {
+                end_game_core::HitZone::Head => &[3],
+                end_game_core::HitZone::LeftTorso | end_game_core::HitZone::RightTorso => &[1],
+                end_game_core::HitZone::LeftLeg => &[14, 15, 17],
+                end_game_core::HitZone::RightLeg => &[7, 8, 10],
+            };
+            let body_point = root.conjugate() * (hit.point - e.position) / scale;
+            let body_motion = root.conjugate() * hit.direction;
+            let mut closest: Option<(f32, ArmorMark)> = None;
+            for &part in indices {
+                let joint = joints[part];
+                let query = joint.r.conjugate() * (body_point - joint.p) + rig.parts[part].pivot;
+                for &[a, b, c] in &rig.parts[part].triangles {
+                    let point = super::marks::closest_triangle(query, a, b, c);
+                    let distance = point.distance_squared(query);
+                    if closest.as_ref().is_some_and(|(d, _)| *d <= distance) {
+                        continue;
+                    }
+                    let mut normal = (b - a).cross(c - a).normalize_or_zero();
+                    if normal.length_squared() < 0.9 {
+                        continue;
+                    }
+                    // Converted surfaces can be double-sided. Face the actual
+                    // incoming contact rather than relying on imported winding.
+                    if normal.dot(query - point) < 0. {
+                        normal = -normal;
+                    }
+                    let direction = joint.r.conjugate() * body_motion;
+                    let tangent = (direction - normal * direction.dot(normal))
+                        .try_normalize()
+                        .unwrap_or_else(|| normal.any_orthonormal_vector());
+                    closest = Some((
+                        distance,
+                        ArmorMark {
+                            life: game.dialogue.life,
+                            enemy: e.id,
+                            event: hit.id,
+                            part,
+                            point: point - rig.parts[part].pivot,
+                            normal,
+                            tangent,
+                        },
+                    ));
+                }
+            }
+            if let Some((distance, mark)) = closest.filter(|(d, _)| *d < 0.36) {
+                let _ = distance;
+                if let Some(i) = existing {
+                    marks[i] = mark;
+                } else if marks.len() < 16 {
+                    marks.push(mark);
+                }
+            }
+        }
+        if let Some(mark) = marks.iter().find(|m| m.enemy == e.id && m.event == hit.id) {
+            let joint = joints[mark.part];
+            let normal = root * joint.r * mark.normal;
+            let tangent = root * joint.r * mark.tangent;
+            let point = e.position + root * joint.point(mark.point) * scale + normal * 0.003;
+            self.marks.stamp(
+                frame,
+                point,
+                normal,
+                tangent,
+                0.065 * scale,
+                0.009 * scale,
+                e.kind != EnemyKind::Cyclops,
+            );
+        }
+    }
     pub fn draw(&self, frame: &mut Frame, game: &Dungeon) {
+        self.armor_marks
+            .lock()
+            .expect("armor mark cache")
+            .retain(|m| m.life == game.dialogue.life);
         let eye = frame.camera.eye;
         let forward = (frame.camera.target - eye).normalize_or_zero();
         for enemy in &game.enemies {
@@ -683,6 +841,7 @@ impl EnemyScene {
                         ),
                 );
             }
+            self.armor_mark(frame, game, enemy, rig, &joints);
             if let Some(part) = rig.weapon(enemy.kind) {
                 let p = enemy.position + root * weapon.p * scale;
                 let r = root * weapon.r;
@@ -812,8 +971,9 @@ mod tests {
     #[test]
     fn final_rigs_register_once_and_instances_reuse_textured_meshes() {
         let (scene, meshes) = fixture();
-        assert_eq!(meshes.len(), 3 * 18 + 4);
-        for mesh in meshes {
+        assert_eq!(meshes.len(), 3 * 18 + 4 + 1);
+        assert!(meshes.last().unwrap().texture.is_none());
+        for mesh in &meshes[..3 * 18 + 4] {
             let texture = mesh.texture.as_ref().expect("decoded RGB8 generated atlas");
             assert_eq!(
                 texture.rgba8.len(),
@@ -1151,5 +1311,155 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn five_zone_reactions_keep_loaded_rigs_grounded_and_interrupt_continuously() {
+        use end_game_core::{HitReaction, HitZone};
+        let (scene, meshes) = fixture();
+        for kind in [
+            EnemyKind::SwordSoldier,
+            EnemyKind::SpearSoldier,
+            EnemyKind::HollowAxeKnight,
+            EnemyKind::Cyclops,
+        ] {
+            let rig = scene.rig(kind);
+            for zone in [
+                HitZone::Head,
+                HitZone::LeftTorso,
+                HitZone::RightTorso,
+                HitZone::LeftLeg,
+                HitZone::RightLeg,
+            ] {
+                for direction in [
+                    Vec3::new(-0.68, -0.73, 0.).normalize(),
+                    Vec3::X,
+                    Vec3::NEG_Y,
+                ] {
+                    let mut e = Enemy::new(0, kind, Vec3::ZERO);
+                    e.yaw = 0.;
+                    e.phase = EnemyPhase::Attacking;
+                    e.elapsed = e.attack.windup_time();
+                    let neutral = rig.pose(&e, 0.).0;
+                    e.reaction = Some(HitReaction {
+                        id: 1,
+                        time: 0.,
+                        zone,
+                        point: Vec3::Y,
+                        direction,
+                        strength: 0.85,
+                        elapsed: 0.,
+                        origin: [Vec3::ZERO; 5],
+                    });
+                    let zero = rig.pose(&e, 0.).0;
+                    for (a, b) in neutral.iter().zip(zero) {
+                        assert!(a.p.distance(b.p) < 0.00001 && a.r.abs_diff_eq(b.r, 0.00001));
+                    }
+                    for tick in 0..=42 {
+                        e.reaction.as_mut().unwrap().elapsed = tick as f32 / 120.;
+                        let (joints, weapon, chains) = rig.pose(&e, 0.);
+                        assert!(
+                            chains.iter().all(|c| c.reached),
+                            "{kind:?} {zone:?} reaction{tick}: {chains:?}"
+                        );
+                        geometry_above_floor(
+                            rig,
+                            meshes,
+                            &joints,
+                            &format!("{kind:?} {zone:?} reaction{tick}"),
+                        );
+                        assert!(weapon.p.distance(joints[6].point(HAND_SOCKET)) < 0.00001);
+                    }
+                    e.reaction.as_mut().unwrap().elapsed = 0.06;
+                    let before = rig.pose(&e, 0.).0;
+                    let origin = e.reaction.unwrap().vectors();
+                    e.reaction = Some(HitReaction {
+                        id: 2,
+                        time: 0.06,
+                        zone: HitZone::Head,
+                        point: Vec3::Y,
+                        direction: Vec3::X,
+                        strength: 0.85,
+                        elapsed: 0.,
+                        origin,
+                    });
+                    e.take_hit(1000., true);
+                    let after = rig.pose(&e, 0.).0;
+                    for (a, b) in before.iter().zip(after) {
+                        assert!(
+                            a.p.distance(b.p) < 0.00001 && a.r.abs_diff_eq(b.r, 0.00001),
+                            "{kind:?} {zone:?} interrupted response"
+                        );
+                    }
+                    for tick in 0..=90 {
+                        e.elapsed = tick as f32 / 60.;
+                        let (joints, _, chains) = rig.pose(&e, 0.);
+                        assert!(
+                            chains.iter().all(|c| c.reached),
+                            "{kind:?} reaction death{tick}"
+                        );
+                        geometry_above_floor(
+                            rig,
+                            meshes,
+                            &joints,
+                            &format!("{kind:?} {zone:?} response collapse{tick}"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn armor_stamp_projects_onto_loaded_geometry_and_follows_its_owner() {
+        use end_game_core::{HitReaction, HitZone};
+        let mut meshes = Vec::new();
+        let scene = EnemyScene::load(&mut meshes);
+        let mark_mesh = meshes.len() as u32;
+        let mut game = Dungeon::default();
+        let mut enemy = Enemy::new(0, EnemyKind::SwordSoldier, Vec3::ZERO);
+        enemy.yaw = 0.;
+        enemy.reaction = Some(HitReaction {
+            id: 1,
+            time: 0.,
+            zone: HitZone::Head,
+            point: Vec3::new(0., 1.7, -0.25),
+            direction: Vec3::X,
+            strength: 0.8,
+            elapsed: 0.,
+            origin: [Vec3::ZERO; 5],
+        });
+        game.enemies = vec![enemy];
+        let mut frame = Frame::default();
+        frame.camera.eye = Vec3::new(0., 1.5, 4.);
+        frame.camera.target = Vec3::Y;
+        scene.draw(&mut frame, &game);
+        let before: Vec<_> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == mark_mesh)
+            .map(|i| i.position)
+            .collect();
+        assert_eq!(before.len(), 2);
+        let cached = scene.armor_marks.lock().unwrap()[0];
+        assert_eq!(cached.part, 3);
+        assert!(cached.point.is_finite() && cached.normal.is_normalized());
+        game.enemies[0].position += Vec3::X * 1.2;
+        frame.instances.clear();
+        scene.draw(&mut frame, &game);
+        let after: Vec<_> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == mark_mesh)
+            .map(|i| i.position)
+            .collect();
+        for (a, b) in before.into_iter().zip(after) {
+            assert!((b - a).distance(Vec3::X * 1.2) < 0.00001);
+        }
+        assert_eq!(scene.armor_marks.lock().unwrap().len(), 1);
+        game.dialogue.life += 1;
+        game.enemies[0].reaction = None;
+        frame.instances.clear();
+        scene.draw(&mut frame, &game);
+        assert!(scene.armor_marks.lock().unwrap().is_empty());
+        assert!(!frame.instances.iter().any(|i| i.mesh == mark_mesh));
     }
 }

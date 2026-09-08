@@ -151,6 +151,7 @@ impl EnemyAttack {
 
 #[derive(Clone, Copy, Debug)]
 pub struct EnemyPose {
+    pub reaction: Option<crate::HitReaction>,
     pub phase: EnemyPhase,
     pub elapsed: f32,
     pub attack: EnemyAttack,
@@ -162,6 +163,7 @@ pub struct EnemyPose {
 }
 #[derive(Clone, Debug)]
 pub struct Enemy {
+    pub reaction: Option<crate::HitReaction>,
     pub id: usize,
     pub kind: EnemyKind,
     pub position: Vec3,
@@ -189,6 +191,7 @@ pub struct Enemy {
 impl Enemy {
     pub fn new(id: usize, kind: EnemyKind, position: Vec3) -> Self {
         Self {
+            reaction: None,
             id,
             kind,
             position,
@@ -258,6 +261,7 @@ impl Enemy {
         let (attack, attack_time, attack_weight) =
             self.attack_pose().unwrap_or((self.attack, 0., 0.));
         EnemyPose {
+            reaction: self.reaction,
             phase: self.phase,
             elapsed: self.elapsed,
             attack,
@@ -475,47 +479,20 @@ impl Dungeon {
     pub fn defeated_count(&self) -> u32 {
         self.enemies.iter().filter(|e| !e.alive()).count() as u32
     }
-    pub(crate) fn castle_sword_contact(&mut self, strike: StrikeKind) -> bool {
-        if self.stage < 5 {
-            return false;
-        }
-        let gates = [self.exit_gate_bounds(), self.quest.gate_bounds()];
-        let eye = self.position + Vec3::Y * 1.1;
-        let target = self
-            .enemies
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                let d = e.position - self.position;
-                e.alive()
-                    && d.y.abs() < 1.35
-                    && Vec2::new(d.x, d.z).length() < 2.7 + e.kind.radius() * 0.25
-                    && self
-                        .forward()
-                        .dot(Vec3::new(d.x, 0., d.z).normalize_or_zero())
-                        > 0.15
-                    && line_clear(
-                        eye,
-                        e.position + Vec3::Y * e.kind.height().min(1.5) * 0.7,
-                        &gates,
-                    )
-            })
-            .min_by(|(_, a), (_, b)| {
-                a.position
-                    .distance_squared(self.position)
-                    .total_cmp(&b.position.distance_squared(self.position))
-            })
-            .map(|(i, _)| i);
-        let Some(i) = target else {
-            return false;
-        };
+    pub(crate) fn apply_enemy_sword_hit(
+        &mut self,
+        i: usize,
+        strike: StrikeKind,
+        point: Vec3,
+        reaction: crate::HitReaction,
+    ) {
         let e = &mut self.enemies[i];
         let was_phase_two = e.phase_two;
+        e.reaction = Some(reaction);
         e.take_hit(
             strike.damage() * if self.werewolf { 1.25 } else { 1. },
             strike.heavy(),
         );
-        let point = e.position + Vec3::Y * e.kind.height().min(1.6) * 0.7;
         let dead = !e.alive();
         let boss = e.kind == EnemyKind::Cyclops;
         if boss && e.health > 0. && e.health <= e.max_health * 0.5 {
@@ -549,7 +526,6 @@ impl Dungeon {
                 "Your blade finds its mark."
             });
         }
-        true
     }
 
     pub(crate) fn tick_castle_enemies(&mut self) {
@@ -573,6 +549,9 @@ impl Dungeon {
         for offset in 0..len {
             let i = (start_turn + offset) % len;
             let e = &mut self.enemies[i];
+            if let Some(r) = &mut e.reaction {
+                r.elapsed += STEP;
+            }
             e.elapsed += STEP;
             e.flinch_left = (e.flinch_left - STEP).max(0.);
             e.cooldown = (e.cooldown - STEP).max(0.);

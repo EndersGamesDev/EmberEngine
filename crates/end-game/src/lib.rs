@@ -1,9 +1,12 @@
-//! End Game v10: a single-player Ember dungeon, native and WASM.
+//! End Game v11: a single-player Ember dungeon, native and WASM.
 mod camera;
+#[cfg(not(target_arch = "wasm32"))]
+mod capture;
 mod castle;
 mod cell;
 mod enemies;
 mod hands;
+mod marks;
 mod quest;
 mod scene;
 mod sword_motion;
@@ -43,11 +46,52 @@ pub struct Game {
     stair_eye: camera::StairEye,
 }
 
+/// Project in vertical-FOV units; the shell applies its current viewport aspect.
+fn aim_projection(camera: &ember_engine::Camera, point: glam::Vec3) -> Option<Vec2> {
+    let forward = (camera.target - camera.eye).try_normalize()?;
+    let right = forward.cross(glam::Vec3::Y).try_normalize()?;
+    let up = right.cross(forward);
+    let delta = point - camera.eye;
+    let depth = delta.dot(forward);
+    if depth <= 0.1 {
+        return None;
+    }
+    let scale = depth * (camera.fov_y_deg.to_radians() * 0.5).tan();
+    let projected = Vec2::new(delta.dot(right), delta.dot(up)) / scale;
+    projected.is_finite().then_some(projected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ember_engine::PadState;
     use end_game_core::StrikeKind;
+
+    #[test]
+    fn aim_marker_matches_renderer_projection_in_both_camera_modes() {
+        let mut g = game();
+        g.sim.stage = 5;
+        g.sim.position = glam::Vec3::new(0.0, 6.0, -70.0);
+        g.sim.yaw = 0.4;
+        g.sim.pitch = -0.2;
+        g.sim.combat.impact_left = 0.15;
+        g.sim.combat.impact_strength = 0.7;
+        let target = g.sim.sword_aim_point();
+        for third_person in [false, true] {
+            let frame = g
+                .scene
+                .frame_with_camera_lift(&g.sim, third_person, 0.0, -0.2);
+            let projected = aim_projection(&frame.camera, target).unwrap();
+            for aspect in [9.0 / 16.0, 16.0 / 9.0, 32.0 / 9.0] {
+                let clip = frame.camera.view_proj(aspect) * target.extend(1.0);
+                let ndc = clip.truncate() / clip.w;
+                assert!((projected.x / aspect - ndc.x).abs() < 0.0001);
+                assert!((projected.y - ndc.y).abs() < 0.0001);
+            }
+            let behind = frame.camera.eye - (frame.camera.target - frame.camera.eye);
+            assert!(aim_projection(&frame.camera, behind).is_none());
+        }
+    }
 
     fn game() -> Game {
         UI.with(|u| *u.borrow_mut() = Ui::default());
@@ -354,15 +398,6 @@ mod tests {
                 &[],
                 (0.0, 0.0),
                 Some(PadState {
-                    buttons: PadButton::RT.mask(),
-                    ..PadState::default()
-                }),
-            ),
-            InputState::from_parts(
-                &[],
-                &[],
-                (0.0, 0.0),
-                Some(PadState {
                     buttons: PadButton::RB.mask(),
                     ..PadState::default()
                 }),
@@ -380,6 +415,101 @@ mod tests {
             g.update(&held, STEP);
             assert_eq!(g.sim.combat.swing_event, 2);
             assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Cut);
+        }
+    }
+
+    #[test]
+    fn heavy_input_is_distinct_counted_once_and_preserved_before_the_next_tick() {
+        for input in [
+            InputState::from_parts(&[KeyCode::KeyR], &[], (0.0, 0.0), None),
+            InputState::from_parts(&[], &[MouseButton::Middle], (0.0, 0.0), None),
+            InputState::from_parts(
+                &[],
+                &[],
+                (0.0, 0.0),
+                Some(PadState {
+                    buttons: PadButton::RT.mask(),
+                    ..PadState::default()
+                }),
+            ),
+        ] {
+            let mut g = combat_game();
+            g.update(&input, STEP * 0.2);
+            g.update(&InputState::default(), STEP * 0.2);
+            assert!(g.sim.combat.active.is_none());
+            assert_eq!(UI.with(|u| u.borrow().actions & 64), 64);
+            g.update(&InputState::default(), STEP);
+            assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Overhead);
+            assert_eq!(g.sim.combat.swing_event, 1);
+            observe_strikes(&mut g, &input, 30);
+            assert_eq!(g.sim.combat.swing_event, 1);
+            g.update(&InputState::default(), STEP);
+            g.update(&input, STEP);
+            assert_eq!(g.sim.combat.swing_event, 2);
+        }
+    }
+
+    #[test]
+    fn heavy_action_wins_light_batch_and_jump_heavy_is_a_separate_animation() {
+        let mut g = combat_game();
+        UI.with(|u| {
+            let mut ui = u.borrow_mut();
+            ui.actions = 64;
+            ui.attacks = 3;
+        });
+        g.update(&InputState::default(), STEP);
+        assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Overhead);
+        assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+        assert_eq!(g.sim.combat.queued_count(), 0);
+        observe_strikes(&mut g, &InputState::default(), 30);
+        assert_eq!(g.sim.combat.swing_event, 1);
+
+        let mut jumping = combat_game();
+        UI.with(|u| u.borrow_mut().actions = 4 | 64);
+        jumping.update(&InputState::default(), STEP);
+        assert!(!jumping.sim.grounded);
+        assert_eq!(
+            jumping.sim.combat.active.unwrap().kind,
+            StrikeKind::JumpHeavy
+        );
+        let state: serde_json::Value = HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(
+            state["combat"]["active"]["kind"],
+            StrikeKind::JumpHeavy.label()
+        );
+    }
+
+    #[test]
+    fn guard_and_pause_discard_heavy_edges_without_replaying_a_held_trigger() {
+        for pause in [false, true] {
+            let mut g = combat_game();
+            let held = InputState::from_parts(
+                &[],
+                &[],
+                (0.0, 0.0),
+                Some(PadState {
+                    buttons: PadButton::RT.mask(),
+                    ..PadState::default()
+                }),
+            );
+            UI.with(|u| {
+                let mut ui = u.borrow_mut();
+                ui.actions = 64;
+                ui.held = if pause { 0 } else { 4 };
+                ui.paused = pause;
+            });
+            g.update(&held, STEP);
+            assert!(g.sim.combat.active.is_none());
+            UI.with(|u| {
+                let mut ui = u.borrow_mut();
+                ui.paused = false;
+                ui.held = 0;
+            });
+            observe_strikes(&mut g, &held, 5);
+            assert!(g.sim.combat.active.is_none());
+            g.update(&InputState::default(), STEP);
+            g.update(&held, STEP);
+            assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Overhead);
         }
     }
 
@@ -408,7 +538,9 @@ mod tests {
     #[test]
     fn combat_input_pause_freezes_hitstop_discards_new_taps_and_resumes_existing_queue() {
         let mut g = combat_game();
-        g.sim.position = glam::Vec3::new(-2.9, 0.0, -1.5);
+        g.sim.position = glam::Vec3::new(0.0, 0.0, -3.0);
+        g.sim.warden = Vec2::new(0.0, -4.8);
+        g.sim.gate_open = 1.0;
         g.sim.warden_health = 100.0;
         UI.with(|u| u.borrow_mut().attacks = 2);
         g.update(&InputState::default(), STEP * 2.0);
@@ -470,7 +602,9 @@ mod tests {
     #[test]
     fn combat_input_hitstop_freezes_look_without_discarding_buffered_edges() {
         let mut g = combat_game();
-        g.sim.position = glam::Vec3::new(-2.9, 0.0, -1.5);
+        g.sim.position = glam::Vec3::new(0.0, 0.0, -3.0);
+        g.sim.warden = Vec2::new(0.0, -4.8);
+        g.sim.gate_open = 1.0;
         g.sim.warden_health = 100.0;
         UI.with(|u| u.borrow_mut().attacks = 1);
         for _ in 0..30 {
@@ -489,7 +623,7 @@ mod tests {
             (180.0, -90.0),
             Some(PadState {
                 right: [0.8, 0.6],
-                buttons: PadButton::RT.mask(),
+                buttons: PadButton::RB.mask(),
                 ..PadState::default()
             }),
         );
@@ -498,20 +632,19 @@ mod tests {
             u.look = Vec2::new(110.0, -90.0);
             u.attacks = 1;
         });
-        // The touch edge and new trigger edge arrive together. One enters the
+        // The touch edge and new shoulder edge arrive together. One enters the
         // core this tick; the other must survive until the next frozen tick.
+        // This physical contact is past the quick-combo window, so it selects
+        // the delayed overhead branch; another tap cannot extend that branch.
         g.update(&look_and_attack, STEP);
         assert_eq!((g.sim.yaw, g.sim.pitch), angles);
         assert_eq!(g.sim.combat.active, strike);
-        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Overhead), None]);
         assert_eq!(UI.with(|u| u.borrow().attacks), 1);
         g.update(&look_and_attack, STEP);
         assert_eq!((g.sim.yaw, g.sim.pitch), angles);
         assert_eq!(g.sim.combat.active, strike);
-        assert_eq!(
-            g.sim.combat.queued(),
-            [Some(StrikeKind::Backhand), Some(StrikeKind::Finisher)]
-        );
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Overhead), None]);
         assert_eq!(UI.with(|u| u.borrow().attacks), 0);
         while g.sim.combat.hitstop_left > 0.0 {
             g.update(&look_and_attack, STEP);
@@ -521,7 +654,7 @@ mod tests {
         g.update(&look_and_attack, STEP);
         assert_ne!((g.sim.yaw, g.sim.pitch), angles);
         assert!(g.sim.combat.active.unwrap().elapsed > strike.unwrap().elapsed);
-        assert_eq!(g.sim.combat.queued_count(), 2);
+        assert_eq!(g.sim.combat.queued_count(), 1);
     }
 
     #[test]
@@ -750,6 +883,7 @@ pub fn run() {
                     game.sim.enemies.clear();
                 }
             }
+            Ok("sword-hit") => capture::sword_hit(&mut game),
             Ok("guard") => {
                 use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
                 game.sim.stage = 4;
@@ -881,6 +1015,7 @@ pub fn run() {
                     "finisher" => Some(StrikeKind::Finisher),
                     "overhead" => Some(StrikeKind::Overhead),
                     "rising" => Some(StrikeKind::Rising),
+                    "jump-heavy" => Some(StrikeKind::JumpHeavy),
                     _ => None,
                 };
                 let kind = std::env::var("END_GAME_STRIKE")
@@ -919,6 +1054,17 @@ pub fn run() {
                         cancelled_at: None,
                     });
                 game.sim.combat.active = Some(strike);
+                if kind == StrikeKind::JumpHeavy {
+                    game.sim.position.y = std::env::var("END_GAME_AIR_HEIGHT")
+                        .ok()
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.75)
+                        .max(0.0);
+                    game.sim.grounded = game.sim.position.y < 0.001;
+                    game.sim.combat.active.as_mut().unwrap().landing_wait =
+                        std::env::var("END_GAME_LANDING_WAIT").as_deref() == Ok("1");
+                }
                 if std::env::var("END_GAME_IMPACT").as_deref() == Ok("1") {
                     game.sim.combat.impact_left = if kind.heavy() { 0.32 } else { 0.22 };
                     game.sim.combat.impact_strength = if kind.heavy() { 0.85 } else { 0.45 };
@@ -982,11 +1128,13 @@ pub fn run() {
             }
             _ => {}
         }
-        game.sim.time = std::env::var("END_GAME_TIME")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        game.sim.gate_open = if game.sim.stage >= 3 { 1.0 } else { 0.0 };
+        if std::env::var("END_GAME_SCENE").as_deref() != Ok("sword-hit") {
+            game.sim.time = std::env::var("END_GAME_TIME")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0);
+            game.sim.gate_open = if game.sim.stage >= 3 { 1.0 } else { 0.0 };
+        }
         UI.with(|u| u.borrow_mut().paused = true);
     }
     ember_engine::run(
@@ -1032,19 +1180,29 @@ impl EmberGame for Game {
         let bits = u32::from(input.down(KeyCode::KeyE) || pad.down(PadButton::West))
             | (u32::from(
                 (cfg!(not(target_arch = "wasm32")) && input.mouse_down(MouseButton::Left))
-                    || pad.down(PadButton::RT)
                     || pad.down(PadButton::RB),
             ) << 1)
             | (u32::from(input.down(KeyCode::Space) || pad.down(PadButton::South)) << 2)
             | (u32::from(input.down(KeyCode::AltLeft) || pad.down(PadButton::East)) << 3)
             | (u32::from(input.down(KeyCode::KeyQ) || pad.down(PadButton::North)) << 4)
-            | (u32::from(input.down(KeyCode::KeyV) || pad.down(PadButton::R3)) << 5);
+            | (u32::from(input.down(KeyCode::KeyV) || pad.down(PadButton::R3)) << 5)
+            | (u32::from(
+                (cfg!(not(target_arch = "wasm32"))
+                    && (input.down(KeyCode::KeyR) || input.mouse_down(MouseButton::Middle)))
+                    || pad.down(PadButton::RT),
+            ) << 6);
         let mut pressed = (bits & !self.previous) | ui.actions;
         let mut attack_presses = ui.attacks.saturating_add(u8::from(pressed & 2 != 0)).min(3);
+        if pressed & 64 != 0 {
+            // A simultaneous heavy press owns this input batch; never replay
+            // counted light taps after the heavy animation has started.
+            attack_presses = 0;
+        }
         if guard_held {
             // Do not replay a strike pressed during guard after it lowers.
             // Already committed core combo swings continue independently.
             attack_presses = 0;
+            pressed &= !64;
         }
         pressed &= !2;
         self.previous = bits;
@@ -1092,6 +1250,7 @@ impl EmberGame for Game {
                         || ui.held & 2 != 0,
                     interact: pressed & 1 != 0,
                     attack: attack_presses > 0,
+                    heavy: pressed & 64 != 0,
                     block,
                     jump: pressed & 4 != 0,
                     dodge: pressed & 8 != 0,
@@ -1176,6 +1335,28 @@ impl EmberGame for Game {
             .events()
             .filter(|e| e.kind == end_game_core::enemies::CastleEventKind::EnemyAttack)
             .last();
+        let lift = self.stair_eye.update(
+            self.sim.position.y,
+            self.sim.grounded,
+            if ui.paused { 0.0 } else { dt },
+        );
+        let frame =
+            self.scene
+                .frame_with_camera_lift(&self.sim, self.third_person, self.wake, lift);
+        let projection = aim_projection(&frame.camera, self.sim.sword_aim_point());
+        let combat_state = serde_json::json!({
+            "label": self.sim.combat.label(), "queued": self.sim.combat.queued_count(),
+            "rhythmLeft": self.sim.combat.rhythm_left(), "quickLeft": self.sim.combat.quick_left(),
+            "swingEvent": self.sim.combat.swing_event,"impactEvent":self.sim.combat.impact_event,
+            "impactStrength":self.sim.combat.impact_strength,
+            "aimedZone":self.sim.aimed_zone().map(|zone|zone.label()),
+            "aimProjection":projection.map(|p|serde_json::json!({"x":p.x,"y":p.y})),
+            "impactZone":self.sim.combat.impact_zone.map(|zone|zone.label()),
+            "impactSurface":self.sim.combat.impact_surface.map(|surface|format!("{surface:?}")),
+            "impactKind":self.sim.combat.impact_kind.map(|kind|format!("{kind:?}")),
+            "impactLeft":self.sim.combat.impact_left,
+            "active":self.sim.combat.active.map(|s|serde_json::json!({"kind":s.kind.label(),"elapsed":s.elapsed,"windup":s.kind.windup_time(),"duration":s.kind.duration(),"landingWait":s.landing_wait && s.elapsed >= s.kind.follow_end()}))
+        });
         let state = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "stage": self.sim.stage, "objective": self.sim.objective(),
             "location": self.sim.location(),
@@ -1219,23 +1400,11 @@ impl EmberGame for Game {
                 "windup": end_game_core::warden::KNIFE_WINDUP,
                 "contact": end_game_core::warden::KNIFE_CONTACT
             },
-            "combat": {
-                "label": self.sim.combat.label(), "queued": self.sim.combat.queued_count(),
-                "rhythmLeft": self.sim.combat.rhythm_left(), "quickLeft": self.sim.combat.quick_left(),
-                "swingEvent": self.sim.combat.swing_event,"impactEvent":self.sim.combat.impact_event,
-                "impactStrength":self.sim.combat.impact_strength,
-                "active":self.sim.combat.active.map(|s|serde_json::json!({"kind":s.kind.label(),"elapsed":s.elapsed,"windup":s.kind.windup_time(),"duration":s.kind.duration()}))
-            },
+            "combat": combat_state,
             "physics": { "gravity": end_game_core::GRAVITY, "crateMass": self.sim.body.mass(), "crateWear": self.sim.body.wear }
         });
         HUD.with(|hud| *hud.borrow_mut() = state.to_string());
-        let lift = self.stair_eye.update(
-            self.sim.position.y,
-            self.sim.grounded,
-            if ui.paused { 0.0 } else { dt },
-        );
-        self.scene
-            .frame_with_camera_lift(&self.sim, self.third_person, self.wake, lift)
+        frame
     }
     fn feedback(&mut self) -> Feedback {
         std::mem::take(&mut self.feedback)
@@ -1267,7 +1436,7 @@ mod wasm {
     pub fn action(mask: u32) {
         UI.with(|u| {
             let mut u = u.borrow_mut();
-            u.actions |= mask & (63 ^ 2);
+            u.actions |= mask & (127 ^ 2);
             if mask & 2 != 0 {
                 u.attacks = u.attacks.saturating_add(1).min(3);
             }

@@ -3,6 +3,7 @@
 //! Attack inputs are press edges supplied by the client. Rhythm uses integer
 //! ticks (18 quick / 54 delayed), independently of motion frozen by hitstop.
 use crate::STEP;
+use crate::{layout::Surface, sword::HitZone};
 use glam::Vec3;
 
 const QUICK_TICKS: u64 = 18;
@@ -15,43 +16,48 @@ pub enum StrikeKind {
     Finisher,
     Overhead,
     Rising,
+    JumpHeavy,
 }
 
 impl StrikeKind {
     pub fn duration(self) -> f32 {
         match self {
-            Self::Cut => 0.78,
-            Self::Backhand => 0.74,
-            Self::Finisher => 1.05,
+            Self::Cut => 0.68,
+            Self::Backhand => 0.60,
+            Self::Finisher => 1.00,
             Self::Overhead => 1.12,
             Self::Rising => 1.0,
+            Self::JumpHeavy => 1.25,
         }
     }
     pub fn windup_time(self) -> f32 {
         match self {
             Self::Cut => 0.24,
-            Self::Backhand => 0.22,
-            Self::Finisher => 0.40,
+            Self::Backhand => 0.18,
+            Self::Finisher => 0.30,
             Self::Overhead => 0.50,
             Self::Rising => 0.37,
+            Self::JumpHeavy => 0.28,
         }
     }
     pub fn contact_time(self) -> f32 {
         match self {
-            Self::Cut => 0.30,
-            Self::Backhand => 0.28,
-            Self::Finisher => 0.48,
+            Self::Cut => 0.33,
+            Self::Backhand => 0.27,
+            Self::Finisher => 0.41,
             Self::Overhead => 0.58,
             Self::Rising => 0.45,
+            Self::JumpHeavy => 0.43,
         }
     }
     pub fn follow_end(self) -> f32 {
         match self {
-            Self::Cut => 0.42,
-            Self::Backhand => 0.39,
-            Self::Finisher => 0.64,
+            Self::Cut => 0.48,
+            Self::Backhand => 0.42,
+            Self::Finisher => 0.60,
             Self::Overhead => 0.74,
             Self::Rising => 0.62,
+            Self::JumpHeavy => 0.62,
         }
     }
     pub fn damage(self) -> f32 {
@@ -61,6 +67,7 @@ impl StrikeKind {
             Self::Finisher => 55.0,
             Self::Overhead => 62.0,
             Self::Rising => 48.0,
+            Self::JumpHeavy => 72.0,
         }
     }
     pub fn stamina_cost(self) -> f32 {
@@ -69,6 +76,7 @@ impl StrikeKind {
             Self::Finisher => 32.0,
             Self::Overhead => 34.0,
             Self::Rising => 28.0,
+            Self::JumpHeavy => 40.0,
         }
     }
     pub fn label(self) -> &'static str {
@@ -78,10 +86,14 @@ impl StrikeKind {
             Self::Finisher => "Finisher",
             Self::Overhead => "Overhead",
             Self::Rising => "Rising cut",
+            Self::JumpHeavy => "Jumping heavy",
         }
     }
     pub fn heavy(self) -> bool {
-        matches!(self, Self::Finisher | Self::Overhead | Self::Rising)
+        matches!(
+            self,
+            Self::Finisher | Self::Overhead | Self::Rising | Self::JumpHeavy
+        )
     }
 }
 
@@ -91,6 +103,12 @@ pub struct Strike {
     pub elapsed: f32,
     /// The contact sample was evaluated, whether it hit an object or missed.
     pub contact_done: bool,
+    /// First actual blade contact; misses consume the active window at its end.
+    pub contact_at: Option<f32>,
+    /// A jumping cut keeps its follow pose until the body lands naturally.
+    pub landing_wait: bool,
+    /// Solid contact time, available to presentation for a deflected recovery.
+    pub surface_stop: Option<f32>,
     /// A buffered strike starts in the chamber reached by the previous recovery.
     pub previous: Option<StrikeKind>,
     /// Time the preceding strike received this buffer; very late input keeps
@@ -122,6 +140,9 @@ impl Strike {
             kind,
             elapsed: 0.0,
             contact_done: false,
+            contact_at: None,
+            landing_wait: kind == StrikeKind::JumpHeavy,
+            surface_stop: None,
             previous: None,
             previous_link_at: 0.0,
             link: None,
@@ -137,6 +158,7 @@ pub enum ImpactKind {
     Warden,
     Chain,
     Enemy,
+    Surface,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -151,6 +173,7 @@ enum Rhythm {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Combat {
     pub active: Option<Strike>,
+    pub sweep: Option<crate::sword::SwordSweep>,
     /// A failed buffered start settles the reached chamber without a pose jump.
     pub recovery: Option<Recovery>,
     pub swing_event: u32,
@@ -160,6 +183,12 @@ pub struct Combat {
     pub impact_kind: Option<ImpactKind>,
     pub impact_strike: Option<StrikeKind>,
     pub impact_strength: f32,
+    pub impact_zone: Option<HitZone>,
+    pub impact_normal: Vec3,
+    pub impact_tangent: Vec3,
+    pub impact_surface: Option<Surface>,
+    /// Stable physical contact frame survives hitstop and the rebound's first tick.
+    pub impact_frame: Option<crate::sword::SwordFrame>,
     pub hitstop_left: f32,
     queue: [Option<StrikeKind>; 2],
     rhythm: Rhythm,
@@ -170,7 +199,9 @@ pub struct Combat {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CombatTick {
+    #[cfg(test)]
     pub contact: Option<StrikeKind>,
+    pub sweep: Option<(Strike, f32, f32)>,
     pub frozen: bool,
 }
 
@@ -199,6 +230,7 @@ impl Combat {
             Some(StrikeKind::Finisher) => "Combo I · Wolf's Fang",
             Some(StrikeKind::Overhead) => "Combo II · Gravebreaker",
             Some(StrikeKind::Rising) => "Combo III · Rising Wolf",
+            Some(StrikeKind::JumpHeavy) => "Jumping heavy",
         }
     }
     pub fn rhythm_age(&self) -> Option<f32> {
@@ -247,6 +279,7 @@ impl Combat {
     /// Pickups own both arms; cancel combat without replaying or rewinding event ids.
     pub fn cancel(&mut self) {
         self.active = None;
+        self.sweep = None;
         self.recovery = None;
         self.clear_queue();
         self.rhythm = Rhythm::Ready;
@@ -256,6 +289,9 @@ impl Combat {
         self.impact_kind = None;
         self.impact_strike = None;
         self.impact_strength = 0.0;
+        self.impact_zone = None;
+        self.impact_surface = None;
+        self.impact_frame = None;
     }
     fn start(&mut self, kind: StrikeKind, previous: Option<StrikeKind>, stamina: &mut f32) -> bool {
         if !stamina.is_finite() || *stamina < kind.stamina_cost() {
@@ -265,6 +301,7 @@ impl Combat {
             return false;
         }
         *stamina -= kind.stamina_cost();
+        self.impact_frame = None;
         self.active = Some(Strike {
             previous,
             ..Strike::new(kind)
@@ -301,7 +338,17 @@ impl Combat {
         self.selection = Some(kind);
     }
     /// One simulation tick. Edges still enter the rhythm buffer during hitstop.
+    #[cfg(test)]
     pub(crate) fn tick(&mut self, attack: bool, stamina: &mut f32) -> CombatTick {
+        self.tick_requests(attack, false, false, stamina)
+    }
+    pub(crate) fn tick_requests(
+        &mut self,
+        attack: bool,
+        heavy: bool,
+        airborne: bool,
+        stamina: &mut f32,
+    ) -> CombatTick {
         self.clock += 1;
         if self
             .last_press
@@ -317,7 +364,18 @@ impl Combat {
             self.last_press = None;
         }
         self.impact_left = (self.impact_left - STEP).max(0.0);
-        if attack {
+        if heavy && self.active.is_none() && self.recovery.is_none() && self.queued_count() == 0 {
+            let kind = if airborne {
+                StrikeKind::JumpHeavy
+            } else {
+                StrikeKind::Overhead
+            };
+            if self.start(kind, None, stamina) {
+                self.rhythm = Rhythm::Closed;
+                self.last_press = None;
+                self.selection = Some(kind);
+            }
+        } else if attack && !heavy {
             self.press(stamina);
         }
         if self.hitstop_left > 0.0 {
@@ -330,13 +388,16 @@ impl Combat {
                 ..CombatTick::default()
             };
         }
+        self.sweep = None;
         if let Some(recovery) = &mut self.recovery {
             recovery.elapsed += STEP;
             if recovery.elapsed + 0.000001 >= Recovery::DURATION {
                 self.recovery = None;
             }
         }
+        #[cfg(test)]
         let mut contact = None;
+        let mut sweep = None;
         if let Some(mut strike) = self.active {
             // Buffer metadata also remains frozen during hitstop. An edge there
             // is latched at the same motion time when the animation resumes.
@@ -347,10 +408,34 @@ impl Combat {
                     cancelled_at: None,
                 });
             }
-            strike.elapsed = (strike.elapsed + STEP).min(strike.kind.duration());
-            if !strike.contact_done && strike.elapsed >= strike.kind.contact_time() {
+            let before = strike.elapsed;
+            if !airborne {
+                strike.landing_wait = false;
+            }
+            let end = if strike.landing_wait {
+                strike.kind.follow_end()
+            } else {
+                strike.kind.duration()
+            };
+            strike.elapsed = (strike.elapsed + STEP).min(end);
+            if strike.surface_stop.is_none()
+                && strike.elapsed >= strike.kind.windup_time()
+                && (before < strike.kind.follow_end() || strike.landing_wait)
+            {
+                sweep = Some((
+                    strike,
+                    before.max(strike.kind.windup_time()),
+                    strike.elapsed.min(strike.kind.follow_end()),
+                ));
+            }
+            if before < strike.kind.contact_time() && strike.elapsed >= strike.kind.contact_time() {
+                #[cfg(test)]
+                {
+                    contact = Some(strike.kind);
+                }
+            }
+            if strike.elapsed >= strike.kind.follow_end() {
                 strike.contact_done = true;
-                contact = Some(strike.kind);
             }
             if strike.elapsed >= strike.kind.duration() {
                 self.active = None;
@@ -371,7 +456,9 @@ impl Combat {
             }
         }
         CombatTick {
+            #[cfg(test)]
             contact,
+            sweep,
             frozen: false,
         }
     }
@@ -384,6 +471,11 @@ impl Combat {
         self.impact_strike = Some(strike);
         self.impact_strength = if heavy { 0.85 } else { 0.45 };
         self.hitstop_left = if heavy { 0.10 } else { 0.06 };
+        self.impact_zone = None;
+        self.impact_surface = None;
+        self.impact_normal = Vec3::ZERO;
+        self.impact_tangent = Vec3::ZERO;
+        self.impact_frame = None;
     }
 }
 
@@ -442,8 +534,8 @@ mod tests {
         }
         assert_eq!(combat.queued(), [Some(Backhand), Some(Finisher)]);
         assert_eq!(stamina, 80.0, "queued strikes charged before starting");
-        assert_eq!(pattern(&[0, 1, 2], Some(3..145)), [Cut, Backhand, Finisher]);
-        assert_eq!(pattern(&[0, 24], Some(25..110)), [Cut, Overhead]);
+        assert_eq!(pattern(&[0, 1, 2], Some(3..130)), [Cut, Backhand, Finisher]);
+        assert_eq!(pattern(&[0, 24], Some(25..105)), [Cut, Overhead]);
     }
 
     #[test]

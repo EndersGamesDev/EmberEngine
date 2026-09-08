@@ -328,7 +328,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## end-game
 
-- Extend sword contact beyond V4's one-time range/cone target selection to swept blade geometry, wall obstruction and direction-specific enemy hit reactions.
 - Replace End Game's unrigged imported heroes and spatial material zones with an authored skeleton, per-part physical material IDs, cape cloth and a continuous wolf-to-werewolf morph; the v1 camera sequence currently swaps meshes.
 - Add calibrated indoor light transport, shadowed local lights and normal/roughness texture maps before claiming photorealistic surfaces; v1 uses base color, scalar materials and unshadowed local torch lights.
 - Extend End Game with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.
