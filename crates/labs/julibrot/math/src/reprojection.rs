@@ -32,6 +32,10 @@ pub struct SourceDepthRecord {
 pub struct ReconstructedSample {
     /// Absolute finite mirror of the canonical slice point.
     pub ambient_four: [f64; 4],
+    /// Source-anchor-relative point retained before finite-mirror addition can lose deep detail.
+    pub source_local_four: [f64; 4],
+    /// Source scale used to express `source_local_four` in the requested zoom frame.
+    pub source_zoom_log2: f64,
     /// Palette-independent value information that supplies target height.
     pub value: RetainedValueSample,
 }
@@ -70,6 +74,26 @@ impl ReconstructedSample {
             depth_tolerance,
         )
     }
+
+    /// Maps this source-local point into a requested exact-anchor frame and projects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid placement inputs, an error above one pixel, or a target
+    /// projection pole.
+    pub fn project_from_anchor(
+        self,
+        target: &Pose,
+        source_to_request_anchor_px: [f64; 2],
+        placement_error_px: f64,
+    ) -> Result<ProjectedSample, ReprojectionError> {
+        project_reconstructed_sample_from_anchor(
+            target,
+            self,
+            source_to_request_anchor_px,
+            placement_error_px,
+        )
+    }
 }
 
 /// Complete binary64 target projection of one reconstructed retained sample.
@@ -86,6 +110,8 @@ pub struct ProjectedSample {
 impl ProjectedSample {
     /// Smallest admitted positive denominator or observer distance in the shared projection.
     pub const POLE_EPSILON: f64 = 1.0e-4;
+    /// Descriptor placement is admitted only when its independent and split error is at most 1 px.
+    pub const PLACEMENT_ERROR_LIMIT_PX: f64 = 1.0;
 
     /// Projects one point already expressed relative to the requested plane origin.
     ///
@@ -119,6 +145,9 @@ pub enum ReprojectionError {
     /// The target is edge-on or the sample reaches a projection pole.
     #[error("the target projection has no finite visible result")]
     ProjectionPole,
+    /// The exact-anchor split cannot certify the descriptor placement below one pixel.
+    #[error("the descriptor exact-anchor placement exceeds its one-pixel error ceiling")]
+    UncertifiedPlacement,
 }
 
 /// Builds a flat-chart `S1` fixture record for one visible source sample.
@@ -148,8 +177,8 @@ pub fn source_depth_record(
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let a_f = chart_scale * homogeneous[0] / homogeneous[2];
     let b_f = chart_scale * homogeneous[1] / homogeneous[2];
-    let ambient_four = absolute_plane_point(pose, [a_f, b_f]);
-    let projected = project_ambient_point(pose, ambient_four, value)?;
+    let source_local_four = plane_local_point(pose, [a_f, b_f]);
+    let projected = ProjectedSample::from_local_point(pose, source_local_four, value)?;
     Ok(SourceDepthRecord {
         a_f,
         b_f,
@@ -197,11 +226,14 @@ fn reconstruct_source_sample_with_tolerance(
     {
         return Err(ReprojectionError::InvalidSource);
     }
+    let source_local_four = plane_local_point(pose, [depth.a_f, depth.b_f]);
     let sample = ReconstructedSample {
         ambient_four: absolute_plane_point(pose, [depth.a_f, depth.b_f]),
+        source_local_four,
+        source_zoom_log2: pose.zoom_log2,
         value,
     };
-    let projected = project_ambient_point(pose, sample.ambient_four, value)?;
+    let projected = ProjectedSample::from_local_point(pose, source_local_four, value)?;
     let pixel_error =
         (projected.screen[0] - source_pixel[0]).hypot(projected.screen[1] - source_pixel[1]);
     let depth_error = (projected.linear_depth - depth.zeta_f).abs();
@@ -221,6 +253,52 @@ pub fn project_reconstructed_sample(
     sample: ReconstructedSample,
 ) -> Result<ProjectedSample, ReprojectionError> {
     project_ambient_point(target, sample.ambient_four, sample.value)
+}
+
+/// Maps a reconstructed source-local point into a requested exact-anchor frame and projects it.
+///
+/// `source_to_request_anchor_px` is the exact source anchor relative to the requested anchor in
+/// requested-pose pixels. `placement_error_px` combines the independent f64 oracle bound with the
+/// compensated residual's rounding bound.
+///
+/// # Errors
+///
+/// Returns a typed refusal for invalid placement inputs, an error above one pixel, or a target
+/// projection pole.
+fn project_reconstructed_sample_from_anchor(
+    target: &Pose,
+    sample: ReconstructedSample,
+    source_to_request_anchor_px: [f64; 2],
+    placement_error_px: f64,
+) -> Result<ProjectedSample, ReprojectionError> {
+    if !source_to_request_anchor_px
+        .into_iter()
+        .chain(sample.source_local_four)
+        .chain([sample.source_zoom_log2, placement_error_px])
+        .all(f64::is_finite)
+        || placement_error_px < 0.0
+    {
+        return Err(ReprojectionError::InvalidSource);
+    }
+    if placement_error_px > ProjectedSample::PLACEMENT_ERROR_LIMIT_PX {
+        return Err(ReprojectionError::UncertifiedPlacement);
+    }
+    let scale_ratio = (target.zoom_log2 - sample.source_zoom_log2).exp2();
+    if !scale_ratio.is_finite() || scale_ratio <= 0.0 || target.grid_width == 0 {
+        return Err(ReprojectionError::ProjectionPole);
+    }
+    let chart_scale = 4.0 / f64::from(target.grid_width);
+    let anchor_chart = source_to_request_anchor_px.map(|value| chart_scale * value);
+    let requested_local: [f64; 4] = core::array::from_fn(|axis| {
+        scale_ratio.mul_add(
+            sample.source_local_four[axis],
+            f64::from(target.plane.basis_u[axis]).mul_add(
+                anchor_chart[0],
+                f64::from(target.plane.basis_v[axis]) * anchor_chart[1],
+            ),
+        )
+    });
+    ProjectedSample::from_local_point(target, requested_local, sample.value)
 }
 
 /// Converts one existing escape record into the value-height input used by reprojection.
@@ -256,13 +334,16 @@ pub fn retained_value_sample(
     Ok(RetainedValueSample { record_height })
 }
 
-fn absolute_plane_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
+fn plane_local_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
     core::array::from_fn(|axis| {
-        f64::from(pose.plane.basis_u[axis]).mul_add(
-            coordinate[0],
-            f64::from(pose.plane.basis_v[axis]).mul_add(coordinate[1], pose.plane_origin[axis]),
-        )
+        f64::from(pose.plane.basis_u[axis])
+            .mul_add(coordinate[0], f64::from(pose.plane.basis_v[axis]) * coordinate[1])
     })
+}
+
+fn absolute_plane_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
+    let local_four = plane_local_point(pose, coordinate);
+    core::array::from_fn(|axis| pose.plane_origin[axis] + local_four[axis])
 }
 
 fn project_ambient_point(
@@ -640,6 +721,8 @@ mod tests {
                 &pole,
                 ReconstructedSample {
                     ambient_four: source.plane_origin,
+                    source_local_four: [0.0; 4],
+                    source_zoom_log2: source.zoom_log2,
                     value,
                 }
             ),

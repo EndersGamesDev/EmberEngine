@@ -262,7 +262,18 @@ pub fn project_descriptor_sample(
     target: &Pose,
 ) -> Result<ProjectedSample, ReprojectionError> {
     let (reconstructed, _) = reconstruct_descriptor_sample(header, pair, source_pixel)?;
-    project_reconstructed_sample(target, reconstructed)
+    let anchor = header.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes;
+    let source_to_request_anchor_px = [
+        unpack_split([anchor[0], anchor[1]]),
+        unpack_split([anchor[2], anchor[3]]),
+    ];
+    let split_error_px = split_rounding_error(anchor[1]).hypot(split_rounding_error(anchor[3]));
+    let independent_error_px = f64::from(header.texels[TilePoseHeader::H21_BOUNDS].lanes[3]);
+    reconstructed.project_from_anchor(
+        target,
+        source_to_request_anchor_px,
+        independent_error_px + split_error_px,
+    )
 }
 
 fn pack_extent_rect_and_map(
@@ -354,6 +365,17 @@ fn pack_split(value: f64) -> Option<[f32; 2]> {
 
 fn unpack_split([high, low]: [f32; 2]) -> f64 {
     f64::from(high) + f64::from(low)
+}
+
+fn split_rounding_error(low: f32) -> f64 {
+    let magnitude = low.abs();
+    let bits = magnitude.to_bits();
+    let adjacent = if bits == f32::MAX.to_bits() {
+        f32::from_bits(bits - 1)
+    } else {
+        f32::from_bits(bits + 1)
+    };
+    0.5 * (f64::from(adjacent) - f64::from(magnitude)).abs()
 }
 
 fn pack_finite_array(values: [f64; 4]) -> Option<[f32; 4]> {
@@ -492,6 +514,10 @@ mod tests {
     const TARGET_DEPTH_TOLERANCE: f64 = 0.01;
     /// One hundred-thousandth retains normalized raster depth across descriptor rounding.
     const TARGET_RASTER_DEPTH_TOLERANCE: f64 = 0.000_01;
+    /// The deepest binary64-scale contract exercised by the existing math scale oracle.
+    const MAXIMAL_DESCRIPTOR_ZOOM_LOG2: f64 = 1000.25;
+    /// A quarter-pixel exact anchor delta must have a material projected effect.
+    const ANCHOR_EFFECT_MINIMUM_PX: f64 = 0.1;
 
     fn pose() -> Pose {
         let object = ObjectAngles {
@@ -567,7 +593,6 @@ mod tests {
         let mut header = TilePoseHeader::zeroed();
         header.texels[TilePoseHeader::H00_IDENTITIES].lanes = [41.0, 42.0, 0.0, 1.0];
         header.texels[TilePoseHeader::H01_SPANS].lanes = [7.0, 8.0, 0.0, 9.0];
-        header.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [0.25, 0.0, -0.5, 0.0];
         header.texels[TilePoseHeader::H21_BOUNDS].lanes = [
             1.0,
             12.0,
@@ -580,6 +605,12 @@ mod tests {
         header.texels[TilePoseHeader::H25_PROVENANCE].lanes = [17.0, 0.0, 1.0, 5.0];
         header.texels[TilePoseHeader::H26_OWNERSHIP].lanes = [6.0, 2.0, 31.0, 32.0];
         header
+    }
+
+    fn set_anchor_delta(header: &mut TilePoseHeader, delta: [f64; 2]) {
+        let x = pack_split(delta[0]).expect("finite exact anchor x splits");
+        let y = pack_split(delta[1]).expect("finite exact anchor y splits");
+        header.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [x[0], x[1], y[0], y[1]];
     }
 
     #[test]
@@ -772,6 +803,79 @@ mod tests {
         assert_eq!(
             project_descriptor_sample(&header, &pair, source_pixel, &pole),
             Err(ReprojectionError::ProjectionPole)
+        );
+    }
+
+    #[test]
+    fn maximal_zoom_projection_applies_certified_exact_anchor_delta() {
+        let mut source = source_pose();
+        source.zoom_log2 = MAXIMAL_DESCRIPTOR_ZOOM_LOG2 - 1.0;
+        rebuild_map(&mut source);
+        let mut target = requested_pose();
+        target.zoom_log2 = MAXIMAL_DESCRIPTOR_ZOOM_LOG2;
+        target.plane_origin = source.plane_origin;
+        rebuild_map(&mut target);
+        assert_eq!(source.plane_origin, target.plane_origin);
+
+        let source_pixel = [37.5, -21.5];
+        let record = EscapeGridRecord {
+            smooth_iter: 128.0,
+            escaped: 1.0,
+            rebase_count: 3.0,
+            status: 0.0,
+        };
+        let value = retained_value_sample(record, 512).expect("value record has a finite height");
+        let depth = source_depth_record(&source, source_pixel, value)
+            .expect("maximal-zoom source sample has a finite receipt");
+        let exact = reconstruct_source_sample(&source, source_pixel, depth, value)
+            .expect("maximal-zoom binary64 source sample round-trips");
+        let anchor_delta_px = [0.25, -0.5];
+        let scale_ratio = (target.zoom_log2 - source.zoom_log2).exp2();
+        let chart_scale = 4.0 / f64::from(target.grid_width);
+        let anchor_chart = anchor_delta_px.map(|value| chart_scale * value);
+        let requested_local: [f64; 4] = core::array::from_fn(|axis| {
+            scale_ratio.mul_add(
+                exact.source_local_four[axis],
+                f64::from(target.plane.basis_u[axis]).mul_add(
+                    anchor_chart[0],
+                    f64::from(target.plane.basis_v[axis]) * anchor_chart[1],
+                ),
+            )
+        });
+        let direct = ProjectedSample::from_local_point(&target, requested_local, value)
+            .expect("direct maximal-zoom requested point projects");
+
+        let rect = SourcePixelRect::from_extent(0, 0, source.grid_width, source.grid_height);
+        let render = TileRenderKey::from_pose(&source, rect);
+        let mut policy = policy_header();
+        set_anchor_delta(&mut policy, anchor_delta_px);
+        let header = pack_descriptor_header(&render, &policy)
+            .expect("maximal-zoom descriptor header packs");
+        let pair = pack_descriptor_sample(record, depth).expect("source sample pair packs");
+        let projected = project_descriptor_sample(&header, &pair, source_pixel, &target)
+            .expect("certified maximal-zoom placement projects");
+        let target_error =
+            (projected.screen[0] - direct.screen[0]).hypot(projected.screen[1] - direct.screen[1]);
+        assert!(target_error <= TARGET_PROJECTION_TOLERANCE_PX);
+
+        let without_delta = project_reconstructed_sample(&target, exact)
+            .expect("uncorrected finite mirror still projects");
+        let anchor_effect = (projected.screen[0] - without_delta.screen[0])
+            .hypot(projected.screen[1] - without_delta.screen[1]);
+        assert!(anchor_effect >= ANCHOR_EFFECT_MINIMUM_PX);
+
+        let mut uncertified_policy = policy_header();
+        uncertified_policy.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [
+            f32::MAX,
+            33_554_432.0,
+            0.0,
+            0.0,
+        ];
+        let uncertified_header = pack_descriptor_header(&render, &uncertified_policy)
+            .expect("finite but uncertifiable anchor split packs");
+        assert_eq!(
+            project_descriptor_sample(&uncertified_header, &pair, source_pixel, &target),
+            Err(ReprojectionError::UncertifiedPlacement)
         );
     }
 }

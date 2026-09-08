@@ -1826,6 +1826,8 @@ mod tests {
                 }
                 let direct_sample = ReconstructedSample {
                     ambient_four: pose.plane_origin,
+                    source_local_four: [0.0; 4],
+                    source_zoom_log2: pose.zoom_log2,
                     value,
                 };
                 let direct =
