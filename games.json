@@ -242,10 +242,17 @@
       "desc": "Awaken in a detailed castle prison. Explore weathered masonry, aged timber and handmade ironwork, slip past the sleeping warden and claim the greatsword. Controller, keyboard/mouse and touch controls with adaptive resolution.",
       "versions": [
         {
+          "v": "v5",
+          "version": "5.0.0",
+          "path": "games/end-game/v5/",
+          "live": true,
+          "note": "The warden rises, draws his knife and attacks with dodgable strikes"
+        },
+        {
           "v": "v4",
           "version": "4.0.0",
           "path": "games/end-game/v4/",
-          "live": true,
+          "live": false,
           "note": "Heavy directional sword strikes, buffered rhythm combos and hit feedback"
         },
         {
