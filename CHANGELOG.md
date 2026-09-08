@@ -16,6 +16,14 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v9
+
+Beyond the Dungeon continues after the greatsword, warden fight and broken exit chain. A rising portcullis opens the lower passage, monumental great hall, grand stair, backyard garden, castle walls and tower summit. Shared measured geometry supplies 451 solids, 88 stair treads and eight prop placements; grounded movement, jumping, guard, footsteps and discovery work across elevations. Separate portal jambs, protected outer rails, swept support and ceiling checks, and out-of-world recovery keep the connected route traversable in both directions (`47e98a90`).
+
+Three SDXL/TRELLIS generated props add carved supports, a dry fountain and a tower entrance: 32,929 triangles, 4,601,616 GLB bytes and 9,437,160 texture bytes including mipmaps. Instanced masonry, physical surface coordinates, blended entry lighting and visibility selection accompany them. Shared PNG storage removes 6,887,552 duplicate download bytes; the final WASM is 29,442,625 bytes. Across 208 representative views the maximum is 255,264 submitted triangles, with 139,014,421 resident texture bytes including mipmaps (`47e98a90`).
+
+All 82 core and 42 client tests, 21 JavaScript tests, 126 Pages fixtures, scoped publication preservation, asset export checks, README coverage and done-list checks pass. An independent audit passes nine offset routes, five perimeter loops and repeated standing/crouched boundary jumps. Twenty-three final passive native frames were inspected in 25.39 seconds; the passage remains byte-identical after PNG deduplication. The Idle browser helper takes 6.89 seconds and the final native build takes 3.91 seconds. Browser gameplay, physical devices, audible output and 5K frame pacing remain unverified. The castle is prepared for later inhabitants and encounters (`47e98a90`).
+
 ### End Game v8
 
 Edge and Guard rotates the cutting edge into each descending, rising and crosswise strike, with accelerating contact and connected recoveries for all three existing input rhythms. Late buffered presses retain their partial chamber pose, both gauntlets remain on the hilt, and a held directional guard receives frontal knife hits on the strong of the sword. Blocking costs 28 stamina; a depleted guard breaks, while hits from behind and unfinished raises remain vulnerable. Mouse, keyboard, gamepad and touch share held guard, release and pause handling, with steel sparks, recoil, sound events and rumble (`9aeca184`).
