@@ -20,6 +20,10 @@ const EXACT_INTEGER_LIMIT: f32 = 16_777_216.0;
 /// Four f32 ulps admit a sine/cosine pair after independent lane rounding.
 const FACTOR_NORM_TOLERANCE: f64 = 4.768_371_582_031_25e-7;
 const SLICE_DETERMINANT_EPSILON: f64 = 1.0e-12;
+/// A binary32 × binary32 × binary64 product has at most 101 significant bits. Requiring an
+/// unbiased exponent of at least -974 keeps its lowest possible exact bit at the binary64
+/// subnormal floor, -1074, where the fused residual remains representable.
+const MIN_ERROR_FREE_TRIPLE_MAGNITUDE: f64 = f64::from_bits(49_u64 << 52);
 
 /// Certified affine chart transform between two parameterizations of one sampled slice.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,9 +33,9 @@ pub struct SliceChartTransform {
     pub chart_map: [f64; 4],
     /// Source-origin offset expressed in canonical chart coordinates.
     pub origin_offset: [f64; 2],
-    /// Source-origin distance outside the canonical plane.
+    /// Certified semantic distance outside the canonical plane; zero for every accepted slice.
     pub out_of_plane_error: f64,
-    /// Half-source-pixel ceiling applied to the out-of-plane error.
+    /// Maximum admitted semantic out-of-plane error; exactly zero in version one.
     pub maximum_error: f64,
 }
 
@@ -111,8 +115,9 @@ impl DerivedChartFootprint {
 
 /// Certifies that source and canonical identities name the same sampled affine slice.
 ///
-/// The bases must pass the shared once-rounded plane relation. The source-origin residual outside
-/// the canonical plane must be no greater than half one source chart sample.
+/// The bases must pass the shared once-rounded plane relation. Every three-axis minor of the
+/// canonical basis and the exact stored origin delta must then vanish under error-free dyadic
+/// expansion arithmetic. The source chart scale is validated but never relaxes that proof.
 #[must_use]
 pub fn certify_same_slice(
     source: SliceIdentity,
@@ -125,18 +130,16 @@ pub fn certify_same_slice(
     let (source_plane, source_origin) = unpack_slice_identity(source)?;
     let (canonical_plane, canonical_origin) = unpack_slice_identity(canonical)?;
     let relation = plane_chart_relation(source_plane, canonical_plane)?;
-    let origin_delta = core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
-    let (origin_offset, out_of_plane_error) =
-        project_vector_to_plane(canonical_plane, origin_delta)?;
-    let maximum_error = 0.5 * source_chart_scale;
-    if out_of_plane_error > maximum_error {
+    if !origin_delta_lies_in_plane(canonical_plane, source_origin, canonical_origin)? {
         return None;
     }
+    let origin_delta = core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
+    let (origin_offset, _) = project_vector_to_plane(canonical_plane, origin_delta)?;
     Some(SliceChartTransform {
         chart_map: relation.chart_map,
         origin_offset,
-        out_of_plane_error,
-        maximum_error,
+        out_of_plane_error: 0.0,
+        maximum_error: 0.0,
     })
 }
 
@@ -645,6 +648,158 @@ fn project_vector_to_plane(plane: Plane, vector: [f64; 4]) -> Option<([f64; 2], 
         .chain([residual])
         .all(f64::is_finite)
         .then_some((coordinate, residual))
+}
+
+fn origin_delta_lies_in_plane(
+    plane: Plane,
+    source_origin: [f64; 4],
+    canonical_origin: [f64; 4],
+) -> Option<bool> {
+    const AXIS_TRIPLES: [[usize; 3]; 4] = [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]];
+
+    for axes in AXIS_TRIPLES {
+        if !exact_plane_minor_is_zero(plane, source_origin, canonical_origin, axes)? {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+fn exact_plane_minor_is_zero(
+    plane: Plane,
+    source_origin: [f64; 4],
+    canonical_origin: [f64; 4],
+    axes: [usize; 3],
+) -> Option<bool> {
+    let mut expansion = Vec::with_capacity(24);
+    let [first, second, third] = axes;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[first],
+        plane.basis_v[second],
+        source_origin[third],
+        canonical_origin[third],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[second],
+        plane.basis_v[third],
+        source_origin[first],
+        canonical_origin[first],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[third],
+        plane.basis_v[first],
+        source_origin[second],
+        canonical_origin[second],
+        false,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[first],
+        plane.basis_v[third],
+        source_origin[second],
+        canonical_origin[second],
+        true,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[second],
+        plane.basis_v[first],
+        source_origin[third],
+        canonical_origin[third],
+        true,
+    )?;
+    add_origin_delta_product(
+        &mut expansion,
+        plane.basis_u[third],
+        plane.basis_v[second],
+        source_origin[first],
+        canonical_origin[first],
+        true,
+    )?;
+    Some(expansion.is_empty())
+}
+
+fn add_origin_delta_product(
+    expansion: &mut Vec<f64>,
+    basis_left: f32,
+    basis_right: f32,
+    source_origin: f64,
+    canonical_origin: f64,
+    negative: bool,
+) -> Option<()> {
+    add_exact_triple_product(
+        expansion,
+        basis_left,
+        basis_right,
+        source_origin,
+        negative,
+    )?;
+    add_exact_triple_product(
+        expansion,
+        basis_left,
+        basis_right,
+        canonical_origin,
+        !negative,
+    )
+}
+
+fn add_exact_triple_product(
+    expansion: &mut Vec<f64>,
+    basis_left: f32,
+    basis_right: f32,
+    origin: f64,
+    negative: bool,
+) -> Option<()> {
+    let basis_product = f64::from(basis_left) * f64::from(basis_right);
+    if basis_product == 0.0 || origin == 0.0 {
+        return Some(());
+    }
+    let product = basis_product * origin;
+    if !product.is_normal() || product.abs() < MIN_ERROR_FREE_TRIPLE_MAGNITUDE {
+        return None;
+    }
+    let roundoff = basis_product.mul_add(origin, -product);
+    let sign = if negative { -1.0 } else { 1.0 };
+    add_expansion_component(expansion, sign * roundoff)?;
+    add_expansion_component(expansion, sign * product)
+}
+
+fn add_expansion_component(expansion: &mut Vec<f64>, component: f64) -> Option<()> {
+    if component == 0.0 {
+        return Some(());
+    }
+    let previous = core::mem::take(expansion);
+    let mut grown = Vec::with_capacity(previous.len() + 1);
+    let mut total = component;
+    for value in previous {
+        let (sum, roundoff) = error_free_sum(total, value)?;
+        if roundoff != 0.0 {
+            grown.push(roundoff);
+        }
+        total = sum;
+    }
+    if total != 0.0 {
+        grown.push(total);
+    }
+    *expansion = grown;
+    Some(())
+}
+
+const fn error_free_sum(accumulator: f64, addend: f64) -> Option<(f64, f64)> {
+    let sum = accumulator + addend;
+    if !sum.is_finite() {
+        return None;
+    }
+    let rounded_addend = sum - accumulator;
+    let restored_accumulator = sum - rounded_addend;
+    let addend_error = addend - rounded_addend;
+    let accumulator_error = accumulator - restored_accumulator;
+    Some((sum, accumulator_error + addend_error))
 }
 
 fn dot_four(left: [f64; 4], right: [f64; 4]) -> f64 {
@@ -1231,7 +1386,7 @@ mod tests {
         }
         assert_eq!(transform.origin_offset, [-6.0, -2.0]);
         assert_eq!(transform.out_of_plane_error, 0.0);
-        assert_eq!(transform.maximum_error, 0.005);
+        assert_eq!(transform.maximum_error, 0.0);
 
         let source_coordinate = [0.25, -0.75];
         let source_local = source_plane.local_point(source_coordinate);
@@ -1251,10 +1406,13 @@ mod tests {
         }
 
         let boundary = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5, 0.0]);
-        let boundary_transform = certify_same_slice(source, boundary, 1.0)
-            .expect("half-source-sample origin residual is admitted");
-        assert_eq!(boundary_transform.out_of_plane_error, 0.5);
-        assert_eq!(boundary_transform.maximum_error, 0.5);
+        assert!(certify_same_slice(source, boundary, 1.0).is_none());
+        let in_plane_boundary =
+            SliceIdentity::new(canonical_plane, [1.5, 4.0, 0.0, 0.0]);
+        let in_plane_transform = certify_same_slice(source, in_plane_boundary, 1.0)
+            .expect("half-source-sample in-plane pan remains the same slice");
+        assert_eq!(in_plane_transform.out_of_plane_error, 0.0);
+        assert_eq!(in_plane_transform.maximum_error, 0.0);
         let beyond = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5_f64.next_up(), 0.0]);
         assert!(certify_same_slice(source, beyond, 1.0).is_none());
 
