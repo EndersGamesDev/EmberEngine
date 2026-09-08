@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v7
+
+The Dread Warden replaces the primitive jailer with an SDXL/TRELLIS generated scarred character, worn leather coat, straps, pouches and boots. Conversion cleans the sculpt, repairs closed lower legs and hidden thigh coverage, removes detached fragments and fits the existing twenty-part rig. The 4,138,652-byte GLB has 20,780 triangles and 20,097,700 cloned texture bytes including mipmaps; source jobs, hashes and seven reproduction scripts accompany it (`d792d205`).
+
+The warden shifts his weight forward before rising, plants his feet during straight full-speed pursuit, counter-rotates his upper body and braces into knife attacks. Existing contact timing, interrupted poses, controls and all four V6 voice reactions remain. Fifty-seven core tests, twenty-six client tests, fourteen JavaScript tests, shell syntax, exported-asset checks, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. Thirty-nine final passive native poses were inspected in 35.58 seconds; the Idle browser helper takes 6.37 seconds and produces a 27,821,775-byte WASM. The complete scene stays within its existing limits at 217,128 triangles and 122,499,349 estimated texture bytes. Browser gameplay, audible output, physical devices and 5K frame pacing remain unverified. The generated fingers remain partly fused, clothing uses rigid articulation and turning blends foot poses (`d792d205`).
+
 ### End Game v6
 
 The Warden’s Voice adds four prerecorded reactions: audible cell footsteps, unlocking the gate, claiming the greatsword and the warden’s death. A twelve-second movement cooldown, once-per-life story events and a bounded event history prevent repetition and lost reactions. One-speaker playback gives story lines priority over barks and death priority over live speech; subtitles, ambience ducking, saved pause offsets, background-resume handling and respawn resets accompany the voice (`e8a7a6f7`).
