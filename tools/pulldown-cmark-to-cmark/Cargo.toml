@@ -10,7 +10,7 @@
 [package]
 name = "pulldown-cmark-to-cmark"
 description = "Convert pulldown-cmark Events back to the string they were parsed from (vendored)"
-version = "22.0.1"
+version.workspace = true
 license = "Apache-2.0"
 
 edition.workspace = true

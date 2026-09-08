@@ -3395,7 +3395,7 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark-to-cmark"
-version = "22.0.1"
+version = "1.0.0"
 dependencies = [
  "pulldown-cmark",
 ]
