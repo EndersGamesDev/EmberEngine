@@ -186,6 +186,8 @@ impl BrowserFrameLoop {
                             centre: split,
                             pixel_scale: scale,
                         },
+                        paired_allocation: None,
+                        source_reconstruction: None,
                     });
                     self.kernel_submission
                         .submit(
@@ -195,7 +197,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: None,
                             },
-                            &mut backdrop.grid,
+                            std::slice::from_mut(&mut backdrop.grid),
                             &job,
                         )
                         .map_err(kernel_error)?
@@ -242,6 +244,8 @@ impl BrowserFrameLoop {
                             scale,
                             reference,
                         },
+                        paired_allocation: None,
+                        source_reconstruction: None,
                     });
                     self.kernel_submission
                         .submit(
@@ -251,7 +255,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: Some(&orbit.span),
                             },
-                            &mut backdrop.grid,
+                            std::slice::from_mut(&mut backdrop.grid),
                             &job,
                         )
                         .map_err(kernel_error)?

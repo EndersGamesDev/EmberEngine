@@ -98,6 +98,10 @@ pub enum TileJobError {
     OutputAlias,
     #[error("the resident output profile cannot hold the paired reservation")]
     OutputProfileTooSmall,
+    #[error("a paired output completion belongs to a stale MAIN generation")]
+    StaleOutputCompletion,
+    #[error("a paired output completion names the wrong output side")]
+    OutputCompletionMismatch,
     #[error("the queue already contains the stable job ID")]
     DuplicateJob,
     #[error("the resident profile has fewer tiles than protected backdrop slots")]
@@ -1656,9 +1660,83 @@ impl PairedOutputSpanPlan {
 
 /// One side of a paired tile output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum TileOutput {
     Value,
     Reconstruction,
+}
+
+impl TileOutput {
+    /// Output-side schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 4;
+}
+
+/// One generation-tagged observation that a paired output side completed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct TileOutputCompletion {
+    /// MAIN generation observed at completion.
+    pub generation: u32,
+    /// Output side whose commands completed.
+    pub output: TileOutput,
+}
+
+impl TileOutputCompletion {
+    /// Output-completion schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 8;
+
+    /// Records one completed side of a generation-tagged output pair.
+    #[must_use]
+    pub const fn new(generation: u32, output: TileOutput) -> Self {
+        Self { generation, output }
+    }
+}
+
+/// One receipt that represents both completions of an allocated output pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PairedOutputReceipt {
+    /// The generation-tagged allocation whose two sides completed.
+    pub allocation: PairedOutputAllocation,
+    /// Value followed by reconstruction completion.
+    pub completions: [TileOutputCompletion; 2],
+}
+
+impl PairedOutputReceipt {
+    /// Paired-output receipt schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 64;
+
+    /// Joins the two correctly ordered completions into one publication receipt.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a completion from another generation or one naming the wrong output side.
+    pub const fn new(
+        allocation: PairedOutputAllocation,
+        value: TileOutputCompletion,
+        reconstruction: TileOutputCompletion,
+    ) -> Result<Self, TileJobError> {
+        if value.generation != allocation.generation
+            || reconstruction.generation != allocation.generation
+        {
+            return Err(TileJobError::StaleOutputCompletion);
+        }
+        if !matches!(value.output, TileOutput::Value)
+            || !matches!(reconstruction.output, TileOutput::Reconstruction)
+        {
+            return Err(TileJobError::OutputCompletionMismatch);
+        }
+        Ok(Self {
+            allocation,
+            completions: [value, reconstruction],
+        })
+    }
 }
 
 /// Completion state that cannot yield a publication until both output spans finish.
@@ -2412,6 +2490,9 @@ mod tests {
         assert_record!(TileSpanIdentity, 1, 12);
         assert_record!(PairedTileSpanIdentities, 1, 24);
         assert_record!(PairedOutputAllocation, 1, 48);
+        assert_record!(TileOutput, 1, 4);
+        assert_record!(TileOutputCompletion, 1, 8);
+        assert_record!(PairedOutputReceipt, 1, 64);
         assert_record!(DescriptorTexel, 1, 16);
         assert_record!(TilePoseHeader, 1, 512);
         assert_record!(DescriptorSamplePair, 1, 32);
@@ -2526,6 +2607,32 @@ mod tests {
         assert_eq!(
             PairedOutputAllocation::from_spans(23, &value, &value, 2_097_152),
             Err(TileJobError::OutputAlias)
+        );
+        let value_completion = TileOutputCompletion::new(23, TileOutput::Value);
+        let reconstruction_completion = TileOutputCompletion::new(23, TileOutput::Reconstruction);
+        let receipt =
+            PairedOutputReceipt::new(allocation, value_completion, reconstruction_completion)
+                .expect("both current-generation completions produce one receipt");
+        assert_eq!(receipt.allocation, allocation);
+        assert_eq!(
+            receipt.completions,
+            [value_completion, reconstruction_completion]
+        );
+        assert_eq!(
+            PairedOutputReceipt::new(
+                allocation,
+                TileOutputCompletion::new(22, TileOutput::Value),
+                reconstruction_completion,
+            ),
+            Err(TileJobError::StaleOutputCompletion)
+        );
+        assert_eq!(
+            PairedOutputReceipt::new(
+                allocation,
+                reconstruction_completion,
+                reconstruction_completion,
+            ),
+            Err(TileJobError::OutputCompletionMismatch)
         );
     }
 

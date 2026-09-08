@@ -5,8 +5,8 @@ use std::{
 };
 
 use ember_julibrot_kernels::{
-    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan,
-    SampleStatus, perturb_scaled_pixel, plan_refinement,
+    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PairedOutputAllocation,
+    PerturbUniform, RefinementPlan, SampleStatus, perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
@@ -20,25 +20,25 @@ use super::super::schedule::{
 };
 use super::{
     BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
-    FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity, KernelGridTarget,
-    KernelJob, KernelPlan, KernelPlanning, KernelPublication, KernelReferenceIdentity,
-    KernelRetirement, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, LEVELS,
-    OrderedRefresh, PresentEventEffect, PresentEventFacts, PresentEventOwner, PresentEventPort,
-    PresentEventTransaction, PresentEventTurn, PresentEventView, PresentFenceRefusal,
-    PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES,
-    REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule,
-    RefusalClass, SceneConsidered, SceneMode, SubmissionKind, SurfacePort, SurfaceResolutionAction,
-    SurfaceResolutionEvent, SurfaceResolutionOutcome, SurfaceResolutionOwner,
-    SurfaceResolutionTransaction, SurfaceResolutionTurn, SurfaceSubmission, SurfaceWarpJob,
-    WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
-    WorkerServiceOwner, WorkerServicePort, WorkerSubmission, accepted_reference_facts,
-    apply_precision_mode, arrival_is_current, backdrop_extent, coverage_pre_empts,
-    defer_scene_until_relief_redraw, execute_ordered_refresh, expand_reference_texels_into,
-    fence_error, hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
-    perturbation_reference_is_current, published_iteration_cap,
-    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed, warp_submission_due,
+    FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity,
+    KernelGridPairAllocation, KernelGridTarget, KernelJob, KernelPlan, KernelPlanning,
+    KernelPublication, KernelReferenceIdentity, KernelRetirement, KernelSpanGeneration,
+    KernelSubmissionOwner, KernelSubmissionPort, LEVELS, OrderedRefresh, PresentEventEffect,
+    PresentEventFacts, PresentEventOwner, PresentEventPort, PresentEventTransaction,
+    PresentEventTurn, PresentEventView, PresentFenceRefusal, PresentSceneCompletion,
+    PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES,
+    ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule, RefusalClass, SceneConsidered,
+    SceneMode, SubmissionKind, SurfacePort, SurfaceResolutionAction, SurfaceResolutionEvent,
+    SurfaceResolutionOutcome, SurfaceResolutionOwner, SurfaceResolutionTransaction,
+    SurfaceResolutionTurn, SurfaceSubmission, SurfaceWarpJob, WholeGridJob, WholeGridMode,
+    WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort,
+    WorkerSubmission, accepted_reference_facts, apply_precision_mode, arrival_is_current,
+    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
+    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
+    sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
+    stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
@@ -984,6 +984,7 @@ impl KernelGridIdentity for ReplayKernelGrid {
 struct ReplayKernelSubmission {
     plans: std::collections::VecDeque<RefinementPlan>,
     grids: std::collections::VecDeque<ReplayKernelGrid>,
+    paired_allocations: std::collections::VecDeque<PairedOutputAllocation>,
     dispatch_facts: std::collections::VecDeque<DispatchFacts>,
 }
 
@@ -1032,7 +1033,8 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
         &mut self,
         (): Self::AllocationContext<'_>,
         _plan: &RefinementPlan,
-    ) -> Result<[Self::Grid; 2], Self::Error> {
+        generation: Option<u32>,
+    ) -> Result<KernelGridPairAllocation<Self::Grid>, Self::Error> {
         let first = self
             .grids
             .pop_front()
@@ -1041,7 +1043,15 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
             .grids
             .pop_front()
             .unwrap_or_else(|| unreachable!("second replay grid input is present"));
-        Ok([first, second])
+        let paired_allocation = generation.map(|expected_generation| {
+            let allocation = self
+                .paired_allocations
+                .pop_front()
+                .unwrap_or_else(|| unreachable!("replay paired allocation input is present"));
+            debug_assert_eq!(allocation.generation, expected_generation);
+            allocation
+        });
+        Ok(([first, second], paired_allocation))
     }
 
     fn retire(
@@ -1058,7 +1068,7 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
     fn submit(
         &mut self,
         (): Self::SubmissionContext<'_>,
-        _grid: &mut Self::Grid,
+        _grids: &mut [Self::Grid],
         job: &KernelJob,
     ) -> Result<DispatchFacts, Self::Error> {
         Ok(self
@@ -1448,6 +1458,7 @@ impl FakePresenter {
                         (),
                         KernelGridTarget::Main,
                         &plan,
+                        None,
                     ) {
                         Ok(allocation) => allocation,
                         Err(error) => match error {},
@@ -1489,7 +1500,10 @@ impl FakePresenter {
                 .kernel_backdrop
                 .get_or_insert_with(ReplayKernelGrid::default),
         };
-        let publication = match self.kernel_submission.submit((), grid, job) {
+        let publication = match self
+            .kernel_submission
+            .submit((), std::slice::from_mut(grid), job)
+        {
             Ok(publication) => publication,
             Err(error) => match error {},
         };
@@ -2369,6 +2383,8 @@ const fn default_replay_kernel_job(owner_epoch: u64, level: RefinementLevel) -> 
             },
             pixel_scale: 1.0,
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
 }
 
@@ -2395,6 +2411,8 @@ const fn main_shallow_replay_job() -> KernelJob {
             },
             pixel_scale: 0.125,
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
 }
 
@@ -2433,6 +2451,8 @@ const fn backdrop_perturbation_replay_job() -> KernelJob {
                 precision_mode: "PictureFast",
             },
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
 }
 
@@ -2508,6 +2528,7 @@ fn record_kernel_submission_turn(input: KernelTurnInput) -> KernelTurn {
         kernel_submission: KernelSubmissionOwner::new(ReplayKernelSubmission {
             plans: input.plans.iter().copied().collect(),
             grids: input.allocated_grids.iter().copied().collect(),
+            paired_allocations: std::collections::VecDeque::new(),
             dispatch_facts: std::collections::VecDeque::from([input.dispatch_facts]),
         }),
         kernel_main: Some(input.main),
@@ -7152,7 +7173,9 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     assert!(source.contains("main_grid_pair: Option<MainGridPair>,"));
     assert!(source.contains("grid_round: u64,"));
     assert!(source.contains("JulibrotKernels::plan_grid_pair"));
-    assert!(source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)"));
+    assert!(
+        source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan, None)")
+    );
     assert!(submit.contains("std::mem::swap(&mut grids.current, &mut grids.spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
 }

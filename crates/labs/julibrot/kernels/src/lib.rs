@@ -34,6 +34,8 @@ pub use refinement::{
     plan_refinement,
 };
 pub use shallow::{KernelSample, escape_shallow_pixel, escape_shallow_point};
+pub use tile_job::PairedOutputReceipt;
+pub use tile_job::TileOutputCompletion;
 pub use tile_job::{
     CanonicalChartCellKey, ContentIdentity, CoverageClass, DEFAULT_TILE_APRON,
     DEFAULT_TILE_CORE_SIDE, DEFAULT_TILE_LOGICAL_BYTES, DEFAULT_TILE_SAMPLE_BYTES,

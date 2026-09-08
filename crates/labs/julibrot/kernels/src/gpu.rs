@@ -517,7 +517,14 @@ impl JulibrotKernels {
         max_color_attachment_bytes_per_sample: u32,
         pair: (&mut [EscapeGrid; 2], PairedOutputAllocation),
         identity: (u64, PrecisionMode, RefinementLevel),
-        uniforms: (&ShallowUniform, &SourceReconstructionUniform),
+        render: (
+            &Plane,
+            &Homography,
+            &CentreSplit,
+            f32,
+            EscapeParams,
+            &SourceReconstructionUniform,
+        ),
     ) -> Result<DispatchFacts, KernelError> {
         admit_paired_color_attachment_limit(max_color_attachment_bytes_per_sample)?;
         let reconstruction_kernel = self
@@ -526,17 +533,20 @@ impl JulibrotKernels {
             .ok_or(KernelError::Register)?;
         let (outputs, allocation) = pair;
         let (owner_epoch, precision_mode, level) = identity;
-        let (value_uniform, source_uniform) = uniforms;
+        let (plane, screen_to_plane, centre, pixel_scale, params, source_uniform) = render;
         let [value_grid, reconstruction_grid] = outputs;
         let [value_allocation, reconstruction_allocation] =
             self.paired_allocations(value_grid, reconstruction_grid, allocation)?;
-        let selected = paired_level(
-            value_allocation,
-            reconstruction_allocation,
+        ensure_requested_params(&value_allocation.plan, params)?;
+        let selected = paired_level(value_allocation, reconstruction_allocation, level)?;
+        let value_uniform = ShallowUniform::pack(
+            *plane,
+            screen_to_plane,
+            *centre,
+            pixel_scale,
+            selected.extent,
+            delivered_params(params, selected.iteration_cap),
             level,
-            value_uniform.width,
-            value_uniform.height,
-            value_uniform.max_iter,
         )?;
         let uniform_bytes = paired_uniform_bytes(value_uniform.bytes(), source_uniform.bytes());
         let value_dispatch = &value_allocation.shallow_dispatches[level_index(level)];
@@ -593,8 +603,12 @@ impl JulibrotKernels {
         max_color_attachment_bytes_per_sample: u32,
         pair: (&mut [EscapeGrid; 2], PairedOutputAllocation),
         identity: (u64, PrecisionMode, RefinementLevel),
-        uniforms: (
-            &PerturbUniform,
+        render: (
+            &Plane,
+            &Homography,
+            [f64; 2],
+            ScaleSplit,
+            EscapeParams,
             &SourceReconstructionUniform,
             ReferenceOrbitInput<'_>,
         ),
@@ -606,21 +620,34 @@ impl JulibrotKernels {
             .ok_or(KernelError::Register)?;
         let (outputs, allocation) = pair;
         let (owner_epoch, precision_mode, level) = identity;
-        let (value_uniform, source_uniform, reference) = uniforms;
+        let (
+            plane,
+            screen_to_plane,
+            centre_from_reference_px,
+            scale,
+            params,
+            source_uniform,
+            reference,
+        ) = render;
         let [value_grid, reconstruction_grid] = outputs;
         let [value_allocation, reconstruction_allocation] =
             self.paired_allocations(value_grid, reconstruction_grid, allocation)?;
+        ensure_requested_params(&value_allocation.plan, params)?;
         self.validate_reference(reference, value_allocation.plan.requested_max_iter)?;
         if reference.precision_mode != precision_mode.as_str() {
             return Err(KernelError::ReferencePrecisionMismatch);
         }
-        let selected = paired_level(
-            value_allocation,
-            reconstruction_allocation,
+        let selected = paired_level(value_allocation, reconstruction_allocation, level)?;
+        let used_orbit_length = reference.length.min(selected.iteration_cap);
+        let value_uniform = PerturbUniform::pack_referenced(
+            *plane,
+            screen_to_plane,
+            centre_from_reference_px,
+            scale,
+            selected.extent,
+            delivered_params(params, selected.iteration_cap),
+            used_orbit_length,
             level,
-            value_uniform.width,
-            value_uniform.height,
-            value_uniform.max_iter,
         )?;
         let uniform_bytes = paired_uniform_bytes(value_uniform.bytes(), source_uniform.bytes());
         let resource_words = ensure_paired_reference_dispatches(
@@ -1024,15 +1051,9 @@ fn paired_level(
     value: &GridAllocation,
     reconstruction: &GridAllocation,
     level: RefinementLevel,
-    width: u32,
-    height: u32,
-    max_iter: u32,
 ) -> Result<crate::LevelSpec, KernelError> {
     let selected = value.plan.level(level);
-    if value.plan != reconstruction.plan
-        || selected.extent != (GridExtent { width, height })
-        || selected.iteration_cap != max_iter
-    {
+    if value.plan != reconstruction.plan {
         return Err(KernelError::Dispatch);
     }
     Ok(selected)

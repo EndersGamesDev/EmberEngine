@@ -214,6 +214,7 @@ impl BrowserFrameLoop {
             &mut self.executor,
             KernelGridTarget::Main,
             &next,
+            None,
         ) {
             Ok(allocation) => allocation.into_grids(),
             Err(error) => {
@@ -260,6 +261,7 @@ impl BrowserFrameLoop {
             &mut self.executor,
             KernelGridTarget::Main,
             &next_plan,
+            None,
         ) {
             Ok(allocation) => allocation.into_grids(),
             Err(error) => {
@@ -315,7 +317,7 @@ impl BrowserFrameLoop {
     fn restore_main_grid_pair(&mut self, plan: &RefinementPlan) -> Result<(), AppError> {
         let [grid, spare] = self
             .kernel_submission
-            .allocate_grid_pair(&mut self.executor, KernelGridTarget::Main, plan)
+            .allocate_grid_pair(&mut self.executor, KernelGridTarget::Main, plan, None)
             .map_err(kernel_error)?
             .into_grids();
         self.main_grid_pair = Some(MainGridPair {
@@ -404,6 +406,8 @@ impl BrowserFrameLoop {
                             centre: split,
                             pixel_scale: scale,
                         },
+                        paired_allocation: None,
+                        source_reconstruction: None,
                     });
                     self.kernel_submission
                         .submit(
@@ -413,7 +417,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: None,
                             },
-                            grid,
+                            std::slice::from_mut(grid),
                             &job,
                         )
                         .map_err(kernel_error)?
@@ -449,6 +453,8 @@ impl BrowserFrameLoop {
                             scale,
                             reference,
                         },
+                        paired_allocation: None,
+                        source_reconstruction: None,
                     });
                     self.kernel_submission
                         .submit(
@@ -458,7 +464,7 @@ impl BrowserFrameLoop {
                                 queue: &self.queue,
                                 reference_span: Some(&orbit.span),
                             },
-                            grid,
+                            std::slice::from_mut(grid),
                             &job,
                         )
                         .map_err(kernel_error)?
