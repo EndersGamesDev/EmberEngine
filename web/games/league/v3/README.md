@@ -1,0 +1,1 @@
+This directory holds the archived UltimateLegue v3 page and UI for right-click orders, attack move, animation takeover, settings and the new-player guide; [`web/games.json`](../../../games.json) preserves its protocol entry, Pages leaves the published release frozen, and repairs follow [`docs/versioning.md`](../../../../docs/versioning.md).

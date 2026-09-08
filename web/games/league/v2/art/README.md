@@ -1,0 +1,1 @@
+Generated UltimateLegue v2 champion, arena and environment WebP assets plus their manifest live here for the v2 page; regenerate them through `tools/league/art/` and preserve their frozen-release contract under [`docs/versioning.md`](../../../../../docs/versioning.md).

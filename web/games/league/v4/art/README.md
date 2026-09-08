@@ -1,0 +1,1 @@
+Generated UltimateLegue v4 court, garden and lane WebP surfaces plus their manifest live here for the live page; regenerate them with `tools/league/art/` under [`docs/asset-pipeline.md`](../../../../../docs/asset-pipeline.md), not by hand.
