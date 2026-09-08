@@ -8,6 +8,9 @@ use crate::{
 
 /// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
+/// Julia's canonical zero orthogonal components differ from the binary32 image of `cos(pi/2)` by
+/// less than one f32 epsilon, while a missing unit basis remains one unit away.
+const TARGET_PLANE_COMPONENT_TOLERANCE: f32 = f32::EPSILON;
 
 impl Plane {
     /// Expands one two-dimensional chart coordinate through this plane's rounded basis.
@@ -289,7 +292,22 @@ fn project_reconstructed_sample_from_anchor(
 ) -> Result<ProjectedSample, ReprojectionError> {
     let expected_plane =
         construct_plane(target.object).map_err(|_| ReprojectionError::InvalidTarget)?;
-    if target.plane != expected_plane {
+    let plane_matches = target
+        .plane
+        .basis_u
+        .iter()
+        .chain(target.plane.basis_v.iter())
+        .zip(
+            expected_plane
+                .basis_u
+                .iter()
+                .chain(expected_plane.basis_v.iter()),
+        )
+        .all(|(actual, expected)| {
+            actual.is_finite()
+                && (*actual - *expected).abs() <= TARGET_PLANE_COMPONENT_TOLERANCE
+        });
+    if !plane_matches {
         return Err(ReprojectionError::InvalidTarget);
     }
     if !source_to_request_anchor_px
