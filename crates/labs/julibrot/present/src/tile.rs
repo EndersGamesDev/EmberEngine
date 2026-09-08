@@ -504,7 +504,8 @@ mod tests {
 
     /// Two f32 words retain these moderate finite-mirror origins within one residual rounding.
     const COMPENSATED_SPLIT_TOLERANCE: f64 = 1.0e-12;
-    /// Rebuilding angles from packed sine/cosine pairs may move either factor by one f32 ulp.
+    /// Rebuilding angles from packed sine/cosine pairs may move either factor by two f32
+    /// epsilon units.
     const FACTOR_ROUND_TRIP_TOLERANCE: f64 = 2.384_185_791_015_625e-7;
     /// H21 admits one hundredth of source linear depth after the S1 f32 lane is decoded.
     const SOURCE_DEPTH_RECEIPT_TOLERANCE: f32 = 0.01;

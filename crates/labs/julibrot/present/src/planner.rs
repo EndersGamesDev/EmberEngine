@@ -1797,7 +1797,7 @@ mod tests {
     fn frozen_planner_corpus_round_trips_descriptor_source_poses() {
         use bytemuck::Zeroable;
 
-        /// Packed factors may move by one ulp after the f32 pair is decoded and packed again.
+        /// Packed factors may move by two f32 epsilon units after decode and repack.
         const FROZEN_FACTOR_LANE_TOLERANCE: f32 = 2.0 * f32::EPSILON;
         /// Two-word finite origins retain these corpus values within one residual rounding.
         const FROZEN_ORIGIN_TOLERANCE: f64 = 1.0e-12;
