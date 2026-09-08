@@ -950,4 +950,56 @@ mod tests {
             Err(ReprojectionError::UncertifiedPlacement)
         );
     }
+
+    #[test]
+    fn large_exact_anchor_refuses_a_uniformly_mis_scaled_target_plane() {
+        let mut source = source_pose();
+        source.zoom_log2 = MAXIMAL_DESCRIPTOR_ZOOM_LOG2 - 1.0;
+        rebuild_map(&mut source);
+        let mut target = requested_pose();
+        target.zoom_log2 = MAXIMAL_DESCRIPTOR_ZOOM_LOG2;
+        target.plane_origin = source.plane_origin;
+        rebuild_map(&mut target);
+
+        let anchor_delta_px = [33_554_432.0, 0.0];
+        assert_eq!(pack_split(anchor_delta_px[0]), Some([33_554_432.0, 0.0]));
+        let scale_ratio = (target.zoom_log2 - source.zoom_log2).exp2();
+        let chart_scale = 4.0 / f64::from(target.grid_width);
+        let anchor_chart = anchor_delta_px.map(|value| chart_scale * value);
+        let source_coordinate = anchor_chart.map(|value| -value / scale_ratio);
+        let source_local_four = target.plane.local_point(source_coordinate);
+        let ambient_four = core::array::from_fn(|axis| {
+            source.plane_origin[axis] + source_local_four[axis]
+        });
+        let value = retained_value_sample(
+            EscapeGridRecord {
+                smooth_iter: 0.0,
+                escaped: 0.0,
+                rebase_count: 0.0,
+                status: 0.0,
+            },
+            1,
+        )
+        .expect("interior record has the cancellation fixture's minus-two height");
+        let sample = ReconstructedSample {
+            ambient_four,
+            source_local_four,
+            source_zoom_log2: source.zoom_log2,
+            value,
+        };
+        sample
+            .project_from_anchor(&target, anchor_delta_px, 0.0)
+            .expect("constructed target accepts the large-anchor cancellation fixture");
+
+        // A one-epsilon uniform basis scale moved this independently recomputed target by
+        // 1.166644886023508 px, beyond the one-pixel placement contract.
+        target.plane.basis_u = target
+            .plane
+            .basis_u
+            .map(|component| component * (1.0 + f32::EPSILON));
+        assert_eq!(
+            sample.project_from_anchor(&target, anchor_delta_px, 0.0),
+            Err(ReprojectionError::InvalidTarget)
+        );
+    }
 }
