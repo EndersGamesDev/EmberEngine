@@ -16,6 +16,14 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v10
+
+The Last Seal adds eight armed soldiers and hollow knights plus the two-phase One-Eyed Castellan. Timed weapon contacts, per-attack guard costs, a single committed attacker and an unblockable slam warning create recovery openings. Castle inscriptions, an ordered Sun-Wolf-Bell puzzle, the Castellan's crown and a rising west gate lead to a physical escape ending. A discovered-clue journal, persistent castle checkpoint and three finite healing shrines support the route (`2b6a5b24`).
+
+Three SDXL/TRELLIS body bases become 18-part articulated rigs with compact RGB8 atlases; separate measured sword, spear, axe and maul models share registered mesh IDs. Bodies and weapons total 38,308 triangles, 5,159,880 GLB bytes and 18,699,288 texture bytes including mipmaps. Five cached Kokoro voice clips and an authored ambient loop add 2,816,792 audio bytes. Provenance, closed retopology limitations and portable reproduction tools accompany the assets. The final WASM is 34,721,738 bytes; 330 sampled frames peak at 270,300 submitted triangles with 157,714,026 estimated resident texture bytes including mipmaps (`2b6a5b24`).
+
+All 102 core and 52 client tests, 29 JavaScript tests, 126 Pages fixtures, scoped publication preservation, decoded asset checks, README coverage and done-list checks pass. Actual rig, socket, weapon, gait and collapse geometry is checked at 120 Hz, and a movement-driven test completes the ordered castle route and crosses the final gate. Twenty-seven passive native pose views plus three focused reframings were inspected in 31.72 seconds of capture wall time. The final Idle browser helper takes 6.37 seconds; the native build takes 4.483 seconds. Browser gameplay, physical controls, audible output, vibration and measured 5K frame pacing remain unverified (`2b6a5b24`).
+
 ### End Game v9
 
 Beyond the Dungeon continues after the greatsword, warden fight and broken exit chain. A rising portcullis opens the lower passage, monumental great hall, grand stair, backyard garden, castle walls and tower summit. Shared measured geometry supplies 451 solids, 88 stair treads and eight prop placements; grounded movement, jumping, guard, footsteps and discovery work across elevations. Separate portal jambs, protected outer rails, swept support and ceiling checks, and out-of-world recovery keep the connected route traversable in both directions (`47e98a90`).
