@@ -195,10 +195,17 @@ function loop(now) {
     quality.sample(ms); globalThis.__emberRenderScale = quality.scale;
     api.touch_input(movement[0], movement[1], look[0], look[1], held); look = [0, 0];
   }
-  if (now - lastHudAt < 80) return;
-  lastHudAt = now;
   const json = api.state_json(); if (!json) return;
   const state = JSON.parse(json);
+  const combat=state.combat;
+  // Contact sounds follow simulation frames, independently of the slower HUD.
+  if(combat) {
+    if(combat.swingEvent===0) lastWhoosh=0;
+    if(combat.active && combat.active.elapsed>=combat.active.windup && combat.swingEvent!==lastWhoosh) {lastWhoosh=combat.swingEvent;swordSound(false);}
+    if(combat.impactEvent!==lastImpact) {lastImpact=combat.impactEvent;if(lastImpact) swordSound(true,combat.impactStrength);}
+  }
+  if (now - lastHudAt < 80) return;
+  lastHudAt = now;
   document.querySelector('.top-actions .version').textContent = `VERSION ${state.version}`;
   if (!$('boot').hidden) { $('boot').hidden = true; $('hud').hidden = false; $('touch').hidden = !coarse || paused || ended; }
   $('form').textContent = state.form.toUpperCase(); $('health').value = state.health; $('health-value').textContent = Math.ceil(state.health); $('stamina').value = state.stamina;
@@ -206,15 +213,11 @@ function loop(now) {
   $('hint').querySelector('kbd').textContent = state.stage === 4 ? (state.pad ? 'R2' : coarse ? 'Strike' : 'LMB') : (state.pad ? '□' : coarse ? 'Use' : 'E');
   $('alert').hidden = state.alert < 0.2; $('alert').textContent = state.alert >= 1 ? 'The warden is awake' : 'The warden hears you';
   if (state.event !== lastEvent) { lastEvent = state.event; lastMessageAt = now; $('message').textContent = state.message; if(state.stage<4) sound('event'); }
-  const combat=state.combat;
   if(combat) {
-    if(combat.swingEvent===0) lastWhoosh=0;
     $('combat-hud').hidden=state.stage<4 || state.finished;
     $('combo-name').textContent=combat.active?combat.label:'Greatsword ready';
     $('combo-cue').textContent=combat.queued?`${combat.queued} follow-up${combat.queued>1?'s':''} buffered`:combat.quickLeft>0?'Tap quickly to chain':combat.rhythmLeft>0?'Tap now for a heavy follow-up':combat.active?`${combat.active.kind} · recovering`:'Tap to strike · pause to vary';
     $('rhythm-fill').style.width=`${Math.max(0,Math.min(100,combat.rhythmLeft/0.9*100))}%`;
-    if(combat.active && combat.active.elapsed>=combat.active.windup && combat.swingEvent!==lastWhoosh) {lastWhoosh=combat.swingEvent;swordSound(false);}
-    if(combat.impactEvent!==lastImpact) {lastImpact=combat.impactEvent;if(lastImpact) swordSound(true,combat.impactStrength);}
   }
   $('message').style.opacity = now - lastMessageAt < 6000 ? '1' : '0';
   if (state.footsteps !== lastSteps) { lastSteps = state.footsteps; if (!state.crouched) sound(); }
