@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Killshot · v31 · Ember</title>
+  <title>Killshot · Ember</title>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -149,7 +149,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; <span>KILLSHOT</span> <small style="opacity:.5">v31</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; <span>KILLSHOT</span> <small id="release-version" style="opacity:.5" title="full version unavailable">Version …</small></h1>
     <div class="headright">
       <div id="host-chip" title="the host this page will play on">server …</div>
       <div id="account" title="click to rename">…</div>
@@ -160,7 +160,7 @@
   <div id="menu" class="card">
     <h2>Killshot</h2>
     <div class="hint"><b>Find your route. Keep your momentum.</b> Free for all, 4v4 team deathmatch or king of the hill across three hand-authored maps. Up to 8 players · <b>5 HP</b> · respawn in 2.5 seconds.</div>
-    <div class="hint"><b>New in v31 · protocol 24:</b> meet the <b>Breach-12 shotgun</b>, a close-range eight-pellet weapon in slot <b>8</b>. Find it in a weapon pickup or choose it as your Custom starting weapon. LIFE, ammo and health boxes, retained weapon slots, circular reload timers, saved controls and <b>Fullscreen mode</b> stay ready.</div>
+    <div class="hint"><b>New in <span id="release-update">this release</span> · protocol 24:</b> meet the <b>Breach-12 shotgun</b>, a close-range eight-pellet weapon in slot <b>8</b>. Find it in a weapon pickup or choose it as your Custom starting weapon. LIFE, ammo and health boxes, retained weapon slots, circular reload timers, saved controls and <b>Fullscreen mode</b> stay ready.</div>
     <details class="quick-guide">
       <summary>Movement, controls &amp; combat guide</summary>
       <p><b>Defaults:</b> WASD move · mouse look · left click fire · right click aim · Space jump · Shift sprint · C crouch · R reload · E melee · Q shield · Tab scoreboard. Change any game action in Settings. Fullscreen has its own button; F11 is the browser shortcut.</p>
@@ -346,7 +346,7 @@
     // legacy top-level key, which every publish keeps writing.
     const { book } = await loadBook(ROOT.href);
     const V = book.v || '0';
-    const { default: init, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
+    const { default: init, package_version, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
     let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
       .catch((e) => { fail(e); console.error(e); });
     // The bundle's exports call into the wasm module, which does not exist
@@ -354,6 +354,12 @@
     // "Cannot read properties of undefined (reading 'proto_version')" on the
     // live page (2026-09-02) and left it at "server …" for good. So wait.
     await ready;
+    const FULL_VERSION = package_version();
+    const VERSION_LABEL = `Version ${FULL_VERSION.split('.')[0]}`;
+    $('release-version').textContent = VERSION_LABEL;
+    $('release-version').title = `Full version ${FULL_VERSION}`;
+    $('release-update').textContent = VERSION_LABEL;
+    document.title = `Killshot · ${VERSION_LABEL} · Ember`;
     const PROTO = proto_version();
 
     // ---- host discovery

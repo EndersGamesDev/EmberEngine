@@ -615,8 +615,14 @@ async function boot() {
     const lab = await openLab({ canvas: CANVAS, statusId: "status" });
     LAB = lab;
     const api = lab.api;
+    const fullVersion = api.package_version();
+    const versionLabel = `Version ${fullVersion.split(".")[0]}`;
+    document.getElementById("release-version").textContent = versionLabel;
+    document.getElementById("release-version").title = `Full version ${fullVersion}`;
+    document.title = `Ember Julibrot · ${versionLabel}`;
     const timer = timerProbe();
     BOOT_FACTS = Object.freeze({
+      package_version: fullVersion,
       timer_quantum_ms: timer.quantum_ms,
       timing_status: timer.quantum_ms === null ? "unavailable: timer exposed no positive transition" : "requires visible replay",
       timer_probe: timer,

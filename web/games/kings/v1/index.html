@@ -203,7 +203,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>four kings</span> <small style="opacity:.5">v1</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>four kings</span> <small id="release-version" style="opacity:.5" title="full version unavailable">Version …</small></h1>
     <div id="proto">protocol …</div>
   </header>
   <div class="controls">
@@ -621,6 +621,11 @@
     try {
       wasm = await import(`./pkg/kings.js?v=${V}`);
       await wasm.default({ module_or_path: `./pkg/kings_bg.wasm?v=${V}` });
+      const fullVersion = wasm.package_version();
+      const versionLabel = `Version ${fullVersion.split('.')[0]}`;
+      document.querySelector('#release-version').textContent = versionLabel;
+      document.querySelector('#release-version').title = `Full version ${fullVersion}`;
+      document.title = `Four Kings · ${versionLabel} · Ember`;
     } catch (e) {
       wasm = null;
       engineError = e;

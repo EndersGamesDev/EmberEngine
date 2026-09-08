@@ -125,6 +125,12 @@ impl Submission {
 #[wasm_bindgen(start)]
 pub fn wasm_init() {}
 
+/// Returns the full release version carried by this wasm package.
+#[wasm_bindgen]
+pub fn package_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Returns the stable timed-kernel inventory as JSON.
 #[wasm_bindgen]
 pub fn kernel_inventory_json() -> String {

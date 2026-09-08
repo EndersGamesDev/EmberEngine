@@ -108,6 +108,7 @@
   <main>
     <div class="eyebrow">ember diagnostic game · report schema 1</div>
     <h1>what is this?</h1>
+    <div id="release-version" class="eyebrow" title="full version unavailable">Version …</div>
     <p class="lede">Let’s find out what this browser is running on. Nine stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
     <section id="guess-card" class="card">
       <div class="eyebrow">optional opening wager</div>
@@ -2089,6 +2090,11 @@
         wasmLoadPromise = (async () => {
           const module = await import('./pkg/what_is_this.js?v=6');
           await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=6' });
+          const fullVersion = module.package_version();
+          const versionLabel = `Version ${fullVersion.split('.')[0]}`;
+          document.querySelector('#release-version').textContent = versionLabel;
+          document.querySelector('#release-version').title = `Full version ${fullVersion}`;
+          document.title = `what is this? · ${versionLabel} · Ember`;
           return module;
         })();
       }

@@ -22,13 +22,20 @@ pub mod ui;
 
 use ember_engine::EngineConfig;
 
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn versioned_title(name: &str) -> String {
+    let major = PACKAGE_VERSION.split('.').next().unwrap_or(PACKAGE_VERSION);
+    format!("{name} — Version {major} · {PACKAGE_VERSION}")
+}
+
 /// Start the hotseat game: four seats, one keyboard, the default
 /// formations, 15 s turns, the camera turning to the seat to move.
 pub fn run_local() {
     let (meshes, ids) = game::build_meshes();
     ember_engine::run(
         EngineConfig {
-            title: "ember: four kings".to_string(),
+            title: versioned_title("ember: four kings"),
             // The board is clicked on the page and steered with the
             // keyboard; grabbing the pointer would only take it away.
             capture_mouse: false,
@@ -51,7 +58,7 @@ pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
     let game = online_game::OnlineGame::connect(cfg, ids)?;
     ember_engine::run(
         EngineConfig {
-            title: "ember: four kings (online)".to_string(),
+            title: versioned_title("ember: four kings (online)"),
             capture_mouse: false,
             // A player opened this; it takes the foreground like any app.
             activate: true,
@@ -102,6 +109,12 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn proto_version() -> u16 {
         kings_core::proto::PROTO_VERSION
+    }
+
+    /// The full release version carried by this wasm package.
+    #[wasm_bindgen]
+    pub fn package_version() -> String {
+        super::PACKAGE_VERSION.to_string()
     }
 
     /// Polled every animation frame: the JSON of `game::HudState`.

@@ -41,7 +41,7 @@
 <body>
   <main>
     <header>
-      <h1>ember <span>fragment-compute lattice</span></h1>
+      <h1>ember <span>fragment-compute lattice</span> <small id="release-version" title="full version unavailable">Version …</small></h1>
       <div id="telemetry">
         <span>requested <strong id="requested">0</strong></span>
         <span>delivered <strong id="delivered">0</strong></span>
@@ -75,7 +75,13 @@
     <footer>The fixed 1,200-vertex/3,000-edge prism and edge topology stay GPU-resident. A layer-generated fragment wrapper mixed-radix decodes each copy's centered 5D lattice coordinate, rotates base+center in SO(5), projects 5D→4D→3D with d₅=d₄=8, and emits two texture slots. Hue is only post-rotation x₅ over the displayed symmetric lattice range. Per shown frame uploads 48 kernel-uniform bytes plus 16 camera bytes.</footer>
   </main>
   <script type="module">
-    import init, { probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=4';
+    import init, { package_version, probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=4';
+
+    const PACKAGE_VERSION = package_version();
+    const VERSION_LABEL = `Version ${PACKAGE_VERSION.split('.')[0]}`;
+    document.querySelector('#release-version').textContent = VERSION_LABEL;
+    document.querySelector('#release-version').title = `Full version ${PACKAGE_VERSION}`;
+    document.title = `ember fragment-compute lattice · ${VERSION_LABEL}`;
 
     const status = document.querySelector('#status');
     const facts = document.querySelector('#facts');

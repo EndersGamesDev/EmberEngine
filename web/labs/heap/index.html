@@ -37,7 +37,7 @@
 </head>
 <body>
   <header>
-    <h1>Heap lattice · algebra against materialization</h1>
+    <h1>Heap lattice · algebra against materialization <small id="release-version" title="full version unavailable">Version …</small></h1>
     <p>Explicit wgpu 24 GL backend over WebGL2 with rawgl's fixed perspective, hue and lighting values. This is a capacity and vertex-work experiment, not an edges-per-millisecond contest: the reference workload is raster-bound, so a large speedup is the first result to distrust.</p>
   </header>
   <main>
@@ -93,9 +93,15 @@
       select_heap_lattice_json,
       start_heap_lattice,
       take_heap_lattice_panic,
+      package_version,
     } from "./pkg/ember_lab_heap.js?v=9";
 
-    const VERSION = "heap-lattice-v9";
+    const PACKAGE_VERSION = package_version();
+    const VERSION_LABEL = `Version ${PACKAGE_VERSION.split(".")[0]}`;
+    document.querySelector("#release-version").textContent = VERSION_LABEL;
+    document.querySelector("#release-version").title = `Full version ${PACKAGE_VERSION}`;
+    document.title = `GPU heap lattice · ${VERSION_LABEL}`;
+    const LAB_SCHEMA = "heap-lattice-v9";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
@@ -417,7 +423,7 @@
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));
       selection = initialized.initial;
-      facts.textContent = JSON.stringify({ version: VERSION, timer, ...initialized }, null, 2);
+      facts.textContent = JSON.stringify({ version: PACKAGE_VERSION, schema: LAB_SCHEMA, timer, ...initialized }, null, 2);
       displaySelection();
       status.textContent = "Mode A step 1 rendered immediately · running equal-work gate before warm-up timing…";
       await runConformance(pageGeneration);

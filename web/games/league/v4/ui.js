@@ -27,6 +27,11 @@ try {
   const m = await import('./pkg/league.js');
   await m.default();
   wasm = m;
+  const fullVersion = wasm.package_version();
+  const versionLabel = `Version ${fullVersion.split('.')[0]}`;
+  $('release-version').textContent = versionLabel;
+  $('release-version').title = `Full version ${fullVersion}`;
+  document.title = `UltimateLegue · ${versionLabel} · Ember`;
   PROTO = wasm.proto_version();
   DATA = JSON.parse(wasm.data_json());
 } catch (e) {

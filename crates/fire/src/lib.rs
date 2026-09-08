@@ -20,6 +20,13 @@ pub mod trackmesh;
 
 use ember_engine::EngineConfig;
 
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn versioned_title(name: &str) -> String {
+    let major = PACKAGE_VERSION.split('.').next().unwrap_or(PACKAGE_VERSION);
+    format!("{name} — Version {major} · {PACKAGE_VERSION}")
+}
+
 /// Start the local game: one human, seven AI cars, three laps.
 pub fn run_local() {
     let track = fire_core::castle::track();
@@ -33,7 +40,7 @@ pub fn run_local() {
     let game = game::Game::new(ids);
     ember_engine::run(
         EngineConfig {
-            title: "ember — fire racer".to_string(),
+            title: versioned_title("ember — fire racer"),
             // The car is steered with the keyboard; grabbing the pointer
             // would only take the cursor away for nothing.
             capture_mouse: false,
@@ -57,7 +64,7 @@ pub fn run_online(cfg: &online_game::Config) -> Result<(), String> {
     let game = online_game::OnlineGame::connect(cfg, ids)?;
     ember_engine::run(
         EngineConfig {
-            title: "ember — fire racer (online)".to_string(),
+            title: versioned_title("ember — fire racer (online)"),
             capture_mouse: false,
             // A player opened this; it takes the foreground like any app.
             activate: true,
@@ -97,6 +104,12 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn proto_version() -> u16 {
         fire_core::proto::PROTO_VERSION
+    }
+
+    /// The full release version carried by this wasm package.
+    #[wasm_bindgen]
+    pub fn package_version() -> String {
+        super::PACKAGE_VERSION.to_string()
     }
 
     /// The page draws the HUD: this renderer has one scene pass, no 2D layer
