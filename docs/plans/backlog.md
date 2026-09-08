@@ -46,6 +46,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## platform-web-deploy
 
+- After `deploy/retag.sh` succeeds on every authoritative remote, remove the legacy-tag fallback from `deploy/tests/test-changelog.sh`.
 - Four lab pages import bundles nothing builds, ships or links: `web/labs/heap/index.html:96`, `web/labs/heap/bench.html:90`, `web/labs/heap/spike.html:41` and `web/labs/layer/index.html:78` load cdylib bundles `deploy/deploy-pages.sh` never builds, `web/games.json` never lists and no page links, so nobody can reach them. Ship them or delete the pages.
 - `copy_pkg` carries only the `.js` and `_bg.wasm` artefacts (`deploy/deploy-pages.sh:181`), so a wasm-bindgen `inline_js` snippet never ships; the consequence is recorded at `crates/ember-engine/Cargo.toml:44` and worked around at `crates/ember-engine/src/app.rs:922`.
 - A name-bound mirror can be chosen on every page by self-reporting an absurd version: `web/hosts.js:308` lets the live value win, the returned view carries no source tag, and the ranking sorts on it at `:371`. The fix carries a source tag from the book merge through the view into the sort.
