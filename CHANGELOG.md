@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v1
+
+The first End Game chapter runs on Ember: awaken in a wooden-floored dungeon cell, recover a key, evade or fight the sleeping warden, claim the greatsword and break the exit chain. Wolf and werewolf armor forms, a prerecorded prologue, material densities and gravity, individually varied surfaces, local torch lighting and adaptive resolution up to a 5120-pixel width accompany keyboard/mouse, standard gamepad and touch controls. The launcher entry and scoped publisher preserve the other live games; each targeted release records its source and file hashes in the game's own `version.json` (`9e664ac0`).
+
+Validation covered six simulation tests, three client input tests, three resolution tests, 53 engine tests, 12 GPU tests, 125 deployment fixtures, offline publication preservation, sibling-client compilation and passive native visual inspection. Release WASM builds successfully. Physical controllers, mobile devices, browser gameplay and 5K frame rates remain unverified; the unrigged armor swap and supplied dragon film establish a v1 prototype, with continuous animation and photorealistic material simulation left in the backlog (`9e664ac0`).
+
 ### Julibrot rounds two and three
 
 Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
