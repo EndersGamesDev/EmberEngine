@@ -428,9 +428,13 @@ impl Presenter {
             precision_mode_name,
         );
         if reference_advanced {
+            let accepted_pose = self
+                .latest_hot_slot
+                .and_then(|slot| self.hot[slot.index() as usize]);
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
                 main.state.centre_revision,
+                accepted_pose.as_ref(),
                 main.state.reference_shift_px,
             );
             if let Some(frame) = self.ledger.retained() {
