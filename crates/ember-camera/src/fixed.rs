@@ -11,9 +11,9 @@ const F64_SUBNORMAL_EXPONENT: i64 = -1_074;
 
 /// Integer bits retained by every [`Fixed`], including its sign bit.
 ///
-/// One complete 64-bit limb gives camera centres a signed range of ±2⁶³ plane units. Every
-/// additional limb is fractional precision, so the first consumer's eight limbs retain 448
-/// fractional bits without making that width a ceiling for other consumers.
+/// One complete 64-bit limb gives camera centres the standard signed range from −2⁶³ through the
+/// fixed value immediately below 2⁶³. Every additional limb is fractional precision, so the first
+/// consumer's eight limbs retain 448 fractional bits without making that width a ceiling.
 pub const FIXED_INTEGER_BITS: usize = LIMB_BITS;
 
 /// A typed refusal from exact camera arithmetic.

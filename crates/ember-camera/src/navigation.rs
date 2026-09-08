@@ -6,9 +6,9 @@ use crate::{
 
 /// Largest magnitude accepted at the floating-point pixel input boundary.
 ///
-/// A signed 31-bit render coordinate covers every `u32` screen about its centre while leaving one
-/// sign bit for exact differences and midpoints.
-pub const MAX_SCREEN_COORDINATE_PIXELS: i64 = 2_147_483_647;
+/// A 2³¹-pixel magnitude covers every `u32` screen about its centre while fixed arithmetic retains
+/// ample room for exact differences and midpoints.
+pub const MAX_SCREEN_COORDINATE_PIXELS: i64 = 2_147_483_648;
 
 /// Maximum relative box-edge slack introduced by one exponent quantum.
 ///
@@ -372,6 +372,18 @@ mod tests {
             Err(CameraError::ExponentOutOfRange)
         );
         assert_eq!(camera, original);
+        Ok(())
+    }
+
+    #[test]
+    fn pixel_boundary_covers_the_largest_centred_u32_extent() -> Result<(), CameraError> {
+        let screen = Screen::new(4, 4)?;
+        let camera = view();
+        assert!(click(&camera, screen, [2_147_483_648.0, 0.0]).is_ok());
+        assert_eq!(
+            click(&camera, screen, [2_147_483_649.0, 0.0]),
+            Err(CameraError::ScreenCoordinateOutOfRange)
+        );
         Ok(())
     }
 

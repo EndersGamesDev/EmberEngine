@@ -11,8 +11,8 @@ pub const MIN_EXPONENT_QUANTA: i32 = -2 * EXPONENT_QUANTA_PER_OCTAVE;
 
 /// Deep navigation limit retained from the first consumer's reachable control range.
 ///
-/// At 120 octaves, a 512-bit value still retains more than 300 guard bits beyond a maximum-width
-/// render pixel, which is what permits a trip back out to recover the original centre bits.
+/// At 120 octaves, a 512-bit value still retains nearly 300 guard bits beyond a maximum-width render
+/// pixel, which is what permits a trip back out to recover the original centre bits.
 pub const MAX_EXPONENT_QUANTA: i32 = 120 * EXPONENT_QUANTA_PER_OCTAVE;
 
 /// An integer count of 1/1024-octave camera scale changes.
