@@ -911,14 +911,9 @@ mod tests {
         let scale_ratio = (target.zoom_log2 - source.zoom_log2).exp2();
         let chart_scale = 4.0 / f64::from(target.grid_width);
         let anchor_chart = anchor_delta_px.map(|value| chart_scale * value);
+        let anchor_local = target.plane.local_point(anchor_chart);
         let requested_local: [f64; 4] = core::array::from_fn(|axis| {
-            scale_ratio.mul_add(
-                exact.source_local_four[axis],
-                f64::from(target.plane.basis_u[axis]).mul_add(
-                    anchor_chart[0],
-                    f64::from(target.plane.basis_v[axis]) * anchor_chart[1],
-                ),
-            )
+            scale_ratio.mul_add(exact.source_local_four[axis], anchor_local[axis])
         });
         let direct = ProjectedSample::from_local_point(&target, requested_local, value)
             .expect("direct maximal-zoom requested point projects");

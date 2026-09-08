@@ -834,7 +834,7 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
                 to.centre_from_reference_px[0] + offset[0],
                 to.centre_from_reference_px[1] + offset[1],
             ];
-            let mut vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
+            let mut vector = to.plane.local_point(coordinate).map(|value| ratio * value);
             for (axis, value) in vector.iter_mut().enumerate() {
                 *value = (to.plane_origin[axis] - from.plane_origin[axis])
                     .mul_add(source_pixels_per_chart, *value);
@@ -852,7 +852,7 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
 
 #[cfg(test)]
 fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewControls) -> [f64; 5] {
-    let chart = plane_point(plane, coordinate);
+    let chart = plane.local_point(coordinate);
     let mut point = [chart[0], chart[1], chart[2], chart[3], height];
     for factor in (0..ViewControls::CAMERA_PLANES.len()).rev() {
         let (first, second) = ViewControls::CAMERA_PLANES[factor];
@@ -868,21 +868,10 @@ fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewCon
     point
 }
 
-fn plane_point(plane: Plane, coordinate: [f64; 2]) -> [f64; 4] {
-    std::array::from_fn(|axis| {
-        f64::from(plane.basis_u[axis]).mul_add(
-            coordinate[0],
-            f64::from(plane.basis_v[axis]) * coordinate[1],
-        )
-    })
-}
-
 fn plane_projection(plane: Plane, point: [f64; 4]) -> [f64; 4] {
     let u = dot4(plane.basis_u, point);
     let v = dot4(plane.basis_v, point);
-    std::array::from_fn(|axis| {
-        f64::from(plane.basis_u[axis]).mul_add(u, f64::from(plane.basis_v[axis]) * v)
-    })
+    plane.local_point([u, v])
 }
 
 fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
@@ -997,7 +986,7 @@ fn project_scene_vertex_with_shortcut(
     let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let chart_coordinate = [chart_scale * mapped[0], chart_scale * mapped[1]];
-    let local_four = plane_point(pose.plane, chart_coordinate);
+    let local_four = pose.plane.local_point(chart_coordinate);
     let projected =
         ProjectedSample::from_local_point(pose, local_four, RetainedValueSample { record_height })
             .ok()?;
@@ -1758,12 +1747,7 @@ mod tests {
     ) -> bool {
         let value = retained_value_sample(record, 4)
             .unwrap_or_else(|error| panic!("{case_name} value: {error}"));
-        let source_local: [f64; 4] = core::array::from_fn(|axis| {
-            f64::from(pose.plane.basis_u[axis]).mul_add(
-                coordinate[0],
-                f64::from(pose.plane.basis_v[axis]) * coordinate[1],
-            )
-        });
+        let source_local = pose.plane.local_point(coordinate);
         let direct = ProjectedSample::from_local_point(pose, source_local, value)
             .unwrap_or_else(|error| panic!("{case_name} direct source receipt: {error}"));
         let depth = SourceDepthRecord {

@@ -2,10 +2,23 @@
 
 use thiserror::Error;
 
-use crate::{EscapeGridRecord, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
+use crate::{EscapeGridRecord, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
 
 /// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
+
+impl Plane {
+    /// Expands one two-dimensional chart coordinate through this plane's rounded basis.
+    #[must_use]
+    pub fn local_point(self, coordinate: [f64; 2]) -> [f64; 4] {
+        core::array::from_fn(|axis| {
+            f64::from(self.basis_u[axis]).mul_add(
+                coordinate[0],
+                f64::from(self.basis_v[axis]) * coordinate[1],
+            )
+        })
+    }
+}
 
 /// Palette-independent value information needed to rebuild one retained sample's lift.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,7 +190,7 @@ pub fn source_depth_record(
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let a_f = chart_scale * homogeneous[0] / homogeneous[2];
     let b_f = chart_scale * homogeneous[1] / homogeneous[2];
-    let source_local_four = plane_local_point(pose, [a_f, b_f]);
+    let source_local_four = pose.plane.local_point([a_f, b_f]);
     let projected = ProjectedSample::from_local_point(pose, source_local_four, value)?;
     Ok(SourceDepthRecord {
         a_f,
@@ -226,7 +239,7 @@ fn reconstruct_source_sample_with_tolerance(
     {
         return Err(ReprojectionError::InvalidSource);
     }
-    let source_local_four = plane_local_point(pose, [depth.a_f, depth.b_f]);
+    let source_local_four = pose.plane.local_point([depth.a_f, depth.b_f]);
     let sample = ReconstructedSample {
         ambient_four: absolute_plane_point(pose, [depth.a_f, depth.b_f]),
         source_local_four,
@@ -289,14 +302,9 @@ fn project_reconstructed_sample_from_anchor(
     }
     let chart_scale = 4.0 / f64::from(target.grid_width);
     let anchor_chart = source_to_request_anchor_px.map(|value| chart_scale * value);
+    let anchor_local = target.plane.local_point(anchor_chart);
     let requested_local: [f64; 4] = core::array::from_fn(|axis| {
-        scale_ratio.mul_add(
-            sample.source_local_four[axis],
-            f64::from(target.plane.basis_u[axis]).mul_add(
-                anchor_chart[0],
-                f64::from(target.plane.basis_v[axis]) * anchor_chart[1],
-            ),
-        )
+        scale_ratio.mul_add(sample.source_local_four[axis], anchor_local[axis])
     });
     ProjectedSample::from_local_point(target, requested_local, sample.value)
 }
@@ -334,17 +342,8 @@ pub fn retained_value_sample(
     Ok(RetainedValueSample { record_height })
 }
 
-fn plane_local_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
-    core::array::from_fn(|axis| {
-        f64::from(pose.plane.basis_u[axis]).mul_add(
-            coordinate[0],
-            f64::from(pose.plane.basis_v[axis]) * coordinate[1],
-        )
-    })
-}
-
 fn absolute_plane_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
-    let local_four = plane_local_point(pose, coordinate);
+    let local_four = pose.plane.local_point(coordinate);
     core::array::from_fn(|axis| pose.plane_origin[axis] + local_four[axis])
 }
 
