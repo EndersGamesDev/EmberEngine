@@ -6,6 +6,7 @@ version = "1.0.2"
 [dependencies]
 bytemuck.workspace = true
 minijinja = { version = "=2.24.0", default-features = false, features = ["debug", "multi_template"] }
+naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in"] }
 
 [lints]
 workspace = true

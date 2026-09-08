@@ -7,5 +7,7 @@ mod runtime;
 mod type_meta;
 
 pub use enum_meta::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslEnumVariant};
-pub use runtime::{RenderError, ShaderConstant, ShaderContext, WgslBinding};
+pub use runtime::{
+    RenderError, RenderedShader, ShaderConstant, ShaderContext, WgslBinding, render,
+};
 pub use type_meta::{WgslField, WgslType, WgslTypeDescription};

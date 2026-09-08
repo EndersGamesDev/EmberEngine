@@ -8,7 +8,19 @@ use crate::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslType, WgslT
 
 const INTERFACE_TEST_NAME: &str = "interface-test.wgsl.jinja";
 const INTERFACE_TEST_SOURCE: &str = include_str!("../templates/interface-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: [(&str, &str); 1] = [(INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE)];
+const INVALID_TEST_NAME: &str = "invalid-test.wgsl.jinja";
+const INVALID_TEST_SOURCE: &str = include_str!("../templates/invalid-test.wgsl.jinja");
+const INVALID_VALIDATION_TEST_NAME: &str = "invalid-validation-test.wgsl.jinja";
+const INVALID_VALIDATION_TEST_SOURCE: &str =
+    include_str!("../templates/invalid-validation-test.wgsl.jinja");
+const EMBEDDED_TEMPLATES: [(&str, &str); 3] = [
+    (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
+    (INVALID_TEST_NAME, INVALID_TEST_SOURCE),
+    (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
+];
+
+const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
+const FNV_PRIME: u64 = 1_099_511_628_211;
 
 /// One bind-group and binding-number pair owned by Rust pipeline setup.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -30,7 +42,28 @@ pub enum ShaderConstant {
     Float(f32),
 }
 
-/// A registration or template-rendering failure.
+/// Validated WGSL source and its deterministic content hash.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RenderedShader {
+    source: String,
+    hash: u64,
+}
+
+impl RenderedShader {
+    /// Returns the WGSL source accepted by naga.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// Returns the stable FNV-1a hash of [`Self::source`].
+    #[must_use]
+    pub const fn hash(&self) -> u64 {
+        self.hash
+    }
+}
+
+/// A registration, template-rendering, or WGSL validation failure.
 #[derive(Debug)]
 pub enum RenderError {
     /// One name was registered with two different descriptions.
@@ -47,6 +80,24 @@ pub enum RenderError {
     },
     /// Minijinja rejected or failed to render an embedded template.
     Template(minijinja::Error),
+    /// Naga could not parse the rendered WGSL.
+    WgslParse {
+        /// Embedded template name.
+        template: String,
+        /// One-based line in the rendered template when naga supplied a span.
+        line: Option<u32>,
+        /// Naga's source diagnostic.
+        diagnostic: String,
+    },
+    /// Naga parsed the WGSL but rejected its shader semantics.
+    WgslValidation {
+        /// Embedded template name.
+        template: String,
+        /// One-based line in the rendered template when naga supplied a span.
+        line: Option<u32>,
+        /// Naga's source diagnostic.
+        diagnostic: String,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -59,6 +110,16 @@ impl fmt::Display for RenderError {
                 write!(formatter, "WGSL constant `{name}` is not finite")
             }
             Self::Template(error) => write!(formatter, "shader template failed: {error:#}"),
+            Self::WgslParse {
+                template,
+                line,
+                diagnostic,
+            } => write_naga_error(formatter, "WGSL parsing", template, *line, diagnostic),
+            Self::WgslValidation {
+                template,
+                line,
+                diagnostic,
+            } => write_naga_error(formatter, "WGSL validation", template, *line, diagnostic),
         }
     }
 }
@@ -67,7 +128,10 @@ impl Error for RenderError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Template(error) => Some(error),
-            Self::ConflictingRegistration { .. } | Self::NonFiniteConstant { .. } => None,
+            Self::ConflictingRegistration { .. }
+            | Self::NonFiniteConstant { .. }
+            | Self::WgslParse { .. }
+            | Self::WgslValidation { .. } => None,
         }
     }
 }
@@ -163,19 +227,72 @@ impl ShaderContext {
         register_once(&mut self.constant_values, name, value, "constant")
     }
 
-    /// Renders one named embedded template through this context's filters.
-    ///
-    /// This stage performs template expansion only. The crate's validated `render` entry point is
-    /// added with naga validation in the next structural step and is the path consumers use.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RenderError::Template`] when the embedded template is missing, invalid, or refers
-    /// to a name absent from this context.
-    pub fn render_template(&self, template_name: &str) -> Result<String, RenderError> {
+    fn expand(&self, template_name: &str) -> Result<String, RenderError> {
         let environment = environment(self)?;
         Ok(environment.get_template(template_name)?.render(())?)
     }
+}
+
+/// Renders one embedded template and rejects WGSL that naga cannot parse or validate.
+///
+/// # Errors
+///
+/// Returns [`RenderError::Template`] for template failures, [`RenderError::WgslParse`] for WGSL
+/// syntax failures, or [`RenderError::WgslValidation`] for invalid shader semantics.
+pub fn render(template_name: &str, context: &ShaderContext) -> Result<RenderedShader, RenderError> {
+    let source = context.expand(template_name)?;
+    validate_wgsl(template_name, &source)?;
+    Ok(RenderedShader {
+        hash: stable_hash(&source),
+        source,
+    })
+}
+
+fn write_naga_error(
+    formatter: &mut fmt::Formatter<'_>,
+    phase: &str,
+    template: &str,
+    line: Option<u32>,
+    diagnostic: &str,
+) -> fmt::Result {
+    match line {
+        Some(number) => write!(
+            formatter,
+            "{phase} failed in template `{template}` at template line {number}:\n{diagnostic}"
+        ),
+        None => write!(
+            formatter,
+            "{phase} failed in template `{template}`:\n{diagnostic}"
+        ),
+    }
+}
+
+fn validate_wgsl(template_name: &str, source: &str) -> Result<(), RenderError> {
+    let module = naga::front::wgsl::parse_str(source).map_err(|error| RenderError::WgslParse {
+        template: template_name.to_owned(),
+        line: error.location(source).map(|location| location.line_number),
+        diagnostic: error.emit_to_string(source),
+    })?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map_err(|error| RenderError::WgslValidation {
+        template: template_name.to_owned(),
+        line: error.location(source).map(|location| location.line_number),
+        diagnostic: error.emit_to_string(source),
+    })?;
+    Ok(())
+}
+
+fn stable_hash(source: &str) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in source.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 fn register_once<T: Copy + PartialEq>(
@@ -307,7 +424,10 @@ fn render_constant(name: &str, value: ShaderConstant) -> String {
 mod tests {
     use bytemuck::{Pod, Zeroable};
 
-    use super::{INTERFACE_TEST_NAME, ShaderConstant, ShaderContext};
+    use super::{
+        INTERFACE_TEST_NAME, INVALID_TEST_NAME, INVALID_VALIDATION_TEST_NAME, RenderError,
+        ShaderConstant, ShaderContext, render, stable_hash,
+    };
 
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C, align(16))]
@@ -330,8 +450,7 @@ mod tests {
 
     crate::impl_wgsl_enum!(TestMode, "TestMode", u32, { Preview, Final });
 
-    #[test]
-    fn embedded_template_uses_every_rust_owned_filter() {
+    fn test_context() -> ShaderContext {
         let mut context = ShaderContext::new();
         context
             .register_type::<TestUniform>()
@@ -345,10 +464,14 @@ mod tests {
         context
             .register_constant("TEST_SCALE", ShaderConstant::Float(2.5))
             .expect("test constant has one description");
+        context
+    }
 
-        let source = context
-            .render_template(INTERFACE_TEST_NAME)
+    #[test]
+    fn embedded_template_uses_every_rust_owned_filter() {
+        let shader = render(INTERFACE_TEST_NAME, &test_context())
             .expect("embedded interface template renders");
+        let source = shader.source();
         assert!(
             source.contains("struct TestUniform { colour: vec4<f32>, transform: mat4x4<f32>, }")
         );
@@ -356,5 +479,38 @@ mod tests {
         assert!(source.contains("const TestMode_Final: u32 = 9u;"));
         assert!(source.contains("@group(0) @binding(3) var values: texture_2d<f32>;"));
         assert!(source.contains("const TEST_SCALE: f32 = 2.5;"));
+    }
+
+    #[test]
+    fn rendered_source_hash_uses_a_pinned_stable_algorithm() {
+        assert_eq!(stable_hash("WGSL"), 7_755_207_365_939_263_476);
+        let first = render(INTERFACE_TEST_NAME, &test_context()).expect("first render validates");
+        let second = render(INTERFACE_TEST_NAME, &test_context()).expect("second render validates");
+        assert_eq!(first.hash(), second.hash());
+    }
+
+    #[test]
+    fn naga_parse_error_names_the_failing_template_line() {
+        let error = render(INVALID_TEST_NAME, &test_context()).expect_err("invalid WGSL must fail");
+        assert!(matches!(
+            &error,
+            RenderError::WgslParse { line: Some(2), .. }
+        ));
+        let message = error.to_string();
+        assert!(message.contains(INVALID_TEST_NAME));
+        assert!(message.contains("template line 2"));
+    }
+
+    #[test]
+    fn naga_validation_error_names_the_failing_template_line() {
+        let error = render(INVALID_VALIDATION_TEST_NAME, &test_context())
+            .expect_err("invalid shader semantics must fail");
+        assert!(matches!(
+            &error,
+            RenderError::WgslValidation { line: Some(_), .. }
+        ));
+        let message = error.to_string();
+        assert!(message.contains(INVALID_VALIDATION_TEST_NAME));
+        assert!(message.contains("template line"));
     }
 }
