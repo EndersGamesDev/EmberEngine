@@ -1,7 +1,7 @@
 use ember_julibrot_math::{
-    EscapeGridRecord, Homography, Plane, Pose, PoseMap, ProjectedSample, ReprojectionError,
-    RetainedValueSample, SourceDepthRecord, ViewControls, pixel_scale, plane_chart_relation,
-    warp_matrix,
+    EscapeGridRecord, Homography, Plane, Pose, PoseMap, ProjectedSample, ReconstructedSample,
+    ReprojectionError, RetainedValueSample, SourceDepthRecord, ViewControls, pixel_scale,
+    plane_chart_relation, warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
@@ -85,16 +85,28 @@ impl Warp {
         crate::tile::pack_descriptor_sample(value, depth)
     }
 
-    /// Unpacks one `S0/S1` pair and derives its palette-independent height.
+    /// Unpacks one `S0/S1` pair without changing either record's declared fields.
     ///
     /// # Errors
     ///
-    /// Returns a typed refusal for invalid lanes or an invalid iteration cap.
+    /// Returns a typed refusal for invalid lanes or non-positive valid source depth.
     pub fn unpack_descriptor_sample(
         pair: &DescriptorSamplePair,
-        iteration_cap: u32,
-    ) -> Result<(RetainedValueSample, SourceDepthRecord), ReprojectionError> {
-        crate::tile::unpack_descriptor_sample(pair, iteration_cap)
+    ) -> Result<(EscapeGridRecord, SourceDepthRecord), ReprojectionError> {
+        crate::tile::unpack_descriptor_sample(pair)
+    }
+
+    /// Reconstructs one descriptor sample and returns its recomputed source screen/depth receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid descriptor or failed source self-round-trip.
+    pub fn reconstruct_descriptor_sample(
+        header: &TilePoseHeader,
+        pair: &DescriptorSamplePair,
+        source_pixel: [f64; 2],
+    ) -> Result<(ReconstructedSample, ProjectedSample), ReprojectionError> {
+        crate::tile::reconstruct_descriptor_sample(header, pair, source_pixel)
     }
 }
 
@@ -1767,6 +1779,89 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn frozen_planner_corpus_round_trips_descriptor_source_samples() {
+        use bytemuck::Zeroable;
+
+        /// F32 source factors and depth must return within one hundredth of a source pixel.
+        const FROZEN_SOURCE_PIXEL_TOLERANCE_PX: f32 = 0.01;
+        /// One hundredth of linear depth bounds every frozen row after S1 f32 rounding.
+        const FROZEN_SOURCE_DEPTH_TOLERANCE: f32 = 0.01;
+        /// Fifteen valid from/to poses remain after the frozen edge-on and zero-extent refusals.
+        const FROZEN_DESCRIPTOR_RECEIPTS: usize = 15;
+
+        let value = RetainedValueSample {
+            record_height: -2.0,
+        };
+        let record = EscapeGridRecord {
+            smooth_iter: 0.0,
+            escaped: 0.0,
+            rebase_count: 0.0,
+            status: 0.0,
+        };
+        let mut receipt_count = 0;
+        for case in named_planner_corpus() {
+            for pose in [case.from_pose, case.to_pose] {
+                if pose.grid_width == 0
+                    || pose.grid_height == 0
+                    || matches!(pose.map, PoseMap::EdgeOn)
+                {
+                    continue;
+                }
+                let direct_sample = ReconstructedSample {
+                    ambient_four: pose.plane_origin,
+                    value,
+                };
+                let direct = ember_julibrot_math::project_reconstructed_sample(
+                    &pose,
+                    direct_sample,
+                )
+                .unwrap_or_else(|error| panic!("{} direct source receipt: {error}", case.name));
+                let depth = SourceDepthRecord {
+                    a_f: 0.0,
+                    b_f: 0.0,
+                    zeta_f: direct.linear_depth,
+                    valid: true,
+                };
+                let mut template = TilePoseHeader::zeroed();
+                template.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+                    0.0,
+                    64.0,
+                    FROZEN_SOURCE_DEPTH_TOLERANCE,
+                    FROZEN_SOURCE_PIXEL_TOLERANCE_PX,
+                ];
+                template.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 1.0;
+                let rect =
+                    crate::SourcePixelRect::from_extent(0, 0, pose.grid_width, pose.grid_height);
+                let render = TileRenderKey::from_pose(&pose, rect);
+                let header = Warp::pack_descriptor_header(&render, &template)
+                    .unwrap_or_else(|| panic!("{} source header packs", case.name));
+                let pair = Warp::pack_descriptor_sample(record, depth)
+                    .unwrap_or_else(|| panic!("{} source sample packs", case.name));
+                let (_, round_trip) =
+                    Warp::reconstruct_descriptor_sample(&header, &pair, direct.screen)
+                        .unwrap_or_else(|error| {
+                            panic!("{} source sample round-trips: {error}", case.name)
+                        });
+                let pixel_error = (round_trip.screen[0] - direct.screen[0])
+                    .hypot(round_trip.screen[1] - direct.screen[1]);
+                assert!(
+                    pixel_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX),
+                    "{} source pixel moved by {pixel_error}",
+                    case.name
+                );
+                assert!(
+                    (round_trip.linear_depth - direct.linear_depth).abs()
+                        <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE),
+                    "{} source depth moved",
+                    case.name
+                );
+                receipt_count += 1;
+            }
+        }
+        assert_eq!(receipt_count, FROZEN_DESCRIPTOR_RECEIPTS);
     }
 
     #[test]

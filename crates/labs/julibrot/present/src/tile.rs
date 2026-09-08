@@ -1,8 +1,9 @@
 //! Compatibility re-exports for the kernels-owned rendered-tile record vocabulary.
 
 use ember_julibrot_math::{
-    EscapeGridRecord, Homography, ObjectAngles, Pose, PoseMap, ReprojectionError,
-    RetainedValueSample, SourceDepthRecord, ViewControls, construct_plane, retained_value_sample,
+    EscapeGridRecord, Homography, ObjectAngles, Pose, PoseMap, ProjectedSample,
+    ReconstructedSample, ReprojectionError, SourceDepthRecord, ViewControls, construct_plane,
+    project_reconstructed_sample, retained_value_sample,
 };
 
 pub use ember_julibrot_kernels::{
@@ -168,24 +169,20 @@ pub fn pack_descriptor_sample(
     ))
 }
 
-/// Unpacks one paired descriptor sample using the supplied delivered iteration cap.
+/// Unpacks one paired descriptor sample without changing either record's declared fields.
 ///
 /// # Errors
 ///
-/// Returns a typed refusal for a non-finite lane, non-binary validity, or invalid value record.
+/// Returns a typed refusal for a non-finite lane, non-binary validity, or non-positive valid depth.
 pub fn unpack_descriptor_sample(
     pair: &DescriptorSamplePair,
-    iteration_cap: u32,
-) -> Result<(RetainedValueSample, SourceDepthRecord), ReprojectionError> {
-    let value = retained_value_sample(
-        EscapeGridRecord {
-            smooth_iter: pair.s0.lanes[0],
-            escaped: pair.s0.lanes[1],
-            rebase_count: pair.s0.lanes[2],
-            status: pair.s0.lanes[3],
-        },
-        iteration_cap,
-    )?;
+) -> Result<(EscapeGridRecord, SourceDepthRecord), ReprojectionError> {
+    let value = EscapeGridRecord {
+        smooth_iter: pair.s0.lanes[0],
+        escaped: pair.s0.lanes[1],
+        rebase_count: pair.s0.lanes[2],
+        status: pair.s0.lanes[3],
+    };
     let valid = match pair.s1.lanes[3].to_bits() {
         bits if bits == 0.0_f32.to_bits() => false,
         bits if bits == 1.0_f32.to_bits() => true,
@@ -197,7 +194,15 @@ pub fn unpack_descriptor_sample(
         zeta_f: f64::from(pair.s1.lanes[2]),
         valid,
     };
-    if ![depth.a_f, depth.b_f, depth.zeta_f]
+    if ![
+        value.smooth_iter,
+        value.escaped,
+        value.rebase_count,
+        value.status,
+    ]
+    .into_iter()
+    .all(f32::is_finite)
+        || ![depth.a_f, depth.b_f, depth.zeta_f]
         .into_iter()
         .all(f64::is_finite)
         || (valid && depth.zeta_f <= 0.0)
@@ -205,6 +210,44 @@ pub fn unpack_descriptor_sample(
         return Err(ReprojectionError::InvalidSource);
     }
     Ok((value, depth))
+}
+
+/// Reconstructs a paired descriptor and returns its recomputed source pixel and depth.
+///
+/// # Errors
+///
+/// Returns a typed refusal for an invalid descriptor or failed source self-round-trip.
+pub fn reconstruct_descriptor_sample(
+    header: &TilePoseHeader,
+    pair: &DescriptorSamplePair,
+    source_pixel: [f64; 2],
+) -> Result<(ReconstructedSample, ProjectedSample), ReprojectionError> {
+    let source = unpack_descriptor_header(header).ok_or(ReprojectionError::InvalidSource)?;
+    let iteration_cap = unpack_unsigned(header.texels[TilePoseHeader::H22_QUALITY].lanes[2])
+        .ok_or(ReprojectionError::InvalidSource)?;
+    let bounds = header.texels[TilePoseHeader::H21_BOUNDS].lanes;
+    let [depth_min, depth_max, coordinate_error, reprojection_error] = bounds.map(f64::from);
+    let (record, depth) = unpack_descriptor_sample(pair)?;
+    let value = retained_value_sample(record, iteration_cap)?;
+    if depth_min < 0.0
+        || depth_max < depth_min
+        || coordinate_error < 0.0
+        || reprojection_error < 0.0
+        || depth.zeta_f < depth_min
+        || depth.zeta_f > depth_max
+    {
+        return Err(ReprojectionError::InvalidSource);
+    }
+    let reconstructed = ReconstructedSample::from_source_receipt(
+        &source,
+        source_pixel,
+        depth,
+        value,
+        reprojection_error,
+        coordinate_error,
+    )?;
+    let source_receipt = project_reconstructed_sample(&source, reconstructed)?;
+    Ok((reconstructed, source_receipt))
 }
 
 fn pack_extent_rect_and_map(
@@ -412,7 +455,8 @@ mod tests {
     use bytemuck::{Zeroable, bytes_of};
     use ember_julibrot_kernels::SourceIdentity;
     use ember_julibrot_math::{
-        ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, screen_to_plane,
+        ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, reconstruct_source_sample,
+        screen_to_plane, source_depth_record,
     };
 
     use super::*;
@@ -421,6 +465,12 @@ mod tests {
     const COMPENSATED_SPLIT_TOLERANCE: f64 = 1.0e-12;
     /// Rebuilding angles from packed sine/cosine pairs may move either factor by one f32 ulp.
     const FACTOR_ROUND_TRIP_TOLERANCE: f64 = 2.384_185_791_015_625e-7;
+    /// H21 admits one hundredth of source linear depth after the S1 f32 lane is decoded.
+    const SOURCE_DEPTH_RECEIPT_TOLERANCE: f32 = 0.01;
+    /// H21 admits one quarter source pixel after every source-pose factor is decoded.
+    const SOURCE_PIXEL_RECEIPT_TOLERANCE_PX: f32 = 0.25;
+    /// One millionth retains reconstructed ambient coordinates across descriptor f32 rounding.
+    const SOURCE_COORDINATE_TOLERANCE: f64 = 0.000_001;
 
     fn pose() -> Pose {
         let object = ObjectAngles {
@@ -442,7 +492,7 @@ mod tests {
             distance_five: 7.0,
             distance_four: 9.0,
         };
-        let map = screen_to_plane(&object, &view, 0.25, 960, 540, 16.0 / 9.0)
+        let map = screen_to_plane(&object, &view, 4.25, 960, 540, 16.0 / 9.0)
             .expect("descriptor fixture has a finite map");
         Pose {
             epoch: 11,
@@ -459,12 +509,37 @@ mod tests {
         }
     }
 
+    fn rebuild_map(pose: &mut Pose) {
+        let map = screen_to_plane(
+            &pose.object,
+            &pose.view,
+            pose.zoom_log2,
+            pose.grid_width,
+            pose.grid_height,
+            f64::from(pose.grid_width) / f64::from(pose.grid_height),
+        )
+        .expect("descriptor fixture has a finite map");
+        pose.map = PoseMap::Mapped(map);
+    }
+
+    fn source_pose() -> Pose {
+        let mut source = pose();
+        source.view.height_scale = 0.0;
+        rebuild_map(&mut source);
+        source
+    }
+
     fn policy_header() -> TilePoseHeader {
         let mut header = TilePoseHeader::zeroed();
         header.texels[TilePoseHeader::H00_IDENTITIES].lanes = [41.0, 42.0, 0.0, 1.0];
         header.texels[TilePoseHeader::H01_SPANS].lanes = [7.0, 8.0, 0.0, 9.0];
         header.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [0.25, 0.0, -0.5, 0.0];
-        header.texels[TilePoseHeader::H21_BOUNDS].lanes = [1.0, 12.0, 0.01, 0.25];
+        header.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+            1.0,
+            12.0,
+            SOURCE_DEPTH_RECEIPT_TOLERANCE,
+            SOURCE_PIXEL_RECEIPT_TOLERANCE_PX,
+        ];
         header.texels[TilePoseHeader::H22_QUALITY].lanes = [1.0, 2.0, 512.0, 37.0];
         header.texels[TilePoseHeader::H23_STATUS].lanes = [65_000.0, 3.0, 4.0, 2.0];
         header.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes = [0.0, 0.0, 192.0, 0.0];
@@ -558,15 +633,15 @@ mod tests {
         assert_eq!(bytes_of(&pair.s0), bytes_of(&expected_s0));
         assert_eq!(pair.s1.lanes, [0.125, -0.25, 8.0, 1.0]);
 
-        let (value, unpacked_depth) = unpack_descriptor_sample(&pair, 512)
-            .expect("exact-in-f32 sample lanes unpack");
-        assert_eq!(value.record_height, -1.0);
+        let (unpacked_record, unpacked_depth) =
+            unpack_descriptor_sample(&pair).expect("exact-in-f32 sample lanes unpack");
+        assert_eq!(unpacked_record, record);
         assert_eq!(unpacked_depth, depth);
 
         let mut non_binary = pair;
         non_binary.s1.lanes[3] = 0.5;
         assert_eq!(
-            unpack_descriptor_sample(&non_binary, 512),
+            unpack_descriptor_sample(&non_binary),
             Err(ReprojectionError::InvalidSource)
         );
         let zero_depth = SourceDepthRecord {
@@ -574,5 +649,43 @@ mod tests {
             ..depth
         };
         assert!(pack_descriptor_sample(record, zero_depth).is_none());
+    }
+
+    #[test]
+    fn descriptor_source_reconstruction_returns_pixel_and_depth() {
+        let source = source_pose();
+        let source_pixel = [37.5, -21.5];
+        let record = EscapeGridRecord {
+            smooth_iter: 128.0,
+            escaped: 1.0,
+            rebase_count: 3.0,
+            status: 0.0,
+        };
+        let value = retained_value_sample(record, 512).expect("value record has a finite height");
+        let depth = source_depth_record(&source, source_pixel, value)
+            .expect("flat source sample has a finite depth receipt");
+        let rect = SourcePixelRect::from_extent(0, 0, source.grid_width, source.grid_height);
+        let render = TileRenderKey::from_pose(&source, rect);
+        let header = pack_descriptor_header(&render, &policy_header())
+            .expect("source descriptor header packs");
+        let pair = pack_descriptor_sample(record, depth).expect("source sample pair packs");
+
+        let (reconstructed, source_receipt) =
+            reconstruct_descriptor_sample(&header, &pair, source_pixel)
+                .expect("packed source sample passes its declared receipt");
+        let source_error = (source_receipt.screen[0] - source_pixel[0])
+            .hypot(source_receipt.screen[1] - source_pixel[1]);
+        assert!(source_error <= f64::from(SOURCE_PIXEL_RECEIPT_TOLERANCE_PX));
+        assert!(
+            (source_receipt.linear_depth - depth.zeta_f).abs()
+                <= f64::from(SOURCE_DEPTH_RECEIPT_TOLERANCE)
+        );
+        assert_eq!(reconstructed.value, value);
+
+        let exact = reconstruct_source_sample(&source, source_pixel, depth, value)
+            .expect("binary64 source fixture round-trips");
+        for (actual, expected) in reconstructed.ambient_four.into_iter().zip(exact.ambient_four) {
+            assert!((actual - expected).abs() <= SOURCE_COORDINATE_TOLERANCE);
+        }
     }
 }
