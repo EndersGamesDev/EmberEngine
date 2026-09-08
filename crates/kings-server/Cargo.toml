@@ -1,7 +1,7 @@
 [package]
 name = "kings-server"
 edition.workspace = true
-version.workspace = true
+version = "1.0.0"
 
 [dependencies]
 kings-core = { path = "../kings-core" }

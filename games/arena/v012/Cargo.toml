@@ -1,7 +1,7 @@
 [package]
 name = "ember-game-arena-v12"
 edition.workspace = true
-version.workspace = true
+version = "12.0.0"
 
 [dependencies]
 ember-legacy = { path = "../../../crates/ember-legacy" }

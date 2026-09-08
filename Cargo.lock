@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "arena"
-version = "0.1.0"
+version = "31.0.0"
 dependencies = [
  "arena-core",
  "ember-engine",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "arena-core"
-version = "0.1.0"
+version = "31.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "arena-server"
-version = "0.1.0"
+version = "31.0.0"
 dependencies = [
  "arena-core",
  "ember-net",
@@ -558,7 +558,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-common"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "serde",
@@ -979,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "ember-client-net"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-net",
  "js-sys",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "ember-editor"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arena-core",
  "ember-engine",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "ember-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v1"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v10"
-version = "0.1.0"
+version = "10.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v11"
-version = "0.1.0"
+version = "11.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v12"
-version = "0.1.0"
+version = "12.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v2"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v3"
-version = "0.1.0"
+version = "3.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v4"
-version = "0.1.0"
+version = "4.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v5"
-version = "0.1.0"
+version = "5.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v6"
-version = "0.1.0"
+version = "6.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v7"
-version = "0.1.0"
+version = "7.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1123,7 +1123,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v8"
-version = "0.1.0"
+version = "8.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-arena-v9"
-version = "0.1.0"
+version = "9.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1141,7 +1141,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-fire-v1"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-legacy",
  "glam",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "ember-game-what-is-this-v1"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-legacy",
  "serde",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "ember-julibrot-kernels",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-kernels"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "ember-julibrot-math",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-math"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "astro-float",
  "thiserror 2.0.20",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-present"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "ember-julibrot-kernels",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-worker"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-julibrot-math",
  "ember-lab-heap",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "ember-legacy"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "sha2",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "ember-net"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1278,7 +1278,7 @@ dependencies = [
 
 [[package]]
 name = "ember-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-game-arena-v1",
  "ember-game-arena-v10",
@@ -1464,7 +1464,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fire"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-client-net",
  "ember-engine",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "fire-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-net",
  "glam",
@@ -1490,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "fire-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fire-core",
  "rustls",
@@ -2307,7 +2307,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kings"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-engine",
  "glam",
@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "kings-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ember-net",
  "serde",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "kings-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "kings-core",
  "rustls",
@@ -2352,7 +2352,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "league"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "ember-engine",
  "glam",
@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "league-core"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "ember-net",
  "proptest",
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "league-server"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "league-core",
  "rustls",
@@ -2436,7 +2436,7 @@ dependencies = [
 
 [[package]]
 name = "linter"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "cli-common",
@@ -4896,7 +4896,7 @@ dependencies = [
 
 [[package]]
 name = "what-is-this"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "ember-client-net",
