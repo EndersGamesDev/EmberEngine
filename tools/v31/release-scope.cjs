@@ -9,8 +9,10 @@ const allowed = Object.freeze(['index.html', 'games.json', 'version.json', 'serv
   `${ENTRY}/index.html`, `${ENTRY}/settings.js`, `${ENTRY}/pkg/arena.js`, `${ENTRY}/pkg/arena_bg.wasm`]);
 
 function replaceLauncherFragment(value, from, to, label) {
-  if (value.includes(to)) {
-    assert(!value.includes(from), `${label}: old and new launcher fragments coexist`);
+  const replacements = value.split(to).length - 1;
+  if (replacements > 0) {
+    assert.equal(replacements, 1, `${label}: duplicate new launcher fragments`);
+    if (!to.includes(from)) assert(!value.includes(from), `${label}: old and new launcher fragments coexist`);
     return value;
   }
   assert.equal(value.split(from).length, 2, `${label}: expected exactly one old launcher fragment`);
