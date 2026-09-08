@@ -46,6 +46,7 @@
 //! |NewPartition|SliceTilt|New slice index; hold|
 //! |NewPartition|OutOfPlaneOrigin|New slice index; hold|
 //! |NewPartition|IterationCap|New MAIN index; hold|
+//! |NewPartition|FormulaAbi|New MAIN index; hold|
 //! |NewPartition|Precision|New MAIN index; hold|
 //! |NewPartition|RecordAbi|New MAIN index; hold|
 //! |NewPartition|MainGeneration|New MAIN index; hold|
@@ -1342,6 +1343,8 @@ pub enum RenderControlChange {
     OutOfPlaneOrigin,
     /// Delivered iteration-cap change.
     IterationCap,
+    /// Formula-semantics ABI change.
+    FormulaAbi,
     /// Precision-policy change.
     Precision,
     /// Escape-record ABI change.
@@ -1356,7 +1359,7 @@ impl RenderControlChange {
     /// Exact encoded byte size.
     pub const BYTE_SIZE: usize = 4;
     /// Every event in stable matrix order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Camera,
         Self::Translation,
         Self::Height,
@@ -1371,6 +1374,7 @@ impl RenderControlChange {
         Self::SliceTilt,
         Self::OutOfPlaneOrigin,
         Self::IterationCap,
+        Self::FormulaAbi,
         Self::Precision,
         Self::RecordAbi,
         Self::MainGeneration,
@@ -1431,6 +1435,7 @@ pub const fn tile_invalidation(change: RenderControlChange) -> TileInvalidation 
         RenderControlChange::SliceTilt
         | RenderControlChange::OutOfPlaneOrigin
         | RenderControlChange::IterationCap
+        | RenderControlChange::FormulaAbi
         | RenderControlChange::Precision
         | RenderControlChange::RecordAbi
         | RenderControlChange::MainGeneration => TileInvalidation::NewPartition,
@@ -2519,6 +2524,7 @@ mod tests {
             RenderControlChange::SliceTilt,
             RenderControlChange::OutOfPlaneOrigin,
             RenderControlChange::IterationCap,
+            RenderControlChange::FormulaAbi,
             RenderControlChange::Precision,
             RenderControlChange::RecordAbi,
             RenderControlChange::MainGeneration,
@@ -2552,7 +2558,7 @@ mod tests {
         TileInvalidation,
         TransitionPresentation,
         &str,
-    ); 17] = [
+    ); 18] = [
         (
             RenderControlChange::Camera,
             TileInvalidation::Keep,
@@ -2636,6 +2642,12 @@ mod tests {
             TileInvalidation::NewPartition,
             TransitionPresentation::HoldPrevious,
             "//! |NewPartition|IterationCap|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::FormulaAbi,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|FormulaAbi|New MAIN index; hold|",
         ),
         (
             RenderControlChange::Precision,

@@ -405,22 +405,25 @@ pub fn project_descriptor_sample(
 ///
 /// Invalid visibility records do not contribute a surface point. Every contributing record must
 /// pass the stage-0 source reconstruction receipt before it can widen the derived footprint.
+/// `source_content` is the authoritative full content key bound to the descriptor allocation;
+/// `content` names the canonical slice into which that source is being indexed.
 ///
 /// # Errors
 ///
 /// Returns a typed refusal for mismatched content provenance, an uncertified slice, an invalid
 /// sample, or a corpus containing no valid reconstructed surface sample.
 pub fn derive_chart_footprint(
+    source_content: &TileContentKey,
     content: &TileContentKey,
     header: &TilePoseHeader,
     samples: &[DescriptorFootprintSample],
 ) -> Result<DerivedChartFootprint, ReprojectionError> {
     let source = unpack_descriptor_header(header).ok_or(ReprojectionError::InvalidSource)?;
-    if !descriptor_matches_content(content, header) {
+    let source_slice = SliceIdentity::new(source.plane, source.plane_origin);
+    if !descriptor_matches_content(source_content, content, source_slice, header) {
         return Err(ReprojectionError::InvalidSource);
     }
     let source_chart_scale = source_chart_scale(&source).ok_or(ReprojectionError::InvalidSource)?;
-    let source_slice = SliceIdentity::new(source.plane, source.plane_origin);
     let transform = certify_same_slice(source_slice, content.slice, source_chart_scale)
         .ok_or(ReprojectionError::InvalidTarget)?;
     let source_coordinate_error = f64::from(header.texels[TilePoseHeader::H21_BOUNDS].lanes[2]);
@@ -521,14 +524,25 @@ impl ChartFootprintAccumulator {
     }
 }
 
-fn descriptor_matches_content(content: &TileContentKey, header: &TilePoseHeader) -> bool {
+fn descriptor_matches_content(
+    source_content: &TileContentKey,
+    canonical_content: &TileContentKey,
+    source_slice: SliceIdentity,
+    header: &TilePoseHeader,
+) -> bool {
     let quality = header.texels[TilePoseHeader::H22_QUALITY].lanes;
     let provenance = header.texels[TilePoseHeader::H25_PROVENANCE].lanes;
-    content.version == TileContentKey::VERSION
-        && unpack_unsigned(quality[2]) == Some(content.iteration_cap)
-        && unpack_unsigned(provenance[1]) == Some(content.main_generation)
-        && unpack_unsigned(provenance[2]) == Some(content.record_abi)
-        && unpack_unsigned(provenance[3]) == Some(content.reference_generation)
+    let expected_content = TileContentKey {
+        slice: canonical_content.slice,
+        ..*source_content
+    };
+    source_content.version == TileContentKey::VERSION
+        && source_content.slice == source_slice
+        && *canonical_content == expected_content
+        && unpack_unsigned(quality[2]) == Some(source_content.iteration_cap)
+        && unpack_unsigned(provenance[1]) == Some(source_content.main_generation)
+        && unpack_unsigned(provenance[2]) == Some(source_content.record_abi)
+        && unpack_unsigned(provenance[3]) == Some(source_content.reference_generation)
 }
 
 fn source_chart_scale(source: &Pose) -> Option<f64> {
@@ -1510,9 +1524,13 @@ mod tests {
         let source = footprint_source_pose();
         let header = footprint_header(&source);
         let slice = rotated_footprint_slice(&source);
+        let source_content = footprint_content(
+            &source,
+            SliceIdentity::new(source.plane, source.plane_origin),
+        );
         let content = footprint_content(&source, slice);
         let samples = FOOTPRINT_CORPUS.map(|pixel| footprint_sample(&source, pixel));
-        let footprint = derive_chart_footprint(&content, &header, &samples)
+        let footprint = derive_chart_footprint(&source_content, &content, &header, &samples)
             .expect("same-slice corpus derives one footprint");
         assert_eq!(footprint.slice, slice);
         assert_eq!(footprint.valid_sample_count, 9);
@@ -1560,7 +1578,7 @@ mod tests {
         let content = footprint_content(&source, slice);
         let source_pixel = [95.75, 47.75];
         let samples = [footprint_sample(&source, source_pixel)];
-        let footprint = derive_chart_footprint(&content, &header, &samples)
+        let footprint = derive_chart_footprint(&content, &content, &header, &samples)
             .expect("pose-derived source derives one density interval");
 
         // Exact arithmetic over the packed map puts the lower endpoint above the floor and the
@@ -1591,11 +1609,15 @@ mod tests {
     fn footprint_derivation_skips_holes_and_refuses_corrupt_or_mismatched_inputs() {
         let source = footprint_source_pose();
         let header = footprint_header(&source);
+        let source_content = footprint_content(
+            &source,
+            SliceIdentity::new(source.plane, source.plane_origin),
+        );
         let content = footprint_content(&source, rotated_footprint_slice(&source));
         let samples = FOOTPRINT_CORPUS.map(|pixel| footprint_sample(&source, pixel));
         let mut with_hole = samples;
         with_hole[4].descriptor.s1.lanes[3] = 0.0;
-        let footprint = derive_chart_footprint(&content, &header, &with_hole)
+        let footprint = derive_chart_footprint(&source_content, &content, &header, &with_hole)
             .expect("one visibility hole leaves a conservative footprint");
         assert_eq!(footprint.valid_sample_count, 8);
 
@@ -1604,13 +1626,13 @@ mod tests {
             sample
         });
         assert_eq!(
-            derive_chart_footprint(&content, &header, &all_holes),
+            derive_chart_footprint(&source_content, &content, &header, &all_holes),
             Err(ReprojectionError::InvalidSource)
         );
         let mut corrupt = samples;
         corrupt[0].descriptor.s1.lanes[3] = 0.5;
         assert_eq!(
-            derive_chart_footprint(&content, &header, &corrupt),
+            derive_chart_footprint(&source_content, &content, &header, &corrupt),
             Err(ReprojectionError::InvalidSource)
         );
         let wrong_main = TileContentKey {
@@ -1618,7 +1640,31 @@ mod tests {
             ..content
         };
         assert_eq!(
-            derive_chart_footprint(&wrong_main, &header, &samples),
+            derive_chart_footprint(&source_content, &wrong_main, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_formula = TileContentKey {
+            formula_abi: content.formula_abi + 1,
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &wrong_formula, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_precision = TileContentKey {
+            precision_mode: PrecisionMode::Deterministic,
+            ..content
+        };
+        assert_eq!(
+            derive_chart_footprint(&source_content, &wrong_precision, &header, &samples),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let wrong_source = TileContentKey {
+            slice: content.slice,
+            ..source_content
+        };
+        assert_eq!(
+            derive_chart_footprint(&wrong_source, &content, &header, &samples),
             Err(ReprojectionError::InvalidSource)
         );
         let tilted = TileContentKey {
@@ -1626,7 +1672,7 @@ mod tests {
             ..content
         };
         assert_eq!(
-            derive_chart_footprint(&tilted, &header, &samples),
+            derive_chart_footprint(&source_content, &tilted, &header, &samples),
             Err(ReprojectionError::InvalidTarget)
         );
     }
