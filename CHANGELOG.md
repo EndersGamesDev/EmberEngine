@@ -50,6 +50,8 @@ A relief zoom that cannot be represented now reports the refusal, retains partia
 
 ### Killshot engineering
 
+Killshot has a landing page at `web/games/arena/`: what the game is, its eight weapons, its three maps and its rules, and a trailer that plays real gameplay recorded from the shipped client alongside generated cinematic shots, a generated score and a spoken narration. The launcher's story link became generic at the same time, reading a `landing` key from `web/games.json` so any game that grows a landing page gets the link by adding one line, while the league's existing block stayed byte-identical because its publisher asserts on those exact bytes. The page's copy was written against `crates/arena-core` rather than the launcher's marketing line, which corrected three claims a reader could otherwise draw from it: there are eight weapons in total and the Breach-12 is the eighth rather than a ninth, slot 9 is permanently empty, and wall kicks chain between opposing walls rather than up one. The page is not published by `deploy/deploy-pages.sh`, which copies only the live version's `index.html` and `settings.js` for this game (`b85ac8d9`).
+
 The server bot and client transport now share the network predicate that treats an interrupted read as transient, Arena's remaining core lint suppressions carry reasons or disappeared where forced lint proved them stale, and frozen protocol fixtures retain their bytes (`9918e39c`).
 
 Arena client and server networking gained the shared interrupted-read behavior, test-only sound helpers stopped entering production builds, and the removed unreferenced backdrop and basalt files leave checked-in shipped bundle hashes unchanged (`9501ec2b`).

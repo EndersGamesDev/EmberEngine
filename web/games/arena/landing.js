@@ -24,6 +24,14 @@
 
   Array.prototype.forEach.call(targets, function (el) { seen.observe(el); });
 
+  // Safety net. The reveal is decoration, but hiding is the default state, so
+  // anything that stops the observer from firing — a prerender, a background
+  // tab that never paints, a browser quirk — would leave the page blank rather
+  // than un-animated. After two seconds, show everything regardless.
+  window.setTimeout(function () {
+    Array.prototype.forEach.call(targets, function (el) { el.classList.add('in'); });
+  }, 2000);
+
   // Pause the trailer when it scrolls out of view: a video that keeps talking
   // from off-screen is the single most irritating thing a landing page can do.
   var video = document.getElementById('trailer-video');
