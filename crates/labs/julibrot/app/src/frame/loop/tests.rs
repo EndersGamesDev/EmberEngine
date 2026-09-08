@@ -25,7 +25,7 @@ use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
     OrbitStep, Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ScaledPixelScale,
     ViewControls, pixel_scale, precision_for, retained_value_sample, scale_split, screen_to_plane,
-    source_depth_record,
+    source_depth_record, warp_matrix,
 };
 
 use super::super::schedule::{
@@ -54,14 +54,15 @@ use super::{
     sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
     stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
+use crate::state::ReferenceSubmission;
 use crate::{
-    AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
-    SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
+    AppError, CaptureArming, FramePolicy, HotFrame, LevelTimingLedger, PendingSurface,
+    PictureState, SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
     DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentEvents, PresentStatus,
     SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
-    relief_redraw_source_covers_destination, renders_same_picture,
+    apply_homography, relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
@@ -7896,6 +7897,606 @@ fn measured_zoom_exposure_report(traces: &[Vec<ZoomTurnRecord>]) -> Vec<ZoomTurn
         })
         .copied()
         .collect()
+}
+
+const ANCHOR_TRACE_CENTRE: [f64; 4] = [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33];
+const ANCHOR_TRACE_CROSSHAIR: [f64; 2] = [240.0, 135.0];
+const ANCHOR_TRACE_ZOOM_DELTA_LOG2: f64 = 0.5;
+const ANCHOR_TRACE_ORBIT_LENGTH: u32 = 512;
+const ANCHOR_TRACE_EXTRA_SETTLED_FRAMES: u32 = 4;
+const ANCHOR_TRACE_MINIMUM_POST_INPUT_FRAMES: usize = 12;
+const ANCHOR_TRACE_SAMPLE_INDEX: u32 = 405 * MEASURED_FINAL_EXTENT[0] + 720;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnchorPresentation {
+    Held,
+    Presented,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnchorRefinement {
+    Pending,
+    Settled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnchorSceneFlight {
+    Idle,
+    InFlight,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnchorRequestedFinal {
+    Pending,
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AnchorFrameState {
+    tier: PresentedTier,
+    precision_mode: PrecisionMode,
+    level: RefinementLevel,
+    records: ZoomRecordState,
+    presentation: AnchorPresentation,
+    refinement: AnchorRefinement,
+    scene_flight: AnchorSceneFlight,
+    requested_final: AnchorRequestedFinal,
+}
+
+#[derive(Clone, Debug)]
+struct AnchorPlacementFrame {
+    turn: ZoomTurnRecord,
+    tier: PresentedTier,
+    precision_mode: PrecisionMode,
+    frame: SceneFrame,
+    anchor_px_up: [f64; 2],
+}
+
+struct AnchorTraceHarness {
+    viewer: ViewerController,
+    precision_mode: PrecisionMode,
+    frame_loop: FrameLoop,
+    plan: RefinementPlan,
+    policy_trace: Vec<ZoomTurnRecord>,
+    source: SceneFrame,
+    fast_final: SceneFrame,
+    frames: Vec<AnchorPlacementFrame>,
+}
+
+fn anchor_trace_scene(
+    viewer: &mut ViewerController,
+    scene_id: u64,
+    level: RefinementLevel,
+    precision_mode: PrecisionMode,
+) -> SceneFrame {
+    let HotFrame { state, pose, .. } = viewer
+        .drain_hot(MEASURED_FINAL_EXTENT)
+        .expect("anchor trace pose");
+    SceneFrame {
+        scene_id,
+        pose,
+        iteration_cap: ANCHOR_TRACE_ORBIT_LENGTH,
+        level,
+        extent: MEASURED_FINAL_EXTENT,
+        texture_index: 0,
+        centre_revision: state.main.centre_revision,
+        plane_origin_f64: state.main.plane_origin_f64,
+        precision_mode: precision_mode.as_str(),
+        measurement: SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id: scene_id,
+            completion_sequence: scene_id,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: precision_mode.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        },
+    }
+}
+
+fn accept_anchor_trace_reference(
+    viewer: &mut ViewerController,
+    submission: ReferenceSubmission,
+    orbit_id: u32,
+) {
+    let generation = submission.navigation.generation;
+    let centre_revision = submission.navigation.centre_revision;
+    let mode = KernelMode::for_zoom(submission.navigation.zoom_log2);
+    if mode == KernelMode::Shallow {
+        assert!(viewer.accept_navigation_without_orbit(generation, centre_revision));
+        return;
+    }
+    let precision = precision_for(
+        submission.navigation.zoom_log2,
+        MEASURED_FINAL_EXTENT[0],
+        ANCHOR_TRACE_ORBIT_LENGTH,
+    )
+    .expect("anchor trace reference precision");
+    assert!(viewer.accept_navigation_with_orbit(
+        generation,
+        centre_revision,
+        orbit_id,
+        ANCHOR_TRACE_ORBIT_LENGTH,
+        precision.requested_bits,
+    ));
+    viewer
+        .configure_navigation_context(
+            submission.navigation.centre,
+            submission.reference_centre,
+            viewer.checked_plane(),
+        )
+        .expect("accepted anchor trace navigation context");
+}
+
+fn push_anchor_placement(
+    frames: &mut Vec<AnchorPlacementFrame>,
+    policy_trace: &[ZoomTurnRecord],
+    source: &SceneFrame,
+    visible: SceneFrame,
+    state: AnchorFrameState,
+) {
+    let frame_index = frames.len();
+    let mut turn = policy_trace
+        .get(frame_index)
+        .copied()
+        .expect("the measured zoom policy trace outlasts the anchor trace");
+    let planned = Warp::reproject(source, &source.pose, &visible.pose).kind;
+    turn.turn = u32::try_from(frame_index).expect("anchor trace frame index");
+    turn.planned = planned;
+    turn.selected = planned;
+    turn.presented =
+        (state.presentation == AnchorPresentation::Presented).then_some(WarpKind::AnchorHomography);
+    turn.visible_kind = Some(WarpKind::AnchorHomography);
+    turn.presented_exposed_fraction = None;
+    turn.refusal_reason = None;
+    turn.edit_state = ZoomEditState::None;
+    turn.attempted_crosshair = None;
+    turn.attempted_zoom_delta = None;
+    turn.records = state.records;
+    turn.retained_level = state.level;
+    turn.refinement = if state.refinement == AnchorRefinement::Pending {
+        ZoomRefinementState::Pending
+    } else {
+        ZoomRefinementState::Idle
+    };
+    turn.hold = ZoomHoldState::Disarmed;
+    turn.source_coverage = ZoomSourceCoverage::CoversDestination;
+    turn.requested_revision = 1;
+    turn.warp_in_flight_kind = None;
+    turn.scene_in_flight = state.scene_flight == AnchorSceneFlight::InFlight;
+    turn.completed_requested_final = state.requested_final == AnchorRequestedFinal::Completed;
+    let matrix = warp_matrix(&source.pose, &visible.pose).expect("anchor trace pose map");
+    let anchor_px_up = apply_homography(matrix.forward, ANCHOR_TRACE_CROSSHAIR)
+        .expect("the anchor remains in the finite presented chart");
+    frames.push(AnchorPlacementFrame {
+        turn,
+        tier: state.tier,
+        precision_mode: state.precision_mode,
+        frame: visible,
+        anchor_px_up,
+    });
+}
+
+fn complete_anchor_trace_level(
+    frame_loop: &mut FrameLoop,
+    frame: &SceneFrame,
+    expected: RefinementLevel,
+) {
+    assert_eq!(frame_loop.due(), Some(expected));
+    frame_loop.submitted(frame.scene_id, expected);
+    assert!(frame_loop.completed(frame.scene_id, frame.pose.orbit_generation, expected,));
+}
+
+impl AnchorTraceHarness {
+    fn new(script: ZoomScript<'_>, initial_zoom_log2: f64) -> (Self, ReferenceSubmission) {
+        let policy_trace = drive_measured_zoom_trace(script);
+        let mut viewer = ViewerController::new(MEASURED_FINAL_EXTENT).expect("anchor trace viewer");
+        viewer
+            .set_plane_origin(ANCHOR_TRACE_CENTRE)
+            .expect("anchor trace plane origin");
+        viewer
+            .set_zoom_log2(initial_zoom_log2)
+            .expect("anchor trace initial zoom");
+        let (precision_mode, mut frame_loop, plan) = precision_runtime_from_viewer(&mut viewer);
+        let initial = viewer
+            .take_reference_submission()
+            .expect("anchor trace initial reference");
+        accept_anchor_trace_reference(&mut viewer, initial, 1);
+        let source = anchor_trace_scene(
+            &mut viewer,
+            1,
+            RefinementLevel::Final,
+            PrecisionMode::PictureFast,
+        );
+        let (_, delta_log2, crosshair) = script.edits[0];
+        viewer
+            .set_crosshair(crosshair.expect("anchor trace crosshair"))
+            .expect("finite off-centre crosshair");
+        viewer
+            .zoom_about_crosshair(delta_log2)
+            .expect("finite scripted wheel zoom");
+        let draft = anchor_trace_scene(
+            &mut viewer,
+            2,
+            RefinementLevel::Preview,
+            PrecisionMode::PictureFast,
+        );
+        let requested = viewer
+            .take_reference_submission()
+            .expect("wheel zoom reference request");
+        frame_loop.accept_request(requested.navigation.generation, true);
+        let mut harness = Self {
+            viewer,
+            precision_mode,
+            frame_loop,
+            plan,
+            policy_trace,
+            source,
+            fast_final: draft.clone(),
+            frames: Vec::new(),
+        };
+        let moving = harness.moving_state();
+        harness.push(draft.clone(), moving);
+        harness.push(
+            draft,
+            AnchorFrameState {
+                presentation: AnchorPresentation::Held,
+                ..moving
+            },
+        );
+        (harness, requested)
+    }
+
+    const fn moving_state(&self) -> AnchorFrameState {
+        AnchorFrameState {
+            tier: PresentedTier::Fast,
+            precision_mode: self.precision_mode,
+            level: RefinementLevel::Preview,
+            records: ZoomRecordState::Unavailable,
+            presentation: AnchorPresentation::Presented,
+            refinement: AnchorRefinement::Pending,
+            scene_flight: AnchorSceneFlight::Idle,
+            requested_final: AnchorRequestedFinal::Pending,
+        }
+    }
+
+    const fn fast_settled_state(&self) -> AnchorFrameState {
+        AnchorFrameState {
+            level: RefinementLevel::Final,
+            records: ZoomRecordState::Ready,
+            presentation: AnchorPresentation::Presented,
+            refinement: AnchorRefinement::Settled,
+            requested_final: AnchorRequestedFinal::Completed,
+            ..self.moving_state()
+        }
+    }
+
+    fn push(&mut self, visible: SceneFrame, state: AnchorFrameState) {
+        push_anchor_placement(
+            &mut self.frames,
+            &self.policy_trace,
+            &self.source,
+            visible,
+            state,
+        );
+    }
+
+    fn present_fast_ladder(&mut self, requested: ReferenceSubmission) {
+        let generation = requested.navigation.generation;
+        accept_anchor_trace_reference(&mut self.viewer, requested, 2);
+        self.frame_loop.scene_input_ready(generation);
+        let fast_preview = anchor_trace_scene(
+            &mut self.viewer,
+            3,
+            RefinementLevel::Preview,
+            PrecisionMode::PictureFast,
+        );
+        complete_anchor_trace_level(
+            &mut self.frame_loop,
+            &fast_preview,
+            RefinementLevel::Preview,
+        );
+        let preview = AnchorFrameState {
+            records: ZoomRecordState::Ready,
+            presentation: AnchorPresentation::Presented,
+            ..self.moving_state()
+        };
+        self.push(fast_preview.clone(), preview);
+        self.push(
+            fast_preview,
+            AnchorFrameState {
+                presentation: AnchorPresentation::Held,
+                ..preview
+            },
+        );
+        self.fast_final = anchor_trace_scene(
+            &mut self.viewer,
+            4,
+            RefinementLevel::Final,
+            PrecisionMode::PictureFast,
+        );
+        complete_anchor_trace_level(
+            &mut self.frame_loop,
+            &self.fast_final,
+            RefinementLevel::Final,
+        );
+        self.push(self.fast_final.clone(), self.fast_settled_state());
+    }
+
+    fn present_sampled_correction(&mut self) {
+        let generation = self
+            .viewer
+            .request_reference_for_pixel(ANCHOR_TRACE_SAMPLE_INDEX, MEASURED_FINAL_EXTENT)
+            .expect("off-centre sampled reference request");
+        let sampled = self
+            .viewer
+            .take_reference_submission()
+            .expect("sampled reference submission");
+        assert_eq!(sampled.navigation.generation, generation);
+        self.push(
+            self.fast_final.clone(),
+            AnchorFrameState {
+                records: ZoomRecordState::Unavailable,
+                presentation: AnchorPresentation::Held,
+                ..self.fast_settled_state()
+            },
+        );
+        accept_anchor_trace_reference(&mut self.viewer, sampled, 3);
+        self.frame_loop
+            .scene_input_resumed(generation, RefinementLevel::Final);
+        self.fast_final = anchor_trace_scene(
+            &mut self.viewer,
+            5,
+            RefinementLevel::Final,
+            PrecisionMode::PictureFast,
+        );
+        complete_anchor_trace_level(
+            &mut self.frame_loop,
+            &self.fast_final,
+            RefinementLevel::Final,
+        );
+        self.push(self.fast_final.clone(), self.fast_settled_state());
+    }
+
+    fn begin_deterministic_promotion(&mut self) -> (SettledPromotion, SceneFrame) {
+        let mut promotion = SettledPromotion::default();
+        let requested_revision = self.viewer.requested_revision();
+        assert_eq!(
+            promotion.observe(
+                0.0,
+                requested_revision,
+                PrecisionMode::PictureFast,
+                true,
+                true,
+            ),
+            None,
+        );
+        assert!(matches!(
+            promotion.observe(
+                STATIC_SETTLE_WINDOW_MS,
+                requested_revision,
+                PrecisionMode::PictureFast,
+                true,
+                true,
+            ),
+            Some(PromotionAction::StartDeterministic { .. })
+        ));
+        apply_precision_mode(
+            promotion.effective_precision_mode(PrecisionMode::PictureFast),
+            &mut self.precision_mode,
+            &mut self.frame_loop,
+            &mut self.plan,
+            &mut self.viewer,
+        )
+        .expect("static deterministic promotion");
+        assert!(
+            self.frame_loop
+                .skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)))
+        );
+        let deterministic = anchor_trace_scene(
+            &mut self.viewer,
+            6,
+            RefinementLevel::Final,
+            PrecisionMode::Deterministic,
+        );
+        assert!(promotion.deterministic_submitted(deterministic.scene_id));
+        self.frame_loop
+            .submitted(deterministic.scene_id, RefinementLevel::Final);
+        (promotion, deterministic)
+    }
+
+    fn finish_deterministic_promotion(
+        &mut self,
+        mut promotion: SettledPromotion,
+        deterministic: &SceneFrame,
+    ) {
+        let rendering = AnchorFrameState {
+            tier: promotion.presented_tier(),
+            precision_mode: self.precision_mode,
+            level: RefinementLevel::Final,
+            records: ZoomRecordState::Ready,
+            presentation: AnchorPresentation::Held,
+            refinement: AnchorRefinement::Pending,
+            scene_flight: AnchorSceneFlight::InFlight,
+            requested_final: AnchorRequestedFinal::Pending,
+        };
+        self.push(self.fast_final.clone(), rendering);
+        assert!(self.frame_loop.completed(
+            deterministic.scene_id,
+            deterministic.pose.orbit_generation,
+            RefinementLevel::Final,
+        ));
+        assert!(promotion.deterministic_completed(deterministic.scene_id));
+        self.push(
+            self.fast_final.clone(),
+            AnchorFrameState {
+                refinement: AnchorRefinement::Settled,
+                scene_flight: AnchorSceneFlight::Idle,
+                requested_final: AnchorRequestedFinal::Completed,
+                ..rendering
+            },
+        );
+        assert!(promotion.deterministic_presented(deterministic.scene_id));
+        let settled = AnchorFrameState {
+            tier: promotion.presented_tier(),
+            precision_mode: self.precision_mode,
+            level: RefinementLevel::Final,
+            records: ZoomRecordState::Ready,
+            presentation: AnchorPresentation::Presented,
+            refinement: AnchorRefinement::Settled,
+            scene_flight: AnchorSceneFlight::Idle,
+            requested_final: AnchorRequestedFinal::Completed,
+        };
+        self.push(SceneFrame::clone(deterministic), settled);
+        for _ in 0..ANCHOR_TRACE_EXTRA_SETTLED_FRAMES {
+            self.push(
+                SceneFrame::clone(deterministic),
+                AnchorFrameState {
+                    presentation: AnchorPresentation::Held,
+                    ..settled
+                },
+            );
+        }
+    }
+}
+
+fn drive_anchor_zoom_trace(
+    scenario: &'static str,
+    initial_zoom_log2: f64,
+    sampled_reference: bool,
+) -> Vec<AnchorPlacementFrame> {
+    let edits = [(
+        0,
+        ANCHOR_TRACE_ZOOM_DELTA_LOG2,
+        Some(ANCHOR_TRACE_CROSSHAIR),
+    )];
+    let script = ZoomScript {
+        scenario,
+        retained_level: RefinementLevel::Final,
+        edits: &edits,
+        initial_scene: ZoomInitialScene::SettledFinal,
+        refinement_on_edit: ZoomRefinementOnEdit::Restart,
+        edit_trigger: ZoomEditTrigger::RequestedFrame,
+        forget_records_before_selection_at_turn: None,
+        destination_extent: MEASURED_FINAL_EXTENT,
+        lattice_probe: ZoomLatticeProbe::Skip,
+    };
+    let (mut harness, requested) = AnchorTraceHarness::new(script, initial_zoom_log2);
+    harness.present_fast_ladder(requested);
+    if sampled_reference {
+        harness.present_sampled_correction();
+    }
+    let (promotion, deterministic) = harness.begin_deterministic_promotion();
+    harness.finish_deterministic_promotion(promotion, &deterministic);
+    assert!(harness.frames.len() >= ANCHOR_TRACE_MINIMUM_POST_INPUT_FRAMES);
+    harness.frames
+}
+
+fn anchor_displacement(first: [f64; 2], second: [f64; 2]) -> f64 {
+    (first[0] - second[0]).hypot(first[1] - second[1])
+}
+
+fn anchor_trace_report(all_runs: &[Vec<AnchorPlacementFrame>]) -> String {
+    let mut output = String::from(
+        "scenario | frame | tier | presented | visible | records | level | precision | previous_px | settled_px\n",
+    );
+    for scenario_frames in all_runs {
+        let settled = scenario_frames
+            .last()
+            .expect("the anchor trace contains its settled frame")
+            .anchor_px_up;
+        for (index, row) in scenario_frames.iter().enumerate() {
+            let previous = index.checked_sub(1).map_or(0.0, |previous| {
+                anchor_displacement(row.anchor_px_up, scenario_frames[previous].anchor_px_up)
+            });
+            let from_settled = anchor_displacement(row.anchor_px_up, settled);
+            let _written = writeln!(
+                output,
+                "{} | {} | {:?} | {:?} | {:?} | {:?} | {:?} | {} | {previous:.9} | {from_settled:.9}",
+                row.turn.scenario,
+                row.turn.turn,
+                row.tier,
+                row.turn.presented,
+                row.turn.visible_kind,
+                row.turn.records,
+                row.turn.retained_level,
+                row.precision_mode.as_str(),
+            );
+            assert_eq!(row.frame.pose.grid_width, MEASURED_FINAL_EXTENT[0]);
+        }
+    }
+    output
+}
+
+/// Records the cursor anchor carried by every post-wheel presented frame until settlement.
+///
+/// Phase-A gate table:
+///
+/// ```text
+/// scenario | frame | tier | presented | visible | records | level | precision | previous_px | settled_px
+/// shallow | 0 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 0.000000000
+/// shallow | 1 | Fast | None | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 0.000000000
+/// shallow | 2 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Preview | PictureFast | 0.000000000 | 0.000000000
+/// shallow | 3 | Fast | None | Some(AnchorHomography) | Ready | Preview | PictureFast | 0.000000000 | 0.000000000
+/// shallow | 4 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | PictureFast | 0.000000000 | 0.000000000
+/// shallow | 5 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 6 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 7 | Deterministic | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 8 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 9 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 10 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// shallow | 11 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 0 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 390.103627165
+/// perturbation sampled | 1 | Fast | None | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 390.103627165
+/// perturbation sampled | 2 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Preview | PictureFast | 114.059265925 | 276.044380490
+/// perturbation sampled | 3 | Fast | None | Some(AnchorHomography) | Ready | Preview | PictureFast | 0.000000000 | 276.044380490
+/// perturbation sampled | 4 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | PictureFast | 0.000000000 | 276.044380490
+/// perturbation sampled | 5 | Fast | None | Some(AnchorHomography) | Unavailable | Final | PictureFast | 0.000000000 | 276.044380490
+/// perturbation sampled | 6 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | PictureFast | 276.044380490 | 0.000000000
+/// perturbation sampled | 7 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 8 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 9 | Deterministic | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 10 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 11 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 12 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// perturbation sampled | 13 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 0 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 114.059265925
+/// binary64 depth | 1 | Fast | None | Some(AnchorHomography) | Unavailable | Preview | PictureFast | 0.000000000 | 114.059265925
+/// binary64 depth | 2 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Preview | PictureFast | 114.059265925 | 0.000000000
+/// binary64 depth | 3 | Fast | None | Some(AnchorHomography) | Ready | Preview | PictureFast | 0.000000000 | 0.000000000
+/// binary64 depth | 4 | Fast | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | PictureFast | 0.000000000 | 0.000000000
+/// binary64 depth | 5 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 6 | Fast | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 7 | Deterministic | Some(AnchorHomography) | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 8 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 9 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 10 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// binary64 depth | 11 | Deterministic | None | Some(AnchorHomography) | Ready | Final | Deterministic | 0.000000000 | 0.000000000
+/// ```
+#[test]
+fn cursor_anchor_placement_across_shallow_perturbation_and_binary64_depths() {
+    const SHALLOW_ZOOM_LOG2: f64 = 1.259_194_831_013_92;
+    const PERTURBATION_ZOOM_LOG2: f64 = 14.0;
+    const BINARY64_DEPTH_ZOOM_LOG2: f64 = 54.0;
+    assert_eq!(KernelMode::for_zoom(SHALLOW_ZOOM_LOG2), KernelMode::Shallow);
+    assert_eq!(
+        KernelMode::for_zoom(PERTURBATION_ZOOM_LOG2),
+        KernelMode::Perturbation,
+    );
+    assert_eq!(
+        KernelMode::for_zoom(BINARY64_DEPTH_ZOOM_LOG2),
+        KernelMode::Perturbation,
+    );
+    let runs = [
+        drive_anchor_zoom_trace("shallow", SHALLOW_ZOOM_LOG2, false),
+        drive_anchor_zoom_trace("perturbation sampled", PERTURBATION_ZOOM_LOG2, true),
+        drive_anchor_zoom_trace("binary64 depth", BINARY64_DEPTH_ZOOM_LOG2, false),
+    ];
+    let report = anchor_trace_report(&runs);
+    std::io::Write::write_all(&mut std::io::stdout().lock(), report.as_bytes())
+        .expect("phase-A table writes to the native test output");
 }
 
 #[test]
