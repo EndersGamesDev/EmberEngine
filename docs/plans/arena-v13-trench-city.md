@@ -151,19 +151,13 @@ Bundle budget: every texture is embedded. Target ≤ +8 MB over v12's 18.4 MB, c
 
 Two generators share adler's 4090 and cannot run at once: the ComfyUI Qwen-Image instance on :8188 (the Fire Racer path) and the Ideogram 4 instance on :8288 behind the picture-generator connector. Only the latter fits while the other is resident, so v13 uses it for everything and pulls results through its history — the connector's gallery URL needs a key this repo does not hold. Recorded in `docs/asset-pipeline.md`.
 
-## 7. Engine changes (separate commits, each pixel-identical for every other game by default)
+## 7. Engine release record
 
-1. **Mipmaps.** Texture upload builds a full CPU box-filtered chain, `mip_level_count = n`, sampler `mipmap_filter: Linear`. Removes the distance shimmer the `CLAUDE.md` table warns about; +33% texture memory. The table row and `docs/asset-pipeline.md` bullet are rewritten.
-2. **Per-frame fog.** `Frame` gains `fog: Fog { color, density }` with `Default` equal to today's constants, uploaded in the scene uniform. The arena sets a warm golden-hour haze so the sky cylinder reads bright instead of navy; pong, fire and the arena's own v12 look are unchanged unless they set it.
+The completed engine changes are recorded in the [v13 changelog entry](../../CHANGELOG.md#killshot-arena).
 
-## 8. Verification, in order
+## 8. Verification record
 
-1. `cargo test --workspace --exclude linter --no-fail-fast` — 36 suites, ≥ 320 passing, plus every new test in §4.4.
-2. `cargo clippy --workspace --all-targets` under the workspace's deny-warnings lints.
-3. `cargo build --target wasm32-unknown-unknown --release -p arena --lib` + `wasm-bindgen`; bundle size reported against the budget.
-4. Native run against a local `arena-server`: `EMBER_CAM` overview screenshot and three eye-height screenshots (tunnel mouth, container chain, spawn) reviewed by eye and attached to the commit message by path.
-5. `wsbot` two-bot run against the local server: join, move, shoot; no panics, states flowing.
-6. Deploy: `deploy/deploy-pong-online.sh` then `deploy/deploy-pages.sh`, in that order (server first so the staged v13 page is joinable the moment it lands).
+The release evidence and source are recorded in the [v13 changelog entry](../../CHANGELOG.md#killshot-arena).
 
 ## 9. Deliberately not done
 

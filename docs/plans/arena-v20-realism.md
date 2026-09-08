@@ -109,16 +109,9 @@ Three variants per gun: **near** as above; **mid** low-passed at 3 kHz with the 
 
 `Sfx` cues are looked up through one `fn source(sfx) -> Cow<[f32]>`; a recorded sample dropped into `crates/arena/assets/sfx/<name>.wav` (16-bit mono 44.1 kHz, `include_bytes!`, decoded by a tiny RIFF reader, no new dependency) replaces the synthesised one at build time when present, else the synth is used. Nothing is shipped in that folder in v20; the reader and its test (`a_wav_in_the_slot_replaces_the_synth`) are. That is the next tier and it needs licensed recordings this repo does not have.
 
-## 7. Work packages, verification, commits
+## 7. Release record
 
-| WP | Owns | Delivers |
-|---|---|---|
-| **A sim + wire + server** | `crates/arena-core/src/{shooter.rs,proto.rs,freight_yard.rs}`, `crates/arena-server/**` | §3, §2.1, §4 with every test named |
-| **B client visuals** | `crates/arena/src/online.rs`, `feel.rs`, `props.rs` | §5 (tracers, plume, casings, impacts, marks, crack, spatial cue routing) |
-| **C sound** | `crates/arena/src/sound.rs`, `crates/arena/Cargo.toml` (web-sys feature), `crates/arena/assets/sfx/` (empty, a README) | §6 |
-| **D page + docs** | `web/games/arena/v20/`, `web/games.json`, `web/index.html`, `deploy/deploy-pages.sh`, `README.md`, `docs/plans/backlog.md`, `docs/asset-pipeline.md` (the sfx slot paragraph) | v20 live on proto 17, v19 archived; the hint; backlog lines for the next tier (blending for glow and smoke, a decal atlas, recorded samples, hit reactions on remote bodies) |
-
-A's skeleton (types, events, proto 17, speeds) lands first; B, C, D in parallel on it; then integration, `cargo test --workspace --exclude linter`, clippy, the wasm check, bots with `shots_seen > 0` on both maps, captures through the harness (a tracer streak 30 ms after a shot, an impact mark on a container, casings), a sound check by plotting every cue's envelope and spectral centroid to a PNG (no ear here), commits (sim+server; client; sound; page+docs), then the host and pages deploy.
+The completed work packages, verification outcome and source commits are recorded in the [v20 changelog entry](../../CHANGELOG.md#killshot-arena).
 
 ## 8. Not done, for the backlog
 

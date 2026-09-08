@@ -83,15 +83,9 @@ Tests, each a name: `teams_are_balanced_on_join` (8 joins: 4 and 4; a ninth afte
 
 `web/games/arena/v19/index.html` from v18 with a `<select id="lobby-mode">` (Free for all, Team deathmatch, King of the hill) beside the map selector, its value in the create config as `mode`, a mode pill on lobby rows from `LobbyInfo.mode`, the hint updated (what each mode is, the limits, the pause); `web/games.json` v19 live on proto 16, v18 archived; `deploy/deploy-pages.sh` `ARENA_LIVE=games/arena/v19`; README's arena section gains the modes and the bump; `docs/hosts.md` if it names the version; backlog lines for what is not done (below).
 
-## 7. Work packages, verification, commits
+## 7. Release record
 
-| WP | Owns | Delivers |
-|---|---|---|
-| **A sim + wire + server** | `crates/arena-core/src/{shooter.rs,freight_yard.rs,proto.rs}`, `crates/arena-server/**` | §3, §2.1, §4 with every test named |
-| **B client** | `crates/arena/src/**` | §5 |
-| **C page + docs** | `web/games/arena/v19/`, `web/games.json`, `web/index.html` (the live version pointer), `deploy/deploy-pages.sh`, `README.md`, `docs/hosts.md`, `docs/plans/backlog.md` | §6 |
-
-A first (the skeleton of types and signatures lands within its first step so B compiles against it); B and C in parallel with A after the skeleton; then integration, `cargo test --workspace --exclude linter`, clippy, the wasm check, a two-client capture per mode through `tools/v18/capture.ps1` (team colours, the hill bars, a round-over line), wsbot runs with `--mode` on both maps, commits (sim+server; client; page+docs), and the host and pages deploy in that order.
+The completed work packages, verification outcome and source commits are recorded in the [v19 changelog entry](../../CHANGELOG.md#killshot-arena).
 
 ## 8. Not done, for the backlog
 

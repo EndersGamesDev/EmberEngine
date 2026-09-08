@@ -6,21 +6,13 @@ Goal: make the repo a big, public thing that people interact with — stars, for
 
 Measured 2026-09-04 with `gh repo view`: 1 star, 0 forks, 0 watchers, 2 issues, 0 releases, wiki off, description empty. The baseline row in `LOG.md` is the record; every session re-measures and appends. Thirty-day targets: 25 stars, 3 forks, 10 issues of any kind, 1 merged external PR, a release per arena version, the wiki live, and a post on every channel in `posts/`.
 
-## Phase 0 — inventory (done 2026-09-04)
+## Phase 0 — inventory
 
-- Read the repo: README, CLAUDE.md, docs/, deploy/, the hub, the backlog.
-- Confirmed: the repo is public; `gh` is authenticated with ADMIN on this machine; `web/index.html` is the games hub, so the player-facing site already exists and the missing piece is the developer-facing page; the default branch is `main`; the deploy is a whitelist of copied files.
+The finished inventory is recorded in [the pending changelog](../CHANGELOG.md#documentation-and-marketing).
 
-## Phase 1 — presence (lands in this branch)
+## Phase 1 — presence
 
-- [x] `marketing/` infrastructure: plan, log, board, memory, heartbeat protocol plus the local script.
-- [x] Developer landing page `web/engine.html` — one self-contained file in the hub's visual language, no runtime fetch — plus the one guarded copy line in `deploy/deploy-pages.sh` so the official deploy carries it.
-- [x] `CONTRIBUTING.md` at the root: prerequisites, run, check, the simulation invariants, the protocol-bump test, where to start (the backlog's one-line gaps).
-- [x] Issue templates (bug / feature / question) in the new YAML format: the bug template asks for the protocol number and the host chip; the feature template asks which layer a change touches before it is written.
-- [x] The `heartbeat` Actions workflow: hourly; when no commit landed in the last hour it appends `marketing/heartbeat.log` and commits the marker, so the public record shows the lane was quiet.
-- [x] Launch post drafts in `posts/` (Show HN, r/rust, r/gamedev, r/webassembly, the X/Bluesky/LinkedIn thread, the YouTube script).
-- [x] The neutral article draft in `wiki/` with the policy note on when it may be published.
-- [x] The repo description and topics, the wiki enabled and seeded, the first release.
+The finished public-presence work is recorded in [the pending changelog](../CHANGELOG.md#documentation-and-marketing).
 
 ## Phase 2 — distribution (human action, drafts ready)
 
