@@ -64,6 +64,10 @@ Large artist source stays **out of git** (see `.gitignore`); only the converted 
 - **Never drive this machine's input.** Someone is sitting at it: nothing you run may move the cursor, synthesise a key or a click, or take the foreground. A client drives itself instead — `EMBER_SCRIPT` (`crates/arena/src/script.rs`), which is how `tools/v18/capture.ps1` gets its pictures.
 - Markdown paragraphs run: one line per paragraph, soft-wrapped by the viewer. Never hard-wrap prose.
 - LF line endings, UTF-8 without BOM, everywhere. Never let a host tool write UTF-16 or a BOM into the tree.
+- Commit messages follow **`docs/commit-messages.md`**.
+- Versions follow **`docs/versioning.md`**: three grades, majors kept, minors tagged with series-prefixed tags (`arena-31.1.0`, `ember-1.1.0`) that are never bare or `v`-prefixed, and one patch per merge.
+- Every tracked folder carries a `README.md`; **`deploy/tests/test-readmes.sh`** enforces the rule.
+- Finished work is recorded in `CHANGELOG.md`'s pending section, never in done-lists elsewhere; **`deploy/tests/test-done-lists.sh`** enforces the rule.
 - **State plainly what was and was not verified.** "Compiles" and "reviewed by reading" are different claims. A commit whose work could not be built says so in its message.
 - Follow-ups go in `docs/plans/backlog.md`, one line each.
 
