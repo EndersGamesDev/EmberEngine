@@ -30,12 +30,18 @@ The first production proof extends that oracle to the real `PaletteRecord` and `
 
 ## Measured bundle cost
 
-Sizes are release wasm bytes before wasm-bindgen. The baseline is commit `1e81e358`; the post-proof Julibrot measurement is filled from the first server gate that freshly builds the proof-linked application, because the editing sandbox intentionally has no Rust toolchain.
+Sizes are measured on the release `ember_lab_julibrot.wasm` before wasm-bindgen. The baseline is commit `1e81e358`; subsequent rows isolate the template feature set and the direct validation path.
 
-| Artifact | Baseline | After proof | Delta |
-|---|---:|---:|---:|
-| `arena.wasm` | 44,934,492 B | Pending full gate; dependency graph unchanged | Expected 0 B |
-| `ember_lab_julibrot.wasm` | 6,870,688 B | Pending light gate | Pending light gate |
+| Build stage | Bytes | Delta from baseline | Included mechanism |
+|---|---:|---:|---|
+| Baseline | 6,870,688 B | 0 B | No runtime shader-template mechanism |
+| Default set | 7,620,854 B | +750,166 B (+10.9%) | Minijinja's default features, including `debug`, plus direct Naga validation |
+| Code-generation set without debug | 7,653,093 B | +782,405 B (+11.4%) | The full dynamic code-generation feature set, including loop controls, because generated shaders need the complete template language; `debug` is excluded from release |
+| Native-only validation | 7,615,046 B | +744,358 B (+10.8%) | The same feature-full Minijinja build without `debug`; direct shader-crate Naga validation is excluded from wasm because wgpu validates shader modules there |
+
+Two superseded diagnostic builds isolated the components: the one-feature, no-debug engine measured 7,578,154 B, and moving direct validation native-only on top of it measured 7,539,257 B. Together with the supported rows, these put Minijinja's core near 670 KB, the remaining code-generation features including loop controls near 75 KB, `debug` near 43 KB, and the direct validator path near 39 KB. The supported engine stays feature-full so dynamically generated shaders can use the template language; only `debug` and duplicate direct validation leave release wasm.
+
+`arena.wasm` remains outside the Julibrot dependency graph. Its baseline is 44,934,492 B; the full gate supplies the post-change confirmation.
 
 ## Migration order
 
