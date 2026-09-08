@@ -4,4 +4,4 @@
 
 `runtime.rs` owns the lab's embedded Minijinja environment and resolves its declaration, enum, binding and constant filters exclusively from a `ShaderContext` supplied by the pipeline owner. Its public renderer parses and validates every expanded source with the same naga version used by wgpu, reports the template line on failure, and gives validated source a stable hash for owner-held caching.
 
-The anti-drift oracles join this foundation as a separate migration step.
+`oracle.rs` tests every type and enum in its real `ShaderContext` registry. It compares naga's rendered struct offsets and sizes with the Rust metadata, including a padded `vec3`, compares rendered enum constants with Rust discriminants, and proves a missing type is named at render time.

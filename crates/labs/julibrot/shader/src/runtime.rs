@@ -13,10 +13,17 @@ const INVALID_TEST_SOURCE: &str = include_str!("../templates/invalid-test.wgsl.j
 const INVALID_VALIDATION_TEST_NAME: &str = "invalid-validation-test.wgsl.jinja";
 const INVALID_VALIDATION_TEST_SOURCE: &str =
     include_str!("../templates/invalid-validation-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: [(&str, &str); 3] = [
+const ORACLE_TEST_NAME: &str = "oracle-test.wgsl.jinja";
+const ORACLE_TEST_SOURCE: &str = include_str!("../templates/oracle-test.wgsl.jinja");
+const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
+const UNREGISTERED_TYPE_TEST_SOURCE: &str =
+    include_str!("../templates/unregistered-type-test.wgsl.jinja");
+const EMBEDDED_TEMPLATES: [(&str, &str); 5] = [
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
     (INVALID_TEST_NAME, INVALID_TEST_SOURCE),
     (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
+    (ORACLE_TEST_NAME, ORACLE_TEST_SOURCE),
+    (UNREGISTERED_TYPE_TEST_NAME, UNREGISTERED_TYPE_TEST_SOURCE),
 ];
 
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
@@ -225,6 +232,16 @@ impl ShaderContext {
             return Err(RenderError::NonFiniteConstant { name });
         }
         register_once(&mut self.constant_values, name, value, "constant")
+    }
+
+    #[cfg(test)]
+    pub(super) fn registered_types(&self) -> impl Iterator<Item = &WgslTypeDescription> {
+        self.structures.values()
+    }
+
+    #[cfg(test)]
+    pub(super) fn registered_enums(&self) -> impl Iterator<Item = &WgslEnumDescription> {
+        self.enumerations.values()
     }
 
     fn expand(&self, template_name: &str) -> Result<String, RenderError> {

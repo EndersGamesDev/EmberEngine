@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 
 mod enum_meta;
+#[cfg(test)]
+mod oracle;
 mod runtime;
 mod type_meta;
 
