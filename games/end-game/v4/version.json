@@ -1,0 +1,16 @@
+{
+  "game": "end-game",
+  "version": "4.0.0",
+  "source": "f6fd41399a943c6dd91e9e4689f6ff1d377c5d44",
+  "files": {
+    "index.html": "eac49a86cf368c345a54daa445a7ced203e7664bde8c59386bf021c1fce868d1",
+    "main.js": "d5fc4ef1079b83da3d9e6fbfb84a6f942c77b38cbfa6310d68e7906bf768d178",
+    "quality.js": "6a24e4240df8d62b386a8b5f95e3fef30a210bab612e554fdda4e4dc5f790117",
+    "style.css": "e0297c8e2a116fb794437672da52db817b55297373966dcb8af64500aba4e0d5",
+    "cover.png": "49ff994de7263c799ef8b3e36a3b15f86fb26a43222094ecccdc2a255d8586e8",
+    "prologue.mp4": "ca6fe16a50fb3dd305fb2d49f53573da19af2c850dfb1814ca86bfe4d75a7741",
+    "ambience.wav": "09eda9da41f6750c0d30c9a7dbf4b16d0b96bc00e72dbe783c2f9d77466174b1",
+    "pkg/end_game.js": "17ddb8517c9d27fd89cb3dc03e3445d1be640b1f3d58fcc9af8f3774b57dedf2",
+    "pkg/end_game_bg.wasm": "445f6344c0d3b62cb23defc7d11b8cc1865055a453ec0e152c9f38aa64d3556e"
+  }
+}
