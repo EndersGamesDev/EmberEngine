@@ -468,9 +468,9 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v9 — In preparation
+### v9 — 2026-09-08
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `6cf7e07aa0acdce01e7e1a1953a130c61967e1b4` (not on main) · no tag · published `f7aa1a7f625c31b7e60de6b62a907b31897dc8a5` (release stamp)
 
 Beyond the Dungeon opens a connected castle route through a basement hall, great hall, garden, battlements and climbable tower. V8 sword combat and blocking remain.
 
