@@ -476,9 +476,9 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v10 — In preparation
+### v10 — 2026-09-08
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `ffe576b58c333517f8c5ff3e9f24483b00b0c507` (not on main) · no tag · published `43d5d806c439f2b1e01a486c89df0f0fbf6122fa` (release stamp)
 
 The Last Seal populates the castle with armed enemies and a cyclops Castellan, and connects its clues to a final escape.
 
