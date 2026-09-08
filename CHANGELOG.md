@@ -18,7 +18,7 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 ### Exact camera
 
-The new dependency-free `ember-camera` crate owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`f3191623`, `bcc2e484`, `375995c0`, `5aaed6df`).
+The new dependency-free `ember-camera` crate owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `cf15bc7d`, `32f86f54`, `04ae93dc`, `e1299b4e`, `3d8d8f1f`).
 
 ### Julibrot rounds two and three
 
