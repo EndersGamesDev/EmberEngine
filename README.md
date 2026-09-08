@@ -66,35 +66,9 @@ The native TCP cube demo has been retired. Multiplayer is migrating to one host,
 
 ## Roadmap
 
-- [x] **0. Base**: workspace, window, wgpu surface, clear color
-- [x] **0.5 Multiplayer online**: the retired cube prototype established an authoritative server, client snapshot interpolation, and shared protocol
-- [x] **0.6 ATW-first presenter (stage A)**: scene renders offscreen
-      (SceneFrame, color+depth); a presenter pass owns the swapchain
-      (identity warp today — see `docs/atw-first-rendering.md`, adopted)
-- [x] **0.7 First game + web build**: 3D pong (2 players, one keyboard),
-      compiled to wasm (WebGPU with WebGL2 fallback), hosted on GitHub Pages
-- [x] **1 (textures half). Per-mesh textures + UVs**: scene pass samples a
-      per-mesh texture at group(1); GLB loader reads TEXCOORD_0; fly camera
-      still open (lands as rotation-only warp, ATW stage B)
-- [x] **2 (first half). glTF mesh pipeline**: Blender (scripted, headless)
-      → .glb → engine multi-mesh instancing; the arena viewmodel (pistol +
-      hands) is authored via `tools/make_assets.py`. Level editing and
-      textures still ahead.
-- [x] **3 (lighting half)**: Blinn-Phong + top sheen + view-depth fog in the
-      scene shader; shadow mapping still open
+Completed roadmap milestones are recorded in [the changelog](CHANGELOG.md#pending); this list contains only work that remains open.
+
 - [ ] 4. Fixed-timestep loop + physics (rapier)
-- [x] **5. egui debug overlay + hot-reloadable WGSL shaders**: the ATW test
-      rig from the doc's §6 — F3 overlay (presenter-composited) with a
-      scene-Hz throttle + frame-age/latency readouts; shaders hot-reload
-      from disk on native
-- [x] **5.5 Authored levels + the graphics update (arena v13)**: the shooter
-      sim takes a `Level` off the wire instead of a seed, so the server names
-      one authored map ("Trench City") and every client builds the same
-      obstacles from it; `Obstacle` grows a bottom (`base`) and a cover
-      `kind`, which makes tunnels and stacked cover representable; the
-      renderer grows CPU-built mipmaps and per-frame fog; and the picture →
-      mesh → texture runbook that produced the map is checked in under
-      `tools/v13/` (`docs/asset-pipeline.md`, Path E)
 - [ ] 6. Offline asset compiler (glTF → baked blobs)
 - [ ] 7. GPU-driven rendering pass (bindless, culling in compute, indirect draws)
 - [ ] Game-specific systems — driven by the game design, step by step

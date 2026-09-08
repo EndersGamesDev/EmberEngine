@@ -12,6 +12,116 @@ Every version the launcher (`web/games.json`) lists, in one place: what a player
 
 The full evidence for every row, including the freeze commits and every publication considered, is the release ledger this file was built from.
 
+## Pending
+
+This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
+
+### Julibrot rounds two and three
+
+Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
+
+Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).
+
+Retired main-grid ownership is now an explicit absent state, including restoration and failure paths, and the short, zoom, height, capture and finished-picture scenarios share one trace fixture without changing their frame or browser-action records (`2e864405`).
+
+Presentation polling now consumes its fixed event set without allocating a vector, reprojection no longer accepts unread precision and validation parameters, and static versus HOT uniform construction makes dynamic offsets structural; the planner, trace and pixel corpora stayed unchanged (`84e8d4f8`).
+
+Surface acquisition, warp submission, receipt validation, retention and presentation now pass through a replayable surface-resolution owner whose ordered record preserves failed turns and distinguishes present, drop and ignore outcomes (`0c746bf3`).
+
+Scene and warp completion, refusal, retained-source bookkeeping and stable facts now pass through a replayable Present-event owner, with poll-before-apply-before-finish ordering and failure chronology pinned (`4a376831`).
+
+Kernel planning, allocation, retirement, encoding and publication now pass through a replayable submission owner whose whole-grid job carries every semantic input by value, including the complete perturbation reference identity (`fb3cc50c`).
+
+Worker submission, arrival processing, reference disposition, facts and channel-only reads now pass through a replayable worker-service owner with a chronological turn record (`a9f3c778`).
+
+The browser and native Julibrot drivers now use one ordered refresh executor with typed stage tokens, replacing marker-only ordering and pinning scene-before-warp and fence-observation order (`e77ddad4`).
+
+The same-thread and browser transports now share one ownership core while retaining ABI-3 bytes, four buffers and their measured transport differences, and app callers reach the viewer through narrowed pan, zoom, precision and navigation entries instead of the mutable owner (`807aa546`, integrating source merges `61acab7b` and `fd96a4de`).
+
+Warm-up measurements now select the newest completed submission by a shared completion sequence instead of mistaking the longest wall duration for recency (`3f885813`).
+
+Round two began with frozen worker-event and app-frame traces, a paired planner corpus, native whole-grid pixels and a served raw-RGBA artifact whose load-dependent facts are explicitly excluded from stable comparison (`e53da1bb`, integrating source merge `148c828f`).
+
+The refactor survey classified the Julibrot ownership seams, measured its debt and established the round-two and round-three oracle contract without changing runtime behavior (`8734d336`).
+
+Relief-aware zoom now reprojects the retained source through the requested view, applies palette only during presentation and holds a covering source instead of clearing it during the transition (`430a56ad`).
+
+A relief zoom that cannot be represented now reports the refusal, retains partial-error evidence and records where each held, redrawn, warped or cleared picture placed the requested view (`b0422875`).
+
+### Killshot engineering
+
+The server bot and client transport now share the network predicate that treats an interrupted read as transient, Arena's remaining core lint suppressions carry reasons or disappeared where forced lint proved them stale, and frozen protocol fixtures retain their bytes (`9918e39c`).
+
+Arena client and server networking gained the shared interrupted-read behavior, test-only sound helpers stopped entering production builds, and the removed unreferenced backdrop and basalt files leave checked-in shipped bundle hashes unchanged (`9501ec2b`).
+
+Stale Arena lint suppressions were removed where native and wasm forced-lint runs proved the scopes clean, with no gameplay or wire change (`49b6518f`).
+
+The completed Trench City roadmap item is already recorded under the existing v13 release entry from source `2d521397`; its design plan now points to that released record instead of maintaining a second completion list.
+
+### UltimateLegue engineering
+
+League's protocol sanitizer now uses the shared network implementation while preserving its game-specific fallback word and wire behavior (`9501ec2b`).
+
+The League server now has a positional oracle for the exact roster, live-phase and state start-message sequence, and stale League client and core lint suppressions were removed (`49b6518f`).
+
+League's V4-touched scene and core files now match the formatter of record, every server target passes the pedantic lint gate, and its browser-only dependency is scoped to wasm without changing play (`9324f9af`).
+
+### Fire Racer engineering
+
+Fire's protocol sanitizer now uses the shared network implementation with the same fallback and bytes as before (`9501ec2b`).
+
+Fire client and server integration tests now wait for the exact racing, readiness and disconnect states they read instead of relying on fixed startup delays (`49b6518f`).
+
+The first bounded cross-client waits removed scheduler races from Fire's online test without weakening its assertions (`9324f9af`).
+
+### Four Kings engineering
+
+Kings now uses the shared protocol sanitizer without changing its fallback or wire bytes, and its online creator waits for the two-seat waiting board before reading it, closing the observed roster/state race (`9501ec2b`).
+
+Kings client and server integration tests now synchronize readiness and disconnect reads against the exact state transition instead of a fixed delay (`49b6518f`).
+
+The first bounded cross-client waits removed scheduler races from the Kings online test while retaining its board assertions (`9324f9af`).
+
+### what is this engineering
+
+The frozen diagnostic source keeps its historical behavior while its lint annotation now states why plumbing may change without changing the hosted contract (`9918e39c`).
+
+The diagnostic crate's client-network dependency is now wasm-only, matching its sole caller and removing it from native builds (`9324f9af`).
+
+### Engine and workspace debt cleanup
+
+The final inline transient-read copies moved onto the shared network predicate, the never-run 9 mm converter was removed, stale lint suppressions disappeared and the workspace gate remained green, closing the planned cleanup slices while leaving the two explicitly ranked follow-ups open (`9918e39c`).
+
+Three unreferenced assets totaling 5,397,461 bytes were removed without changing shipped bundle hashes; network sanitization, digest framing and transient-read handling gained shared implementations with game-specific fallbacks and failure behavior preserved (`9501ec2b`).
+
+Twenty-eight stale lint suppressions were removed across eleven crates and tools, each only after its applicable configurations produced no diagnostic, while helper and fixture suppressions that still carry a real reason remained (`49b6518f`).
+
+The workspace returned to a green gate after League formatting and lint repairs, bounded online-test waits and correct target scoping for four browser-only dependencies (`9324f9af`).
+
+The retired multiplayer prototype established the authoritative-server and client-snapshot boundary now used by the online games (`9484b7dd`).
+
+Per-mesh textures and UVs, glTF texture coordinates, Blinn-Phong lighting, fog, the native diagnostic overlay, scene-rate controls and shader hot reload form the completed early rendering layer (`6cbb4612`).
+
+The offline Blender-to-glTF path established multi-mesh instancing and the first authored Arena viewmodel (`b4ccb6ac`).
+
+The initial workspace, offscreen scene/presenter split and local Pong wasm page established the engine and its first browser game (`01d913da`).
+
+### Servers and hosting
+
+The dedicated public node can now receive prebuilt artifacts from the build server, start the exact server commit named by the published pages and verify the shipped set through isolated host fixtures (`1106e450`).
+
+### Tooling
+
+The level editor once again constructs current `Level` values after supplies became part of the shared Arena type, restoring editor builds without changing a game release (`b252e35a`).
+
+### Documentation and marketing
+
+The repository now has an authority-to-surface engine design reference tying simulation ownership, rendering, reprojection and presentation contracts together, with Julibrot named as the executable miniature (`4855f249`).
+
+The backlog was rebuilt from a four-way audit so closed and obsolete rows left the living plan and every retained row names a concrete remaining gap (`7369cb54`).
+
+The public-presence pass established the developer landing page, contribution and issue routes, heartbeat record, launch drafts, neutral article, repository metadata and the first public release; distribution that needs a human account remains open in the marketing plan (`527c2ca3`).
+
 ## Killshot (arena)
 
 ### v31 — 2026-09-06
@@ -302,13 +412,21 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ### v4 — 2026-09-07
 
-proto 2 · stamp r1799 · source `bc7baa80` · tag `league-v4` · published `68b6eea8` (game) and `b11fdf73` (landing)
+proto 2 · stamp r1799 · source `bc7baa80` · tag `league-v4` · published `68b6eea8` (release stamp)
 
 Crystalforge readability pass for lane and goal silhouettes, V4 feedback overlay and authoring polish built from existing gameplay.
 
 This release is protocol-preserving and does not change movement, damage, healing, cooldown, economy or match mode rules.
 
-Released 2026-09-07 from main `bc7baa80` (r1799) after codex ran out of tokens and the owner handed the cycle to fable to finish with Spark and OpenCode. The V3 server on port 7784 is reused unchanged (league-core and league-server byte-identical to `cf4a95f0`, proven by the publisher's compatibility guard); the client bundle is `league_bg.wasm` sha256 `0e31cf22e8bd7990…`. Second ground pass: the lane paving is a seamless non-mirrored tile (its cross seam regenerated by one SDXL inpaint job), the garden is a darker jade block with periodic mottling, the sun is cooler and the hearth and Court spires taller with unchanged footprints. Feedback module clippy-clean; the Escape menu's Tab cycle reaches the sound inputs. Main CI 34126155702 green (https://github.com/EndersGamesDev/EmberEngine/actions/runs/34126155702); Pages deploy 34126489361. Proof: prove-live passed (11 public files byte-identical, 30 frozen files unchanged, real public 1v1 and 3v3 through wsprobe healthy on protocol 2 in 0.58 s and 0.42 s, 14.1 s total); prove-landing passed (CDN bytes of the landing match the source, 4 s); Pages deployment 34126489361 success at 13:19:04Z. Known limits: a faint soft band recurs along the lane every 5.4 units; the heal cue never fires for the healed player because heal events carry unit 0; the bottom bar overflows below about 410 px as in V3.
+Released 2026-09-07 from main `bc7baa80` (r1799), which completed the V4 ground treatment, feedback overlay, keyboard navigation and release integration after the visual groundwork at `70d4263f` and the Clippy cleanup at `38e58be2`. The V3 server on port 7784 is reused unchanged (league-core and league-server byte-identical to `cf4a95f0`, proven by the publisher's compatibility guard); the client bundle is `league_bg.wasm` sha256 `0e31cf22e8bd7990…`. Second ground pass: the lane paving is a seamless non-mirrored tile (its cross seam regenerated by one SDXL inpaint job), the garden is a darker jade block with periodic mottling, the sun is cooler and the hearth and Court spires taller with unchanged footprints. Feedback module clippy-clean; the Escape menu's Tab cycle reaches the sound inputs. Main CI 34126155702 and Pages deployment 34126489361 passed. The separate landing publication is `b11fdf73`. Proof: prove-live passed (11 public files byte-identical, 30 frozen files unchanged, real public 1v1 and 3v3 through wsprobe healthy on protocol 2 in 0.58 s and 0.42 s, 14.1 s total); prove-landing passed (CDN bytes of the landing match the source, 4 s); Pages deployment 34126489361 succeeded at 13:19:04Z. Known limits: a faint soft band recurs along the lane every 5.4 units; the heal cue never fires for the healed player because heal events carry unit 0; the bottom bar overflows below about 410 px as in V3.
+
+### v3 — 2026-09-07
+
+proto 2 · stamp — · source not recorded · no tag
+
+Right-click movement and attacks, bindable attack-move, ability animation takeover, saved bindings, fullscreen controls and a complete new-player guide made this the first protocol 2 League build.
+
+The repository records the V3 page tree at `1c8dde39`, its authoritative attack-move foundation at `3381e495` and its launcher promotion at `82c960bd`, while the release plan records the locally tested bundle hash. Those sources establish what was prepared, but not what reached Pages: the repository carries only the `league-v1` and `league-v2` tags, and its fetched `refs/remotes/pages/gh-pages` tip `b01bd38d` has no `games/league/v3/` tree. No published source stamp or V3 tag can therefore be evidenced from the repository, so this entry records neither rather than inventing them.
 
 ### v2 — 2026-09-06
 

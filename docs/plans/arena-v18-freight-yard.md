@@ -448,57 +448,9 @@ Every material's image links are broken or absent (paths on the artist's machine
 
 Texture VRAM is `w × h × 4 × 4/3` per mesh id. Today's viewmodel: 44.7 MB (hands 2048², four parts at 1024²). Measured after the build: the viewmodel set's texture VRAM is **74.8 MB** with mip chains (every weapon is registered because any remote player may hold any gun; `CLAUDE.md`'s 112 MB line is the reference point). Bundle: `viewmodel.glb` was 8.0 MB; the shipped v18 GLB is **17.4 MB** (146 006 triangles, 13 PNGs totalling 11.5 MB) after taking the pre-decided first fallback, the Vityaz and sniper atlases at 768 (at 1024 it measured 18.2 MB), and it is still 1.4 MB over the 16 MB line this document drew; the next levers (the hands' 2048 picture at 2.7 MB, the shield's 1.6 MB, the AK and the revolver frame at 1024, the 15 000-triangle budgets) are a project decision recorded in the backlog, not taken blind. The wasm bundle measured **39.1 MB** after `wasm-bindgen` (`web/pkg/arena_bg.wasm`; 29.6 MB before v18; the "~17 MB" in `docs/asset-pipeline.md` was stale and is corrected there).
 
-## 9. Work packages, verification, commits
+## 9. Release record
 
-### 9.1 Interfaces fixed first (one skeleton commit: compiles, every existing test green)
-
-`arena-core`: `Cover::Loot`; the `WeaponStats` fields, `weapon_stats`/`weapon_name` with the table, `SIDEARM`, `WEAPON_COUNT`, `RESERVE_INFINITE`, `LOOT_POOL`, `Projectile`, `LOOT_SIZE`, `LOOT_RESPAWN_SECS`, `SALT_LOOT`; `hash64`/`roll`/`unit_pair`; `Bullet { weapon, pierce, hit_mask }`; `PlayerSt.reserve`; `PlayerIn.ads`; `VStep` and the new `step_vertical` return with the lowest-base clamp; `Sim::from_level(&Level, u64)`, `Sim.seed`, `Sim.loot`, `Sim.hits/blasts/loot_events`; `LootBlock`; `loot_roll`, `segment_hits_box`/`segment_hits_cover` signatures; `MAP_FREIGHT_YARD`, `Level::named`'s arm, and `freight_yard.rs` returning the centre alone. `proto.rs`: every field and variant in §2.1, `PROTO_VERSION = 14`. `arena-server`: compiles against it (map per lobby, events forwarded, `State.loot`, `ads`). The client and the frozen tests are mechanically updated (tuple → struct at the `step_vertical` call sites; `heavy_kills_in_two_hits` → `the_revolver_kills_in_two_hits`; `pads_upgrade_and_death_resets` → `pads_hand_out_the_same_loot`).
-
-### 9.2 Packages (parallel after the skeleton; owned files never overlap; the repo is the medium, `docs/worker-protocol.md`)
-
-| WP | Owns | Delivers |
-|---|---|---|
-| **A sim + wire + server** | `crates/arena-core/src/shooter.rs`, `proto.rs`, `crates/arena-server/src/lib.rs`, `examples/wsbot.rs` | §3 and §5 in full with every test named there; the §2.1 tests; wsbot gains `--map` and a `--bonk` mode |
-| **B map** | `crates/arena-core/src/freight_yard.rs`, `crates/arena-core/tests/fixtures/trench-city-v18.json` (born as `trench-city-v17.json`, regenerated at the §2.2 bump), the shared `level_helpers` test module | §4 and its fifteen invariants |
-| **C engine** | `crates/ember-engine/src/{feedback.rs,input.rs,app.rs,lib.rs}`, its `Cargo.toml` | §6.1 on both platforms, its four tests, the §6.4 doc bullet |
-| **D client** | `crates/arena/src/{online.rs,feel.rs,sound.rs,props.rs,lib.rs}`, its `Cargo.toml` | §5.4, §6.2, §6.3, §7 |
-| **E assets** | `tools/v18/*`, `tools/v15/build_viewmodel.py` (guard + `build_revolver`), `crates/arena/assets/viewmodel.glb`, `viewmodel-rig.json`, `docs/asset-pipeline.md` (the atlas-bake paragraph, the stale bundle number) | §8, with the wall time of every step |
-| **F page + docs + deploy** | `web/games/arena/v18/index.html`, `web/games.json`, `deploy/deploy-pages.sh`, `README.md`, `docs/hosts.md`, `docs/minimum-requirements.md`, `docs/plans/backlog.md`, `CLAUDE.md` (the clamp reports its box) | the page with the map selector, the gamepad hint, the `emberRumble` shim and the lobby-row map pill; games.json `v18` live on proto 14 with v17 archived; `ARENA_LIVE=games/arena/v18` |
-
-Ordering: this plan → the skeleton → A, B, C, E, F in parallel (B needs only the skeleton; C and E need nothing from the tree) → D (starts on the skeleton and rebases on A's numbers, C's `Feedback` and E's node names) → integration, review, staging.
-
-### 9.3 Commands (every run reports wall time; builds at idle priority: on this Windows workstation `nice` is a no-op, so `Start-Process … -PriorityClass Idle` or `cmd /c start /low /b /wait`)
-
-- `cargo check -p arena-core -p arena -p arena-server --tests` (9 s warm) after every edit; `cargo test -p arena-core -p arena` (87 tests green today, 9 s); `cargo test -p ember-engine`; `cargo test -p arena-server`.
-- `cargo clippy --workspace --all-targets` (deny-warnings; pedantic; `unsafe_code = deny`: gilrs and `Reflect` need none).
-- `cargo build --target wasm32-unknown-unknown --release -p arena --lib && wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm`, then the size of `web/pkg/arena_bg.wasm`.
-- Assets: `C:\hy3d\venv\Scripts\python.exe tools/v18/prep_pictures.py`; `"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python tools/v18/build_weapons.py -- --preview`.
-
-### 9.4 Verification, in order, each recorded in the commit that closes it
-
-1. Unit: everything above green; the determinism test and the frozen Trench City fixture (`trench-city-v18.json`, the map with its blocks) pass.
-2. `verify_glb` output and the previews reviewed by eye; `every_table_weapon_has_a_node_or_a_fallback` green.
-3. Native two-client capture (v18 record — the input half of this is now FORBIDDEN: nothing may click, type or move the cursor on this machine, and a client drives itself from `EMBER_SCRIPT` instead; see CLAUDE.md's working rules and `crates/arena/src/script.rs`) (a local `arena-server` on 127.0.0.1:7778, two `arena-app` clients, `EMBER_CAM` on the observer and a click to focus the second client — the v17 lesson; `keybd_event` works, synthetic clicks do not, so the harness is rewritten under `tools/v18/` because nothing of it is committed today): each weapon first person and on the other client, a bonk with the pop, a rocket in flight and its blast on both clients, the sniper scope. Screenshots into `tools/v18/ingame-*.png`, paths in the commit.
-4. Gamepad: no pad is attached to this workstation (gilrs listed none on 2026-09-03, and the engine's ignored host probe printed `0 pad(s)`), so the rumble and input paths are verified by compile and by their unit tests only, and the commit says exactly that; a pad plugged in later exercises them without a code change.
-5. wsbot: two bots for 60 s on each map with `--bonk`; no panics, states flowing, `Loot` and `Blast` events counted > 0, outbound bytes per client reported against today's.
-6. wasm bundle size reported; the v18 page opened in a real browser (the embedded pane has no WebGL2: v14's lesson).
-7. Deploy is **not** part of v18's definition of done: the live host is this workstation on proto 13 and moving it (`deploy/deploy-arena-local.sh up` before `deploy/deploy-pages.sh`) is the user's separate decision. The page is staged on the branch and `games.json` carries v18 on `proto: 15` (§2.2), exactly as v13 was staged before its server moved.
-
-### 9.5 Commit plan (branch `lane/arena-v18`, one topic each; every message states what was built, what was run, and what was only read)
-
-1. `docs: arena v18 plan — Freight Yard, seven guns, loot blocks, the feel pass` (this document, plus the loot texture and its script).
-2. `arena v18: the contracts` (§9.1).
-3. `arena-core: the weapon table, the reserve, spread and gravity`.
-4. `arena-core: pierce, rockets and splash with line of sight`.
-5. `arena-core: loot blocks — the bonk names its box, the roll, the grant, pads unified`.
-6. `arena-core: Freight Yard`.
-7. `proto/server: v14 — a map per lobby, ads, hit, blast and loot events`.
-8. `ember-engine: feedback and gamepads — gilrs on native, the Gamepad API on the web, rumble through the page shim`.
-9. `tools/v15: an importable revolver builder`.
-10. `tools/v18: the weapons build, the atlas bake, viewmodel.glb`.
-11. `arena: the held gun by id, first person and on every player; rockets; the blocks`.
-12. `arena: the feel pass — recoil curves, shake, rumble, ten sounds, gamepad play`.
-13. `arena v18: stage the Freight Yard page and record it in the docs`.
+The completed work packages, verification outcome and source commits are recorded in the [v18 changelog entry](../../CHANGELOG.md#killshot-arena).
 
 ## 10. Risks, and what is not done
 
