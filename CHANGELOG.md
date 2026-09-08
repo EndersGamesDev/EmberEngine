@@ -434,6 +434,12 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
+### v5 — In preparation
+
+no proto · stamp — · source not recorded · no tag
+
+The Warden’s Knife replaces the seated guard with an articulated enemy who rises, draws a knife and pursues the player. Telegraphed knife attacks resolve damage at contact and recover before repeating; V4 sword combos and the complete V1–V4 releases remain available.
+
 ### v4 — 2026-09-08
 
 no proto · stamp — · source `f6fd41399a943c6dd91e9e4689f6ff1d377c5d44` (not on main) · no tag · published `f562dc067175ed5f22b357ab9439c589307fad74` (release stamp)

@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "method": "Deterministic material-built Blender geometry; no generated bitmap service or imported character mesh",
+    "generators": [
+      "tools/end-game/v5_generate_atlas.py",
+      "tools/end-game/v5_build_warden.py",
+      "tools/end-game/v5_verify_warden.py"
+    ],
+    "geometry_helper": "tools/end-game/v3_build_hands.py (read-only)",
+    "atlas_seed": 5090926,
+    "units": "meters",
+    "facing": "-Z",
+    "up": "+Y"
+  },
+  "file": "warden.glb",
+  "bytes": 486824,
+  "sha256": "ad67a5c5b376eb7e8c6bf4c074a962dd234f1c41366ffc2e500310dbd3b7ca90",
+  "nodes": 20,
+  "primitives": 20,
+  "triangles": 11830,
+  "textures": [
+    {
+      "size": [
+        128,
+        128
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 14330
+    }
+  ],
+  "cloned_texture_gpu_bytes_with_mips": 1747620,
+  "body_bounds_min": [
+    -0.35600000619888306,
+    0.0010000000474974513,
+    -0.18799999356269836
+  ],
+  "body_bounds_max": [
+    0.35600000619888306,
+    1.8650000095367432,
+    0.1550000011920929
+  ],
+  "sidecar": "warden-rig.json",
+  "parts": [
+    {
+      "name": "warden_boot_l",
+      "triangles": 440,
+      "image_index": 0,
+      "bounds_min": [
+        -0.17000000178813934,
+        0.0010000000474974513,
+        -0.18799999356269836
+      ],
+      "bounds_max": [
+        -0.03999999910593033,
+        0.23999999463558197,
+        0.0820000022649765
+      ]
+    },
+    {
+      "name": "warden_boot_r",
+      "triangles": 440,
+      "image_index": 0,
+      "bounds_min": [
+        0.03999999910593033,
+        0.0010000000474974513,
+        -0.18799999356269836
+      ],
+      "bounds_max": [
+        0.17000000178813934,
+        0.23999999463558197,
+        0.0820000022649765
+      ]
+    },
+    {
+      "name": "warden_chair",
+      "triangles": 1080,
+      "image_index": 0,
+      "bounds_min": [
+        -0.29649999737739563,
+        0.0,
+        0.07750000059604645
+      ],
+      "bounds_max": [
+        0.29649999737739563,
+        1.371216893196106,
+        0.7122499942779541
+      ]
+    },
+    {
+      "name": "warden_coat_l",
+      "triangles": 156,
+      "image_index": 0,
+      "bounds_min": [
+        -0.23100000619888306,
+        0.625,
+        -0.0020000000949949026
+      ],
+      "bounds_max": [
+        -0.004999999888241291,
+        1.0010000467300415,
+        0.12999999523162842
+      ]
+    },
+    {
+      "name": "warden_coat_r",
+      "triangles": 156,
+      "image_index": 0,
+      "bounds_min": [
+        0.004999999888241291,
+        0.625,
+        -0.0020000000949949026
+      ],
+      "bounds_max": [
+        0.23100000619888306,
+        1.0010000467300415,
+        0.12999999523162842
+      ]
+    },
+    {
+      "name": "warden_forearm_l",
+      "triangles": 372,
+      "image_index": 0,
+      "bounds_min": [
+        -0.32199999690055847,
+        0.8450000286102295,
+        -0.057999998331069946
+      ],
+      "bounds_max": [
+        -0.1979999989271164,
+        1.1990000009536743,
+        0.057999998331069946
+      ]
+    },
+    {
+      "name": "warden_forearm_r",
+      "triangles": 460,
+      "image_index": 0,
+      "bounds_min": [
+        0.1979999989271164,
+        0.8450000286102295,
+        -0.06400000303983688
+      ],
+      "bounds_max": [
+        0.32199999690055847,
+        1.1990000009536743,
+        0.057999998331069946
+      ]
+    },
+    {
+      "name": "warden_hand_l",
+      "triangles": 1252,
+      "image_index": 0,
+      "bounds_min": [
+        -0.3078649640083313,
+        0.7630000114440918,
+        -0.05412619933485985
+      ],
+      "bounds_max": [
+        -0.21899999678134918,
+        0.8859999775886536,
+        0.026629582047462463
+      ]
+    },
+    {
+      "name": "warden_hand_r",
+      "triangles": 1252,
+      "image_index": 0,
+      "bounds_min": [
+        0.21899999678134918,
+        0.7630000114440918,
+        -0.05412619933485985
+      ],
+      "bounds_max": [
+        0.3078649640083313,
+        0.8859999775886536,
+        0.026629582047462463
+      ]
+    },
+    {
+      "name": "warden_head",
+      "triangles": 2712,
+      "image_index": 0,
+      "bounds_min": [
+        -0.13300000131130219,
+        1.5759999752044678,
+        -0.1599999964237213
+      ],
+      "bounds_max": [
+        0.13300000131130219,
+        1.8650000095367432,
+        0.09300000220537186
+      ]
+    },
+    {
+      "name": "warden_knife",
+      "triangles": 378,
+      "image_index": 0,
+      "bounds_min": [
+        0.20999999344348907,
+        0.7609999775886536,
+        -0.03449999913573265
+      ],
+      "bounds_max": [
+        0.6349999904632568,
+        0.8029999732971191,
+        0.02199999988079071
+      ]
+    },
+    {
+      "name": "warden_neck",
+      "triangles": 236,
+      "image_index": 0,
+      "bounds_min": [
+        -0.08399999886751175,
+        1.4869999885559082,
+        -0.07599999755620956
+      ],
+      "bounds_max": [
+        0.08399999886751175,
+        1.6358686685562134,
+        0.07000000029802322
+      ]
+    },
+    {
+      "name": "warden_pelvis",
+      "triangles": 416,
+      "image_index": 0,
+      "bounds_min": [
+        -0.1850000023841858,
+        0.7450000047683716,
+        -0.13699999451637268
+      ],
+      "bounds_max": [
+        0.2329999953508377,
+        1.1349999904632568,
+        0.11800000071525574
+      ]
+    },
+    {
+      "name": "warden_shin_l",
+      "triangles": 192,
+      "image_index": 0,
+      "bounds_min": [
+        -0.16699999570846558,
+        0.11000002920627594,
+        -0.06828697770833969
+      ],
+      "bounds_max": [
+        -0.043000005185604095,
+        0.6050000190734863,
+        0.05999999865889549
+      ]
+    },
+    {
+      "name": "warden_shin_r",
+      "triangles": 192,
+      "image_index": 0,
+      "bounds_min": [
+        0.043000005185604095,
+        0.11000002920627594,
+        -0.06828697770833969
+      ],
+      "bounds_max": [
+        0.16699999570846558,
+        0.6050000190734863,
+        0.05999999865889549
+      ]
+    },
+    {
+      "name": "warden_thigh_l",
+      "triangles": 128,
+      "image_index": 0,
+      "bounds_min": [
+        -0.19699999690055847,
+        0.5400000214576721,
+        -0.09399999678134918
+      ],
+      "bounds_max": [
+        -0.013000000268220901,
+        0.9700000286102295,
+        0.09399999678134918
+      ]
+    },
+    {
+      "name": "warden_thigh_r",
+      "triangles": 128,
+      "image_index": 0,
+      "bounds_min": [
+        0.013000000268220901,
+        0.5400000214576721,
+        -0.09399999678134918
+      ],
+      "bounds_max": [
+        0.19699999690055847,
+        0.9700000286102295,
+        0.09399999678134918
+      ]
+    },
+    {
+      "name": "warden_torso",
+      "triangles": 1344,
+      "image_index": 0,
+      "bounds_min": [
+        -0.3190000057220459,
+        1.0449999570846558,
+        -0.17000000178813934
+      ],
+      "bounds_max": [
+        0.3190000057220459,
+        1.5529999732971191,
+        0.1550000011920929
+      ]
+    },
+    {
+      "name": "warden_upperarm_l",
+      "triangles": 248,
+      "image_index": 0,
+      "bounds_min": [
+        -0.35600000619888306,
+        1.1299999952316284,
+        -0.08399999886751175
+      ],
+      "bounds_max": [
+        -0.164000004529953,
+        1.5269999504089355,
+        0.08399999886751175
+      ]
+    },
+    {
+      "name": "warden_upperarm_r",
+      "triangles": 248,
+      "image_index": 0,
+      "bounds_min": [
+        0.164000004529953,
+        1.1299999952316284,
+        -0.08399999886751175
+      ],
+      "bounds_max": [
+        0.35600000619888306,
+        1.5269999504089355,
+        0.08399999886751175
+      ]
+    }
+  ],
+  "verification": "Exported GLB names/identity transforms, finite positions/UVs, normalized normals, winding agreement, zero degenerate triangles, RGB8 images, opaque white materials, hierarchy and payload budgets. Native motion/rendering verification is separate.",
+  "verification_seconds": 0.0204
+}

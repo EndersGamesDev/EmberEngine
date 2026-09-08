@@ -23,7 +23,7 @@ pub struct Scene {
     wolf: Model,
     werewolf: Model,
     sword: Model,
-    warden: Model,
+    warden: super::warden::WardenRig,
     cot: Model,
     torch: Model,
     props: Vec<Prop>,
@@ -148,10 +148,7 @@ impl Scene {
             &mut meshes,
             include_bytes!("../../../assets/end-game/v3/wolf-greatsword.glb"),
         );
-        let warden = model(
-            &mut meshes,
-            include_bytes!("../../../assets/end-game/v1/warden.glb"),
-        );
+        let warden = super::warden::WardenRig::load(&mut meshes);
         let cot = model(
             &mut meshes,
             include_bytes!("../../../assets/end-game/v2/cot-detailed.glb"),
@@ -351,28 +348,7 @@ impl Scene {
             Material::Oak,
             false,
         );
-        let breath = (t * 1.6).sin() * 0.014;
-        let flinch = if game.combat.impact_kind == Some(end_game_core::combat::ImpactKind::Warden) {
-            (game.combat.impact_left / game.combat.impact_duration()).clamp(0.0, 1.0)
-                * 0.16
-                * game.combat.impact_strength
-        } else {
-            0.0
-        };
-        let warden_rot = if game.warden_health == 0.0 {
-            Quat::from_rotation_z(-1.4)
-        } else {
-            Quat::from_rotation_y(-0.5) * Quat::from_rotation_x(breath - flinch)
-        };
-        draw_model(
-            out,
-            &self.warden,
-            Vec3::new(game.warden.x, breath, game.warden.y),
-            1.0,
-            warden_rot,
-            Material::Leather,
-            false,
-        );
+        self.warden.draw(out, game);
         for (i, p) in positions.iter().enumerate() {
             draw_model(
                 out,
@@ -659,7 +635,7 @@ mod tests {
             })
             .sum();
         eprintln!(
-            "V3 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            "V5 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
             textures * 4 / 3
         );
         assert!(triangles < 220_000);

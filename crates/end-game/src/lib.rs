@@ -1,8 +1,9 @@
-//! End Game v4: a single-player Ember dungeon, native and WASM.
+//! End Game v5: a single-player Ember dungeon, native and WASM.
 mod cell;
 mod hands;
 mod scene;
 mod sword_motion;
+mod warden;
 
 use ember_engine::{
     EmberGame, EngineConfig, Feedback, Frame, InputState, KeyCode, MouseButton, PadButton,
@@ -87,6 +88,41 @@ mod tests {
         assert!(g.third_person);
         g.update(&InputState::default(), STEP);
         assert!(g.third_person);
+    }
+
+    #[test]
+    fn pausing_a_knife_windup_freezes_the_enemy_then_resumes_contact_and_feedback() {
+        use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
+        let mut g = game();
+        g.sim.stage = 3;
+        g.sim.position = glam::Vec3::new(-2.9, 0.0, -2.55);
+        g.sim.alert = 1.0;
+        g.sim.warden_ai.phase = WardenPhase::Attacking;
+        g.sim.warden_ai.elapsed = 0.4;
+        let paused_time = g.sim.time;
+        let phase_time = g.sim.warden_ai.elapsed;
+        UI.with(|u| u.borrow_mut().paused = true);
+        for _ in 0..12 {
+            g.update(&InputState::default(), 0.1);
+        }
+        assert_eq!(g.sim.time, paused_time);
+        assert_eq!(g.sim.warden_ai.phase, WardenPhase::Attacking);
+        assert_eq!(g.sim.warden_ai.elapsed, phase_time);
+        assert_eq!(g.sim.health, 100.0);
+        UI.with(|u| u.borrow_mut().paused = false);
+        while g.sim.warden_ai.elapsed + STEP < KNIFE_CONTACT {
+            g.update(&InputState::default(), STEP);
+            assert_eq!(g.sim.health, 100.0);
+        }
+        g.update(&InputState::default(), STEP);
+        assert_eq!(g.sim.health, 85.0);
+        assert_eq!(g.sim.warden_ai.hit_event, 1);
+        assert!(!g.feedback().rumbles.is_empty());
+        let snapshot: serde_json::Value =
+            HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(snapshot["warden"]["phase"], "Attacking");
+        assert_eq!(snapshot["warden"]["hitEvent"], 1);
+        assert!(snapshot["warden"]["hitLeft"].as_f64().unwrap() > 0.0);
     }
 
     #[test]
@@ -390,6 +426,46 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok("warden") => {
+                use end_game_core::warden::WardenPhase;
+                game.sim.stage = 3;
+                game.sim.position = glam::Vec3::new(-2.9, 0.0, -0.9);
+                game.sim.pitch = -0.16;
+                if let Ok(distance) = std::env::var("END_GAME_WARDEN_DISTANCE") {
+                    if let Ok(distance) = distance.parse::<f32>() {
+                        game.sim.position.z = game.sim.warden.y + distance.clamp(1.0, 3.0);
+                    }
+                }
+                game.sim.warden_ai.phase = match std::env::var("END_GAME_WARDEN_PHASE").as_deref() {
+                    Ok("waking") => WardenPhase::Waking,
+                    Ok("hunting") => WardenPhase::Hunting,
+                    Ok("attacking") => WardenPhase::Attacking,
+                    Ok("staggered") => WardenPhase::Staggered,
+                    Ok("dead") => WardenPhase::Dead,
+                    _ => WardenPhase::Sleeping,
+                };
+                game.sim.warden_ai.elapsed = std::env::var("END_GAME_ACTION_TIME")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                game.sim.warden_ai.walk_phase = std::env::var("END_GAME_WALK_PHASE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.0);
+                if game.sim.warden_ai.phase == WardenPhase::Hunting {
+                    game.sim.warden_ai.walk_blend = 1.0;
+                }
+                if game.sim.warden_ai.phase == WardenPhase::Staggered {
+                    game.sim.warden_ai.flinch_left = (0.22 - game.sim.warden_ai.elapsed).max(0.0);
+                }
+                if game.sim.warden_ai.phase == WardenPhase::Dead {
+                    game.sim.warden_health = 0.0;
+                    let elapsed = game.sim.warden_ai.elapsed;
+                    game.sim.warden_ai.phase = WardenPhase::Hunting;
+                    game.sim.warden_ai.die();
+                    game.sim.warden_ai.elapsed = elapsed;
+                }
+            }
             Ok("combat") => {
                 use end_game_core::combat::{ImpactKind, Strike, StrikeKind};
                 let kind = match std::env::var("END_GAME_STRIKE").as_deref() {
@@ -541,6 +617,7 @@ impl EmberGame for Game {
             self.accumulated += dt;
             let old_event = self.sim.event;
             let old_impact = self.sim.combat.impact_event;
+            let old_knife_hit = self.sim.warden_ai.hit_event;
             while self.accumulated >= STEP {
                 self.sim.tick(Controls {
                     movement: Vec2::new(
@@ -570,7 +647,9 @@ impl EmberGame for Game {
             if attack_presses > 0 {
                 UI.with(|u| u.borrow_mut().attacks = attack_presses);
             }
-            if self.sim.combat.impact_event != old_impact {
+            if self.sim.warden_ai.hit_event != old_knife_hit && self.sim.warden_ai.hit_left > 0.0 {
+                self.feedback.rumble(0.72, 0.55, 160);
+            } else if self.sim.combat.impact_event != old_impact {
                 self.feedback
                     .rumble(self.sim.combat.impact_strength.min(1.0), 0.42, 190);
             } else if self.sim.event != old_event {
@@ -596,6 +675,16 @@ impl EmberGame for Game {
             "position": self.sim.position.to_array(), "time": self.sim.time,
             "interacting": self.sim.interaction.is_some(),
             "finished": self.sim.finished(),
+            "warden": {
+                "phase": format!("{:?}", self.sim.warden_ai.phase),
+                "label": self.sim.warden_ai.label(), "health": self.sim.warden_health,
+                "elapsed": self.sim.warden_ai.elapsed,
+                "near": self.sim.distance(self.sim.warden.x, self.sim.warden.y) < 7.0,
+                "attackEvent": self.sim.warden_ai.attack_event,
+                "hitEvent": self.sim.warden_ai.hit_event, "hitLeft": self.sim.warden_ai.hit_left,
+                "windup": end_game_core::warden::KNIFE_WINDUP,
+                "contact": end_game_core::warden::KNIFE_CONTACT
+            },
             "combat": {
                 "label": self.sim.combat.label(), "queued": self.sim.combat.queued_count(),
                 "rhythmLeft": self.sim.combat.rhythm_left(), "quickLeft": self.sim.combat.quick_left(),

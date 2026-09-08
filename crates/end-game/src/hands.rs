@@ -237,10 +237,12 @@ pub fn view(game: &Dungeon, wake: f32) -> View {
     });
     let impact = (game.combat.impact_left / game.combat.impact_duration()).clamp(0.0, 1.0)
         * game.combat.impact_strength;
-    let kick = (game.combat.impact_left * 95.0).sin() * impact * 0.018;
-    let head = head - Vec3::Y * impact * 0.012;
+    let hurt = (game.warden_ai.hit_left / 0.24).clamp(0.0, 1.0);
+    let kick = (game.combat.impact_left * 95.0).sin() * impact * 0.018
+        + (game.warden_ai.hit_left * 48.0).sin() * hurt * 0.022;
+    let head = head - Vec3::Y * (impact * 0.012 + hurt * 0.017);
     let rot = Quat::from_rotation_y(-yaw)
-        * Quat::from_rotation_x(pitch + impact * 0.026)
+        * Quat::from_rotation_x(pitch + impact * 0.026 - hurt * 0.032)
         * Quat::from_rotation_z(kick);
     View {
         head,

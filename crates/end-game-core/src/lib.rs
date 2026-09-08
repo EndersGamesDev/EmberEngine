@@ -2,8 +2,10 @@
 use glam::{Vec2, Vec3};
 pub mod combat;
 pub mod interaction;
+pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use interaction::{Interaction, InteractionKind};
+pub use warden::{Warden, WardenPhase};
 
 pub const STEP: f32 = 1.0 / 60.0;
 pub const GRAVITY: f32 = 9.81;
@@ -14,11 +16,93 @@ const COT_MAX: Vec2 = Vec2::new(-1.6, 4.75);
 const PLINTH_CENTER: Vec2 = Vec2::new(2.6, -4.6);
 const PLINTH_HALF: Vec2 = Vec2::new(0.50, 0.45);
 const PLINTH_YAW: f32 = -0.23;
+const WARDEN_RADIUS: f32 = 0.28;
+const WARDEN_MIN: Vec2 = Vec2::new(-4.40, -6.37);
+const WARDEN_MAX: Vec2 = Vec2::new(4.40, -0.66);
 
 fn plinth_local(point: Vec2) -> Vec2 {
     let delta = point - PLINTH_CENTER;
     let (sin, cos) = PLINTH_YAW.sin_cos();
     Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
+}
+
+fn plinth_world(point: Vec2) -> Vec2 {
+    let (sin, cos) = PLINTH_YAW.sin_cos();
+    PLINTH_CENTER
+        + Vec2::new(
+            cos * point.x + sin * point.y,
+            -sin * point.x + cos * point.y,
+        )
+}
+
+fn warden_walk_clear(from: Vec2, to: Vec2) -> bool {
+    let inside = |p: Vec2| p.cmpge(WARDEN_MIN).all() && p.cmple(WARDEN_MAX).all();
+    let half = PLINTH_HALF + Vec2::splat(WARDEN_RADIUS);
+    inside(from)
+        && inside(to)
+        && !segment_hits_rect(plinth_local(from), plinth_local(to), -half, half)
+}
+
+/// Six-node visibility graph around the only solid inside the corridor. The
+/// four corners include body clearance; every movement segment is rechecked.
+fn warden_waypoint(from: Vec2, player: Vec2) -> Option<Vec2> {
+    let mut goal = player.clamp(WARDEN_MIN, WARDEN_MAX);
+    let half = PLINTH_HALF + Vec2::splat(WARDEN_RADIUS + 0.04);
+    let mut local = plinth_local(goal);
+    if local.abs().cmple(half).all() {
+        let clearance = half - local.abs();
+        let axis = if clearance.x < clearance.y { 0 } else { 1 };
+        local[axis] = if local[axis] < 0.0 {
+            -half[axis]
+        } else {
+            half[axis]
+        };
+        goal = plinth_world(local);
+    }
+    if warden_walk_clear(from, goal) {
+        return Some(goal);
+    }
+    let nodes = [
+        from,
+        goal,
+        plinth_world(Vec2::new(-half.x, -half.y)),
+        plinth_world(Vec2::new(half.x, -half.y)),
+        plinth_world(Vec2::new(half.x, half.y)),
+        plinth_world(Vec2::new(-half.x, half.y)),
+    ];
+    let mut distance = [f32::INFINITY; 6];
+    let mut previous = [usize::MAX; 6];
+    let mut visited = [false; 6];
+    distance[0] = 0.0;
+    for _ in 0..6 {
+        let next = (0..6)
+            .filter(|&i| !visited[i] && distance[i].is_finite())
+            .min_by(|&a, &b| distance[a].total_cmp(&distance[b]));
+        let Some(current) = next else { break };
+        if current == 1 {
+            break;
+        }
+        visited[current] = true;
+        for candidate in 1..6 {
+            if visited[candidate] || !warden_walk_clear(nodes[current], nodes[candidate]) {
+                continue;
+            }
+            let cost = distance[current] + nodes[current].distance(nodes[candidate]);
+            if cost < distance[candidate] {
+                distance[candidate] = cost;
+                previous[candidate] = current;
+            }
+        }
+    }
+    let mut next = 1;
+    for _ in 0..6 {
+        match previous[next] {
+            0 => return Some(nodes[next]),
+            usize::MAX => return None,
+            parent => next = parent,
+        }
+    }
+    None
 }
 
 fn segment_hits_plinth(from: Vec2, to: Vec2) -> bool {
@@ -184,6 +268,7 @@ pub struct Dungeon {
     pub alert: f32,
     pub warden: Vec2,
     pub warden_health: f32,
+    pub warden_ai: Warden,
     pub time: f32,
     pub body: Body,
     pub event: u32,
@@ -215,6 +300,7 @@ impl Default for Dungeon {
             alert: 0.0,
             warden: Vec2::new(-2.9, -3.7),
             warden_health: 100.0,
+            warden_ai: Warden::default(),
             time: 0.0,
             event: 0,
             message: "Cold iron. Old wood. You are still alive.",
@@ -362,6 +448,8 @@ impl Dungeon {
                 - kind.damage() * if self.werewolf { 1.25 } else { 1.0 })
             .max(0.0);
             self.alert = 1.0;
+            self.warden_ai
+                .on_sword_hit(kind.heavy(), self.warden_health == 0.0);
             self.combat.impact(
                 kind,
                 ImpactKind::Warden,
@@ -407,6 +495,96 @@ impl Dungeon {
         }
         true
     }
+
+    fn knife_line_clear(&self, from: Vec2, to: Vec2) -> bool {
+        if segment_hits_plinth(from, to) || segment_hits_rect(from, to, COT_MIN, COT_MAX) {
+            return false;
+        }
+        // Test whole segments, including the cell's solid sides and the portion
+        // of the sliding bars that still occupies the aperture.
+        for (min, max) in [
+            (Vec2::new(-4.68, -0.38), Vec2::new(-0.64, 0.38)),
+            (Vec2::new(0.64, -0.38), Vec2::new(4.68, 0.38)),
+        ] {
+            if segment_hits_rect(from, to, min, max) {
+                return false;
+            }
+        }
+        let bars_left = if self.stage < 3 {
+            -0.64
+        } else {
+            (-0.72 + self.gate_open * 1.55 - 0.14).max(-0.64)
+        };
+        bars_left >= 0.64
+            || !segment_hits_rect(from, to, Vec2::new(bars_left, -0.38), Vec2::new(0.64, 0.38))
+    }
+
+    fn tick_warden(&mut self, running: bool) {
+        if self.warden_health <= 0.0 && self.warden_ai.phase != WardenPhase::Dead {
+            self.warden_ai.on_sword_hit(false, true);
+        }
+        let phase = self.warden_ai.phase;
+        let contact = self.warden_ai.advance();
+        if phase == WardenPhase::Dead {
+            return;
+        }
+        let player = Vec2::new(self.position.x, self.position.z);
+        let offset = player - self.warden;
+        let distance = offset.length();
+        if self.stage >= 3 && phase == WardenPhase::Sleeping {
+            let noise = distance < 1.0
+                || (running && distance < 4.5)
+                || (self.attack_time > 0.0 && distance < 6.0);
+            if noise {
+                self.alert = (self.alert + STEP * 1.4).min(1.0);
+            } else if self.alert < 1.0 {
+                self.alert = (self.alert - STEP * 0.2).max(0.0);
+            }
+            if self.alert >= 1.0 {
+                self.warden_ai.threaten();
+            }
+        }
+        if contact
+            && Vec3::new(offset.x, self.position.y, offset.y).length() <= 1.65
+            && self.warden_ai.forward().dot(offset.normalize_or_zero()) >= 0.55
+            && self.dodge_time == 0.0
+            && self.knife_line_clear(self.warden, player)
+        {
+            self.health -= 15.0;
+            self.hit_cooldown = warden::KNIFE_DURATION;
+            self.warden_ai.hit_player();
+            self.say("The knife finds you. Step aside during his windup.");
+        }
+        // A phase transition consumes this tick. In particular, the entire
+        // wake, knife recovery, or stagger finishes before pursuit can resume.
+        if phase != WardenPhase::Hunting {
+            return;
+        }
+        if distance <= 1.25 && self.knife_line_clear(self.warden, player) {
+            self.warden_ai.turn_toward(offset);
+            if self.warden_ai.forward().dot(offset.normalize_or_zero()) >= 0.90 {
+                self.warden_ai.begin_attack();
+            }
+            return;
+        }
+        let Some(waypoint) = warden_waypoint(self.warden, player) else {
+            self.warden_ai.turn_toward(offset);
+            return;
+        };
+        let toward = waypoint - self.warden;
+        self.warden_ai.turn_toward(toward);
+        let direction = toward.normalize_or_zero();
+        if self.warden_ai.forward().dot(direction) < 0.75 {
+            return;
+        }
+        let travel = toward.length().min(warden::WALK_SPEED * STEP);
+        let next = self.warden + direction * travel;
+        if warden_walk_clear(self.warden, next) {
+            self.warden_ai.walked(self.warden.distance(next));
+            self.warden = next;
+        }
+    }
+
     pub fn tick(&mut self, mut input: Controls) {
         if self.finished() {
             return;
@@ -577,28 +755,7 @@ impl Dungeon {
             self.event += 1;
             self.say("Your blade is somewhere beyond these bars.");
         }
-        if self.stage >= 3 && self.warden_health > 0.0 {
-            let dist = self.distance(self.warden.x, self.warden.y);
-            let noise =
-                dist < 1.0 || (running && dist < 4.5) || (self.attack_time > 0.0 && dist < 6.0);
-            if noise {
-                self.alert = (self.alert + STEP * 1.4).min(1.0);
-            } else if self.alert < 1.0 {
-                self.alert = (self.alert - STEP * 0.2).max(0.0);
-            }
-            if self.alert >= 1.0 {
-                let dir =
-                    (Vec2::new(self.position.x, self.position.z) - self.warden).normalize_or_zero();
-                if dist > 1.1 && self.position.z < -0.6 {
-                    self.warden += dir * STEP * 1.25;
-                }
-                if dist < 1.5 && self.hit_cooldown == 0.0 && self.dodge_time == 0.0 {
-                    self.health -= 15.0;
-                    self.hit_cooldown = 1.4;
-                    self.say("The warden has found you. Move.");
-                }
-            }
-        }
+        self.tick_warden(running);
         if self.health <= 0.0 {
             *self = Self::default();
             self.say("The dark takes you. Try again.");
@@ -1120,6 +1277,8 @@ mod tests {
         }
         assert_eq!(s.alert, 1.0);
         assert_eq!(s.warden_health, 72.0);
+        assert_eq!(s.warden_ai.phase, WardenPhase::Waking);
+        assert_eq!(s.warden_ai.stand_amount(), 0.0);
     }
 
     #[test]
@@ -1243,6 +1402,7 @@ mod tests {
             assert_eq!(s.position, frozen.position);
             assert_eq!(s.velocity_y, frozen.velocity_y);
             assert_eq!(s.warden, frozen.warden);
+            assert_eq!(s.warden_ai, frozen.warden_ai);
             assert_eq!(s.body.position, frozen.body.position);
             assert_eq!(s.body.velocity, frozen.body.velocity);
             assert_eq!(s.combat.active, frozen.combat.active);
@@ -1331,5 +1491,330 @@ mod tests {
             assert_eq!(s.combat.queued_count(), 0);
             assert_eq!(s.combat.swing_event, event);
         }
+    }
+
+    fn knife_fixture() -> Dungeon {
+        let mut s = Dungeon {
+            stage: 4,
+            gate_open: 1.0,
+            position: Vec3::new(0.0, 0.0, -1.85),
+            warden: Vec2::new(0.0, -3.0),
+            ..Dungeon::default()
+        };
+        s.warden_ai.phase = WardenPhase::Hunting;
+        s.tick(Controls::default());
+        assert_eq!(s.warden_ai.phase, WardenPhase::Attacking);
+        assert_eq!(s.warden_ai.elapsed, 0.0);
+        assert_eq!(s.warden_ai.attack_event, 1);
+        s
+    }
+
+    #[test]
+    fn alerted_warden_finishes_waking_before_pursuit_or_damage() {
+        let mut s = Dungeon {
+            stage: 3,
+            gate_open: 1.0,
+            alert: 1.0,
+            position: Vec3::new(-2.9, 0.0, -1.5),
+            ..Dungeon::default()
+        };
+        let origin = s.warden;
+        s.tick(Controls::default());
+        assert_eq!(s.warden_ai.phase, WardenPhase::Waking);
+        let mut stand = 0.0;
+        for _ in 0..99 {
+            s.tick(Controls::default());
+            assert_eq!(s.warden, origin);
+            assert_eq!(s.health, 100.0);
+            assert_eq!(s.warden_ai.attack_event, 0);
+            assert!(s.warden_ai.stand_amount() >= stand);
+            stand = s.warden_ai.stand_amount();
+        }
+        assert_eq!(s.warden_ai.phase, WardenPhase::Hunting);
+        assert_eq!(s.warden_ai.knife_draw(), 1.0);
+        s.tick(Controls::default());
+        assert!(s.warden.y > origin.y);
+        assert!(s.warden_ai.walk_phase > 0.0);
+    }
+
+    #[test]
+    fn close_player_wakes_warden_without_proximity_damage() {
+        let mut s = Dungeon {
+            stage: 3,
+            position: Vec3::new(-2.9, 0.0, -2.9),
+            ..Dungeon::default()
+        };
+        for _ in 0..43 {
+            s.tick(Controls::default());
+        }
+        assert_eq!(s.warden_ai.phase, WardenPhase::Waking);
+        assert_eq!(s.health, 100.0);
+        for _ in 0..99 {
+            s.tick(Controls::default());
+            assert_eq!(s.health, 100.0);
+        }
+        assert_eq!(s.warden_ai.attack_event, 0);
+    }
+
+    #[test]
+    fn knife_hits_once_at_contact_and_finishes_recovery_before_reattacking() {
+        let mut s = knife_fixture();
+        let yaw = s.warden_ai.yaw;
+        for _ in 0..37 {
+            s.tick(Controls::default());
+            assert_eq!(s.health, 100.0);
+            assert_eq!(s.warden_ai.hit_event, 0);
+            assert_eq!(s.warden_ai.yaw, yaw);
+        }
+        assert!(s.warden_ai.elapsed < warden::KNIFE_CONTACT);
+        s.tick(Controls::default());
+        assert_eq!(s.health, 85.0);
+        assert_eq!(s.warden_ai.hit_event, 1);
+        assert_eq!(s.warden_ai.hit_left, warden::HIT_DURATION);
+        for _ in 38..86 {
+            s.tick(Controls::default());
+            assert_eq!(s.health, 85.0);
+            assert_eq!(s.warden_ai.hit_event, 1);
+            assert_eq!(s.warden_ai.attack_event, 1);
+        }
+        assert_eq!(s.warden_ai.phase, WardenPhase::Hunting);
+        s.tick(Controls::default());
+        assert_eq!(s.warden_ai.phase, WardenPhase::Attacking);
+        assert_eq!(s.warden_ai.elapsed, 0.0);
+        assert_eq!(s.warden_ai.attack_event, 2);
+    }
+
+    #[test]
+    fn walking_out_during_windup_misses_and_cannot_hit_late() {
+        let mut s = knife_fixture();
+        for _ in 0..12 {
+            s.tick(Controls::default());
+        }
+        let origin = s.position;
+        for _ in 12..38 {
+            s.tick(Controls {
+                movement: -Vec2::Y,
+                ..Controls::default()
+            });
+        }
+        assert!(s.position.z > origin.z + 0.8);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.hit_event, 0);
+        s.position = origin;
+        for _ in 38..86 {
+            s.tick(Controls::default());
+            assert_eq!(s.health, 100.0);
+            assert_eq!(s.warden_ai.hit_event, 0);
+        }
+    }
+
+    #[test]
+    fn dodging_at_contact_avoids_a_knife_still_inside_range() {
+        let mut s = knife_fixture();
+        for _ in 0..36 {
+            s.tick(Controls::default());
+        }
+        s.tick(Controls {
+            dodge: true,
+            movement: Vec2::X,
+            ..Controls::default()
+        });
+        s.tick(Controls::default());
+        assert!(s.dodge_time > 0.0);
+        assert!(s.distance(s.warden.x, s.warden.y) < 1.65);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.hit_event, 0);
+    }
+
+    #[test]
+    fn knife_direction_locks_at_start_and_cannot_hit_behind_warden() {
+        let mut s = knife_fixture();
+        let yaw = s.warden_ai.yaw;
+        for _ in 0..25 {
+            s.tick(Controls::default());
+        }
+        s.position = Vec3::new(0.0, 0.0, -4.1);
+        for _ in 25..38 {
+            s.tick(Controls::default());
+            assert_eq!(s.warden_ai.yaw, yaw);
+        }
+        assert!(s.distance(s.warden.x, s.warden.y) < 1.65);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.hit_event, 0);
+    }
+
+    #[test]
+    fn light_hits_flinch_but_heavy_hits_cancel_the_pending_knife_contact() {
+        for heavy in [false, true] {
+            let mut s = knife_fixture();
+            for _ in 0..24 {
+                s.tick(Controls::default());
+            }
+            let elapsed = s.warden_ai.elapsed;
+            s.strike_contact(if heavy {
+                StrikeKind::Overhead
+            } else {
+                StrikeKind::Cut
+            });
+            assert!(s.warden_ai.flinch_left > 0.0);
+            if heavy {
+                assert_eq!(s.warden_ai.phase, WardenPhase::Staggered);
+                assert_eq!(s.warden_ai.elapsed, 0.0);
+            } else {
+                assert_eq!(s.warden_ai.phase, WardenPhase::Attacking);
+                assert_eq!(s.warden_ai.elapsed, elapsed);
+            }
+            for _ in 0..40 {
+                s.tick(Controls::default());
+            }
+            assert_eq!(s.health, if heavy { 100.0 } else { 85.0 });
+            assert_eq!(s.warden_ai.hit_event, if heavy { 0 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn death_cancels_a_pending_knife_and_advances_collapse_after_hitstop() {
+        let mut s = knife_fixture();
+        s.warden_health = 10.0;
+        for _ in 0..36 {
+            s.tick(Controls::default());
+        }
+        s.strike_contact(StrikeKind::Cut);
+        assert_eq!(s.warden_health, 0.0);
+        assert_eq!(s.warden_ai.phase, WardenPhase::Dead);
+        assert_eq!(s.warden_ai.stand_amount(), 1.0);
+        while s.combat.hitstop_left > 0.0 {
+            s.tick(Controls::default());
+            assert_eq!(s.warden_ai.elapsed, 0.0);
+        }
+        for _ in 0..180 {
+            s.tick(Controls::default());
+        }
+        assert!(s.warden_ai.elapsed > 2.99);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.hit_event, 0);
+        assert_eq!(s.warden_ai.attack_event, 1);
+    }
+
+    #[test]
+    fn knife_cannot_cross_closed_bars_or_cell_walls_but_open_aperture_allows_contact() {
+        for (stage, x, expected) in [(2, 0.0, 100.0), (4, 1.0, 100.0), (4, 0.0, 85.0)] {
+            let mut s = Dungeon {
+                stage,
+                gate_open: if stage >= 3 { 1.0 } else { 0.0 },
+                warden: Vec2::new(x, -0.66),
+                position: Vec3::new(x, 0.0, 0.50),
+                ..Dungeon::default()
+            };
+            s.warden_ai.begin_attack();
+            for _ in 0..38 {
+                s.tick(Controls::default());
+            }
+            assert_eq!(s.health, expected, "stage {stage}, x {x}");
+        }
+    }
+
+    #[test]
+    fn knife_cannot_cross_the_sword_plinth() {
+        let from = plinth_world(Vec2::new(0.0, -0.70));
+        let to = plinth_world(Vec2::new(0.0, 0.70));
+        let delta = to - from;
+        let mut s = Dungeon {
+            stage: 4,
+            gate_open: 1.0,
+            warden: from,
+            position: Vec3::new(to.x, 0.0, to.y),
+            ..Dungeon::default()
+        };
+        s.warden_ai.yaw = delta.x.atan2(-delta.y);
+        s.warden_ai.begin_attack();
+        for _ in 0..38 {
+            s.tick(Controls::default());
+        }
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.hit_event, 0);
+    }
+
+    #[test]
+    fn pursuit_routes_around_plinth_without_crossing_solids_or_sliding_feet() {
+        for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+            let from = plinth_world(direction * -1.7);
+            let to = plinth_world(direction * 1.7);
+            let mut s = Dungeon {
+                stage: 4,
+                gate_open: 1.0,
+                warden: from,
+                position: Vec3::new(to.x, 0.0, to.y),
+                ..Dungeon::default()
+            };
+            s.warden_ai.phase = WardenPhase::Hunting;
+            let mut traveled = 0.0;
+            for _ in 0..600 {
+                let before = s.warden;
+                let walk = s.warden_ai.walk_phase;
+                s.tick(Controls::default());
+                assert!(
+                    warden_walk_clear(before, s.warden),
+                    "{direction:?}: {before:?} -> {:?}",
+                    s.warden
+                );
+                let step = s.warden.distance(before);
+                assert!(step <= warden::WALK_SPEED * STEP + 0.00001);
+                if step == 0.0 {
+                    assert_eq!(s.warden_ai.walk_phase, walk);
+                }
+                traveled += step;
+                if s.warden_ai.attack_event > 0 {
+                    break;
+                }
+            }
+            assert_eq!(
+                s.warden_ai.attack_event, 1,
+                "did not reach {to:?} from {from:?}, ended {:?}",
+                s.warden
+            );
+            assert!(traveled > 2.0);
+        }
+    }
+
+    #[test]
+    fn hunting_stays_in_corridor_when_player_retreats_into_cell() {
+        let mut s = Dungeon {
+            stage: 3,
+            gate_open: 1.0,
+            warden: Vec2::new(0.0, -2.0),
+            position: Vec3::new(0.0, 0.0, 2.0),
+            ..Dungeon::default()
+        };
+        s.warden_ai.phase = WardenPhase::Hunting;
+        for _ in 0..240 {
+            let before = s.warden;
+            s.tick(Controls::default());
+            assert!(warden_walk_clear(before, s.warden));
+            assert!(s.warden.y <= WARDEN_MAX.y);
+        }
+        assert!(s.warden.y > -0.70);
+        assert_eq!(s.health, 100.0);
+        assert_eq!(s.warden_ai.attack_event, 0);
+    }
+
+    #[test]
+    fn global_hitstop_freezes_pending_knife_contact_and_feedback() {
+        let mut s = knife_fixture();
+        for _ in 0..37 {
+            s.tick(Controls::default());
+        }
+        s.warden_ai.hit_left = 0.10;
+        s.combat
+            .impact(StrikeKind::Cut, ImpactKind::Warden, Vec3::ZERO);
+        let frozen = s.warden_ai.clone();
+        while s.combat.hitstop_left > 0.0 {
+            s.tick(Controls::default());
+            assert_eq!(s.warden_ai, frozen);
+            assert_eq!(s.health, 100.0);
+        }
+        s.tick(Controls::default());
+        assert_eq!(s.health, 85.0);
+        assert_eq!(s.warden_ai.hit_event, 1);
     }
 }
