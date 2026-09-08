@@ -484,9 +484,9 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v11 — In preparation
+### v11 — 2026-09-08
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `2dae79206c564b91837473c65c039c7d21472827` (not on main) · no tag · published `e0a4a7b74d8456f3696356a36cd84493a0ab6a2c` (release stamp)
 
 Weight and Impact focuses the greatsword combo, aimed body zones, a separate jumping heavy attack and visible hit reactions.
 
