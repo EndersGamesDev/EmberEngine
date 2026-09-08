@@ -181,8 +181,10 @@ pub enum RenderError {
     WgslParse {
         /// Embedded template name.
         template: String,
-        /// One-based line in the rendered template when naga supplied a span.
+        /// One-based line in the rendered WGSL when naga supplied a span.
         line: Option<u32>,
+        /// Text of the rendered WGSL line when naga supplied a usable line number.
+        excerpt: Option<String>,
         /// Naga's source diagnostic.
         diagnostic: String,
     },
@@ -191,8 +193,10 @@ pub enum RenderError {
     WgslValidation {
         /// Embedded template name.
         template: String,
-        /// One-based line in the rendered template when naga supplied a span.
+        /// One-based line in the rendered WGSL when naga supplied a span.
         line: Option<u32>,
+        /// Text of the rendered WGSL line when naga supplied a usable line number.
+        excerpt: Option<String>,
         /// Naga's source diagnostic.
         diagnostic: String,
     },
@@ -222,14 +226,30 @@ impl fmt::Display for RenderError {
             Self::WgslParse {
                 template,
                 line,
+                excerpt,
                 diagnostic,
-            } => write_naga_error(formatter, "WGSL parsing", template, *line, diagnostic),
+            } => write_naga_error(
+                formatter,
+                "WGSL parsing",
+                template,
+                *line,
+                excerpt.as_deref(),
+                diagnostic,
+            ),
             #[cfg(not(target_arch = "wasm32"))]
             Self::WgslValidation {
                 template,
                 line,
+                excerpt,
                 diagnostic,
-            } => write_naga_error(formatter, "WGSL validation", template, *line, diagnostic),
+            } => write_naga_error(
+                formatter,
+                "WGSL validation",
+                template,
+                *line,
+                excerpt.as_deref(),
+                diagnostic,
+            ),
             #[cfg(not(target_arch = "wasm32"))]
             Self::ContextAudit {
                 template,
@@ -391,13 +411,20 @@ fn write_naga_error(
     phase: &str,
     template: &str,
     line: Option<u32>,
+    excerpt: Option<&str>,
     diagnostic: &str,
 ) -> fmt::Result {
     match line {
-        Some(number) => write!(
-            formatter,
-            "{phase} failed in template `{template}` at template line {number}:\n{diagnostic}"
-        ),
+        Some(number) => {
+            write!(
+                formatter,
+                "{phase} failed in template `{template}` at rendered WGSL line {number}:"
+            )?;
+            if let Some(source_line) = excerpt {
+                write!(formatter, "\n{source_line}")?;
+            }
+            write!(formatter, "\n{diagnostic}")
+        }
         None => write!(
             formatter,
             "{phase} failed in template `{template}`:\n{diagnostic}"
@@ -412,23 +439,37 @@ fn validate_wgsl(
     context: &ShaderContext,
     trace: &[Emission],
 ) -> Result<(), RenderError> {
-    let module = naga::front::wgsl::parse_str(source).map_err(|error| RenderError::WgslParse {
-        template: template_name.to_owned(),
-        line: error.location(source).map(|location| location.line_number),
-        diagnostic: error.emit_to_string(source),
+    let module = naga::front::wgsl::parse_str(source).map_err(|error| {
+        let number = error.location(source).map(|location| location.line_number);
+        RenderError::WgslParse {
+            template: template_name.to_owned(),
+            line: number,
+            excerpt: rendered_line(source, number),
+            diagnostic: error.emit_to_string(source),
+        }
     })?;
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
     )
     .validate(&module)
-    .map_err(|error| RenderError::WgslValidation {
-        template: template_name.to_owned(),
-        line: error.location(source).map(|location| location.line_number),
-        diagnostic: error.emit_to_string(source),
+    .map_err(|error| {
+        let number = error.location(source).map(|location| location.line_number);
+        RenderError::WgslValidation {
+            template: template_name.to_owned(),
+            line: number,
+            excerpt: rendered_line(source, number),
+            diagnostic: error.emit_to_string(source),
+        }
     })?;
     audit_context(template_name, &module, context, trace)?;
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn rendered_line(source: &str, number: Option<u32>) -> Option<String> {
+    let index = usize::try_from(number?.checked_sub(1)?).ok()?;
+    source.lines().nth(index).map(str::to_owned)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1310,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn naga_parse_error_names_the_failing_template_line() {
+    fn naga_parse_error_names_the_rendered_wgsl_line() {
         let error = render(INVALID_TEST_NAME, &test_context()).expect_err("invalid WGSL must fail");
         assert!(matches!(
             &error,
@@ -1318,11 +1359,11 @@ mod tests {
         ));
         let message = error.to_string();
         assert!(message.contains(INVALID_TEST_NAME));
-        assert!(message.contains("template line 2"));
+        assert!(message.contains("rendered WGSL line 2:\nfn broken(: f32) {}"));
     }
 
     #[test]
-    fn naga_validation_error_names_the_failing_template_line() {
+    fn naga_validation_error_names_the_rendered_wgsl_line() {
         let error = render(INVALID_VALIDATION_TEST_NAME, &test_context())
             .expect_err("invalid shader semantics must fail");
         assert!(matches!(
@@ -1331,6 +1372,7 @@ mod tests {
         ));
         let message = error.to_string();
         assert!(message.contains(INVALID_VALIDATION_TEST_NAME));
-        assert!(message.contains("template line"));
+        assert!(message.contains("rendered WGSL line"));
+        assert!(message.contains("var missing_binding: texture_2d<f32>;"));
     }
 }
