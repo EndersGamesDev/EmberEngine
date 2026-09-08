@@ -454,9 +454,9 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v7 — In preparation
+### v7 — 2026-09-08
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `2f199f71f8210138b0047ca16dc5123ef81c89a6` (not on main) · no tag · published `890dd6c62eac9cd4caba2aa0df4467deb70515e4` (release stamp)
 
 The Dread Warden redesigns the jailer with a generated textured character and more grounded rise, pursuit and knife animations. V6 voice reactions and V1–V6 releases remain available.
 
