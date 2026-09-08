@@ -6,19 +6,31 @@ use minijinja::{Environment, ErrorKind, UndefinedBehavior};
 
 use crate::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslType, WgslTypeDescription};
 
+#[cfg(test)]
 const INTERFACE_TEST_NAME: &str = "interface-test.wgsl.jinja";
+#[cfg(test)]
 const INTERFACE_TEST_SOURCE: &str = include_str!("../templates/interface-test.wgsl.jinja");
+#[cfg(test)]
 const INVALID_TEST_NAME: &str = "invalid-test.wgsl.jinja";
+#[cfg(test)]
 const INVALID_TEST_SOURCE: &str = include_str!("../templates/invalid-test.wgsl.jinja");
+#[cfg(test)]
 const INVALID_VALIDATION_TEST_NAME: &str = "invalid-validation-test.wgsl.jinja";
+#[cfg(test)]
 const INVALID_VALIDATION_TEST_SOURCE: &str =
     include_str!("../templates/invalid-validation-test.wgsl.jinja");
+#[cfg(test)]
 const ORACLE_TEST_NAME: &str = "oracle-test.wgsl.jinja";
+#[cfg(test)]
 const ORACLE_TEST_SOURCE: &str = include_str!("../templates/oracle-test.wgsl.jinja");
+#[cfg(test)]
 const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
+#[cfg(test)]
 const UNREGISTERED_TYPE_TEST_SOURCE: &str =
     include_str!("../templates/unregistered-type-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: [(&str, &str); 5] = [
+const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[];
+#[cfg(test)]
+const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
     (INVALID_TEST_NAME, INVALID_TEST_SOURCE),
     (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
@@ -378,7 +390,11 @@ fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderEr
         },
     );
 
-    for (name, source) in EMBEDDED_TEMPLATES {
+    for &(name, source) in EMBEDDED_TEMPLATES {
+        environment.add_template(name, source)?;
+    }
+    #[cfg(test)]
+    for &(name, source) in TEST_TEMPLATES {
         environment.add_template(name, source)?;
     }
     Ok(environment)
