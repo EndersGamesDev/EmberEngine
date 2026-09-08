@@ -33,10 +33,17 @@ mkdir -p wan seg
 # ---------------------------------------------------------------- Wan shots
 # The worker runs on this machine but binds its LAN address, not loopback, so
 # the shots come from that address. WAN_HOST overrides it.
+# The cached copy is keyed by the JOB ID, not just the file name. Caching on the
+# name alone silently reuses whatever shot was fetched into that slot last time:
+# a run that stood four slots up on one placeholder job left all four slots
+# showing that clip, and the film looked deliberate.
 fetch() { # id name
-  if [ ! -s "wan/$2.mp4" ]; then
+  if [ ! -s "wan/$2.mp4" ] || [ "$(cat "wan/$2.id" 2>/dev/null)" != "$1" ]; then
     curl -sf "http://${WAN_HOST:-192.168.178.188}:8189/jobs/$1/video.mp4" -o "wan/$2.mp4"
-    echo "fetched wan/$2.mp4 ($(stat -c%s "wan/$2.mp4") bytes)"
+    echo "$1" > "wan/$2.id"
+    echo "fetched wan/$2.mp4 from job $1 ($(stat -c%s "wan/$2.mp4") bytes)"
+  else
+    echo "wan/$2.mp4 already holds job $1"
   fi
 }
 fetch "${WAN_OPERATOR:?}"  operator
@@ -144,7 +151,7 @@ echo "wrote cues.json"
 # chest from the bass shelf, a short hall tail, then compression.
 VOX="asetrate=24000*0.90,aresample=48000,atempo=1.1111,bass=g=5:f=100,\
 acompressor=threshold=0.05:ratio=4:attack=5:release=200,\
-aecho=0.85:0.9:80|200:0.3|0.18,volume=5.0"
+aecho=0.85:0.9:80|200:0.3|0.18,volume=6.0"
 # The voice bus is padded to the full length before it keys the ducking:
 # sidechaincompress stops when its key input stops, which would otherwise cut
 # the music dead at the last spoken word.
