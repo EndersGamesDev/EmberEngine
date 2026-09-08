@@ -1,0 +1,341 @@
+#!/usr/bin/env bash
+# Enforce Julibrot's runtime-template boundary and its closed migration debt.
+#
+#   bash deploy/tests/test-shaders.sh
+#   bash deploy/tests/test-shaders.sh --self-test
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+ALLOWLIST="$HERE/julibrot-shader-allowlist.txt"
+POLICY="$ROOT/docs/julibrot/shaders.md"
+LEGACY_FIXTURE_PATH="crates/labs/julibrot/present/src/shade_shader.rs"
+LEGACY_FIXTURE_SYMBOL="LEGACY_SHADE_SOURCE"
+
+declare -A ALLOWED=()
+declare -A DETECTED=()
+allowlist_count=0
+template_count=0
+test_fixture_count=0
+failures=0
+
+ceiling_contains() {
+    local record="$1"
+    grep -Fqx -- "$record" <<'CEILING'
+# R3-04 landed after this lane's base: one production source and one test-only fixture.
+inline|crates/labs/julibrot/present/src/shader.rs|HEAP_SCENE_PREFIX|JB-PRESENT-SCENE
+inline|crates/labs/julibrot/present/src/shader.rs|SCENE_BODY|JB-PRESENT-SCENE
+inline|crates/labs/julibrot/present/src/shader.rs|GLITCH_COUNT_BODY|JB-PRESENT-SCENE
+inline|crates/labs/julibrot/present/src/warp_shader.rs|WARP_SHADER|JB-PRESENT-WARP
+inline|crates/labs/julibrot/present/src/gpu/device/tests.rs|SOURCE|JB-PRESENT-NATIVE-TEST
+inline|crates/labs/julibrot/app/src/frame/loop/tests.rs|TEMPLATE|JB-APP-PAIRED-TEST
+inline|crates/labs/julibrot/kernels/src/gpu.rs|RECONSTRUCTION_BODY|JB-KERNEL-RECONSTRUCTION
+file|crates/labs/julibrot/kernels/src/shallow.wgsl|-|JB-KERNEL-SHALLOW
+file|crates/labs/julibrot/kernels/src/perturb.wgsl|-|JB-KERNEL-PERTURB
+CEILING
+}
+
+report_failure() {
+    printf '%s\n' "$1" >&2
+    failures=1
+}
+
+load_allowlist() {
+    local allowlist="$1"
+    local policy="$2"
+    local line_number=0 record kind path symbol row key
+    local -a fields=()
+
+    if [ ! -f "$allowlist" ]; then
+        report_failure "missing Julibrot shader allowlist: $allowlist"
+        return
+    fi
+    if [ ! -f "$policy" ]; then
+        report_failure "missing Julibrot shader policy: $policy"
+        return
+    fi
+
+    while IFS= read -r record || [ -n "$record" ]; do
+        line_number=$((line_number + 1))
+        case "$record" in
+            ''|'#'*) continue ;;
+        esac
+        fields=()
+        IFS='|' read -r -a fields <<< "$record"
+        if [ "${#fields[@]}" -ne 4 ]; then
+            report_failure "malformed shader allowlist line $line_number: $record"
+            continue
+        fi
+        kind="${fields[0]}"
+        path="${fields[1]}"
+        symbol="${fields[2]}"
+        row="${fields[3]}"
+        if [[ "$kind" != "file" && "$kind" != "inline" ]] \
+            || [[ "$path" != crates/labs/julibrot/* ]] \
+            || [[ ! "$symbol" =~ ^(-|[A-Za-z_][A-Za-z0-9_]*)$ ]] \
+            || [[ ! "$row" =~ ^JB-[A-Z0-9-]+$ ]] \
+            || { [ "$kind" = "file" ] && [ "$symbol" != "-" ]; } \
+            || { [ "$kind" = "inline" ] && [ "$symbol" = "-" ]; }
+        then
+            report_failure "invalid shader allowlist line $line_number: $record"
+            continue
+        fi
+        if ! ceiling_contains "$record"; then
+            report_failure "shader allowlist may only shrink; remove unapproved record: $record"
+            continue
+        fi
+        if ! grep -Fq -- "$row" "$policy"; then
+            report_failure "shader allowlist row is absent from policy: $row"
+            continue
+        fi
+        key="$kind|$path|$symbol"
+        if [ -n "${ALLOWED[$key]+present}" ]; then
+            report_failure "duplicate shader allowlist record: $key"
+            continue
+        fi
+        ALLOWED["$key"]="$row"
+        allowlist_count=$((allowlist_count + 1))
+    done < "$allowlist"
+}
+
+record_detected() {
+    local kind="$1"
+    local path="$2"
+    local symbol="$3"
+    local key="$kind|$path|$symbol"
+
+    if [ -n "${DETECTED[$key]+present}" ]; then
+        report_failure "ambiguous duplicate shader source: $key"
+        return
+    fi
+    DETECTED["$key"]=1
+}
+
+record_pinned_test_fixture() {
+    local repo="$1"
+    local path="$2"
+    local symbol="$3"
+    local line="$4"
+    local previous_line
+
+    if [ "$path" != "$LEGACY_FIXTURE_PATH" ] || [ "$symbol" != "$LEGACY_FIXTURE_SYMBOL" ]; then
+        return 1
+    fi
+    previous_line="$(sed -n "$((line - 1))p" "$repo/$path")"
+    if [ "$previous_line" != '#[cfg(test)]' ]; then
+        report_failure "pinned legacy shader fixture must carry #[cfg(test)]: $path:$line"
+        return 0
+    fi
+    test_fixture_count=$((test_fixture_count + 1))
+    return 0
+}
+
+scan_shader_files() {
+    local repo="$1"
+    local path
+
+    while IFS= read -r path; do
+        case "$path" in
+            crates/labs/julibrot/shader/templates/*.wgsl.jinja)
+                template_count=$((template_count + 1))
+                ;;
+            crates/labs/julibrot/*.wgsl|crates/labs/julibrot/*.wgsl.jinja)
+                record_detected "file" "$path" "-"
+                ;;
+        esac
+    done < <(git -C "$repo" ls-files)
+}
+
+scan_inline_raw_strings() {
+    local repo="$1"
+    local pattern path line source symbol
+
+    pattern='(^|[[:space:]])(const|static|let)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[^=]*=[[:space:]]*r[#]*"'
+    while IFS=: read -r path line source; do
+        if [[ "$source" =~ (const|static|let)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*) ]]; then
+            symbol="${BASH_REMATCH[2]}"
+            record_pinned_test_fixture "$repo" "$path" "$symbol" "$line" \
+                || record_detected "inline" "$path" "$symbol"
+        else
+            report_failure "could not identify inline shader symbol at $path:$line"
+        fi
+    done < <(git -C "$repo" grep -n -E "$pattern" -- 'crates/labs/julibrot/**/*.rs' 2>/dev/null || :)
+}
+
+scan_inline_quoted_wgsl() {
+    local repo="$1"
+    local pattern path line source symbol
+
+    pattern='(^|[[:space:]])(const|static|let)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[^=]*=[[:space:]]*"[^"]*(@vertex|@fragment|@compute|@group)'
+    while IFS=: read -r path line source; do
+        if [[ "$source" =~ (const|static|let)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*) ]]; then
+            symbol="${BASH_REMATCH[2]}"
+            record_detected "inline" "$path" "$symbol"
+        else
+            report_failure "could not identify quoted shader symbol at $path:$line"
+        fi
+    done < <(git -C "$repo" grep -n -E "$pattern" -- 'crates/labs/julibrot/**/*.rs' 2>/dev/null || :)
+
+    pattern='ShaderSource::Wgsl[[:space:]]*\([[:space:]]*(r[#]*)?"'
+    while IFS=: read -r path line source; do
+        record_detected "inline" "$path" "ShaderSource_Wgsl_line_$line"
+    done < <(git -C "$repo" grep -n -E "$pattern" -- 'crates/labs/julibrot/**/*.rs' 2>/dev/null || :)
+}
+
+compare_inventory() {
+    local key
+
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        if [ -z "${ALLOWED[$key]+present}" ]; then
+            report_failure "unlisted Julibrot shader source: $key"
+        fi
+    done < <(printf '%s\n' "${!DETECTED[@]}" | sort)
+
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        if [ -z "${DETECTED[$key]+present}" ]; then
+            report_failure "stale Julibrot shader allowlist record: $key|${ALLOWED[$key]}"
+        fi
+    done < <(printf '%s\n' "${!ALLOWED[@]}" | sort)
+}
+
+check_repo() {
+    local repo="$1"
+    local allowlist="$2"
+    local policy="$3"
+
+    ALLOWED=()
+    DETECTED=()
+    allowlist_count=0
+    template_count=0
+    test_fixture_count=0
+    failures=0
+    load_allowlist "$allowlist" "$policy"
+    scan_shader_files "$repo"
+    scan_inline_raw_strings "$repo"
+    scan_inline_quoted_wgsl "$repo"
+    if [ "$test_fixture_count" -ne 1 ]; then
+        report_failure "expected one cfg(test) legacy shade fixture; found $test_fixture_count"
+    fi
+    compare_inventory
+    [ "$failures" -eq 0 ]
+}
+
+expect_rejection() {
+    local label="$1"
+    local needle="$2"
+    local repo="$3"
+    local allowlist="$4"
+    local policy="$5"
+    local output
+
+    if output="$(check_repo "$repo" "$allowlist" "$policy" 2>&1)"; then
+        printf 'SELF-TEST FAIL: %s was accepted\n' "$label" >&2
+        return 1
+    fi
+    if [[ "$output" != *"$needle"* ]]; then
+        printf 'SELF-TEST FAIL: %s reported the wrong failure: %s\n' "$label" "$output" >&2
+        return 1
+    fi
+}
+
+write_migrated_shade_fixture() {
+    local path="$1"
+
+    printf '%s\n' \
+        'fn shade_shader() { render_template(); }' \
+        '#[cfg(test)]' \
+        'const LEGACY_SHADE_SOURCE: &str = r"' \
+        '@fragment fn legacy_shade() {}' \
+        '";' > "$path"
+}
+
+self_test() {
+    local started temporary repo allowlist policy
+    started="$(date +%s)"
+    temporary="$(mktemp -d -p "${TMPDIR:-/tmp}" ember-shadertest-XXXXXX)"
+    SHADER_TEST_TMP="$temporary"
+    trap '[ -z "${SHADER_TEST_TMP:-}" ] || rm -rf -- "$SHADER_TEST_TMP"' EXIT
+    repo="$temporary/repo"
+    allowlist="$repo/deploy/tests/julibrot-shader-allowlist.txt"
+    policy="$repo/docs/julibrot/shaders.md"
+
+    git -C "$temporary" init -q repo
+    mkdir -p "$repo/crates/labs/julibrot/kernels/src"
+    mkdir -p "$repo/crates/labs/julibrot/present/src"
+    mkdir -p "$repo/crates/labs/julibrot/shader/templates"
+    mkdir -p "$repo/deploy/tests" "$repo/docs/julibrot"
+    printf '%s\n' '{{ "PaletteUniform"|wgsl_type }}' > "$repo/crates/labs/julibrot/shader/templates/present-shade.wgsl.jinja"
+    write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    printf '%s\n' 'kernel body' > "$repo/crates/labs/julibrot/kernels/src/shallow.wgsl"
+    printf '%s\n' 'const WARP_SHADER: &str = r"' '@vertex fn warp() {}' '";' > "$repo/crates/labs/julibrot/present/src/warp_shader.rs"
+    printf '%s\n' 'JB-PRESENT-SHADE' 'JB-PRESENT-WARP' 'JB-PRESENT-SCENE' 'JB-KERNEL-SHALLOW' 'JB-KERNEL-PERTURB' > "$policy"
+    printf '%s\n' \
+        'inline|crates/labs/julibrot/present/src/warp_shader.rs|WARP_SHADER|JB-PRESENT-WARP' \
+        'file|crates/labs/julibrot/kernels/src/shallow.wgsl|-|JB-KERNEL-SHALLOW' > "$allowlist"
+    git -C "$repo" add .
+
+    if ! check_repo "$repo" "$allowlist" "$policy"; then
+        printf 'SELF-TEST FAIL: reviewed debt and migrated template were rejected\n' >&2
+        return 1
+    fi
+
+    printf '%s\n' 'unlisted body' > "$repo/crates/labs/julibrot/present/src/new.wgsl"
+    git -C "$repo" add crates/labs/julibrot/present/src/new.wgsl
+    expect_rejection "an unlisted .wgsl file" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    git -C "$repo" rm -q -f crates/labs/julibrot/present/src/new.wgsl
+
+    printf '%s\n' 'const NEW_SHADER: &str = r"' '@fragment fn fragment() {}' '";' > "$repo/crates/labs/julibrot/present/src/new_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/new_shader.rs
+    expect_rejection "an unlisted inline shader" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    git -C "$repo" rm -q -f crates/labs/julibrot/present/src/new_shader.rs
+
+    printf '%s\n' 'fn direct_shader() { ShaderSource::Wgsl(r"@vertex fn vertex() {}"); }' > "$repo/crates/labs/julibrot/present/src/direct_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/direct_shader.rs
+    expect_rejection "a direct inline ShaderSource literal" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    git -C "$repo" rm -q -f crates/labs/julibrot/present/src/direct_shader.rs
+
+    printf '%s\n' 'const SHADE_SHADER: &str = r"' '@fragment fn old_shade() {}' '";' > "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+    expect_rejection "the migrated shade inline source" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" || return 1
+    write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+
+    printf '%s\n' \
+        'fn shade_shader() { render_template(); }' \
+        'const LEGACY_SHADE_SOURCE: &str = r"' \
+        '@fragment fn legacy_shade() {}' \
+        '";' > "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+    expect_rejection "an unguarded legacy fixture" "must carry #[cfg(test)]" "$repo" "$allowlist" "$policy" || return 1
+    write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
+    git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
+
+    printf '%s\n' 'file|crates/labs/julibrot/kernels/src/perturb.wgsl|-|JB-KERNEL-PERTURB' >> "$allowlist"
+    expect_rejection "a stale allowlist record" "stale Julibrot shader allowlist record" "$repo" "$allowlist" "$policy" || return 1
+    sed -i '$d' "$allowlist"
+
+    printf '%s\n' 'const NEW_SHADER: &str = r"' '@compute @workgroup_size(1) fn new_shader() {}' '";' > "$repo/crates/labs/julibrot/present/src/new_shader.rs"
+    printf '%s\n' 'inline|crates/labs/julibrot/present/src/new_shader.rs|NEW_SHADER|JB-PRESENT-SCENE' >> "$allowlist"
+    git -C "$repo" add crates/labs/julibrot/present/src/new_shader.rs
+    expect_rejection "an expanded allowlist" "shader allowlist may only shrink" "$repo" "$allowlist" "$policy" || return 1
+
+    printf 'SELF-TEST PASS: templates, pinned test fixture, closed debt, files, inline and direct sources, stale records and shrink-only ceiling, %ss\n' "$(( $(date +%s) - started ))"
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+    [ "$#" -eq 1 ] || { printf 'usage: bash deploy/tests/test-shaders.sh [--self-test]\n' >&2; exit 2; }
+    self_test
+    exit $?
+fi
+[ "$#" -eq 0 ] || { printf 'usage: bash deploy/tests/test-shaders.sh [--self-test]\n' >&2; exit 2; }
+
+started="$(date +%s)"
+if check_repo "$ROOT" "$ALLOWLIST" "$POLICY"; then
+    printf 'SHADER CHECK PASS: %s production/test templates, %s pinned legacy test fixture, %s reviewed migration exceptions, %ss\n' "$template_count" "$test_fixture_count" "$allowlist_count" "$(( $(date +%s) - started ))"
+else
+    status=$?
+    printf 'SHADER CHECK FAIL: unrendered Julibrot shader source, %ss\n' "$(( $(date +%s) - started ))" >&2
+    exit "$status"
+fi
