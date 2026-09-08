@@ -1578,7 +1578,7 @@ struct KernelPublication {
     #[cfg(test)]
     job: KernelJob,
     #[cfg(test)]
-    span: KernelSpanGeneration,
+    spans: [KernelSpanGeneration; 2],
     paired_receipt: Option<PairedOutputReceipt>,
     facts: DispatchFacts,
 }
@@ -1648,6 +1648,8 @@ trait KernelSubmissionPort {
 struct KernelSubmissionOwner<P> {
     port: P,
     paired_job: Option<KernelJob>,
+    paired_pending: Option<KernelPublication>,
+    paired_fence: Option<(u32, u64)>,
     paired_completions: [Option<TileOutputCompletion>; 2],
     paired_receipt: Option<PairedOutputReceipt>,
     refused_completions: Vec<TileOutputCompletion>,
@@ -1659,6 +1661,8 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
         Self {
             port,
             paired_job: None,
+            paired_pending: None,
+            paired_fence: None,
             paired_completions: [None; 2],
             paired_receipt: None,
             refused_completions: Vec::new(),
@@ -1766,40 +1770,79 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
         job: &KernelJob,
     ) -> Result<KernelPublication, P::Error> {
         #[cfg(test)]
-        let span = grids[0].span_generation();
+        let first_span = grids[0].span_generation();
+        #[cfg(test)]
+        let second_span = grids
+            .get(1)
+            .map_or(first_span, KernelGridIdentity::span_generation);
         let facts = self.port.submit(context, grids, job)?;
-        let paired_receipt = job
-            .whole_grid()
-            .paired_allocation
-            .map(|allocation| self.complete_pair(job, allocation));
-        Ok(KernelPublication {
+        let publication = KernelPublication {
             #[cfg(test)]
             job: *job,
             #[cfg(test)]
-            span,
-            paired_receipt,
+            spans: [first_span, second_span],
+            paired_receipt: None,
             facts,
-        })
+        };
+        if job.whole_grid().paired_allocation.is_some() {
+            debug_assert!(self.paired_pending.is_none());
+            self.paired_job = Some(*job);
+            self.paired_pending = Some(publication);
+            self.paired_fence = None;
+            self.paired_completions = [None; 2];
+            self.paired_receipt = None;
+        }
+        Ok(publication)
     }
 
-    fn complete_pair(
-        &mut self,
-        job: &KernelJob,
-        allocation: PairedOutputAllocation,
-    ) -> PairedOutputReceipt {
-        self.paired_job = Some(*job);
-        self.paired_completions = [None; 2];
-        self.paired_receipt = None;
-        let value = TileOutputCompletion::new(allocation.generation, TileOutput::Value);
-        let reconstruction =
-            TileOutputCompletion::new(allocation.generation, TileOutput::Reconstruction);
+    fn bind_paired_fence(&mut self, scene_id: u64) -> Option<u32> {
+        let allocation = self.paired_job?.whole_grid().paired_allocation?;
+        self.paired_pending.as_ref()?;
+        self.paired_fence = Some((allocation.generation, scene_id));
+        Some(allocation.generation)
+    }
+
+    fn observe_paired_fence(&mut self, scene_id: u64) -> Option<KernelPublication> {
+        let (generation, expected_scene_id) = self.paired_fence?;
+        if scene_id != expected_scene_id {
+            return None;
+        }
+        let value = TileOutputCompletion::new(generation, TileOutput::Value);
+        let reconstruction = TileOutputCompletion::new(generation, TileOutput::Reconstruction);
         let first = self.observe_paired_completion(value);
         debug_assert_eq!(first, Ok(None));
         let Ok(Some(receipt)) = self.observe_paired_completion(reconstruction) else {
-            unreachable!("matching paired completions always produce one receipt")
+            unreachable!("one observed fence completes both outputs from its queue submission")
         };
-        debug_assert_eq!(self.paired_receipt, Some(receipt));
-        receipt
+        let mut publication = self
+            .paired_pending
+            .take()
+            .unwrap_or_else(|| unreachable!("a bound paired fence retains its publication"));
+        publication.paired_receipt = Some(receipt);
+        self.paired_fence = None;
+        Some(publication)
+    }
+
+    fn refuse_paired_fence(&mut self, scene_id: u64) -> bool {
+        if self
+            .paired_fence
+            .is_none_or(|(_, expected_scene_id)| expected_scene_id != scene_id)
+        {
+            return false;
+        }
+        self.paired_pending = None;
+        self.paired_fence = None;
+        self.paired_completions = [None; 2];
+        true
+    }
+
+    const fn abandon_unbound_pair(&mut self) -> bool {
+        if self.paired_pending.is_none() || self.paired_fence.is_some() {
+            return false;
+        }
+        self.paired_pending = None;
+        self.paired_completions = [None; 2];
+        true
     }
 
     fn observe_paired_completion(
@@ -3652,6 +3695,10 @@ mod browser {
             &mut self,
             event: &PresentSceneCompletion,
         ) -> Result<PresentEventEffect, Self::Error> {
+            let _paired_publication = self
+                .frame_loop
+                .kernel_submission
+                .observe_paired_fence(event.frame.scene_id);
             self.complete_scene(&event.frame, event.reference_sample);
             #[cfg(test)]
             let effect = self.event_effect(false, false, false);
@@ -3664,6 +3711,10 @@ mod browser {
             &mut self,
             event: &PresentSceneDrop,
         ) -> Result<PresentEventEffect, Self::Error> {
+            let _paired_publication = self
+                .frame_loop
+                .kernel_submission
+                .observe_paired_fence(event.scene_id);
             self.drop_scene(event.scene_id, event.measurement);
             #[cfg(test)]
             let effect = self.event_effect(false, false, false);
@@ -3688,6 +3739,12 @@ mod browser {
             &mut self,
             event: &PresentFenceRefusal,
         ) -> Result<PresentEventEffect, Self::Error> {
+            if matches!(event.kind, SubmissionKind::Scene) {
+                let _pair_refused = self
+                    .frame_loop
+                    .kernel_submission
+                    .refuse_paired_fence(event.id);
+            }
             let (refused, cancelled) = self.refuse_fence(
                 event.kind,
                 event.id,

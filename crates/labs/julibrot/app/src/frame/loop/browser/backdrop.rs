@@ -264,6 +264,7 @@ impl BrowserFrameLoop {
         };
         match self.presenter.submit_scene(slot, now_ms) {
             Ok(scene_id) => {
+                let _paired_generation = self.kernel_submission.bind_paired_fence(scene_id);
                 let backdrop = self.backdrop.as_mut().ok_or_else(|| {
                     AppError::Kernel("submitted backdrop lost its grid".to_string())
                 })?;
@@ -280,8 +281,14 @@ impl BrowserFrameLoop {
                 );
                 Ok(Some(scene_id))
             }
-            Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
-            Err(error) => Err(present_error(error)),
+            Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => {
+                let _abandoned = self.kernel_submission.abandon_unbound_pair();
+                Ok(None)
+            }
+            Err(error) => {
+                let _abandoned = self.kernel_submission.abandon_unbound_pair();
+                Err(present_error(error))
+            }
         }
     }
 }
