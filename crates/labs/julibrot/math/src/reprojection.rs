@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::{EscapeGridRecord, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
 
+/// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
 
 /// Palette-independent value information needed to rebuild one retained sample's lift.
@@ -33,6 +34,42 @@ pub struct ReconstructedSample {
     pub ambient_four: [f64; 4],
     /// Palette-independent value information that supplies target height.
     pub value: RetainedValueSample,
+}
+
+impl ReconstructedSample {
+    /// Reconstructs one source sample and verifies its pixel and linear-depth receipt.
+    ///
+    /// Separate bounds let a descriptor declare the independently measured coordinate and depth
+    /// errors introduced by its `f32` lanes, while the existing free function retains its stricter
+    /// binary64 self-check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid inputs or a source projection outside either bound.
+    pub fn from_source_receipt(
+        pose: &Pose,
+        source_pixel: [f64; 2],
+        depth: SourceDepthRecord,
+        value: RetainedValueSample,
+        pixel_tolerance: f64,
+        depth_tolerance: f64,
+    ) -> Result<Self, ReprojectionError> {
+        if !pixel_tolerance.is_finite()
+            || pixel_tolerance < 0.0
+            || !depth_tolerance.is_finite()
+            || depth_tolerance < 0.0
+        {
+            return Err(ReprojectionError::InvalidSource);
+        }
+        reconstruct_source_sample_with_tolerance(
+            pose,
+            source_pixel,
+            depth,
+            value,
+            pixel_tolerance,
+            depth_tolerance,
+        )
+    }
 }
 
 /// Complete binary64 target projection of one reconstructed retained sample.
@@ -133,6 +170,24 @@ pub fn reconstruct_source_sample(
     depth: SourceDepthRecord,
     value: RetainedValueSample,
 ) -> Result<ReconstructedSample, ReprojectionError> {
+    ReconstructedSample::from_source_receipt(
+        pose,
+        source_pixel,
+        depth,
+        value,
+        SOURCE_ROUND_TRIP_EPSILON,
+        SOURCE_ROUND_TRIP_EPSILON,
+    )
+}
+
+fn reconstruct_source_sample_with_tolerance(
+    pose: &Pose,
+    source_pixel: [f64; 2],
+    depth: SourceDepthRecord,
+    value: RetainedValueSample,
+    pixel_tolerance: f64,
+    depth_tolerance: f64,
+) -> Result<ReconstructedSample, ReprojectionError> {
     if !depth.valid
         || !source_pixel.into_iter().all(f64::is_finite)
         || ![depth.a_f, depth.b_f, depth.zeta_f, value.record_height]
@@ -150,7 +205,7 @@ pub fn reconstruct_source_sample(
     let pixel_error =
         (projected.screen[0] - source_pixel[0]).hypot(projected.screen[1] - source_pixel[1]);
     let depth_error = (projected.linear_depth - depth.zeta_f).abs();
-    if pixel_error > SOURCE_ROUND_TRIP_EPSILON || depth_error > SOURCE_ROUND_TRIP_EPSILON {
+    if pixel_error > pixel_tolerance || depth_error > depth_tolerance {
         return Err(ReprojectionError::SourceRoundTrip);
     }
     Ok(sample)
@@ -343,6 +398,11 @@ mod tests {
     use super::*;
     use crate::{ObjectAngles, construct_plane, screen_to_plane};
 
+    /// The solved binary64 fixture keeps its pixel receipt at the strict existing bound.
+    const DECLARED_PIXEL_TOLERANCE: f64 = SOURCE_ROUND_TRIP_EPSILON;
+    /// One rounded `f32` depth lane needs two millionths of linear-distance headroom.
+    const DECLARED_DEPTH_TOLERANCE: f64 = 2.0e-6;
+
     fn pose_for(object: ObjectAngles, view: ViewControls) -> Pose {
         let extent = [960, 540];
         let map = screen_to_plane(
@@ -524,6 +584,28 @@ mod tests {
         assert_eq!(
             reconstruct_source_sample(&source, pixel, wrong_depth, value),
             Err(ReprojectionError::SourceRoundTrip)
+        );
+        assert!(
+            ReconstructedSample::from_source_receipt(
+                &source,
+                pixel,
+                wrong_depth,
+                value,
+                DECLARED_PIXEL_TOLERANCE,
+                DECLARED_DEPTH_TOLERANCE,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            ReconstructedSample::from_source_receipt(
+                &source,
+                pixel,
+                depth,
+                value,
+                -1.0,
+                DECLARED_DEPTH_TOLERANCE,
+            ),
+            Err(ReprojectionError::InvalidSource)
         );
     }
 
