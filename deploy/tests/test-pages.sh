@@ -26,6 +26,9 @@ if [[ ! "$LEAGUE_LIVE" =~ ^games/league/v[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
+END_GAME_LIVE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(next(v["path"].rstrip("/") for g in d["games"] if g["id"] == "end-game" for v in g["versions"] if v.get("live") is True))' "$DEPLOY/../web/games.json" | tr -d '\r')"
+[[ "$END_GAME_LIVE" =~ ^games/end-game/v[1-9][0-9]*$ ]] || exit 1
+
 TMP="$(mktemp -d -t ember-pagestest-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
@@ -52,7 +55,7 @@ mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
 mkdir -p "$REPO/crates/league-core/src"
 mkdir -p "$REPO/crates/arena" "$REPO/crates/fire" "$REPO/crates/kings" "$REPO/crates/league"
-mkdir -p "$REPO/crates/end-game" "$REPO/web/games/end-game/v1"
+mkdir -p "$REPO/crates/end-game" "$REPO/web/$END_GAME_LIVE"
 mkdir -p "$REPO/crates/what-is-this" "$REPO/crates/labs/julibrot/app"
 cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
 for manifest in arena fire kings league what-is-this end-game; do
@@ -87,7 +90,7 @@ printf 'stale source bundle\n' > "$REPO/web/$LEAGUE_LIVE/pkg/arena.js"
 printf 'stale source stamp\n' > "$REPO/web/$LEAGUE_LIVE/version.json"
 printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
 for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
-    printf "End Game fixture %s\n" "$name" > "$REPO/web/games/end-game/v1/$name"
+    printf "End Game fixture %s\n" "$name" > "$REPO/web/$END_GAME_LIVE/$name"
 done
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
@@ -119,6 +122,9 @@ printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
 printf 'frozen pong js\n' > "$SEED/games/pong/v1/pkg/pong.js"
 printf 'frozen pong wasm\n' > "$SEED/games/pong/v1/pkg/pong_bg.wasm"
 printf '{"v":"seed","proto":14,"ws":"wss://old.example","league_proto":2,"league_ws":"wss://old-league.example","hosts":[{"name":"new-host","ws":"wss://new.example","proto":15,"version":"r2","league_ws":"wss://new-league.example","league_proto":3}]}\n' > "$SEED/server.json"
+mkdir -p "$SEED/games/end-game/v1/pkg"
+printf 'original end game page\n' > "$SEED/games/end-game/v1/index.html"
+printf 'original end game bundle\n' > "$SEED/games/end-game/v1/pkg/end_game_bg.wasm"
 export SHIM_PAGES_SEED="$SEED"
 
 echo "== ordinary build assembles all five games and the Julibrot lab =="
@@ -139,9 +145,12 @@ contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] 
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
 for f in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav pkg/end_game.js pkg/end_game_bg.wasm; do
-    if [ -f "$SHIM_PUBLISHED/games/end-game/v1/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
+    if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done
 contains "$ARGV" "[-p] [end-game] [--lib]" "End Game is built as an Ember wasm library"
+if [ "$END_GAME_LIVE" != games/end-game/v1 ]; then
+    if diff -r "$SEED/games/end-game/v1" "$SHIM_PUBLISHED/games/end-game/v1" > "$TMP/end-game-v1.diff"; then ok "frozen End Game v1 remains byte-identical"; else bad "frozen End Game v1 changed"; fi
+fi
 for f in index.html pkg/what_is_this.js pkg/what_is_this_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/games/what-is-this/v1/$f" ]; then
         ok "assembled what-is-this $f"

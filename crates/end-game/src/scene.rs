@@ -1,8 +1,7 @@
 //! Material-built dungeon: seeded surface coordinates, metres, authored collision in core.
 use ember_engine::environment::PointLight;
 use ember_engine::{
-    Camera, Environment, Fog, Frame, Instance, MeshData, MeshVertex, Particle, TextureData,
-    assets::load_glb,
+    Camera, Environment, Fog, Frame, Instance, MeshData, Particle, TextureData, assets::load_glb,
 };
 use end_game_core::{Dungeon, Material};
 use glam::{Quat, Vec2, Vec3};
@@ -11,7 +10,7 @@ pub struct Model {
     pub ids: Vec<(u32, Vec3, Option<Material>)>,
 }
 pub struct Scene {
-    static_world: Vec<Instance>,
+    cell: Cell,
     oak: u32,
     iron: u32,
     wolf: Model,
@@ -22,11 +21,7 @@ pub struct Scene {
     torch: Model,
 }
 
-fn hash(mut seed: u32) -> f32 {
-    seed = seed.wrapping_mul(747796405).wrapping_add(2891336453);
-    seed = ((seed >> ((seed >> 28) + 4)) ^ seed).wrapping_mul(277803737);
-    ((seed ^ (seed >> 22)) & 65535) as f32 / 65535.0
-}
+use super::cell::{Cell, hash};
 fn model(meshes: &mut Vec<MeshData>, bytes: &[u8]) -> Model {
     let parts = load_glb(bytes).expect("validated End Game GLB");
     let ids = parts
@@ -108,75 +103,6 @@ fn draw_model(
     }
 }
 
-fn box_vertices(target: &mut Vec<MeshVertex>, position: Vec3, size: Vec3, rot: Quat, seed: u32) {
-    // Every face samples its own deterministic patch and direction in the material.
-    // Textures are shared at material level, avoiding one allocation per stone.
-    let mesh = MeshData::textured_box(1.0, None);
-    for (face, triangle) in mesh.vertices.chunks(6).enumerate() {
-        let u = hash(seed.wrapping_add(face as u32 * 331)) * 13.0;
-        let v = hash(seed.wrapping_add(face as u32 * 7919 + 41)) * 13.0;
-        for vertex in triangle {
-            let pos = position + rot * (Vec3::from_array(vertex.pos) * size);
-            let normal = rot * Vec3::from_array(vertex.normal);
-            target.push(MeshVertex {
-                pos: pos.to_array(),
-                normal: normal.to_array(),
-                uv: [vertex.uv[0] * 0.55 + u, vertex.uv[1] * 0.55 + v],
-            });
-        }
-    }
-}
-
-fn vault_stone(target: &mut Vec<MeshVertex>, z: f32, segment: u32) {
-    let a = -std::f32::consts::FRAC_PI_2 + segment as f32 * std::f32::consts::PI / 28.0 + 0.002;
-    let b = a + std::f32::consts::PI / 28.0 - 0.004;
-    let point = |angle: f32, outer: bool, depth: f32| {
-        Vec3::new(
-            angle.sin() * if outer { 5.06 } else { 4.85 },
-            1.6 + angle.cos() * if outer { 2.67 } else { 2.4 },
-            depth,
-        )
-    };
-    let p = [
-        point(a, true, z - 0.22),
-        point(b, true, z - 0.22),
-        point(b, false, z - 0.22),
-        point(a, false, z - 0.22),
-        point(a, true, z + 0.22),
-        point(b, true, z + 0.22),
-        point(b, false, z + 0.22),
-        point(a, false, z + 0.22),
-    ];
-    let center = p.iter().copied().sum::<Vec3>() / 8.0;
-    for face in [
-        [0, 1, 2, 3],
-        [7, 6, 5, 4],
-        [0, 4, 5, 1],
-        [3, 2, 6, 7],
-        [0, 3, 7, 4],
-        [1, 5, 6, 2],
-    ] {
-        let mut n = (p[face[1]] - p[face[0]])
-            .cross(p[face[2]] - p[face[0]])
-            .normalize();
-        let mid = face.map(|i| p[i]).iter().copied().sum::<Vec3>() / 4.0;
-        if n.dot(mid - center) < 0.0 {
-            n = -n;
-        }
-        let uv = [[0.0, 0.0], [0.5, 0.0], [0.5, 0.5], [0.0, 0.5]];
-        for index in [0, 1, 2, 0, 2, 3] {
-            target.push(MeshVertex {
-                pos: p[face[index]].to_array(),
-                normal: n.to_array(),
-                uv: [
-                    uv[index][0] + hash(segment) * 8.0,
-                    uv[index][1] + hash(segment + 7) * 8.0,
-                ],
-            });
-        }
-    }
-}
-
 impl Scene {
     pub fn build() -> (Self, Vec<MeshData>) {
         let mut meshes = vec![
@@ -184,7 +110,7 @@ impl Scene {
                 1.0,
                 Some(
                     TextureData::from_png_bytes(include_bytes!(
-                        "../../../assets/end-game/v1/oak.png"
+                        "../../../assets/end-game/v2/oak.png"
                     ))
                     .unwrap(),
                 ),
@@ -198,237 +124,8 @@ impl Scene {
                     .unwrap(),
                 ),
             ),
-            MeshData::textured_box(
-                1.0,
-                Some(
-                    TextureData::from_png_bytes(include_bytes!(
-                        "../../../assets/end-game/v1/stone.png"
-                    ))
-                    .unwrap(),
-                ),
-            ),
         ];
-        let mut oak = Vec::new();
-        let mut stone = Vec::new();
-        let mut iron = Vec::new();
-        let mut seed = 100u32;
-        let mut block = |vertices: &mut Vec<MeshVertex>, p, s, q| {
-            seed += 1;
-            box_vertices(vertices, p, s, q, seed);
-        };
-        let identity = Quat::IDENTITY;
-        // Structural masonry backs the joints: mortar cracks never reveal the sky.
-        for x in [-3.40, 3.40] {
-            block(
-                &mut stone,
-                Vec3::new(x, 1.8, 2.65),
-                Vec3::new(0.30, 3.7, 5.5),
-                identity,
-            );
-        }
-        for x in [-5.38, 5.38] {
-            block(
-                &mut stone,
-                Vec3::new(x, 2.2, -3.5),
-                Vec3::new(0.34, 4.5, 7.4),
-                identity,
-            );
-        }
-        block(
-            &mut stone,
-            Vec3::new(0.0, 1.8, 5.4),
-            Vec3::new(7.1, 3.7, 0.3),
-            identity,
-        );
-        block(
-            &mut stone,
-            Vec3::new(0.0, 2.2, -7.4),
-            Vec3::new(10.9, 4.5, 0.3),
-            identity,
-        );
-        for x in [-4.2, 4.2] {
-            block(
-                &mut stone,
-                Vec3::new(x, 2.2, 0.3),
-                Vec3::new(2.0, 4.5, 0.35),
-                identity,
-            );
-        }
-        for x in 0..6 {
-            block(
-                &mut oak,
-                Vec3::new(-0.75 + x as f32 * 0.3, 1.35, -7.18),
-                Vec3::new(0.285, 2.7, 0.18),
-                identity,
-            );
-        }
-        // Individually fitted boards, seams, joists and square iron nails.
-        for row in 0..20 {
-            for col in 0..3 {
-                block(
-                    &mut oak,
-                    Vec3::new(-2.85 + row as f32 * 0.3, -0.085, 0.85 + col as f32 * 1.65),
-                    Vec3::new(0.286, 0.16, 1.63),
-                    identity,
-                );
-                for end in [-0.68, 0.68] {
-                    block(
-                        &mut iron,
-                        Vec3::new(
-                            -2.85 + row as f32 * 0.3,
-                            0.002,
-                            0.85 + col as f32 * 1.65 + end,
-                        ),
-                        Vec3::new(0.025, 0.006, 0.025),
-                        identity,
-                    );
-                }
-            }
-        }
-        // Masonry with staggered courses and small geometric variation.
-        for y in 0..9 {
-            for z in 0..7 {
-                for x in [-3.18, 3.18] {
-                    block(
-                        &mut stone,
-                        Vec3::new(x, 0.2 + y as f32 * 0.4, 0.37 + z as f32 * 0.76),
-                        Vec3::new(0.38, 0.38, 0.73),
-                        identity,
-                    );
-                }
-            }
-            for x in 0..9 {
-                block(
-                    &mut stone,
-                    Vec3::new(
-                        -2.9 + x as f32 * 0.72 + (y % 2) as f32 * 0.2,
-                        0.2 + y as f32 * 0.4,
-                        5.15,
-                    ),
-                    Vec3::new(0.70, 0.38, 0.40),
-                    identity,
-                );
-            }
-            for z in 0..10 {
-                for x in [-5.15, 5.15] {
-                    block(
-                        &mut stone,
-                        Vec3::new(x, 0.2 + y as f32 * 0.4, -0.36 - z as f32 * 0.73),
-                        Vec3::new(0.38, 0.38, 0.70),
-                        identity,
-                    );
-                }
-            }
-            for x in 0..14 {
-                let xx = -4.72 + x as f32 * 0.72;
-                if xx.abs() > 1.0 || y > 6 {
-                    block(
-                        &mut stone,
-                        Vec3::new(xx, 0.2 + y as f32 * 0.4, -7.1),
-                        Vec3::new(0.70, 0.38, 0.4),
-                        identity,
-                    );
-                }
-            }
-        }
-        for x in 0..14 {
-            for z in 0..10 {
-                let id = x * 31 + z;
-                block(
-                    &mut stone,
-                    Vec3::new(
-                        -4.64 + x as f32 * 0.715,
-                        -0.09 + hash(id) * 0.012,
-                        -0.35 - z as f32 * 0.7,
-                    ),
-                    Vec3::new(0.698, 0.17, 0.684),
-                    identity,
-                );
-            }
-        }
-        // Barrel-vault ribs and a dark stone ceiling.
-        for z in [-0.7, -3.6, -6.5] {
-            for x in [-4.75, 4.75] {
-                block(
-                    &mut stone,
-                    Vec3::new(x, 1.4, z),
-                    Vec3::new(0.48, 2.8, 0.5),
-                    identity,
-                );
-            }
-        }
-        for z in [-0.7, -3.6, -6.5] {
-            for i in 0..28 {
-                vault_stone(&mut stone, z, i);
-            }
-        }
-        block(
-            &mut stone,
-            Vec3::new(0.0, 4.35, -3.5),
-            Vec3::new(10.3, 0.35, 7.4),
-            identity,
-        );
-        block(
-            &mut stone,
-            Vec3::new(0.0, 3.7, 2.6),
-            Vec3::new(6.5, 0.30, 5.3),
-            identity,
-        );
-        for z in [0.6, 2.6, 4.6] {
-            block(
-                &mut oak,
-                Vec3::new(0.0, 3.42, z),
-                Vec3::new(6.0, 0.24, 0.22),
-                identity,
-            );
-        }
-        for i in 0..21 {
-            let x = -3.0 + i as f32 * 0.30;
-            if x.abs() > 0.75 {
-                block(
-                    &mut iron,
-                    Vec3::new(x, 1.6, 0.0),
-                    Vec3::new(0.048, 3.2, 0.055),
-                    identity,
-                );
-            }
-        }
-        for y in [0.17, 2.7, 3.25] {
-            block(
-                &mut iron,
-                Vec3::new(0.0, y, 0.0),
-                Vec3::new(6.2, 0.08, 0.09),
-                identity,
-            );
-        }
-        // Sword stone, made from individually oriented mineral blocks.
-        for i in 0..9 {
-            block(
-                &mut stone,
-                Vec3::new(
-                    2.6 + (hash(i + 9) - 0.5) * 0.8,
-                    0.25 + hash(i + 11) * 0.25,
-                    -4.6 + (hash(i + 4) - 0.5) * 0.7,
-                ),
-                Vec3::new(0.72, 0.64, 0.68),
-                Quat::from_rotation_y(hash(i) * 4.0) * Quat::from_rotation_z(hash(i + 6) * 0.4),
-            );
-        }
-        let mut static_world = Vec::new();
-        for (vertices, source, material) in [
-            (oak, 0, Material::Oak),
-            (iron, 1, Material::Iron),
-            (stone, 2, Material::Stone),
-        ] {
-            let texture = meshes[source].texture.clone();
-            meshes.push(MeshData { vertices, texture });
-            let p = material.properties();
-            static_world.push(
-                Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
-                    .with_mesh(meshes.len() as u32)
-                    .with_surface(p.roughness, p.metallic),
-            );
-        }
+        let cell = super::cell::build(&mut meshes);
         let wolf = armor(
             &mut meshes,
             include_bytes!("../../../assets/end-game/v1/wolf.glb"),
@@ -455,7 +152,7 @@ impl Scene {
         );
         (
             Self {
-                static_world,
+                cell,
                 oak: 1,
                 iron: 2,
                 wolf,
@@ -518,7 +215,7 @@ impl Scene {
             enabled: true,
             sun_direction: Vec3::new(-0.3, 0.7, -0.65).normalize(),
             sun_color: Vec3::new(0.38, 0.54, 0.86),
-            sun_intensity: 0.18,
+            sun_intensity: 0.26,
             sky_zenith: Vec3::splat(0.008),
             sky_horizon: Vec3::new(0.035, 0.06, 0.095),
             cloud_coverage: 0.0,
@@ -529,8 +226,8 @@ impl Scene {
         for (i, position) in positions.iter().enumerate() {
             env.lights[i] = PointLight {
                 position: *position,
-                color: Vec3::new(1.0, 0.42, 0.12),
-                intensity: 12.0 * flicker,
+                color: Vec3::new(1.0, 0.60, 0.30),
+                intensity: 7.5 * flicker,
                 radius: 7.0,
             };
         }
@@ -549,42 +246,11 @@ impl Scene {
                 color: [0.012, 0.019, 0.03],
                 density: 0.022,
             },
-            instances: self.static_world.clone(),
+            instances: self.cell.world.clone(),
             ..Frame::default()
         };
         let out = &mut frame.instances;
-        let gate_shift = if game.stage >= 3 { 1.55 } else { 0.0 };
-        for i in 0..5 {
-            out.push(
-                Instance::new(
-                    Vec3::new(-0.60 + i as f32 * 0.3 + gate_shift, 1.55, 0.04),
-                    Vec3::new(0.055, 3.0, 0.07),
-                    Vec3::ONE,
-                )
-                .with_mesh(self.iron)
-                .with_surface(0.38, 0.9),
-            );
-        }
-        for y in [0.1, 1.0, 2.8] {
-            out.push(
-                Instance::new(
-                    Vec3::new(gate_shift, y, 0.04),
-                    Vec3::new(1.40, 0.075, 0.10),
-                    Vec3::ONE,
-                )
-                .with_mesh(self.iron)
-                .with_surface(0.4, 0.9),
-            );
-        }
-        out.push(
-            Instance::new(
-                Vec3::new(gate_shift + 0.45, 1.05, 0.13),
-                Vec3::new(0.17, 0.22, 0.08),
-                Vec3::new(0.63, 0.43, 0.19),
-            )
-            .with_mesh(self.iron)
-            .with_surface(0.48, 0.72),
-        );
+        self.cell.animate(out, t, game.gate_open);
         draw_model(
             out,
             &self.cot,
@@ -634,10 +300,10 @@ impl Scene {
                 });
             }
         }
-        let plank_angle = if game.stage > 0 { -0.22 } else { 0.025 };
+        let plank_angle = 0.025 - game.board_open * 0.245;
         out.push(
             Instance::new(
-                Vec3::new(-1.25, 0.035 + if game.stage > 0 { 0.15 } else { 0.0 }, 2.1),
+                Vec3::new(-1.25, 0.035 + game.board_open * 0.15, 2.1),
                 Vec3::new(0.30, 0.07, 1.30),
                 Vec3::new(0.9, 0.84, 0.72),
             )
@@ -777,6 +443,29 @@ impl Scene {
                 size: Vec2::splat(0.012 + hash(i) * 0.018),
                 opacity: 0.25,
             });
+        }
+        for i in 0..5 {
+            let phase = (t * 0.47 + i as f32 * 0.21).fract();
+            let x = 2.60 + (hash(i * 91) - 0.5) * 0.18;
+            let z = 4.46 + (hash(i * 19) - 0.5) * 0.14;
+            frame.particles.push(Particle {
+                position: Vec3::new(x, 3.15 * (1.0 - phase * phase), z),
+                color: Vec3::new(0.48, 0.64, 0.72),
+                size: Vec2::new(0.012, 0.035),
+                opacity: 0.58,
+            });
+            if phase > 0.84 {
+                let radius = (phase - 0.84) * 0.8;
+                for point in 0..10 {
+                    let a = point as f32 * std::f32::consts::TAU / 10.0;
+                    frame.particles.push(Particle {
+                        position: Vec3::new(x + a.cos() * radius, 0.014, z + a.sin() * radius),
+                        color: Vec3::new(0.25, 0.37, 0.41),
+                        size: Vec2::splat(0.013),
+                        opacity: (1.0 - phase) * 1.8,
+                    });
+                }
+            }
         }
         if transform_view {
             for i in 0..40u32 {

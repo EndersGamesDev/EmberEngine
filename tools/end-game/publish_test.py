@@ -19,12 +19,16 @@ class ReleaseAssembly(unittest.TestCase):
             for name in publish.FILES + ['pkg/end_game.js', 'pkg/end_game_bg.wasm']:
                 (assets / name).write_bytes(name.encode())
             old = {'games': [{'id': 'league', 'versions': [{'v': 'future', 'live': True}], 'unknown': 'preserve'}]}
-            game = {'id': 'end-game', 'versions': [{'version': '1.0.0', 'path': 'games/end-game/v1/'}]}
+            game = {'id': 'end-game', 'versions': [{'version': '2.0.0', 'path': 'games/end-game/v2/'}]}
             (source / 'web/games.json').write_text(json.dumps({'games': [game]}))
             (dest / 'games.json').write_text(json.dumps(old))
             (dest / 'index.html').write_text('<style>existing</style><main>keep live content</main>')
             (dest / 'server.json').write_bytes(b'keep host book')
+            frozen = dest / 'games/end-game/v1/pkg/end_game_bg.wasm'
+            frozen.parent.mkdir(parents=True, exist_ok=True)
+            frozen.write_bytes(b'original published v1')
             publish.assemble(source, dest, 'source-sha')
+            self.assertEqual(frozen.read_bytes(), b'original published v1')
             catalog = json.loads((dest / 'games.json').read_text())
             self.assertEqual(catalog['games'][0], old['games'][0])
             self.assertEqual(catalog['games'][1], game)

@@ -1,0 +1,5 @@
+# The Living Cell assets
+
+Version 2 adds original generated material surfaces and a compact furnishing kit to the existing v1 characters and weapons. `limestone.png` and `oak.png` are original 1254-pixel square albedos generated with built-in image_gen; the exact prompts are in `surface-prompts.md`. Source originals and generator provenance remain in `C:/Users/end/dev/end-game/runtime-v2-assets/surfaces`. Limestone has good measured border continuity; oak maps to one cropped patch per face with its grain along each board, avoiding visible repetition seams.
+
+The game builds smaller beveled stones, fitted courses and mortar, roof timbers, iron rails, rivets, window surrounds and architectural details from metre-scaled materials. Stone variation is seeded; material textures are shared within geometry batches. Imported props are separate GLBs with explicit floor or suspension pivots. Runtime assets use base-color images; additional PBR maps are not supported by Ember. Environmental cloth deformation and chain motion are authored animation, not a physical cloth solver.

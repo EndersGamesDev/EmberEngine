@@ -124,6 +124,8 @@ pub struct Dungeon {
     pub stamina: f32,
     pub health: f32,
     pub stage: u8,
+    pub gate_open: f32,
+    pub board_open: f32,
     pub werewolf: bool,
     pub transformation: f32,
     pub attack_time: f32,
@@ -151,6 +153,8 @@ impl Default for Dungeon {
             stamina: 100.0,
             health: 100.0,
             stage: 0,
+            gate_open: 0.0,
+            board_open: 0.0,
             werewolf: false,
             transformation: 0.0,
             attack_time: 0.0,
@@ -243,6 +247,10 @@ impl Dungeon {
         if z.abs() < 0.38 && (self.stage < 3 || x.abs() > 0.64) {
             return false;
         }
+        // The physical aperture follows the sliding gate during its opening motion.
+        if z.abs() < 0.38 && x + 0.14 > -0.72 + self.gate_open * 1.55 {
+            return false;
+        }
         // The cot has a physical footprint, not only a picture.
         if (-2.8..=-1.7).contains(&x) && (2.55..=4.55).contains(&z) {
             return false;
@@ -254,6 +262,20 @@ impl Dungeon {
             return;
         }
         self.time += STEP;
+        self.gate_open = (self.gate_open
+            + if self.stage >= 3 {
+                STEP / 0.85
+            } else {
+                -STEP * 3.0
+            })
+        .clamp(0.0, 1.0);
+        self.board_open = (self.board_open
+            + if self.stage > 0 {
+                STEP * 2.0
+            } else {
+                -STEP * 3.0
+            })
+        .clamp(0.0, 1.0);
         self.crouched = input.crouch;
         self.attack_time = (self.attack_time - STEP).max(0.0);
         self.transformation = (self.transformation - STEP).max(0.0);
@@ -418,6 +440,10 @@ mod tests {
         assert_eq!(s.stage, 2);
         s.position = Vec3::new(0.0, 0.0, 0.8);
         s.interact();
+        assert!(!s.can_stand(0.0, 0.0));
+        for _ in 0..60 {
+            s.tick(Controls::default());
+        }
         assert!(s.can_stand(0.0, 0.0));
         s.position = Vec3::new(2.6, 0.0, -4.0);
         s.interact();

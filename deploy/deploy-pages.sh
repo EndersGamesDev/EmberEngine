@@ -54,7 +54,7 @@ V1_COMMIT="e7b85e8"
 # Release versions come from the packages being shipped. Validate every
 # catalog entry before a build or publish, then use Arena's release major to
 # select its stable vN directory. Other legacy slots remain explicit locators.
-IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE < <("$PY" - web/games.json <<'PY'
+IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE END_GAME_LIVE < <("$PY" - web/games.json <<'PY'
 import json, pathlib, re, sys
 
 catalog_path = pathlib.Path(sys.argv[1])
@@ -103,11 +103,15 @@ if arena.get("v") != "v%s" % arena_major or arena.get("path") != arena_path:
 league = next(release for release in games["league"]["versions"] if release.get("live") is True)
 if re.fullmatch(r"games/league/v[1-9][0-9]*/", league.get("path", "")) is None:
     raise SystemExit("FAILED: League catalog must select exactly one safe live version path")
-print(arena_path.rstrip("/") + "\t" + league["path"].rstrip("/"))
+end_game = next(release for release in games["end-game"]["versions"] if release.get("live") is True)
+if re.fullmatch(r"games/end-game/v[1-9][0-9]*/", end_game.get("path", "")) is None:
+    raise SystemExit("FAILED: End Game catalog must select exactly one safe live version path")
+print(arena_path.rstrip("/") + "\t" + league["path"].rstrip("/") + "\t" + end_game["path"].rstrip("/"))
 PY
 )
 ARENA_LIVE="${ARENA_LIVE//$'\r'/}"
 LEAGUE_LIVE="${LEAGUE_LIVE//$'\r'/}"
+END_GAME_LIVE="${END_GAME_LIVE//$'\r'/}"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     missing=()
@@ -194,7 +198,6 @@ ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
 WHAT_LIVE="games/what-is-this/v1"
-END_GAME_LIVE="games/end-game/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
 rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \

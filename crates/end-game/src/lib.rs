@@ -1,4 +1,5 @@
-//! End Game v1: a single-player Ember dungeon, native and WASM.
+//! End Game v2: a single-player Ember dungeon, native and WASM.
+mod cell;
 mod scene;
 
 use ember_engine::{
@@ -123,6 +124,16 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok("cell-detail") => {
+                game.sim.position = glam::Vec3::new(1.5, 0.0, 1.3);
+                game.sim.yaw = -2.35;
+                game.sim.pitch = -0.08;
+            }
+            Ok("cell-wall") => {
+                game.sim.position = glam::Vec3::new(-0.5, 0.0, 2.4);
+                game.sim.yaw = -1.35;
+                game.sim.pitch = -0.08;
+            }
             Ok("corridor") => {
                 game.sim.stage = 3;
                 game.sim.position = glam::Vec3::new(0.0, 0.0, -0.8);
@@ -142,11 +153,16 @@ pub fn run() {
             }
             _ => {}
         }
+        game.sim.time = std::env::var("END_GAME_TIME")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+        game.sim.gate_open = if game.sim.stage >= 3 { 1.0 } else { 0.0 };
         UI.with(|u| u.borrow_mut().paused = true);
     }
     ember_engine::run(
         EngineConfig {
-            title: "End Game — Version 1".into(),
+            title: format!("End Game — {}", env!("CARGO_PKG_VERSION")),
             capture_mouse: !passive,
             activate: !passive,
             meshes,
