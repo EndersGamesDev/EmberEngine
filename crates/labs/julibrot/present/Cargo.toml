@@ -8,6 +8,7 @@ bytemuck.workspace = true
 ember-lab-heap = { path = "../../heap" }
 ember-julibrot-kernels = { path = "../kernels" }
 ember-julibrot-math = { path = "../math" }
+ember-julibrot-shader = { path = "../shader" }
 ember-julibrot-worker = { path = "../worker" }
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }

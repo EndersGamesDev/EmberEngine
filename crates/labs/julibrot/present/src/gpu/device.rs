@@ -6,11 +6,12 @@ use ember_lab_heap::{DialectLimits, HeapPresentResources};
 #[cfg(test)]
 use crate::PaletteId;
 use crate::fence::FenceLedger;
+use crate::shade_shader::PALETTE_UNIFORM_BINDING;
 use crate::state::{ExposureLatch, SceneLedger};
 use crate::{
     HOT_PAYLOAD_BYTES, HotSlot, Pose, PoseMap, PresentConfig, PresentError, PresentFacts,
     PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, WarpKind, glitch_count_shader,
-    hot_ring_bytes, scene_shader,
+    hot_ring_bytes, scene_shader, shade_shader,
 };
 
 #[cfg(test)]
@@ -314,6 +315,7 @@ struct GpuState {
     relief_redraw_backdrop_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     shade_pipeline: wgpu::RenderPipeline,
+    _shade_source: ember_julibrot_shader::RenderedShader,
     palette_buffer: wgpu::Buffer,
     palette_group: wgpu::BindGroup,
     scene_fence: wgpu::Buffer,
@@ -667,7 +669,7 @@ fn create_gpu_state(
     let presentation_values = create_value_target(device, &warp_texture_layout, &sampler, [1, 1]);
     let palette_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Julibrot present-time palette uniform"),
-        size: 48,
+        size: crate::shade_shader::palette_uniform_bytes(),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -675,7 +677,7 @@ fn create_gpu_state(
         label: Some("Julibrot present-time palette group"),
         layout: &palette_layout,
         entries: &[wgpu::BindGroupEntry {
-            binding: 0,
+            binding: PALETTE_UNIFORM_BINDING,
             resource: palette_buffer.as_entire_binding(),
         }],
     });
@@ -742,11 +744,15 @@ fn create_gpu_state(
     );
     let warp_pipeline =
         create_warp_pipeline(device, SCENE_FORMAT, &warp_texture_layout, &warp_hot_layout);
+    let shade_source = shade_shader().map_err(|_| PresentError::Device {
+        operation: "render Julibrot shade shader",
+    })?;
     let shade_pipeline = create_shade_pipeline(
         device,
         config.surface_format,
         &warp_texture_layout,
         &palette_layout,
+        shade_source.source(),
     );
     Ok(GpuState {
         heap_group,
@@ -770,6 +776,7 @@ fn create_gpu_state(
         relief_redraw_backdrop_pipeline,
         warp_pipeline,
         shade_pipeline,
+        _shade_source: shade_source,
         palette_buffer,
         palette_group,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),

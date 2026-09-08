@@ -6,6 +6,10 @@ use minijinja::{Environment, ErrorKind, UndefinedBehavior};
 
 use crate::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslType, WgslTypeDescription};
 
+/// Embedded template for Julibrot's final value-to-colour presentation pass.
+pub const PRESENT_SHADE_TEMPLATE: &str = "present-shade.wgsl.jinja";
+const PRESENT_SHADE_SOURCE: &str = include_str!("../templates/present-shade.wgsl.jinja");
+
 #[cfg(test)]
 const INTERFACE_TEST_NAME: &str = "interface-test.wgsl.jinja";
 #[cfg(test)]
@@ -28,7 +32,7 @@ const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
 #[cfg(test)]
 const UNREGISTERED_TYPE_TEST_SOURCE: &str =
     include_str!("../templates/unregistered-type-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[];
+const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[(PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE)];
 #[cfg(test)]
 const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
@@ -343,6 +347,7 @@ fn register_once<T: Copy + PartialEq>(
 fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderError> {
     let mut environment = Environment::empty();
     environment.set_debug(true);
+    environment.set_keep_trailing_newline(true);
     environment.set_undefined_behavior(UndefinedBehavior::Strict);
 
     let structures = context.structures.clone();

@@ -27,6 +27,8 @@ pub enum PaletteId {
     Ice = 2,
 }
 
+ember_julibrot_shader::impl_wgsl_enum!(PaletteId, "PaletteId", u32, { Classic, Ember, Ice });
+
 /// The exact palette data uploaded only for the presentation shade pass.
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C, align(16))]
@@ -38,6 +40,12 @@ pub struct PaletteRecord {
     /// Exact clear and disocclusion colour.
     pub clear_rgba: [f32; 4],
 }
+
+ember_julibrot_shader::impl_wgsl_struct!(PaletteRecord, "PaletteUniform", {
+    map: [f32; 4],
+    interior_rgba: [f32; 4],
+    clear_rgba: [f32; 4],
+});
 
 /// The version-one Classic palette.
 pub const CLASSIC_PALETTE: PaletteRecord = PaletteRecord {

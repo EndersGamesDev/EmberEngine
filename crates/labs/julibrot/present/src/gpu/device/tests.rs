@@ -1358,7 +1358,12 @@ fn palette_is_not_a_scene_selection_key_and_is_uploaded_before_shade() {
         assert!(!source.contains("PaletteUniform"));
         assert!(!source.contains("palette."));
     }
-    assert!(crate::shade_shader().contains("palette."));
+    assert!(
+        crate::shade_shader()
+            .expect("shade template renders")
+            .source()
+            .contains("palette.")
+    );
     assert!(!include_str!("scene/submit.rs").contains("selected_palette"));
 }
 

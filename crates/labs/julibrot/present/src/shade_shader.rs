@@ -1,4 +1,42 @@
-const SHADE_SHADER: &str = r"
+use ember_julibrot_shader::{
+    PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderContext, render,
+};
+
+use crate::{PaletteId, PaletteRecord};
+
+pub const SHADE_VALUES_GROUP: u32 = 0;
+pub const PRESENTATION_VALUES_BINDING: u32 = 0;
+pub const NEAREST_VALUE_BINDING: u32 = 1;
+pub const SHADE_PALETTE_GROUP: u32 = 1;
+pub const PALETTE_UNIFORM_BINDING: u32 = 0;
+
+pub fn palette_uniform_bytes() -> u64 {
+    u64::try_from(core::mem::size_of::<PaletteRecord>())
+        .expect("palette uniform size fits wgpu's address space")
+}
+
+/// Returns the sole value-to-colour presentation shader.
+///
+/// # Errors
+///
+/// Returns the template, registration, parsing, or validation failure detected before wgpu sees
+/// the source.
+pub fn shade_shader() -> Result<RenderedShader, RenderError> {
+    let mut context = ShaderContext::new();
+    context.register_type::<PaletteRecord>()?;
+    context.register_enum::<PaletteId>()?;
+    context.register_binding(
+        "presentation_values",
+        SHADE_VALUES_GROUP,
+        PRESENTATION_VALUES_BINDING,
+    )?;
+    context.register_binding("nearest_value", SHADE_VALUES_GROUP, NEAREST_VALUE_BINDING)?;
+    context.register_binding("palette", SHADE_PALETTE_GROUP, PALETTE_UNIFORM_BINDING)?;
+    render(PRESENT_SHADE_TEMPLATE, &context)
+}
+
+#[cfg(test)]
+const LEGACY_SHADE_SOURCE: &str = r"
 struct PaletteUniform { map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
 @group(0) @binding(0) var presentation_values: texture_2d<f32>;
 @group(0) @binding(1) var nearest_value: sampler;
@@ -52,30 +90,82 @@ fn colour(value: vec4<f32>) -> vec4<f32> {
 }
 ";
 
-/// Returns the sole value-to-colour presentation shader.
-#[must_use]
-pub const fn shade_shader() -> &'static str {
-    SHADE_SHADER
-}
-
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_shader::{WgslEnum as _, WgslEnumDiscriminant, WgslType as _};
+
     use super::*;
+
+    const RENDERED_SHADE_HASH: u64 = 0x57fe_070b_02fa_9c44;
+
+    fn assert_palette_layout(module: &naga::Module) {
+        let description = PaletteRecord::DESCRIPTION;
+        let shader_type = module
+            .types
+            .iter()
+            .find_map(|(_, shader_type)| {
+                (shader_type.name.as_deref() == Some(description.name)).then_some(shader_type)
+            })
+            .expect("rendered palette type exists");
+        let naga::TypeInner::Struct { members, span } = &shader_type.inner else {
+            panic!("rendered palette type must be a struct");
+        };
+        assert_eq!(members.len(), description.fields.len());
+        for (shader_field, rust_field) in members.iter().zip(description.fields) {
+            assert_eq!(shader_field.name.as_deref(), Some(rust_field.name));
+            assert_eq!(
+                shader_field.offset,
+                u32::try_from(rust_field.offset).expect("palette field offset fits WGSL"),
+            );
+        }
+        assert_eq!(
+            *span,
+            u32::try_from(description.size).expect("palette size fits WGSL"),
+        );
+    }
+
+    fn assert_palette_discriminants(source: &str) {
+        for variant in PaletteId::DESCRIPTION.variants {
+            let WgslEnumDiscriminant::Unsigned(value) = variant.discriminant else {
+                panic!("palette discriminants are unsigned");
+            };
+            let variant_name = variant.name;
+            let expected = format!("const PaletteId_{variant_name}: u32 = {value}u;");
+            assert!(source.lines().any(|line| line == expected));
+        }
+    }
 
     #[test]
     fn shade_source_parses_and_validates() {
-        let module = naga::front::wgsl::parse_str(shade_shader()).expect("shade WGSL parses");
+        let shader = shade_shader().expect("shade template renders");
+        let legacy_source: String = shader
+            .source()
+            .split_inclusive('\n')
+            .filter(|line| !line.starts_with("const PaletteId_"))
+            .collect();
+        assert_eq!(legacy_source, LEGACY_SHADE_SOURCE);
+        assert_eq!(
+            shader.hash(),
+            RENDERED_SHADE_HASH,
+            "actual rendered shade hash: {:#018x}",
+            shader.hash()
+        );
+
+        let module = naga::front::wgsl::parse_str(shader.source()).expect("shade WGSL parses");
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
         .expect("shade WGSL validates");
+        assert_palette_layout(&module);
+        assert_palette_discriminants(shader.source());
     }
 
     #[test]
     fn shade_is_the_only_palette_reader_and_pins_every_status_colour() {
-        let source = shade_shader();
+        let shader = shade_shader().expect("shade template renders");
+        let source = shader.source();
         assert!(source.contains("var<uniform> palette: PaletteUniform"));
         assert!(source.contains("status == 4.0 || status == 5.0"));
         assert!(source.contains("status == 2.0 || status == 6.0"));

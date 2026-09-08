@@ -1,4 +1,7 @@
-use crate::{PaletteRecord, shade_shader};
+use crate::PaletteRecord;
+use crate::shade_shader::{
+    NEAREST_VALUE_BINDING, PRESENTATION_VALUES_BINDING, SHADE_PALETTE_GROUP, SHADE_VALUES_GROUP,
+};
 
 use super::{GpuState, SCENE_FORMAT, SceneTexture, extent_3d};
 
@@ -24,11 +27,11 @@ pub(super) fn create_value_target(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
-                binding: 0,
+                binding: PRESENTATION_VALUES_BINDING,
                 resource: wgpu::BindingResource::TextureView(&view),
             },
             wgpu::BindGroupEntry {
-                binding: 1,
+                binding: NEAREST_VALUE_BINDING,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
@@ -53,14 +56,16 @@ pub(super) fn create_shade_pipeline(
     surface_format: wgpu::TextureFormat,
     value_layout: &wgpu::BindGroupLayout,
     palette_layout: &wgpu::BindGroupLayout,
+    source: &str,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Julibrot sole shade shader"),
-        source: wgpu::ShaderSource::Wgsl(shade_shader().into()),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
     });
+    let bind_group_layouts = shade_bind_group_layouts(value_layout, palette_layout);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Julibrot sole shade pipeline"),
-        bind_group_layouts: &[value_layout, palette_layout],
+        bind_group_layouts: &bind_group_layouts,
         push_constant_ranges: &[],
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -94,6 +99,17 @@ pub(super) fn create_shade_pipeline(
     })
 }
 
+fn shade_bind_group_layouts<'a>(
+    value_layout: &'a wgpu::BindGroupLayout,
+    palette_layout: &'a wgpu::BindGroupLayout,
+) -> [&'a wgpu::BindGroupLayout; 2] {
+    match (SHADE_VALUES_GROUP, SHADE_PALETTE_GROUP) {
+        (0, 1) => [value_layout, palette_layout],
+        (1, 0) => [palette_layout, value_layout],
+        _ => panic!("shade bind groups must be zero and one"),
+    }
+}
+
 pub(super) fn encode_shade(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
@@ -114,8 +130,8 @@ pub(super) fn encode_shade(
         timestamp_writes: None,
     });
     pass.set_pipeline(&gpu.shade_pipeline);
-    pass.set_bind_group(0, &gpu.presentation_values.warp_group, &[]);
-    pass.set_bind_group(1, &gpu.palette_group, &[]);
+    pass.set_bind_group(SHADE_VALUES_GROUP, &gpu.presentation_values.warp_group, &[]);
+    pass.set_bind_group(SHADE_PALETTE_GROUP, &gpu.palette_group, &[]);
     pass.draw(0..3, 0..1);
 }
 

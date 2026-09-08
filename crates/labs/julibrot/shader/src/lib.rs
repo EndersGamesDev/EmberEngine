@@ -10,6 +10,7 @@ mod type_meta;
 
 pub use enum_meta::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslEnumVariant};
 pub use runtime::{
-    RenderError, RenderedShader, ShaderConstant, ShaderContext, WgslBinding, render,
+    PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderConstant, ShaderContext,
+    WgslBinding, render,
 };
 pub use type_meta::{WgslField, WgslType, WgslTypeDescription};
