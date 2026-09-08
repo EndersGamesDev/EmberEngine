@@ -52,10 +52,11 @@ pub use planner::{
 pub use shade_shader::shade_shader;
 pub use shader::{glitch_count_shader, scene_shader};
 pub use tile::{
-    CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
-    DescriptorTexel, ExactF32, ExactF64, PoseMapKey, RenderControlChange, SliceChartTransform,
-    SliceIdentity, SourcePixelRect, TileContentKey, TileInvalidation, TilePoseHeader, TileQuality,
-    TileRenderKey, TileResidency, TileRung, TransitionPresentation, certify_same_slice,
+    CanonicalChartCellKey, DerivedChartFootprint, DescriptorAbiError, DescriptorCostLedger,
+    DescriptorFootprintSample, DescriptorSamplePair, DescriptorTexel, ExactF32, ExactF64,
+    PoseMapKey, RenderControlChange, SliceChartTransform, SliceIdentity, SourcePixelRect,
+    TileContentKey, TileInvalidation, TilePoseHeader, TileQuality, TileRenderKey, TileResidency,
+    TileRung, TransitionPresentation, certify_same_slice, derive_chart_footprint,
     select_same_surface_owner, tile_invalidation, transition_presentation, validate_pose_header,
 };
 pub use uniform::{
