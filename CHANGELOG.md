@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v4
+
+Weight of the Blade adds Cut, Backhand, Finisher, Overhead and Rising arcs. One tap strikes once; three quick taps select Wolf's Fang, tap-pause-tap selects Gravebreaker, and tap-tap-pause-tap selects Rising Wolf. Counted input preserves rapid mouse/touch taps, held buttons do not repeat, and valid follow-ups buffer through recovery. Damage occurs at contact, with a short impact freeze, sparks, camera movement, sound and rumble; final gate recovery completes before the chapter overlay. Both V3 gauntlets retain their hilt grips throughout the authored arcs (`d550af5a`).
+
+Twenty-eight core tests, fifteen client/geometry/IK/input tests, three resolution tests, JavaScript syntax, scoped publication preservation, all 126 Pages fixtures, all 222 changelog checks, README coverage and done-list checks pass. Fifteen passive native strike-phase captures and one staged heavy-impact frame were inspected; real contact behavior is covered by simulation tests. The final release helper builds the 24,773,487-byte WASM in 7.64 seconds at Idle priority. Browser gameplay, physical DualSense/mobile controls, audible output, device vibration and 5K frame pacing remain unverified. Swept weapon collision and rigged enemy reactions remain in the backlog (`d550af5a`).
+
 ### End Game v3
 
 Hands of the Wolf replaces the box gauntlets with 34 articulated parts, finger curl, thumb opposition and measured key/sword grips. Grounded, collision-checked approaches lead into contact, grasp, lift, stow and recovery; the key follows its ring socket, the gate waits for key withdrawal, and the greatsword lifts its shallow-seated tip clear before rotating. The generated three-asset kit is 644,048 bytes. Fourteen core tests, eight client/geometry/IK/input tests, three resolution tests, exported GLB checks, native contact captures and scoped publication preservation pass; the browser bundle is 24,757,936 bytes. Browser gameplay, physical DualSense/mobile devices and 5K frame pacing remain unverified (`21c289ef`).
