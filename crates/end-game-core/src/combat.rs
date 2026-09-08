@@ -91,6 +91,29 @@ pub struct Strike {
     pub elapsed: f32,
     /// The contact sample was evaluated, whether it hit an object or missed.
     pub contact_done: bool,
+    /// A buffered strike starts in the chamber reached by the previous recovery.
+    pub previous: Option<StrikeKind>,
+    /// Time the preceding strike received this buffer; very late input keeps
+    /// its partially recovered entry rather than rushing a full chamber.
+    pub previous_link_at: f32,
+    /// Latched before motion advances, so late input cannot teleport the weapon.
+    pub link: Option<StrikeLink>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrikeLink {
+    pub next: StrikeKind,
+    pub at: f32,
+    pub cancelled_at: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Recovery {
+    pub strike: Strike,
+    pub elapsed: f32,
+}
+impl Recovery {
+    pub const DURATION: f32 = 0.20;
 }
 
 impl Strike {
@@ -99,6 +122,9 @@ impl Strike {
             kind,
             elapsed: 0.0,
             contact_done: false,
+            previous: None,
+            previous_link_at: 0.0,
+            link: None,
         }
     }
     pub fn remaining(self) -> f32 {
@@ -124,6 +150,8 @@ enum Rhythm {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Combat {
     pub active: Option<Strike>,
+    /// A failed buffered start settles the reached chamber without a pose jump.
+    pub recovery: Option<Recovery>,
     pub swing_event: u32,
     pub impact_event: u32,
     pub impact_left: f32,
@@ -199,6 +227,7 @@ impl Combat {
     }
     pub fn finished(&self) -> bool {
         self.active.is_none()
+            && self.recovery.is_none()
             && self.queued_count() == 0
             && self.hitstop_left == 0.0
             && self.impact_left == 0.0
@@ -206,12 +235,18 @@ impl Combat {
     /// Stop future strikes after the escape chain breaks, retaining this strike's recovery.
     pub fn clear_queue(&mut self) {
         self.queue = [None; 2];
+        if let Some(strike) = &mut self.active {
+            if let Some(link) = &mut strike.link {
+                link.cancelled_at.get_or_insert(strike.elapsed);
+            }
+        }
         self.rhythm = Rhythm::Closed;
         self.last_press = None;
     }
     /// Pickups own both arms; cancel combat without replaying or rewinding event ids.
     pub fn cancel(&mut self) {
         self.active = None;
+        self.recovery = None;
         self.clear_queue();
         self.rhythm = Rhythm::Ready;
         self.selection = None;
@@ -221,7 +256,7 @@ impl Combat {
         self.impact_strike = None;
         self.impact_strength = 0.0;
     }
-    fn start(&mut self, kind: StrikeKind, stamina: &mut f32) -> bool {
+    fn start(&mut self, kind: StrikeKind, previous: Option<StrikeKind>, stamina: &mut f32) -> bool {
         if !stamina.is_finite() || *stamina < kind.stamina_cost() {
             self.clear_queue();
             self.rhythm = Rhythm::Ready;
@@ -229,11 +264,17 @@ impl Combat {
             return false;
         }
         *stamina -= kind.stamina_cost();
-        self.active = Some(Strike::new(kind));
+        self.active = Some(Strike {
+            previous,
+            ..Strike::new(kind)
+        });
         self.swing_event = self.swing_event.wrapping_add(1);
         true
     }
     fn press(&mut self, stamina: &mut f32) {
+        if self.recovery.is_some() {
+            return;
+        }
         let gap = self.last_press.map_or(u64::MAX, |tick| self.clock - tick);
         let (kind, next) = match self.rhythm {
             Rhythm::One if gap <= QUICK_TICKS => (StrikeKind::Backhand, Rhythm::QuickPair),
@@ -246,7 +287,7 @@ impl Combat {
             _ => return,
         };
         if self.active.is_none() {
-            if !self.start(kind, stamina) {
+            if !self.start(kind, None, stamina) {
                 return;
             }
         } else if let Some(slot) = self.queue.iter_mut().find(|slot| slot.is_none()) {
@@ -288,8 +329,23 @@ impl Combat {
                 ..CombatTick::default()
             };
         }
+        if let Some(recovery) = &mut self.recovery {
+            recovery.elapsed += STEP;
+            if recovery.elapsed + 0.000001 >= Recovery::DURATION {
+                self.recovery = None;
+            }
+        }
         let mut contact = None;
         if let Some(mut strike) = self.active {
+            // Buffer metadata also remains frozen during hitstop. An edge there
+            // is latched at the same motion time when the animation resumes.
+            if strike.link.is_none() {
+                strike.link = self.queue[0].map(|next| StrikeLink {
+                    next,
+                    at: strike.elapsed,
+                    cancelled_at: None,
+                });
+            }
             strike.elapsed = (strike.elapsed + STEP).min(strike.kind.duration());
             if !strike.contact_done && strike.elapsed >= strike.kind.contact_time() {
                 strike.contact_done = true;
@@ -300,7 +356,14 @@ impl Combat {
                 let next = self.queue[0].take();
                 self.queue[0] = self.queue[1].take();
                 if let Some(kind) = next {
-                    self.start(kind, stamina);
+                    if !self.start(kind, Some(strike.kind), stamina) {
+                        self.recovery = Some(Recovery {
+                            strike,
+                            elapsed: 0.0,
+                        });
+                    } else if let Some(next) = &mut self.active {
+                        next.previous_link_at = strike.link.map_or(0.0, |link| link.at);
+                    }
                 }
             } else {
                 self.active = Some(strike);
@@ -485,5 +548,80 @@ mod tests {
         combat.tick(true, &mut stamina);
         assert_eq!(combat.active.unwrap().kind, StrikeKind::Cut);
         assert_eq!(stamina, 80.0);
+    }
+
+    #[test]
+    fn buffered_chambers_latch_once_and_pass_the_previous_strike() {
+        let mut combat = Combat::default();
+        let mut stamina = 100.0;
+        combat.tick(true, &mut stamina);
+        let at = combat.active.unwrap().elapsed;
+        combat.tick(true, &mut stamina);
+        let link = combat.active.unwrap().link.unwrap();
+        assert_eq!(link.next, StrikeKind::Backhand);
+        assert_eq!(link.at, at);
+        combat.tick(true, &mut stamina);
+        assert_eq!(combat.active.unwrap().link, Some(link));
+        while combat.active.unwrap().kind == StrikeKind::Cut {
+            combat.tick(false, &mut stamina);
+        }
+        let next = combat.active.unwrap();
+        assert_eq!(next.previous, Some(StrikeKind::Cut));
+        assert_eq!(next.elapsed, 0.0);
+        combat.tick(false, &mut stamina);
+        let link = combat.active.unwrap().link.unwrap();
+        assert_eq!(link.next, StrikeKind::Finisher);
+        assert_eq!(link.at, 0.0);
+    }
+
+    #[test]
+    fn failed_link_settles_without_contacts_and_freezes_with_hitstop() {
+        let mut combat = Combat::default();
+        let mut stamina = 39.0;
+        combat.tick(true, &mut stamina);
+        combat.tick(true, &mut stamina);
+        while combat.recovery.is_none() {
+            combat.tick(false, &mut stamina);
+        }
+        let recovery = combat.recovery.unwrap();
+        assert_eq!(recovery.elapsed, 0.0);
+        assert_eq!(recovery.strike.kind, StrikeKind::Cut);
+        assert_eq!(recovery.strike.link.unwrap().next, StrikeKind::Backhand);
+        assert!(!combat.finished());
+        combat.hitstop_left = 2.0 * STEP;
+        assert!(combat.tick(true, &mut stamina).frozen);
+        assert_eq!(combat.recovery, Some(recovery));
+        assert!(combat.tick(true, &mut stamina).frozen);
+        assert_eq!(combat.recovery, Some(recovery));
+        for _ in 0..12 {
+            assert!(combat.tick(true, &mut stamina).contact.is_none());
+        }
+        assert!(combat.finished());
+        assert_eq!(combat.swing_event, 1);
+        assert_eq!(combat.queued_count(), 0);
+        assert_eq!(stamina, 19.0);
+    }
+
+    #[test]
+    fn clearing_a_buffer_records_the_current_pose_for_smooth_recovery() {
+        let mut combat = Combat::default();
+        let mut stamina = 100.0;
+        combat.tick(true, &mut stamina);
+        combat.tick(true, &mut stamina);
+        for _ in 0..30 {
+            combat.tick(false, &mut stamina);
+        }
+        let elapsed = combat.active.unwrap().elapsed;
+        combat.clear_queue();
+        assert_eq!(
+            combat.active.unwrap().link.unwrap().cancelled_at,
+            Some(elapsed)
+        );
+        assert_eq!(combat.queued_count(), 0);
+        for _ in 0..60 {
+            combat.tick(false, &mut stamina);
+        }
+        assert!(combat.finished());
+        assert_eq!(combat.swing_event, 1);
     }
 }

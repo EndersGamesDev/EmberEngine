@@ -2,10 +2,14 @@
 use glam::{Vec2, Vec3};
 pub mod combat;
 pub mod dialogue;
+pub mod guard;
+#[cfg(test)]
+mod guard_tests;
 pub mod interaction;
 pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use dialogue::{Dialogue, VoiceEvent, VoiceKind};
+pub use guard::{Guard, GuardContact};
 pub use interaction::{Interaction, InteractionKind};
 pub use warden::{Warden, WardenPhase};
 
@@ -245,6 +249,7 @@ pub struct Controls {
     pub jump: bool,
     pub interact: bool,
     pub attack: bool,
+    pub block: bool,
     pub dodge: bool,
     pub transform: bool,
 }
@@ -264,6 +269,7 @@ pub struct Dungeon {
     pub werewolf: bool,
     pub transformation: f32,
     pub combat: Combat,
+    pub guard: Guard,
     /// Compatibility timer: active sword duration remaining, or unarmed cooldown.
     pub attack_time: f32,
     pub crouched: bool,
@@ -298,6 +304,7 @@ impl Default for Dungeon {
             werewolf: false,
             transformation: 0.0,
             combat: Combat::default(),
+            guard: Guard::default(),
             attack_time: 0.0,
             crouched: false,
             alert: 0.0,
@@ -566,10 +573,35 @@ impl Dungeon {
             && self.dodge_time == 0.0
             && self.knife_line_clear(self.warden, player)
         {
-            self.health -= 15.0;
-            self.hit_cooldown = warden::KNIFE_DURATION;
-            self.warden_ai.hit_player();
-            self.say("The knife finds you. Step aside during his windup.");
+            let eye = self.position + Vec3::Y * if self.crouched { 1.0 } else { 1.65 };
+            let forward = self.forward();
+            let look = Vec3::new(
+                forward.x * self.pitch.cos(),
+                self.pitch.sin(),
+                forward.z * self.pitch.cos(),
+            );
+            let incoming =
+                (Vec3::new(self.warden.x, 1.25, self.warden.y) - eye).normalize_or_zero();
+            let result = if look.dot(incoming) >= 0.5 && self.position.y <= 0.001 {
+                self.guard
+                    .receive(&mut self.stamina, eye + look * 0.65 - Vec3::Y * 0.22)
+            } else {
+                GuardContact::Open
+            };
+            if result == GuardContact::Blocked {
+                self.combat.hitstop_left = 3.0 * STEP;
+                self.warden_ai.on_sword_hit(false, false);
+                self.say("Steel catches the knife. Keep your guard toward him.");
+            } else {
+                self.health -= 15.0;
+                self.hit_cooldown = warden::KNIFE_DURATION;
+                self.warden_ai.hit_player();
+                self.say(if result == GuardContact::Broken {
+                    "Your guard breaks. Lower the blade to recover stamina."
+                } else {
+                    "The knife finds you. Guard toward him or step aside."
+                });
+            }
         }
         // A phase transition consumes this tick. In particular, the entire
         // wake, knife recovery, or stagger finishes before pursuit can resume.
@@ -641,7 +673,7 @@ impl Dungeon {
         }
         let old_swing = self.combat.swing_event;
         let progress = self.combat.tick(
-            self.stage == 4 && !was_interacting && input.attack,
+            self.stage == 4 && !was_interacting && input.attack && !input.block,
             &mut self.stamina,
         );
         if self.combat.swing_event != old_swing {
@@ -663,6 +695,16 @@ impl Dungeon {
         }
         self.time += STEP;
         self.dialogue.advance();
+        self.guard.tick(
+            input.block,
+            self.stage == 4
+                && !was_interacting
+                && self.position.y <= 0.001
+                && !input.jump
+                && !input.dodge
+                && self.dodge_time == 0.0
+                && self.combat.finished(),
+        );
         self.gate_open = (self.gate_open
             + if self.stage >= 3 {
                 STEP / 0.85
@@ -702,13 +744,19 @@ impl Dungeon {
         let forward = self.forward();
         let right = Vec3::new(forward.z * -1.0, 0.0, forward.x);
         let direction = right * movement.x + forward * movement.y;
-        let running =
-            input.sprint && self.stamina > 4.0 && !input.crouch && movement.length() > 0.1;
+        let guarding = self.guard.amount > 0.0;
+        let running = input.sprint
+            && self.stamina > 4.0
+            && !input.crouch
+            && !guarding
+            && movement.length() > 0.1;
         if input.dodge && self.stamina > 24.0 && self.dodge_time == 0.0 {
             self.dodge_time = 0.22;
             self.stamina -= 24.0;
         }
-        let speed = if input.crouch {
+        let speed = if guarding {
+            1.0
+        } else if input.crouch {
             1.1
         } else if running {
             4.1
@@ -742,7 +790,15 @@ impl Dungeon {
         {
             self.position.z += delta.z;
         }
-        self.stamina = (self.stamina + if running { -18.0 } else { 16.0 } * STEP).clamp(0.0, 100.0);
+        self.stamina = (self.stamina
+            + if running {
+                -18.0
+            } else if guarding {
+                0.0
+            } else {
+                16.0
+            } * STEP)
+            .clamp(0.0, 100.0);
         if input.jump && self.position.y == 0.0 && self.stamina > 12.0 {
             self.velocity_y = 4.1;
             self.stamina -= 12.0;
@@ -969,6 +1025,7 @@ mod tests {
                 jump: true,
                 interact: true,
                 attack: true,
+                block: true,
                 dodge: true,
                 transform: true,
             });

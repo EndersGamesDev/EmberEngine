@@ -159,6 +159,7 @@ mod tests {
                         kind,
                         elapsed,
                         contact_done: elapsed >= kind.contact_time(),
+                        ..Strike::new(kind)
                     });
                     let v = view(&game, 0.0);
                     let m = hands.motion(&game, &v);
@@ -238,11 +239,13 @@ pub fn view(game: &Dungeon, wake: f32) -> View {
     let impact = (game.combat.impact_left / game.combat.impact_duration()).clamp(0.0, 1.0)
         * game.combat.impact_strength;
     let hurt = (game.warden_ai.hit_left / 0.24).clamp(0.0, 1.0);
+    let blocked = (game.guard.impact_left / end_game_core::guard::IMPACT_TIME).clamp(0.0, 1.0);
     let kick = (game.combat.impact_left * 95.0).sin() * impact * 0.018
-        + (game.warden_ai.hit_left * 48.0).sin() * hurt * 0.022;
+        + (game.warden_ai.hit_left * 48.0).sin() * hurt * 0.022
+        + (game.guard.impact_left * 72.0).sin() * blocked * 0.012;
     let head = head - Vec3::Y * (impact * 0.012 + hurt * 0.017);
     let rot = Quat::from_rotation_y(-yaw)
-        * Quat::from_rotation_x(pitch + impact * 0.026 - hurt * 0.032)
+        * Quat::from_rotation_x(pitch + impact * 0.026 - hurt * 0.032 + blocked * 0.014)
         * Quat::from_rotation_z(kick);
     View {
         head,
@@ -392,7 +395,13 @@ impl Hands {
             key: None,
             sword: None,
         };
-        let ready = super::sword_motion::weapon(game.combat.active, v.head, v.rot);
+        let ready = super::sword_motion::weapon(
+            &game.combat,
+            game.guard.amount,
+            game.guard.impact_left,
+            v.head,
+            v.rot,
+        );
         if game.stage >= 4 {
             m.sword = Some(ready);
             self.sword_hands(&mut m, ready, 1.0);

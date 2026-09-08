@@ -1,4 +1,4 @@
-//! End Game v7: a single-player Ember dungeon, native and WASM.
+//! End Game v8: a single-player Ember dungeon, native and WASM.
 mod cell;
 mod hands;
 mod scene;
@@ -20,6 +20,7 @@ struct Ui {
     actions: u32,
     attacks: u8,
     paused: bool,
+    guard_reset: bool,
     third_person: bool,
 }
 thread_local! {
@@ -31,6 +32,7 @@ pub struct Game {
     scene: scene::Scene,
     accumulated: f32,
     previous: u32,
+    guard_release_required: bool,
     third_person: bool,
     feedback: Feedback,
     wake: f32,
@@ -50,6 +52,7 @@ mod tests {
             scene,
             accumulated: 0.0,
             previous: 0,
+            guard_release_required: false,
             third_person: false,
             feedback: Feedback::default(),
             wake: 0.0,
@@ -439,6 +442,132 @@ mod tests {
         assert!(g.sim.combat.active.unwrap().elapsed > strike.unwrap().elapsed);
         assert_eq!(g.sim.combat.queued_count(), 2);
     }
+
+    #[test]
+    fn guard_mouse_keyboard_controller_and_touch_raise_and_release_equally() {
+        let inputs = [
+            InputState::from_parts(&[], &[MouseButton::Right], (0.0, 0.0), None),
+            InputState::from_parts(&[KeyCode::KeyF], &[], (0.0, 0.0), None),
+            InputState::from_parts(
+                &[],
+                &[],
+                (0.0, 0.0),
+                Some(PadState {
+                    buttons: PadButton::LT.mask(),
+                    ..PadState::default()
+                }),
+            ),
+            InputState::default(),
+        ];
+        for (i, input) in inputs.iter().enumerate() {
+            let mut g = combat_game();
+            if i == 3 {
+                UI.with(|u| u.borrow_mut().held = 4);
+            }
+            for _ in 0..12 {
+                g.update(input, STEP);
+            }
+            assert!(g.sim.guard.ready(), "input source {i}");
+            assert_eq!(g.sim.combat.swing_event, 0);
+            UI.with(|u| u.borrow_mut().held = 0);
+            for _ in 0..8 {
+                g.update(&InputState::default(), STEP);
+            }
+            assert_eq!(g.sim.guard.amount, 0.0);
+        }
+    }
+
+    #[test]
+    fn guard_pause_freezes_pose_then_requires_physical_release_before_rearming() {
+        let mut g = combat_game();
+        let held = InputState::from_parts(
+            &[],
+            &[],
+            (0.0, 0.0),
+            Some(PadState {
+                buttons: PadButton::LT.mask(),
+                ..PadState::default()
+            }),
+        );
+        for _ in 0..12 {
+            g.update(&held, STEP);
+        }
+        let frozen = g.sim.guard.clone();
+        UI.with(|u| {
+            let mut u = u.borrow_mut();
+            u.paused = true;
+            u.held = 4;
+        });
+        // The web platform masks the controller snapshot while paused.
+        g.update(&InputState::default(), 0.1);
+        assert_eq!(g.sim.guard, frozen);
+        assert_eq!(UI.with(|u| u.borrow().held), 0);
+        UI.with(|u| u.borrow_mut().paused = false);
+        for _ in 0..10 {
+            g.update(&held, STEP);
+        }
+        assert_eq!(g.sim.guard.amount, 0.0);
+        g.update(&InputState::default(), STEP);
+        for _ in 0..12 {
+            g.update(&held, STEP);
+        }
+        assert!(g.sim.guard.ready());
+        // A complete pause/resume between updates must also drop held guard.
+        UI.with(|u| u.borrow_mut().guard_reset = true);
+        g.update(&held, STEP);
+        assert!(!g.sim.guard.ready());
+    }
+
+    #[test]
+    fn guard_discards_new_attacks_but_waits_for_the_committed_combo() {
+        let mut g = combat_game();
+        UI.with(|u| u.borrow_mut().attacks = 3);
+        for _ in 0..3 {
+            g.update(&InputState::default(), STEP);
+        }
+        assert_eq!(g.sim.combat.queued_count(), 2);
+        UI.with(|u| {
+            let mut u = u.borrow_mut();
+            u.held = 4;
+            u.attacks = 1;
+        });
+        for _ in 0..48 {
+            g.update(&InputState::default(), STEP * 6.0);
+        }
+        assert_eq!(g.sim.combat.swing_event, 3);
+        assert!(g.sim.combat.finished());
+        assert!(g.sim.guard.ready());
+        UI.with(|u| u.borrow_mut().held = 0);
+        for _ in 0..8 {
+            g.update(&InputState::default(), STEP);
+        }
+        assert_eq!(g.sim.combat.swing_event, 3);
+    }
+
+    #[test]
+    fn guard_contact_hud_and_rumble_distinguish_block_from_break() {
+        use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
+        for (stamina, broken) in [(100.0, false), (10.0, true)] {
+            let mut g = game();
+            g.sim.stage = 4;
+            g.sim.position = glam::Vec3::new(-2.9, 0.0, -2.55);
+            g.sim.guard.amount = 1.0;
+            g.sim.stamina = stamina;
+            g.sim.warden_ai.phase = WardenPhase::Attacking;
+            g.sim.warden_ai.elapsed = KNIFE_CONTACT - STEP;
+            UI.with(|u| u.borrow_mut().held = 4);
+            g.update(&InputState::default(), STEP);
+            let snapshot: serde_json::Value =
+                HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+            assert_eq!(snapshot["guard"]["breakEvent"], u32::from(broken));
+            assert_eq!(snapshot["guard"]["blockEvent"], u32::from(!broken));
+            assert_eq!(g.sim.health, if broken { 85.0 } else { 100.0 });
+            let feedback = g.feedback();
+            assert!(!feedback.rumbles.is_empty());
+            assert_eq!(feedback.rumbles[0].strong > 0.5, broken);
+            assert_eq!(feedback.rumbles[0].ms > 180, broken);
+        }
+    }
 }
 
 pub fn run() {
@@ -449,6 +578,7 @@ pub fn run() {
         scene,
         accumulated: 0.0,
         previous: 0,
+        guard_release_required: false,
         third_person: false,
         feedback: Feedback::default(),
         wake: 1.0,
@@ -460,6 +590,41 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok("guard") => {
+                use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
+                game.sim.stage = 4;
+                game.sim.position = glam::Vec3::new(-2.9, 0.0, -2.2);
+                game.sim.pitch = -0.10;
+                game.sim.warden_ai.phase = WardenPhase::Hunting;
+                game.sim.guard.impact_point = game.sim.position + glam::Vec3::new(0.0, 1.3, -0.7);
+                let elapsed = std::env::var("END_GAME_ACTION_TIME")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|t| t.is_finite())
+                    .unwrap_or(0.06)
+                    .max(0.0);
+                match std::env::var("END_GAME_GUARD_PHASE").as_deref() {
+                    Ok("raise") => game.sim.guard.amount = (elapsed / 0.18).clamp(0.0, 1.0),
+                    Ok("lower") => game.sim.guard.amount = (1.0 - elapsed / 0.12).clamp(0.0, 1.0),
+                    Ok("recoil") => {
+                        game.sim.guard.amount = 1.0;
+                        game.sim.guard.impact_left = (0.24 - elapsed).max(0.0);
+                        game.sim.guard.block_event = 1;
+                        game.sim.stamina = 72.0;
+                        game.sim.warden_ai.phase = WardenPhase::Attacking;
+                        game.sim.warden_ai.elapsed = KNIFE_CONTACT + elapsed;
+                    }
+                    Ok("break") => {
+                        game.sim.guard.amount = (1.0 - elapsed / 0.12).clamp(0.0, 1.0);
+                        game.sim.guard.broken_left = (0.9 - elapsed).max(0.0);
+                        game.sim.guard.break_event = 1;
+                        game.sim.stamina = 0.0;
+                        game.sim.warden_ai.phase = WardenPhase::Attacking;
+                        game.sim.warden_ai.elapsed = KNIFE_CONTACT + elapsed;
+                    }
+                    _ => game.sim.guard.amount = 1.0,
+                }
+            }
             Ok("warden") => {
                 use end_game_core::warden::WardenPhase;
                 game.sim.stage = 3;
@@ -549,14 +714,20 @@ pub fn run() {
                 }
             }
             Ok("combat") => {
-                use end_game_core::combat::{ImpactKind, Strike, StrikeKind};
-                let kind = match std::env::var("END_GAME_STRIKE").as_deref() {
-                    Ok("backhand") => StrikeKind::Backhand,
-                    Ok("finisher") => StrikeKind::Finisher,
-                    Ok("overhead") => StrikeKind::Overhead,
-                    Ok("rising") => StrikeKind::Rising,
-                    _ => StrikeKind::Cut,
+                use end_game_core::combat::{ImpactKind, Strike, StrikeKind, StrikeLink};
+                let parse_kind = |name: &str| match name {
+                    "cut" => Some(StrikeKind::Cut),
+                    "backhand" => Some(StrikeKind::Backhand),
+                    "finisher" => Some(StrikeKind::Finisher),
+                    "overhead" => Some(StrikeKind::Overhead),
+                    "rising" => Some(StrikeKind::Rising),
+                    _ => None,
                 };
+                let kind = std::env::var("END_GAME_STRIKE")
+                    .ok()
+                    .as_deref()
+                    .and_then(parse_kind)
+                    .unwrap_or(StrikeKind::Cut);
                 let elapsed = std::env::var("END_GAME_ACTION_TIME")
                     .ok()
                     .and_then(|s| s.parse::<f32>().ok())
@@ -567,6 +738,26 @@ pub fn run() {
                 let mut strike = Strike::new(kind);
                 strike.elapsed = elapsed;
                 strike.contact_done = elapsed >= kind.contact_time();
+                strike.previous = std::env::var("END_GAME_PREVIOUS_STRIKE")
+                    .ok()
+                    .as_deref()
+                    .and_then(parse_kind);
+                let link_time = std::env::var("END_GAME_LINK_TIME")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|t| t.is_finite())
+                    .unwrap_or(0.1)
+                    .max(0.0);
+                strike.previous_link_at = link_time.min(strike.previous.unwrap_or(kind).duration());
+                strike.link = std::env::var("END_GAME_NEXT_STRIKE")
+                    .ok()
+                    .as_deref()
+                    .and_then(parse_kind)
+                    .map(|next| StrikeLink {
+                        next,
+                        at: link_time.min(kind.duration()),
+                        cancelled_at: None,
+                    });
                 game.sim.combat.active = Some(strike);
                 if std::env::var("END_GAME_IMPACT").as_deref() == Ok("1") {
                     game.sim.combat.impact_left = if kind.heavy() { 0.32 } else { 0.22 };
@@ -657,6 +848,7 @@ impl EmberGame for Game {
             value.look = Vec2::ZERO;
             value.actions = 0;
             value.attacks = 0;
+            value.guard_reset = false;
             result
         });
         let dt = if dt.is_finite() {
@@ -665,6 +857,18 @@ impl EmberGame for Game {
             0.0
         };
         let pad = input.pad().unwrap_or_default();
+        // Browser keys/pointers use the cancellable held-input bridge. Native
+        // input and the standard controller share the same simulation flag.
+        let guard_held = (cfg!(not(target_arch = "wasm32"))
+            && (input.down(KeyCode::KeyF) || input.mouse_down(MouseButton::Right)))
+            || pad.down(PadButton::LT)
+            || ui.held & 4 != 0;
+        if ui.paused || ui.guard_reset {
+            self.guard_release_required = true;
+        } else if !guard_held {
+            self.guard_release_required = false;
+        }
+        let block = guard_held && !self.guard_release_required;
         let bits = u32::from(input.down(KeyCode::KeyE) || pad.down(PadButton::West))
             | (u32::from(
                 (cfg!(not(target_arch = "wasm32")) && input.mouse_down(MouseButton::Left))
@@ -677,6 +881,11 @@ impl EmberGame for Game {
             | (u32::from(input.down(KeyCode::KeyV) || pad.down(PadButton::R3)) << 5);
         let mut pressed = (bits & !self.previous) | ui.actions;
         let mut attack_presses = ui.attacks.saturating_add(u8::from(pressed & 2 != 0)).min(3);
+        if guard_held {
+            // Do not replay a strike pressed during guard after it lowers.
+            // Already committed core combo swings continue independently.
+            attack_presses = 0;
+        }
         pressed &= !2;
         self.previous = bits;
         if !ui.paused {
@@ -700,6 +909,8 @@ impl EmberGame for Game {
             let old_event = self.sim.event;
             let old_impact = self.sim.combat.impact_event;
             let old_knife_hit = self.sim.warden_ai.hit_event;
+            let old_block = self.sim.guard.block_event;
+            let old_break = self.sim.guard.break_event;
             while self.accumulated >= STEP {
                 self.sim.tick(Controls {
                     movement: Vec2::new(
@@ -714,6 +925,7 @@ impl EmberGame for Game {
                         || ui.held & 2 != 0,
                     interact: pressed & 1 != 0,
                     attack: attack_presses > 0,
+                    block,
                     jump: pressed & 4 != 0,
                     dodge: pressed & 8 != 0,
                     transform: pressed & 16 != 0,
@@ -729,7 +941,13 @@ impl EmberGame for Game {
             if attack_presses > 0 {
                 UI.with(|u| u.borrow_mut().attacks = attack_presses);
             }
-            if self.sim.warden_ai.hit_event != old_knife_hit && self.sim.warden_ai.hit_left > 0.0 {
+            if self.sim.guard.break_event != old_break {
+                self.feedback.rumble(0.85, 0.65, 260);
+            } else if self.sim.guard.block_event != old_block {
+                self.feedback.rumble(0.22, 0.42, 100);
+            } else if self.sim.warden_ai.hit_event != old_knife_hit
+                && self.sim.warden_ai.hit_left > 0.0
+            {
                 self.feedback.rumble(0.72, 0.55, 160);
             } else if self.sim.combat.impact_event != old_impact {
                 self.feedback
@@ -747,6 +965,7 @@ impl EmberGame for Game {
             }
         } else {
             self.accumulated = 0.0;
+            UI.with(|u| u.borrow_mut().held = 0);
         }
         let state = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "stage": self.sim.stage, "objective": self.sim.objective(),
@@ -757,6 +976,11 @@ impl EmberGame for Game {
             "position": self.sim.position.to_array(), "time": self.sim.time,
             "interacting": self.sim.interaction.is_some(),
             "finished": self.sim.finished(),
+            "guard": {
+                "amount": self.sim.guard.amount, "ready": self.sim.guard.ready(),
+                "brokenLeft": self.sim.guard.broken_left, "impactLeft": self.sim.guard.impact_left,
+                "blockEvent": self.sim.guard.block_event, "breakEvent": self.sim.guard.break_event
+            },
             "dialogue": {
                 "life": self.sim.dialogue.life, "sequence": self.sim.dialogue.sequence,
                 "dead": self.sim.dialogue.dead(),
@@ -827,6 +1051,7 @@ mod wasm {
         UI.with(|u| {
             let mut u = u.borrow_mut();
             u.paused = paused;
+            u.guard_reset |= paused;
             u.movement = Vec2::ZERO;
             u.look = Vec2::ZERO;
             u.actions = 0;

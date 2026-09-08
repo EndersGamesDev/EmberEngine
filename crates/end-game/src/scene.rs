@@ -519,6 +519,24 @@ impl Scene {
                 });
             }
         }
+        if game.guard.impact_left > 0.0 {
+            let age = end_game_core::guard::IMPACT_TIME - game.guard.impact_left;
+            for i in 0..14u32 {
+                let direction = Vec3::new(
+                    hash(i * 31) * 2.0 - 1.0,
+                    0.25 + hash(i * 67),
+                    hash(i * 47) * 2.0 - 1.0,
+                )
+                .normalize();
+                frame.particles.push(Particle {
+                    position: game.guard.impact_point + direction * age * 1.7
+                        - Vec3::Y * 4.905 * age * age,
+                    color: Vec3::new(0.90, 0.82, 0.61),
+                    size: Vec2::splat(0.012),
+                    opacity: (game.guard.impact_left / end_game_core::guard::IMPACT_TIME) * 0.85,
+                });
+            }
+        }
         // A sparse, short-lived steel-colored trail makes the fast cut readable.
         if !see_hero {
             if let Some(strike) = game.combat.active {
@@ -526,8 +544,8 @@ impl Scene {
                     && strike.elapsed < strike.kind.follow_end() + 0.045
                 {
                     for age in [0.02, 0.04, 0.06] {
-                        let pose = super::sword_motion::sample(
-                            strike.kind,
+                        let pose = super::sword_motion::sample_strike(
+                            strike,
                             (strike.elapsed - age).max(0.0),
                         );
                         for i in 1..=7 {
@@ -635,7 +653,7 @@ mod tests {
             })
             .sum();
         eprintln!(
-            "V7 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            "V8 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
             textures * 4 / 3
         );
         assert!(triangles < 220_000);
