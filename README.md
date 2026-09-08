@@ -60,7 +60,7 @@ The layering is one-way: `game → scene/simulation → renderer → platform`; 
 
 | Folder | What it holds | README |
 |---|---|---|
-| `.github/` | Issue forms and GitHub Actions workflows | [read](.github/README.md) |
+| `.github/` | Issue forms and GitHub Actions workflows | [read](.github/CONTENTS.md) |
 | `assets/` | Concept references, layouts, runtime GLBs and textures | [read](assets/README.md) |
 | `crates/` | The engine, current games, shared protocols, servers and labs | [per-crate READMEs](crates/) |
 | `deploy/` | Pages publication, host lifecycle, address-book and watchdog scripts | [read](deploy/README.md) |

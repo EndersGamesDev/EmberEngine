@@ -22,6 +22,9 @@ check_repo() {
         [ -n "$dir" ] || continue
         if [ "$dir" = "." ]; then
             readme="README.md"
+        # GitHub renders .github/README.md in place of the root README on the repository landing page.
+        elif [ "$dir" = ".github" ]; then
+            readme=".github/CONTENTS.md"
         else
             readme="$dir/README.md"
         fi
@@ -35,15 +38,16 @@ check_repo() {
 }
 
 self_test() {
-    local started tmp first
+    local started tmp first github_missing
     started="$(date +%s)"
     tmp="$(mktemp -d -t ember-readmetest-XXXXXX)"
     README_TEST_TMP="$tmp"
     trap '[ -z "${README_TEST_TMP:-}" ] || rm -rf "$README_TEST_TMP"' EXIT
 
     git -C "$tmp" init -q
-    mkdir -p "$tmp/documented" "$tmp/generated" "$tmp/undocumented"
+    mkdir -p "$tmp/.github" "$tmp/documented" "$tmp/generated" "$tmp/undocumented"
     printf '# Fixture\n' > "$tmp/README.md"
+    printf '# GitHub fixture\n' > "$tmp/.github/CONTENTS.md"
     printf '# Documented\n' > "$tmp/documented/README.md"
     printf 'tracked\n' > "$tmp/documented/file.txt"
     printf 'Generated from fixture-source.\n' > "$tmp/generated/README.md"
@@ -67,7 +71,20 @@ self_test() {
         return 1
     fi
 
-    echo "SELF-TEST PASS: missing and complete fixtures, $(( $(date +%s) - started ))s"
+    git -C "$tmp" rm -q -f .github/CONTENTS.md
+    mkdir -p "$tmp/.github"
+    printf 'tracked\n' > "$tmp/.github/fixture.yml"
+    git -C "$tmp" add .github/fixture.yml
+    if github_missing="$(check_repo "$tmp" 2>&1)"; then
+        echo "SELF-TEST FAIL: .github without CONTENTS.md was accepted" >&2
+        return 1
+    fi
+    if [ "$github_missing" != "missing README.md: .github" ]; then
+        echo "SELF-TEST FAIL: wrong .github report: $github_missing" >&2
+        return 1
+    fi
+
+    echo "SELF-TEST PASS: missing, complete, and .github exception fixtures, $(( $(date +%s) - started ))s"
 }
 
 if [ "${1:-}" = "--self-test" ]; then

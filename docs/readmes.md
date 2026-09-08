@@ -8,4 +8,6 @@ Generated and vendored directories use a one-line README that identifies the dir
 
 The repository root README introduces the project and links to each top-level folder README; deeper READMEs describe only their own directory and point upward or to focused documentation instead of repeating repository-wide guidance.
 
-Run `bash deploy/tests/test-readmes.sh` to list every tracked directory whose tracked `README.md` is missing. The check deliberately has no exception list: a tracked directory is either documented or reported.
+Run `bash deploy/tests/test-readmes.sh` to list every tracked directory whose tracked `README.md` is missing.
+
+The sole exception is `.github/`, which uses `.github/CONTENTS.md` because GitHub would render `.github/README.md` in place of the root README on the repository landing page.
