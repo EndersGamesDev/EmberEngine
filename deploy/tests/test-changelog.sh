@@ -71,6 +71,7 @@ GAMES="$REPO/web/games.json"
 section_for() {
     case "$1" in
         arena)        echo "Killshot (arena)" ;;
+        end-game)     echo "End Game" ;;
         league)       echo "UltimateLegue (league)" ;;
         fire)         echo "Fire Racer" ;;
         kings)        echo "Four Kings" ;;

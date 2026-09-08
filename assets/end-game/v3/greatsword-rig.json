@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "units": "meters",
+  "node": "wolf_greatsword",
+  "axes": "X blade/tip forward, Y thickness, Z blade width",
+  "guard_origin": [
+    0,
+    0,
+    0
+  ],
+  "blade_tip": [
+    1.85,
+    0,
+    0
+  ],
+  "grip_axis": [
+    1,
+    0,
+    0
+  ],
+  "grip_span_x": [
+    -0.32,
+    -0.025
+  ],
+  "grip_radius": 0.014,
+  "grip_center": [
+    -0.1725,
+    0,
+    0
+  ],
+  "primary_grip": [
+    -0.13,
+    0,
+    0
+  ],
+  "secondary_grip": [
+    -0.25,
+    0,
+    0
+  ],
+  "pommel_center": [
+    -0.37,
+    0,
+    0
+  ],
+  "mount_formula": "Choose weapon rotation R mapping +X to hand power_grip.axis. Weapon translation = hand_socket_world - R * primary_grip. Roll around grip axis is a presentation choice.",
+  "build_seconds": 8.25
+}

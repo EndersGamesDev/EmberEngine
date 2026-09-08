@@ -1,0 +1,1093 @@
+{
+  "schema_version": 1,
+  "units": "meters",
+  "axes": "X fingers-forward, Y dorsal/up, Z right; right thumb-Z, left thumb+Z",
+  "geometry_space": "all vertices in absolute hand bind coordinates, node transforms identity",
+  "shoulder": [
+    -0.57,
+    0,
+    0
+  ],
+  "elbow": [
+    -0.27,
+    0,
+    0
+  ],
+  "wrist": [
+    0,
+    0,
+    0
+  ],
+  "parts": [
+    {
+      "name": "hand_r_upperarm",
+      "parent": null,
+      "pivot": [
+        -0.57,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "ik_upperarm",
+      "endpoint": [
+        -0.27,
+        0,
+        0
+      ],
+      "length": 0.3
+    },
+    {
+      "name": "hand_r_forearm",
+      "parent": "hand_r_upperarm",
+      "pivot": [
+        -0.27,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "ik_forearm",
+      "endpoint": [
+        0,
+        0,
+        0
+      ],
+      "length": 0.27
+    },
+    {
+      "name": "hand_r_palm",
+      "parent": "hand_r_forearm",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "palm"
+    },
+    {
+      "name": "hand_r_index_0",
+      "parent": "hand_r_palm",
+      "pivot": [
+        0.086,
+        0.0,
+        -0.033
+      ],
+      "curl_axis": [
+        -0.06994284733753277,
+        -0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 0,
+      "length": 0.04,
+      "tip": [
+        0.12590204001013117,
+        0.0,
+        -0.03579771389350131
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_index_1",
+      "parent": "hand_r_index_0",
+      "pivot": [
+        0.12590204001013117,
+        0.0,
+        -0.03579771389350131
+      ],
+      "curl_axis": [
+        -0.06994284733753277,
+        -0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 1,
+      "length": 0.024,
+      "tip": [
+        0.14984326401620987,
+        0.0,
+        -0.0374763422296021
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_index_2",
+      "parent": "hand_r_index_1",
+      "pivot": [
+        0.14984326401620987,
+        0.0,
+        -0.0374763422296021
+      ],
+      "curl_axis": [
+        -0.06994284733753277,
+        -0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 2,
+      "length": 0.018,
+      "tip": [
+        0.1677991820207689,
+        0.0,
+        -0.038735313481677684
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_r_middle_0",
+      "parent": "hand_r_palm",
+      "pivot": [
+        0.094,
+        0.0,
+        -0.011
+      ],
+      "curl_axis": [
+        0.0,
+        -0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 0,
+      "length": 0.044,
+      "tip": [
+        0.138,
+        0.0,
+        -0.011
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_middle_1",
+      "parent": "hand_r_middle_0",
+      "pivot": [
+        0.138,
+        0.0,
+        -0.011
+      ],
+      "curl_axis": [
+        0.0,
+        -0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 1,
+      "length": 0.027,
+      "tip": [
+        0.165,
+        0.0,
+        -0.011
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_middle_2",
+      "parent": "hand_r_middle_1",
+      "pivot": [
+        0.165,
+        0.0,
+        -0.011
+      ],
+      "curl_axis": [
+        0.0,
+        -0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 2,
+      "length": 0.019,
+      "tip": [
+        0.184,
+        0.0,
+        -0.011
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_r_ring_0",
+      "parent": "hand_r_palm",
+      "pivot": [
+        0.089,
+        0.0,
+        0.012
+      ],
+      "curl_axis": [
+        0.034992854604336196,
+        0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 0,
+      "length": 0.04,
+      "tip": [
+        0.12897550250093953,
+        0.0,
+        0.013399714184173447
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_ring_1",
+      "parent": "hand_r_ring_0",
+      "pivot": [
+        0.12897550250093953,
+        0.0,
+        0.013399714184173447
+      ],
+      "curl_axis": [
+        0.034992854604336196,
+        0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 1,
+      "length": 0.025,
+      "tip": [
+        0.15396019156402674,
+        0.0,
+        0.014274535549281852
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_ring_2",
+      "parent": "hand_r_ring_1",
+      "pivot": [
+        0.15396019156402674,
+        0.0,
+        0.014274535549281852
+      ],
+      "curl_axis": [
+        0.034992854604336196,
+        0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 2,
+      "length": 0.018,
+      "tip": [
+        0.17194916768944954,
+        0.0,
+        0.014904406932159903
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_r_pinky_0",
+      "parent": "hand_r_palm",
+      "pivot": [
+        0.078,
+        -0.001,
+        0.033
+      ],
+      "curl_axis": [
+        0.09983341664682815,
+        0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 0,
+      "length": 0.031,
+      "tip": [
+        0.1088451291236188,
+        -0.001,
+        0.03609483591605167
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_pinky_1",
+      "parent": "hand_r_pinky_0",
+      "pivot": [
+        0.1088451291236188,
+        -0.001,
+        0.03609483591605167
+      ],
+      "curl_axis": [
+        0.09983341664682815,
+        0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 1,
+      "length": 0.021,
+      "tip": [
+        0.12974021659445734,
+        -0.001,
+        0.03819133766563506
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_r_pinky_2",
+      "parent": "hand_r_pinky_1",
+      "pivot": [
+        0.12974021659445734,
+        -0.001,
+        0.03819133766563506
+      ],
+      "curl_axis": [
+        0.09983341664682815,
+        0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 2,
+      "length": 0.016,
+      "tip": [
+        0.14566028323890576,
+        -0.001,
+        0.03978867233198431
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_r_thumb_0",
+      "parent": "hand_r_palm",
+      "pivot": [
+        0.037,
+        -0.003,
+        -0.044
+      ],
+      "curl_axis": [
+        -0.7915052914417219,
+        -0.0,
+        -0.6111623136448737
+      ],
+      "category": "thumb",
+      "digit": "thumb",
+      "segment": 0,
+      "length": 0.047,
+      "tip": [
+        0.06567286743012168,
+        -0.0058202820423070515,
+        -0.08113371355704284
+      ],
+      "curl_range": [
+        0,
+        1.45
+      ],
+      "opposition_axis": [
+        0,
+        -1,
+        0
+      ],
+      "opposition_range": [
+        0,
+        2.1
+      ]
+    },
+    {
+      "name": "hand_r_thumb_1",
+      "parent": "hand_r_thumb_0",
+      "pivot": [
+        0.06567286743012168,
+        -0.0058202820423070515,
+        -0.08113371355704284
+      ],
+      "curl_axis": [
+        -0.7915052914417219,
+        -0.0,
+        -0.6111623136448737
+      ],
+      "category": "thumb",
+      "digit": "thumb",
+      "segment": 1,
+      "length": 0.036,
+      "tip": [
+        0.08763506375957658,
+        -0.007980498074712452,
+        -0.10957655798371395
+      ],
+      "curl_range": [
+        0,
+        1.45
+      ],
+      "opposition_axis": null,
+      "opposition_range": null
+    },
+    {
+      "name": "hand_l_upperarm",
+      "parent": null,
+      "pivot": [
+        -0.57,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "ik_upperarm",
+      "endpoint": [
+        -0.27,
+        0,
+        0
+      ],
+      "length": 0.3
+    },
+    {
+      "name": "hand_l_forearm",
+      "parent": "hand_l_upperarm",
+      "pivot": [
+        -0.27,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "ik_forearm",
+      "endpoint": [
+        0,
+        0,
+        0
+      ],
+      "length": 0.27
+    },
+    {
+      "name": "hand_l_palm",
+      "parent": "hand_l_forearm",
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "curl_axis": [
+        0,
+        0,
+        -1
+      ],
+      "category": "palm"
+    },
+    {
+      "name": "hand_l_index_0",
+      "parent": "hand_l_palm",
+      "pivot": [
+        0.086,
+        0.0,
+        0.033
+      ],
+      "curl_axis": [
+        0.06994284733753277,
+        0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 0,
+      "length": 0.04,
+      "tip": [
+        0.12590204001013117,
+        0.0,
+        0.03579771389350131
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_index_1",
+      "parent": "hand_l_index_0",
+      "pivot": [
+        0.12590204001013117,
+        0.0,
+        0.03579771389350131
+      ],
+      "curl_axis": [
+        0.06994284733753277,
+        0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 1,
+      "length": 0.024,
+      "tip": [
+        0.14984326401620987,
+        0.0,
+        0.0374763422296021
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_index_2",
+      "parent": "hand_l_index_1",
+      "pivot": [
+        0.14984326401620987,
+        0.0,
+        0.0374763422296021
+      ],
+      "curl_axis": [
+        0.06994284733753277,
+        0.0,
+        -0.9975510002532796
+      ],
+      "category": "finger",
+      "digit": "index",
+      "segment": 2,
+      "length": 0.018,
+      "tip": [
+        0.1677991820207689,
+        0.0,
+        0.038735313481677684
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_l_middle_0",
+      "parent": "hand_l_palm",
+      "pivot": [
+        0.094,
+        0.0,
+        0.011
+      ],
+      "curl_axis": [
+        -0.0,
+        0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 0,
+      "length": 0.044,
+      "tip": [
+        0.138,
+        0.0,
+        0.011
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_middle_1",
+      "parent": "hand_l_middle_0",
+      "pivot": [
+        0.138,
+        0.0,
+        0.011
+      ],
+      "curl_axis": [
+        -0.0,
+        0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 1,
+      "length": 0.027,
+      "tip": [
+        0.165,
+        0.0,
+        0.011
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_middle_2",
+      "parent": "hand_l_middle_1",
+      "pivot": [
+        0.165,
+        0.0,
+        0.011
+      ],
+      "curl_axis": [
+        -0.0,
+        0.0,
+        -1.0
+      ],
+      "category": "finger",
+      "digit": "middle",
+      "segment": 2,
+      "length": 0.019,
+      "tip": [
+        0.184,
+        0.0,
+        0.011
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_l_ring_0",
+      "parent": "hand_l_palm",
+      "pivot": [
+        0.089,
+        0.0,
+        -0.012
+      ],
+      "curl_axis": [
+        -0.034992854604336196,
+        -0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 0,
+      "length": 0.04,
+      "tip": [
+        0.12897550250093953,
+        0.0,
+        -0.013399714184173447
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_ring_1",
+      "parent": "hand_l_ring_0",
+      "pivot": [
+        0.12897550250093953,
+        0.0,
+        -0.013399714184173447
+      ],
+      "curl_axis": [
+        -0.034992854604336196,
+        -0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 1,
+      "length": 0.025,
+      "tip": [
+        0.15396019156402674,
+        0.0,
+        -0.014274535549281852
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_ring_2",
+      "parent": "hand_l_ring_1",
+      "pivot": [
+        0.15396019156402674,
+        0.0,
+        -0.014274535549281852
+      ],
+      "curl_axis": [
+        -0.034992854604336196,
+        -0.0,
+        -0.9993875625234886
+      ],
+      "category": "finger",
+      "digit": "ring",
+      "segment": 2,
+      "length": 0.018,
+      "tip": [
+        0.17194916768944954,
+        0.0,
+        -0.014904406932159903
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_l_pinky_0",
+      "parent": "hand_l_palm",
+      "pivot": [
+        0.078,
+        -0.001,
+        -0.033
+      ],
+      "curl_axis": [
+        -0.09983341664682815,
+        -0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 0,
+      "length": 0.031,
+      "tip": [
+        0.1088451291236188,
+        -0.001,
+        -0.03609483591605167
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_pinky_1",
+      "parent": "hand_l_pinky_0",
+      "pivot": [
+        0.1088451291236188,
+        -0.001,
+        -0.03609483591605167
+      ],
+      "curl_axis": [
+        -0.09983341664682815,
+        -0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 1,
+      "length": 0.021,
+      "tip": [
+        0.12974021659445734,
+        -0.001,
+        -0.03819133766563506
+      ],
+      "curl_range": [
+        0,
+        1.8
+      ]
+    },
+    {
+      "name": "hand_l_pinky_2",
+      "parent": "hand_l_pinky_1",
+      "pivot": [
+        0.12974021659445734,
+        -0.001,
+        -0.03819133766563506
+      ],
+      "curl_axis": [
+        -0.09983341664682815,
+        -0.0,
+        -0.9950041652780258
+      ],
+      "category": "finger",
+      "digit": "pinky",
+      "segment": 2,
+      "length": 0.016,
+      "tip": [
+        0.14566028323890576,
+        -0.001,
+        -0.03978867233198431
+      ],
+      "curl_range": [
+        0,
+        1.5
+      ]
+    },
+    {
+      "name": "hand_l_thumb_0",
+      "parent": "hand_l_palm",
+      "pivot": [
+        0.037,
+        -0.003,
+        0.044
+      ],
+      "curl_axis": [
+        0.7915052914417219,
+        0.0,
+        -0.6111623136448737
+      ],
+      "category": "thumb",
+      "digit": "thumb",
+      "segment": 0,
+      "length": 0.047,
+      "tip": [
+        0.06567286743012168,
+        -0.0058202820423070515,
+        0.08113371355704284
+      ],
+      "curl_range": [
+        0,
+        1.45
+      ],
+      "opposition_axis": [
+        0,
+        1,
+        0
+      ],
+      "opposition_range": [
+        0,
+        2.1
+      ]
+    },
+    {
+      "name": "hand_l_thumb_1",
+      "parent": "hand_l_thumb_0",
+      "pivot": [
+        0.06567286743012168,
+        -0.0058202820423070515,
+        0.08113371355704284
+      ],
+      "curl_axis": [
+        0.7915052914417219,
+        0.0,
+        -0.6111623136448737
+      ],
+      "category": "thumb",
+      "digit": "thumb",
+      "segment": 1,
+      "length": 0.036,
+      "tip": [
+        0.08763506375957658,
+        -0.007980498074712452,
+        0.10957655798371395
+      ],
+      "curl_range": [
+        0,
+        1.45
+      ],
+      "opposition_axis": null,
+      "opposition_range": null
+    }
+  ],
+  "presets": {
+    "open": {},
+    "power_grip": {
+      "index_0": 0.55,
+      "index_1": 1.2,
+      "index_2": 1.0,
+      "middle_0": 0.6,
+      "middle_1": 1.4,
+      "middle_2": 1.1,
+      "ring_0": 0.55,
+      "ring_1": 1.25,
+      "ring_2": 1.05,
+      "pinky_0": 0.3,
+      "pinky_1": 0.95,
+      "pinky_2": 0.6,
+      "thumb_0": {
+        "opposition": 1.78,
+        "curl": 0.27
+      },
+      "thumb_1": 0.4
+    },
+    "pinch": {
+      "index_0": 0.3,
+      "index_1": 1.3,
+      "index_2": 1.2,
+      "middle_0": 0.28,
+      "middle_1": 0.6,
+      "middle_2": 0.45,
+      "ring_0": 0.4,
+      "ring_1": 0.7,
+      "ring_2": 0.55,
+      "pinky_0": 0.55,
+      "pinky_1": 0.8,
+      "pinky_2": 0.65,
+      "thumb_0": {
+        "opposition": 0.8,
+        "curl": 0.22
+      },
+      "thumb_1": 0.72
+    }
+  },
+  "contacts_right": {
+    "power_grip": {
+      "point": [
+        0.101,
+        -0.03,
+        0
+      ],
+      "axis": [
+        -0.21999997250000516,
+        0.0,
+        0.9754998780625229
+      ],
+      "radius": 0.014
+    },
+    "pinch": {
+      "point": [
+        0.091,
+        -0.043,
+        -0.044
+      ],
+      "item_ring_radius": 0.016,
+      "item_contact_point": [
+        0.107,
+        -0.043,
+        -0.044
+      ]
+    }
+  },
+  "contacts_left": {
+    "power_grip": {
+      "point": [
+        0.101,
+        -0.03,
+        0
+      ],
+      "axis": [
+        -0.21999997250000516,
+        0.0,
+        -0.9754998780625229
+      ],
+      "radius": 0.014
+    },
+    "pinch": {
+      "point": [
+        0.091,
+        -0.043,
+        0.044
+      ],
+      "item_ring_radius": 0.016,
+      "item_contact_point": [
+        0.107,
+        -0.043,
+        0.044
+      ]
+    }
+  },
+  "key": {
+    "file": "iron-key.glb",
+    "ring_center": [
+      0,
+      0,
+      0
+    ],
+    "shaft_axis": [
+      1,
+      0,
+      0
+    ],
+    "ring_normal": [
+      0,
+      0,
+      1
+    ],
+    "grip_anchor": [
+      0,
+      0,
+      0
+    ]
+  },
+  "pose_formula": "Dchild = Dparent * T(bind_pivot) * R(opposition_axis,opposition) * R(curl_axis,curl) * T(-bind_pivot). Draw wrist_world * Dchild on bind-coordinate vertices. IK segment draw: joint_world - rotation*bind_pivot.",
+  "tip_audit_right": {
+    "power_grip": {
+      "index_2": [
+        0.09915333241224289,
+        -0.051393043249845505,
+        -0.033922240138053894
+      ],
+      "middle_2": [
+        0.1000952422618866,
+        -0.05018533766269684,
+        -0.010999999940395355
+      ],
+      "ring_2": [
+        0.10017388314008713,
+        -0.050428297370672226,
+        0.012391247786581516
+      ],
+      "pinky_2": [
+        0.10966874659061432,
+        -0.045470207929611206,
+        0.03617746755480766
+      ],
+      "thumb_1": [
+        0.08314661681652069,
+        -0.04224033281207085,
+        0.010337420739233494
+      ]
+    },
+    "pinch": {
+      "index_2": [
+        0.10650233924388885,
+        -0.041840337216854095,
+        -0.03443751484155655
+      ],
+      "middle_2": [
+        0.15802057087421417,
+        -0.05142141878604889,
+        -0.010999999940395355
+      ],
+      "ring_2": [
+        0.13572953641414642,
+        -0.05580050125718117,
+        0.013636200688779354
+      ],
+      "pinky_2": [
+        0.10224730521440506,
+        -0.05224224925041199,
+        0.0354328416287899
+      ],
+      "thumb_1": [
+        0.10120458900928497,
+        -0.04628439247608185,
+        -0.051303595304489136
+      ]
+    }
+  },
+  "build_seconds": 44.76
+}

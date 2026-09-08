@@ -273,10 +273,17 @@
       "desc": "Awaken in a detailed castle prison. Explore weathered masonry, aged timber and handmade ironwork, slip past the sleeping warden and claim the greatsword. Controller, keyboard/mouse and touch controls with adaptive resolution.",
       "versions": [
         {
+          "v": "v3",
+          "version": "3.0.0",
+          "path": "games/end-game/v3/",
+          "live": true,
+          "note": "Articulated wolf gauntlets, finger grips and timed item pickups"
+        },
+        {
           "v": "v2",
           "version": "2.0.0",
           "path": "games/end-game/v2/",
-          "live": true,
+          "live": false,
           "note": "The Living Cell: generated stone and oak surfaces, detailed furnishings, fitted masonry, moving chains, cloth and dripping water"
         },
         {

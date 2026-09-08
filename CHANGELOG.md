@@ -420,6 +420,26 @@ The original local game — the pong classic. Two players, one keyboard, first t
 
 The page itself is older than its arena path: it entered as `web/games/pong/v2/index.html` with the games hub at `b4a9ad1e` and was renamed under `web/games/arena/v0/` at `11d6ab2d`, "rename: move pong lineage under arena paths". That rename is also why the launcher has no arena v2: the number belonged to the pong lineage and was not re-used. v0 is not frozen — the paddle simulation ships inside the arena bundle, so every hub deploy rebuilds this page too. Twenty-five publications, the newest with an on-`main` stamp being r1469 `f28a145f`, which is what serves.
 
+## End Game
+
+### v3 — In preparation
+
+no proto · stamp — · source not recorded · no tag
+
+Hands of the Wolf adds articulated gauntlets and contact-timed floorboard, key, lock and two-hand greatsword interactions. The launcher retains V1 and V2 alongside the new release.
+
+### v2 — 2026-09-08
+
+no proto · stamp — · source `48a37a7115b5cab12f6162752f711d59edc6df89` (not on main) · no tag · published `e36d50bede1d46a543199c61cfd32cc45a6bafdb` (release stamp)
+
+The Living Cell adds generated stone and timber surfaces, fitted masonry, detailed furnishings, and animated chains, cloth, gate and water. The release-local stamp and hashes identify the preserved 2.0.0 bundle.
+
+### v1 — 2026-09-08
+
+no proto · stamp — · source `9f4acfbf96484714efd06f47e784e96a110f8879` (not on main) · no tag · published `d5710a94593320494f7e07342932118c22d55523` (release stamp)
+
+The Awakening introduces the first Ember dungeon chapter, wolf armor, greatsword, material physics, torch lighting, and keyboard/mouse, gamepad and touch controls. The release-local stamp and hashes identify the preserved 1.0.0 bundle.
+
 ## UltimateLegue (league)
 
 ### v4 — 2026-09-07

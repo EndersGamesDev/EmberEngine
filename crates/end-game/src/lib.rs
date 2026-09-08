@@ -1,5 +1,6 @@
-//! End Game v2: a single-player Ember dungeon, native and WASM.
+//! End Game v3: a single-player Ember dungeon, native and WASM.
 mod cell;
+mod hands;
 mod scene;
 
 use ember_engine::{
@@ -71,8 +72,12 @@ mod tests {
         g.update(&tap, STEP * 0.2);
         assert_eq!(g.sim.stage, 0);
         g.update(&InputState::default(), STEP);
-        assert_eq!(g.sim.stage, 1);
+        assert!(g.sim.interaction.is_some());
         g.update(&InputState::default(), STEP * 3.0);
+        assert_eq!(g.sim.stage, 0);
+        for _ in 0..100 {
+            g.update(&InputState::default(), STEP);
+        }
         assert_eq!(g.sim.stage, 1);
     }
 
@@ -103,6 +108,32 @@ mod tests {
         assert_eq!(touch_game.sim.position, expected);
         assert_eq!(touch_game.sim.attack_time, 0.0);
     }
+
+    #[test]
+    fn pausing_freezes_pickup_and_busy_look_and_taps_do_not_queue() {
+        let mut g = game();
+        g.sim.position = end_game_core::InteractionKind::Key.approach();
+        g.sim.stage = 1;
+        g.sim.interact();
+        g.update(&InputState::default(), STEP * 5.0);
+        let elapsed = g.sim.interaction.unwrap().elapsed;
+        UI.with(|u| u.borrow_mut().paused = true);
+        for _ in 0..20 {
+            g.update(&InputState::default(), STEP * 3.0);
+        }
+        assert_eq!(g.sim.interaction.unwrap().elapsed, elapsed);
+        UI.with(|u| u.borrow_mut().paused = false);
+        let input = InputState::from_parts(&[KeyCode::KeyE], &[], (90.0, 90.0), None);
+        let yaw = g.sim.yaw;
+        let pitch = g.sim.pitch;
+        g.update(&input, STEP * 0.2);
+        assert_eq!((g.sim.yaw, g.sim.pitch), (yaw, pitch));
+        for _ in 0..150 {
+            g.update(&InputState::default(), STEP);
+        }
+        assert_eq!(g.sim.stage, 2);
+        assert!(g.sim.interaction.is_none());
+    }
 }
 
 pub fn run() {
@@ -124,6 +155,32 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok(name @ ("lift-board" | "pickup-key" | "unlock" | "draw-sword")) => {
+                use end_game_core::{Interaction, InteractionKind};
+                let (kind, stage) = match name {
+                    "lift-board" => (InteractionKind::Board, 0),
+                    "pickup-key" => (InteractionKind::Key, 1),
+                    "unlock" => (InteractionKind::Lock, 2),
+                    _ => (InteractionKind::Sword, 3),
+                };
+                let elapsed = std::env::var("END_GAME_ACTION_TIME")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1.0);
+                game.sim.stage = stage + u8::from(elapsed >= kind.commit_time());
+                game.sim.position = kind.approach();
+                game.sim.interaction = Some(Interaction {
+                    kind,
+                    elapsed,
+                    origin: kind.approach(),
+                    committed: elapsed >= kind.commit_time(),
+                });
+                game.sim.board_open = if kind == InteractionKind::Board {
+                    game.sim.interaction.unwrap().manipulate()
+                } else {
+                    1.0
+                };
+            }
             Ok("cell-detail") => {
                 game.sim.position = glam::Vec3::new(1.5, 0.0, 1.3);
                 game.sim.yaw = -2.35;
@@ -205,10 +262,14 @@ impl EmberGame for Game {
             }
             pressed &= !32;
             let (dx, dy) = input.mouse_delta();
-            self.sim.yaw += dx * 0.0021 + pad.right[0] * dt * 2.25 + ui.look.x * 0.003;
-            self.sim.pitch = (self.sim.pitch - dy * 0.0021 + pad.right[1] * dt * 1.65
-                - ui.look.y * 0.003)
-                .clamp(-1.2, 1.15);
+            if self.sim.interaction.is_none() {
+                self.sim.yaw += dx * 0.0021 + pad.right[0] * dt * 2.25 + ui.look.x * 0.003;
+                self.sim.pitch = (self.sim.pitch - dy * 0.0021 + pad.right[1] * dt * 1.65
+                    - ui.look.y * 0.003)
+                    .clamp(-1.2, 1.15);
+            } else {
+                pressed = 0;
+            }
             self.wake = (self.wake - dt * 0.35).max(0.0);
             self.accumulated += dt;
             let old_event = self.sim.event;
@@ -258,6 +319,7 @@ impl EmberGame for Game {
             "event": self.sim.event, "message": self.sim.message, "footsteps": self.sim.footsteps,
             "crouched": self.sim.crouched, "pad": input.pad().is_some(), "transformation": self.sim.transformation,
             "position": self.sim.position.to_array(), "time": self.sim.time,
+            "interacting": self.sim.interaction.is_some(),
             "physics": { "gravity": end_game_core::GRAVITY, "crateMass": self.sim.body.mass(), "crateWear": self.sim.body.wear }
         });
         HUD.with(|hud| *hud.borrow_mut() = state.to_string());

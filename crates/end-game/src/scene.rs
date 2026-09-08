@@ -27,6 +27,8 @@ pub struct Scene {
     cot: Model,
     torch: Model,
     props: Vec<Prop>,
+    hands: super::hands::Hands,
+    key: Model,
 }
 
 use super::cell::{Cell, hash};
@@ -144,7 +146,7 @@ impl Scene {
         );
         let sword = model(
             &mut meshes,
-            include_bytes!("../../../assets/end-game/v1/sword.glb"),
+            include_bytes!("../../../assets/end-game/v3/wolf-greatsword.glb"),
         );
         let warden = model(
             &mut meshes,
@@ -212,6 +214,11 @@ impl Scene {
                 sway: *sway,
             })
             .collect();
+        let hands = super::hands::Hands::load(&mut meshes);
+        let key = model(
+            &mut meshes,
+            include_bytes!("../../../assets/end-game/v3/iron-key.glb"),
+        );
         (
             Self {
                 cell,
@@ -224,6 +231,8 @@ impl Scene {
                 cot,
                 torch,
                 props,
+                hands,
+                key,
             },
             meshes,
         )
@@ -232,18 +241,12 @@ impl Scene {
     pub fn frame(&self, game: &Dungeon, third_person: bool, wake: f32) -> Frame {
         let fwd = game.forward();
         let right = Vec3::new(-fwd.z, 0.0, fwd.x);
-        let head = game.position
-            + Vec3::Y
-                * if game.crouched {
-                    1.0
-                } else {
-                    1.65 - wake * 1.18
-                };
-        let view = fwd * game.pitch.cos() + Vec3::Y * game.pitch.sin();
-        let view_rot = Quat::from_rotation_y(-game.yaw) * Quat::from_rotation_x(game.pitch);
-        let view_up = view_rot * Vec3::Y;
+        let presentation = super::hands::view(game, wake);
+        let head = presentation.head;
+        let view = presentation.forward;
+        let motion = self.hands.motion(game, &presentation);
         let transform_view = game.transformation > 0.0;
-        let see_hero = third_person || transform_view;
+        let see_hero = (third_person || transform_view) && game.interaction.is_none();
         let camera = if see_hero {
             let offset = if transform_view {
                 fwd * 2.2 + right * 1.1
@@ -386,32 +389,31 @@ impl Scene {
                 });
             }
         }
-        let plank_angle = 0.025 - game.board_open * 0.245;
+        let (plank_position, plank_rotation) =
+            end_game_core::interaction::board_pose(game.board_open);
         out.push(
             Instance::new(
-                Vec3::new(-1.25, 0.035 + game.board_open * 0.15, 2.1),
+                plank_position,
                 Vec3::new(0.30, 0.07, 1.30),
                 Vec3::new(0.9, 0.84, 0.72),
             )
             .with_mesh(self.oak)
-            .with_rot(Quat::from_rotation_x(plank_angle))
+            .with_rot(plank_rotation)
             .with_surface(0.95, 0.0),
         );
-        if game.stage == 1 {
-            out.push(
-                Instance::new(
-                    Vec3::new(-1.0, 0.08, 2.1),
-                    Vec3::new(0.05, 0.03, 0.24),
-                    Vec3::new(1.0, 0.65, 0.2),
-                )
-                .with_surface(0.3, 0.8),
+        if let Some(key) = motion
+            .key
+            .or_else(|| (game.stage == 1).then(super::hands::ground_key))
+        {
+            draw_model(
+                out,
+                &self.key,
+                key.p,
+                1.0,
+                key.r,
+                Material::Iron,
+                motion.key.is_some(),
             );
-            frame.particles.push(Particle {
-                position: Vec3::new(-1.0, 0.2, 2.1),
-                color: Vec3::new(1.0, 0.64, 0.22),
-                size: Vec2::splat(0.16),
-                opacity: 0.5,
-            });
         }
         let body = &game.body;
         out.push(
@@ -454,13 +456,18 @@ impl Scene {
                 .with_rot(Quat::from_rotation_z(0.35)),
             );
         }
-        if game.stage < 4 {
+        if game.stage < 4
+            && !game
+                .interaction
+                .is_some_and(|a| a.kind == end_game_core::InteractionKind::Sword)
+        {
+            let sword = super::hands::standing_sword();
             draw_model(
                 out,
                 &self.sword,
-                Vec3::new(2.6, 1.9, -4.6),
+                sword.p,
                 1.0,
-                Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2),
+                sword.r,
                 Material::Iron,
                 false,
             );
@@ -493,28 +500,17 @@ impl Scene {
                 );
             }
         } else {
-            // Gauntlets are material-built placeholders until the generated hero is rigged.
-            for side in [-1.0, 1.0] {
-                let p = head + view * 0.43 + right * 0.30 * side - view_up * 0.40;
-                out.push(
-                    Instance::new(p, Vec3::new(0.105, 0.16, 0.20), Vec3::new(0.10, 0.12, 0.15))
-                        .with_rot(view_rot)
-                        .with_mesh(self.iron)
-                        .with_surface(0.48, 0.7)
-                        .without_shadow(),
+            self.hands.draw(out, &presentation, &motion);
+            if let Some(sword) = motion.sword {
+                draw_model(
+                    out,
+                    &self.sword,
+                    sword.p,
+                    1.0,
+                    sword.r,
+                    Material::Iron,
+                    true,
                 );
-            }
-            if game.stage >= 4 {
-                let swing = if game.attack_time > 0.0 {
-                    (game.attack_time / 0.7 * std::f32::consts::PI).sin()
-                } else {
-                    0.0
-                };
-                let p = head + view * 0.47 + right * (0.40 - swing * 0.62) - view_up * 0.36;
-                let rot = view_rot
-                    * Quat::from_rotation_y(std::f32::consts::FRAC_PI_2 - swing * 0.7)
-                    * Quat::from_rotation_z(0.7 - swing * 1.4);
-                draw_model(out, &self.sword, p, 0.7, rot, Material::Iron, true);
             }
         }
         for i in 0..54u32 {
@@ -609,7 +605,7 @@ mod tests {
             })
             .sum();
         eprintln!(
-            "V2 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            "V3 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
             textures * 4 / 3
         );
         assert!(triangles < 220_000);

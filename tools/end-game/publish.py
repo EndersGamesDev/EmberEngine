@@ -13,7 +13,7 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-SLOT = Path('games/end-game/v2')
+SLOT = Path('games/end-game/v3')
 FILES = ['index.html', 'main.js', 'quality.js', 'style.css', 'cover.png', 'prologue.mp4', 'ambience.wav']
 ACCENT = '.card[data-game="end-game"]::before { height: 190px; opacity: .78; background: linear-gradient(0deg, #0b1426, transparent), url("games/end-game/v1/cover.png") center / cover; }'
 
@@ -31,7 +31,7 @@ def assemble(source, destination, commit):
     for name in ['end_game.js', 'end_game_bg.wasm']:
         shutil.copyfile(source / 'web' / SLOT / 'pkg' / name, page / 'pkg' / name)
     manifest = {name: hashlib.sha256((page / name).read_bytes()).hexdigest() for name in FILES + ['pkg/end_game.js', 'pkg/end_game_bg.wasm']}
-    (page / 'version.json').write_text(json.dumps({'game': 'end-game', 'version': '2.0.0', 'source': commit, 'files': manifest}, indent=2) + '\n', encoding='utf-8', newline='\n')
+    (page / 'version.json').write_text(json.dumps({'game': 'end-game', 'version': '3.0.0', 'source': commit, 'files': manifest}, indent=2) + '\n', encoding='utf-8', newline='\n')
     catalog_path = destination / 'games.json'
     current = json.loads(catalog_path.read_text(encoding='utf-8'))
     source_catalog = json.loads((source / 'web/games.json').read_text(encoding='utf-8'))
@@ -63,7 +63,7 @@ def main():
         raise RuntimeError('Invalid WASM artifact')
     git('fetch', 'origin', 'gh-pages')
     # Retain the isolated output for inspection; never delete a computed tree.
-    stage = Path(tempfile.mkdtemp(prefix='end-game-v2-pages-')) / 'pages'
+    stage = Path(tempfile.mkdtemp(prefix='end-game-v3-pages-')) / 'pages'
     git('worktree', 'add', '--detach', str(stage), 'FETCH_HEAD')
     assemble(ROOT, stage, commit)
     git('add', '--', str(SLOT), 'games.json', 'index.html', cwd=stage)

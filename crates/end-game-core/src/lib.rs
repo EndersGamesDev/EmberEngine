@@ -1,8 +1,54 @@
 //! End Game's local, fixed-step dungeon simulation. All lengths are metres.
 use glam::{Vec2, Vec3};
+pub mod interaction;
+pub use interaction::{Interaction, InteractionKind};
 
 pub const STEP: f32 = 1.0 / 60.0;
 pub const GRAVITY: f32 = 9.81;
+
+const COT_MIN: Vec2 = Vec2::new(-2.9, 2.35);
+const COT_MAX: Vec2 = Vec2::new(-1.6, 4.75);
+// The rotated base encloses the upper block of cell.rs's sword monolith.
+const PLINTH_CENTER: Vec2 = Vec2::new(2.6, -4.6);
+const PLINTH_HALF: Vec2 = Vec2::new(0.50, 0.45);
+const PLINTH_YAW: f32 = -0.23;
+
+fn plinth_local(point: Vec2) -> Vec2 {
+    let delta = point - PLINTH_CENTER;
+    let (sin, cos) = PLINTH_YAW.sin_cos();
+    Vec2::new(cos * delta.x - sin * delta.y, sin * delta.x + cos * delta.y)
+}
+
+fn segment_hits_plinth(from: Vec2, to: Vec2) -> bool {
+    segment_hits_rect(
+        plinth_local(from),
+        plinth_local(to),
+        -PLINTH_HALF,
+        PLINTH_HALF,
+    )
+}
+
+fn segment_hits_rect(from: Vec2, to: Vec2, min: Vec2, max: Vec2) -> bool {
+    let direction = to - from;
+    let mut enter: f32 = 0.0;
+    let mut leave: f32 = 1.0;
+    for axis in 0..2 {
+        if direction[axis] == 0.0 {
+            if from[axis] < min[axis] || from[axis] > max[axis] {
+                return false;
+            }
+        } else {
+            let a = (min[axis] - from[axis]) / direction[axis];
+            let b = (max[axis] - from[axis]) / direction[axis];
+            enter = enter.max(a.min(b));
+            leave = leave.min(a.max(b));
+            if enter > leave {
+                return false;
+            }
+        }
+    }
+    true
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Material {
@@ -126,6 +172,7 @@ pub struct Dungeon {
     pub stage: u8,
     pub gate_open: f32,
     pub board_open: f32,
+    pub interaction: Option<Interaction>,
     pub werewolf: bool,
     pub transformation: f32,
     pub attack_time: f32,
@@ -155,6 +202,7 @@ impl Default for Dungeon {
             stage: 0,
             gate_open: 0.0,
             board_open: 0.0,
+            interaction: None,
             werewolf: false,
             transformation: 0.0,
             attack_time: 0.0,
@@ -198,11 +246,16 @@ impl Dungeon {
         Vec2::new(self.position.x - x, self.position.z - z).length()
     }
     pub fn prompt(&self) -> &'static str {
+        if self.interaction.is_some() {
+            return "";
+        }
         match self.stage {
             0 if self.distance(-1.25, 2.1) < 1.6 => "Lift the loose floorboard",
             1 if self.distance(-1.25, 2.1) < 1.6 => "Take the iron key",
             2 if self.distance(0.0, 0.0) < 1.6 => "Unlock the cell",
-            3 if self.distance(2.6, -4.6) < 1.9 => "Draw the greatsword from stone",
+            3 if self.distance(2.6, -4.6) < 1.9 || self.distance(2.6, -2.95) < 1.25 => {
+                "Draw the greatsword from stone"
+            }
             4 if self.distance(0.0, -6.5) < 2.0 => "Strike the gate's chain",
             _ => "",
         }
@@ -212,29 +265,71 @@ impl Dungeon {
         self.event += 1;
     }
     pub fn interact(&mut self) {
-        if self.prompt().is_empty() {
+        // Approaches are authored on the floor. Let an airborne player finish
+        // their jump instead of interpolating them down through the furniture.
+        if self.position.y != 0.0 || self.velocity_y != 0.0 || self.prompt().is_empty() {
             return;
         }
-        match self.stage {
-            0 => {
+        let kind = match self.stage {
+            0 => InteractionKind::Board,
+            1 => InteractionKind::Key,
+            2 => InteractionKind::Lock,
+            3 => InteractionKind::Sword,
+            _ => return,
+        };
+        let approach = kind.approach();
+        // Check the whole segment against furniture: a short corner crossing can
+        // fall between preflight samples and then intersect an animation tick.
+        if segment_hits_rect(
+            Vec2::new(self.position.x, self.position.z),
+            Vec2::new(approach.x, approach.z),
+            COT_MIN,
+            COT_MAX,
+        ) || segment_hits_plinth(
+            Vec2::new(self.position.x, self.position.z),
+            Vec2::new(approach.x, approach.z),
+        ) {
+            self.say("Move to the clear side of the object.");
+            return;
+        }
+        for step in 0..=24 {
+            let p = self.position.lerp(approach, step as f32 / 24.0);
+            if !self.can_stand(p.x, p.z) {
+                self.say("Move to the clear side of the object.");
+                return;
+            }
+        }
+        // The interaction owns the arms and the approach from its first tick.
+        // A dodge started on an earlier tick must not add motion to that path.
+        self.dodge_time = 0.0;
+        self.attack_time = 0.0;
+        self.interaction = Some(Interaction {
+            kind,
+            elapsed: 0.0,
+            origin: self.position,
+            committed: false,
+        });
+    }
+    fn commit_interaction(&mut self, kind: InteractionKind) {
+        match kind {
+            InteractionKind::Board => {
                 self.stage = 1;
                 self.say("A key, hidden beneath the grain.");
             }
-            1 => {
+            InteractionKind::Key => {
                 self.stage = 2;
                 self.say("An iron key. Keep quiet.");
             }
-            2 => {
+            InteractionKind::Lock => {
                 self.stage = 3;
                 self.say("The lock gives. The warden still sleeps.");
             }
-            3 => {
+            InteractionKind::Sword => {
                 self.stage = 4;
                 self.werewolf = true;
-                self.transformation = 2.6;
+                self.transformation = 0.0;
                 self.say("The blade remembers. The wolf awakens.");
             }
-            _ => {}
         }
     }
     fn can_stand(&self, x: f32, z: f32) -> bool {
@@ -252,7 +347,10 @@ impl Dungeon {
             return false;
         }
         // The cot has a physical footprint, not only a picture.
-        if (-2.9..=-1.6).contains(&x) && (2.35..=4.75).contains(&z) {
+        if (COT_MIN.x..=COT_MAX.x).contains(&x) && (COT_MIN.y..=COT_MAX.y).contains(&z) {
+            return false;
+        }
+        if plinth_local(Vec2::new(x, z)).abs().cmple(PLINTH_HALF).all() {
             return false;
         }
         // V2 furnishings stay in the corners, with clearance around their visible solids.
@@ -261,11 +359,36 @@ impl Dungeon {
         }
         true
     }
-    pub fn tick(&mut self, input: Controls) {
+    pub fn tick(&mut self, mut input: Controls) {
         if self.stage == 5 {
             return;
         }
         self.time += STEP;
+        if input.interact && self.interaction.is_none() {
+            self.interact();
+        }
+        let was_interacting = self.interaction.is_some();
+        if let Some(mut action) = self.interaction {
+            action.elapsed += STEP;
+            self.position = action.origin.lerp(
+                action.kind.approach(),
+                interaction::ease(0.0, 0.35, action.elapsed),
+            );
+            self.velocity_y = 0.0;
+            if action.kind == InteractionKind::Board {
+                self.board_open = action.manipulate();
+            }
+            if !action.committed && action.elapsed >= action.kind.commit_time() {
+                self.commit_interaction(action.kind);
+                action.committed = true;
+            }
+            self.interaction = if action.elapsed >= action.kind.duration() {
+                None
+            } else {
+                Some(action)
+            };
+            input = Controls::default();
+        }
         self.gate_open = (self.gate_open
             + if self.stage >= 3 {
                 STEP / 0.85
@@ -273,21 +396,22 @@ impl Dungeon {
                 -STEP * 3.0
             })
         .clamp(0.0, 1.0);
-        self.board_open = (self.board_open
-            + if self.stage > 0 {
-                STEP * 2.0
-            } else {
-                -STEP * 3.0
-            })
-        .clamp(0.0, 1.0);
-        self.crouched = input.crouch;
+        if !was_interacting {
+            self.board_open = (self.board_open
+                + if self.stage > 0 {
+                    STEP * 2.0
+                } else {
+                    -STEP * 3.0
+                })
+            .clamp(0.0, 1.0);
+        }
+        if !was_interacting {
+            self.crouched = input.crouch;
+        }
         self.attack_time = (self.attack_time - STEP).max(0.0);
         self.transformation = (self.transformation - STEP).max(0.0);
         self.dodge_time = (self.dodge_time - STEP).max(0.0);
         self.hit_cooldown = (self.hit_cooldown - STEP).max(0.0);
-        if input.interact {
-            self.interact();
-        }
         if input.transform && self.stage >= 4 && self.transformation == 0.0 {
             self.werewolf = !self.werewolf;
             self.transformation = 1.2;
@@ -329,10 +453,20 @@ impl Dungeon {
         } * if self.dodge_time > 0.0 { 6.5 } else { speed }
             * STEP;
         let old = self.position;
-        if self.can_stand(self.position.x + delta.x, self.position.z) {
+        if self.can_stand(self.position.x + delta.x, self.position.z)
+            && !segment_hits_plinth(
+                Vec2::new(self.position.x, self.position.z),
+                Vec2::new(self.position.x + delta.x, self.position.z),
+            )
+        {
             self.position.x += delta.x;
         }
-        if self.can_stand(self.position.x, self.position.z + delta.z) {
+        if self.can_stand(self.position.x, self.position.z + delta.z)
+            && !segment_hits_plinth(
+                Vec2::new(self.position.x, self.position.z),
+                Vec2::new(self.position.x, self.position.z + delta.z),
+            )
+        {
             self.position.z += delta.z;
         }
         self.stamina = (self.stamina + if running { -18.0 } else { 16.0 } * STEP).clamp(0.0, 100.0);
@@ -420,6 +554,32 @@ impl Dungeon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_interaction(s: &mut Dungeon) {
+        assert!(s.interaction.is_some(), "interaction did not start");
+        for _ in 0..180 {
+            s.tick(Controls::default());
+            if s.interaction.is_none() {
+                return;
+            }
+        }
+        panic!("interaction did not finish: {:?}", s.interaction);
+    }
+
+    fn perform_interaction(s: &mut Dungeon, kind: InteractionKind) {
+        let stage = s.stage;
+        s.tick(Controls {
+            interact: true,
+            ..Controls::default()
+        });
+        assert_eq!(s.interaction.map(|action| action.kind), Some(kind));
+        assert_eq!(
+            s.stage, stage,
+            "interaction committed before reaching the object"
+        );
+        finish_interaction(s);
+    }
+
     #[test]
     fn locked_bars_and_cot_are_solid() {
         let mut s = Dungeon::default();
@@ -439,18 +599,20 @@ mod tests {
         s.interact();
         assert_eq!(s.stage, 0);
         s.position = Vec3::new(-1.25, 0.0, 2.1);
-        s.interact();
-        s.interact();
+        perform_interaction(&mut s, InteractionKind::Board);
+        assert_eq!(s.stage, 1);
+        perform_interaction(&mut s, InteractionKind::Key);
         assert_eq!(s.stage, 2);
         s.position = Vec3::new(0.0, 0.0, 0.8);
         s.interact();
         assert!(!s.can_stand(0.0, 0.0));
+        finish_interaction(&mut s);
         for _ in 0..60 {
             s.tick(Controls::default());
         }
         assert!(s.can_stand(0.0, 0.0));
         s.position = Vec3::new(2.6, 0.0, -4.0);
-        s.interact();
+        perform_interaction(&mut s, InteractionKind::Sword);
         assert!(s.werewolf);
         s.position = Vec3::new(0.0, 0.0, -5.4);
         s.tick(Controls {
@@ -458,6 +620,332 @@ mod tests {
             ..Controls::default()
         });
         assert_eq!(s.stage, 5);
+    }
+
+    #[test]
+    fn interactions_commit_once_after_contact_and_manipulation() {
+        for (stage, kind) in [
+            InteractionKind::Board,
+            InteractionKind::Key,
+            InteractionKind::Lock,
+            InteractionKind::Sword,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut s = Dungeon {
+                stage: stage as u8,
+                position: kind.approach(),
+                board_open: if stage > 0 { 1.0 } else { 0.0 },
+                gate_open: if stage >= 3 { 1.0 } else { 0.0 },
+                ..Dungeon::default()
+            };
+            s.interact();
+            let mut previous_elapsed = 0.0;
+            let mut saw_contact = false;
+            let mut saw_commit = false;
+            for _ in 0..180 {
+                // Repeated requests cannot restart an action, repeat its effect,
+                // or start the next stage while the hand is still recovering.
+                s.tick(Controls {
+                    interact: true,
+                    ..Controls::default()
+                });
+                if let Some(action) = s.interaction {
+                    assert_eq!(action.kind, kind);
+                    assert!(action.elapsed > previous_elapsed);
+                    previous_elapsed = action.elapsed;
+                    if action.elapsed < kind.commit_time() {
+                        assert_eq!(s.stage, stage as u8);
+                        assert_eq!(s.event, 0);
+                        if action.elapsed >= kind.contact_time() {
+                            saw_contact = true;
+                            assert_eq!(action.reach(), 1.0);
+                        }
+                        if kind == InteractionKind::Lock {
+                            assert_eq!(s.gate_open, 0.0);
+                        }
+                        if kind == InteractionKind::Sword {
+                            assert!(!s.werewolf);
+                        }
+                    } else {
+                        saw_commit = true;
+                        assert!(action.committed);
+                        assert_eq!(action.grasp(), 1.0);
+                        assert_eq!(action.manipulate(), 1.0);
+                        assert_eq!(s.stage, stage as u8 + 1);
+                        assert_eq!(s.event, 1);
+                    }
+                } else {
+                    break;
+                }
+            }
+            assert!(
+                saw_contact && saw_commit,
+                "missing contact or commit for {kind:?}"
+            );
+            assert!(s.interaction.is_none());
+            assert_eq!(s.stage, stage as u8 + 1);
+            assert_eq!(s.event, 1);
+            assert_eq!(s.position, kind.approach());
+            for _ in 0..120 {
+                s.tick(Controls::default());
+            }
+            assert_eq!(s.stage, stage as u8 + 1);
+            assert_eq!(s.event, 1, "{kind:?} effect repeated after recovery");
+        }
+    }
+
+    #[test]
+    fn interaction_suppresses_competing_controls_from_start_through_recovery() {
+        let mut s = Dungeon {
+            position: Vec3::new(2.6, 0.0, -3.6),
+            stage: 3,
+            gate_open: 1.0,
+            board_open: 1.0,
+            ..Dungeon::default()
+        };
+        let origin = s.position;
+        let mut elapsed = 0.0;
+        for _ in 0..180 {
+            s.tick(Controls {
+                movement: Vec2::ONE,
+                sprint: true,
+                crouch: true,
+                jump: true,
+                interact: true,
+                attack: true,
+                dodge: true,
+                transform: true,
+            });
+            elapsed += STEP;
+            let expected = origin.lerp(
+                InteractionKind::Sword.approach(),
+                interaction::ease(0.0, 0.35, elapsed),
+            );
+            assert!(s.position.distance(expected) < 0.00001);
+            assert_eq!(s.velocity_y, 0.0);
+            assert_eq!(s.stamina, 100.0);
+            assert_eq!(s.attack_time, 0.0);
+            assert_eq!(s.dodge_time, 0.0);
+            assert_eq!(s.transformation, 0.0);
+            assert_eq!(s.footsteps, 0);
+            assert_eq!(s.alert, 0.0);
+            if s.stage == 4 {
+                assert!(s.werewolf, "transform input overrode the sword interaction");
+            }
+            if s.interaction.is_none() {
+                break;
+            }
+        }
+        assert!(s.interaction.is_none());
+        assert_eq!(s.stage, 4);
+        assert_eq!(s.event, 1);
+
+        // Movement resumes on the next tick, without replaying any held edge.
+        s.tick(Controls {
+            movement: Vec2::X,
+            ..Controls::default()
+        });
+        assert!(s.position.x > InteractionKind::Sword.approach().x);
+        assert_eq!(s.attack_time, 0.0);
+    }
+
+    #[test]
+    fn accepted_interaction_cancels_existing_dodge_and_attack_motion() {
+        let mut s = Dungeon {
+            position: Vec3::new(-1.25, 0.0, 2.1),
+            ..Dungeon::default()
+        };
+        s.tick(Controls {
+            dodge: true,
+            attack: true,
+            ..Controls::default()
+        });
+        assert!(s.dodge_time > 0.0 && s.attack_time > 0.0);
+        s.interact();
+        assert_eq!(s.dodge_time, 0.0);
+        assert_eq!(s.attack_time, 0.0);
+        let origin = s.position;
+        for _ in 0..30 {
+            s.tick(Controls::default());
+            let action = s.interaction.unwrap();
+            let expected = origin.lerp(
+                action.kind.approach(),
+                interaction::ease(0.0, 0.35, action.elapsed),
+            );
+            assert!(s.position.distance(expected) < 0.00001);
+        }
+        finish_interaction(&mut s);
+        let recovered = s.position;
+        s.tick(Controls::default());
+        assert_eq!(s.position, recovered);
+    }
+
+    #[test]
+    fn airborne_interaction_waits_for_a_grounded_request() {
+        let mut s = Dungeon {
+            position: Vec3::new(-1.25, 0.0, 2.1),
+            ..Dungeon::default()
+        };
+        s.tick(Controls {
+            jump: true,
+            ..Controls::default()
+        });
+        assert!(s.position.y > 0.0);
+        let mut expected = s.clone();
+        expected.tick(Controls::default());
+        s.tick(Controls {
+            interact: true,
+            ..Controls::default()
+        });
+        assert!(s.interaction.is_none());
+        assert_eq!(s.position, expected.position);
+        assert_eq!(s.velocity_y, expected.velocity_y);
+        assert_eq!(s.stage, 0);
+        for _ in 0..120 {
+            s.tick(Controls::default());
+        }
+        assert_eq!(s.position.y, 0.0);
+        assert!(
+            s.interaction.is_none(),
+            "an airborne request was incorrectly queued"
+        );
+        perform_interaction(&mut s, InteractionKind::Board);
+        assert_eq!(s.stage, 1);
+    }
+
+    #[test]
+    fn approach_rejects_a_cot_crossing_even_when_both_endpoints_are_clear() {
+        for origin in [
+            Vec3::new(-2.5, 0.0, 2.2),
+            // This corner crossing falls between the old 24 preflight samples.
+            Vec3::new(-2.01, 0.0, 1.49),
+        ] {
+            let mut s = Dungeon {
+                position: origin,
+                ..Dungeon::default()
+            };
+            let approach = InteractionKind::Board.approach();
+            assert!(s.can_stand(origin.x, origin.z));
+            assert!(s.can_stand(approach.x, approach.z));
+            assert!(!s.prompt().is_empty());
+            s.tick(Controls {
+                interact: true,
+                ..Controls::default()
+            });
+            assert!(
+                s.interaction.is_none(),
+                "approach crossed the cot from {origin:?}"
+            );
+            assert_eq!(s.position, origin);
+            assert_eq!(s.stage, 0);
+            assert_eq!(s.message, "Move to the clear side of the object.");
+            for _ in 0..120 {
+                s.tick(Controls::default());
+            }
+            assert_eq!(s.stage, 0);
+            assert_eq!(s.position, origin);
+        }
+    }
+
+    #[test]
+    fn sword_plinth_blocks_far_side_approaches_and_walking() {
+        let mut s = Dungeon {
+            position: Vec3::new(2.6, 0.0, -5.5),
+            stage: 3,
+            gate_open: 1.0,
+            ..Dungeon::default()
+        };
+        let origin = s.position;
+        let approach = InteractionKind::Sword.approach();
+        assert!(!s.can_stand(2.6, -4.6));
+        // Outside the rotated solid, even though inside its axis-aligned bounds.
+        assert!(s.can_stand(2.04, -4.10));
+        assert!(s.can_stand(origin.x, origin.z));
+        assert!(s.can_stand(approach.x, approach.z));
+        assert!(!s.prompt().is_empty());
+        s.tick(Controls {
+            interact: true,
+            ..Controls::default()
+        });
+        assert!(s.interaction.is_none());
+        assert_eq!(s.position, origin);
+        assert_eq!(s.stage, 3);
+        assert_eq!(s.message, "Move to the clear side of the object.");
+
+        s.position = Vec3::new(2.6, 0.0, -3.8);
+        for _ in 0..120 {
+            s.tick(Controls {
+                movement: Vec2::Y,
+                ..Controls::default()
+            });
+            assert!(s.can_stand(s.position.x, s.position.z));
+            assert!(s.position.z > -4.15, "walked through the monolith");
+        }
+        perform_interaction(&mut s, InteractionKind::Sword);
+        assert_eq!(s.stage, 4);
+    }
+
+    #[test]
+    fn dodge_cannot_skip_a_rotated_plinth_corner() {
+        let mut s = Dungeon {
+            position: Vec3::new(2.94, 0.0, -4.05),
+            stage: 3,
+            gate_open: 1.0,
+            ..Dungeon::default()
+        };
+        let origin = s.position;
+        assert!(s.can_stand(origin.x, origin.z));
+        assert!(s.can_stand(origin.x + 6.5 * STEP, origin.z));
+        s.tick(Controls {
+            movement: Vec2::X,
+            dodge: true,
+            ..Controls::default()
+        });
+        assert_eq!(
+            s.position, origin,
+            "dodge tunneled through the stone corner"
+        );
+    }
+
+    #[test]
+    fn accepted_approach_remains_in_clear_space_and_finishes_before_contact() {
+        for (stage, kind, origin) in [
+            (0, InteractionKind::Board, Vec3::new(-0.5, 0.0, 2.2)),
+            (1, InteractionKind::Key, Vec3::new(-1.25, 0.0, 3.12)),
+            (2, InteractionKind::Lock, Vec3::new(0.0, 0.0, 1.4)),
+            (3, InteractionKind::Sword, Vec3::new(2.2, 0.0, -3.3)),
+        ] {
+            let mut s = Dungeon {
+                position: origin,
+                stage,
+                gate_open: if stage >= 3 { 1.0 } else { 0.0 },
+                ..Dungeon::default()
+            };
+            s.interact();
+            assert!(s.interaction.is_some(), "{kind:?} approach rejected");
+            for _ in 0..180 {
+                let previous = s.position;
+                s.tick(Controls::default());
+                assert!(s.can_stand(s.position.x, s.position.z));
+                assert_eq!(s.position.y, 0.0);
+                assert!(
+                    s.position.distance(previous) < 0.15,
+                    "{kind:?} approach teleported"
+                );
+                if let Some(action) = s.interaction {
+                    if action.elapsed >= 0.35 {
+                        assert_eq!(s.position, kind.approach());
+                        assert!(action.elapsed >= kind.contact_time() || s.stage == stage);
+                    }
+                } else {
+                    break;
+                }
+            }
+            assert!(s.interaction.is_none());
+            assert_eq!(s.stage, stage + 1);
+        }
     }
     #[test]
     fn density_controls_impulse_and_gravity_is_mass_independent() {
@@ -523,13 +1011,13 @@ mod tests {
         }
         let mut s = Dungeon::default();
         walk(&mut s, -1.25, 2.1);
-        s.interact();
-        s.interact();
+        perform_interaction(&mut s, InteractionKind::Board);
+        perform_interaction(&mut s, InteractionKind::Key);
         walk(&mut s, 0.0, 0.8);
-        s.interact();
+        perform_interaction(&mut s, InteractionKind::Lock);
         walk(&mut s, 0.0, -1.0);
         walk(&mut s, 2.6, -3.5);
-        s.interact();
+        perform_interaction(&mut s, InteractionKind::Sword);
         assert_eq!(s.stage, 4);
         walk(&mut s, 0.0, -5.5);
         s.yaw = 0.0;
