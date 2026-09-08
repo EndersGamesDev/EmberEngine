@@ -2,6 +2,20 @@
 
 set -u
 
+start_ns=$(date +%s%N)
+subjects_checked=0
+subjects_rejected=0
+
+report_result() {
+    exit_status=$?
+    end_ns=$(date +%s%N)
+    wall_ms=$(((end_ns - start_ns) / 1000000))
+    printf 'test-commit-messages: %d subjects checked, %d rejected, wall %d ms\n' "$subjects_checked" "$subjects_rejected" "$wall_ms"
+    return "$exit_status"
+}
+
+trap report_result EXIT
+
 subject_pattern='^(feat|fix|refactor|docs|test|chore|build|ci|perf|style|revert)\([a-z0-9]([a-z0-9-]*[a-z0-9])?\)!?: [a-z]([[:print:]]*[^.])?$'
 
 valid_subject() {
@@ -17,7 +31,9 @@ self_test() {
     failures=0
 
     while IFS= read -r subject; do
+        subjects_checked=$((subjects_checked + 1))
         if ! valid_subject "$subject"; then
+            subjects_rejected=$((subjects_rejected + 1))
             printf 'rejected known-good subject: %s\n' "$subject" >&2
             failures=1
         fi
@@ -30,9 +46,12 @@ docs(workspace): document why verification results belong in every commit body f
 GOOD
 
     while IFS= read -r subject; do
+        subjects_checked=$((subjects_checked + 1))
         if valid_subject "$subject"; then
             printf 'accepted known-bad subject: %s\n' "$subject" >&2
             failures=1
+        else
+            subjects_rejected=$((subjects_rejected + 1))
         fi
     done <<'BAD'
 feature(arena): add spectator controls
@@ -49,7 +68,7 @@ BAD
         return 1
     fi
 
-    printf 'commit-message self-test passed\n'
+    return 0
 }
 
 resolve_base() {
@@ -77,7 +96,9 @@ base=$(resolve_base "${1:-}") || exit 2
 failures=0
 
 while IFS= read -r subject; do
+    subjects_checked=$((subjects_checked + 1))
     if ! valid_subject "$subject"; then
+        subjects_rejected=$((subjects_rejected + 1))
         printf '%s\n' "$subject"
         failures=1
     fi
