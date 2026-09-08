@@ -5,9 +5,9 @@ use ember_julibrot_math::{
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpRefusalReason,
-    apply_homography, compose_homography, height_for_record, identity_warp_rows,
-    pack_homography_rows,
+    LatticePair, MeshError, PaletteRecord, SceneFrame, TilePoseHeader, TileRenderKey, WarpKind,
+    WarpPlan, WarpRefusalReason, apply_homography, compose_homography, height_for_record,
+    identity_warp_rows, pack_homography_rows,
 };
 
 /// The escape record status the kernel writes for a pixel with no plane point.
@@ -52,6 +52,27 @@ impl Warp {
     #[must_use]
     pub fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
         reproject(last_frame, from_pose, to_pose)
+    }
+
+    /// Packs the source-pose lanes of one version-one descriptor header.
+    ///
+    /// Policy and lifetime lanes arrive in `header` and remain unchanged except where the ABI
+    /// assigns source identity, pose, extent, rectangle, map, scale, or provenance.
+    #[must_use]
+    pub fn pack_descriptor_header(
+        render: &TileRenderKey,
+        header: &TilePoseHeader,
+    ) -> Option<TilePoseHeader> {
+        crate::tile::pack_descriptor_header(render, header)
+    }
+
+    /// Unpacks one version-one descriptor header into its projection-only finite source pose.
+    ///
+    /// Epoch and reference-centre displacement are not descriptor lanes and are returned neutral;
+    /// semantic equality remains the authority of the accompanying engine-neutral keys.
+    #[must_use]
+    pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
+        crate::tile::unpack_descriptor_header(header)
     }
 }
 
@@ -416,7 +437,7 @@ pub fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<
     ])
 }
 
-fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
+pub(crate) fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
     let determinant = matrix[2].mul_add(
         matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
         matrix[0].mul_add(
@@ -1673,6 +1694,65 @@ mod tests {
                 plan: entry(&case.frame, &case.from_pose, &case.to_pose),
             })
             .collect()
+    }
+
+    #[test]
+    fn frozen_planner_corpus_round_trips_descriptor_source_poses() {
+        use bytemuck::Zeroable;
+
+        /// Packed factors may move by one ulp after the f32 pair is decoded and packed again.
+        const FROZEN_FACTOR_LANE_TOLERANCE: f32 = 2.0 * f32::EPSILON;
+        /// Two-word finite origins retain these corpus values within one residual rounding.
+        const FROZEN_ORIGIN_TOLERANCE: f64 = 1.0e-12;
+
+        for case in named_planner_corpus() {
+            for pose in [case.from_pose, case.to_pose] {
+                let rect = crate::SourcePixelRect::from_extent(
+                    0,
+                    0,
+                    pose.grid_width,
+                    pose.grid_height,
+                );
+                let render = TileRenderKey::from_pose(&pose, rect);
+                let packed =
+                    Warp::pack_descriptor_header(&render, &TilePoseHeader::zeroed());
+                if pose.grid_width == 0
+                    || pose.grid_height == 0
+                    || matches!(pose.map, PoseMap::EdgeOn)
+                {
+                    assert!(packed.is_none(), "{} must refuse", case.name);
+                    continue;
+                }
+                let packed = packed.unwrap_or_else(|| panic!("{} must pack", case.name));
+                let unpacked = Warp::unpack_descriptor_header(&packed)
+                    .unwrap_or_else(|| panic!("{} must unpack", case.name));
+                for (actual, expected) in unpacked.plane_origin.into_iter().zip(pose.plane_origin) {
+                    assert!(
+                        (actual - expected).abs() <= FROZEN_ORIGIN_TOLERANCE,
+                        "{} origin moved",
+                        case.name
+                    );
+                }
+                let round_key = TileRenderKey::from_pose(&unpacked, rect);
+                let round = Warp::pack_descriptor_header(&round_key, &TilePoseHeader::zeroed())
+                    .unwrap_or_else(|| panic!("{} must repack", case.name));
+                for (actual, expected) in round.texels[2..21]
+                    .iter()
+                    .flat_map(|texel| texel.lanes)
+                    .zip(
+                        packed.texels[2..21]
+                            .iter()
+                            .flat_map(|texel| texel.lanes),
+                    )
+                {
+                    assert!(
+                        (actual - expected).abs() <= FROZEN_FACTOR_LANE_TOLERANCE,
+                        "{} descriptor lane moved",
+                        case.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]
