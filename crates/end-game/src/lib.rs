@@ -455,15 +455,36 @@ pub fn run() {
                 if game.sim.warden_ai.phase == WardenPhase::Hunting {
                     game.sim.warden_ai.walk_blend = 1.0;
                 }
+                let interrupted_attack = std::env::var("END_GAME_WARDEN_INTERRUPT_TIME")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|t| t.is_finite())
+                    .filter(|_| {
+                        matches!(
+                            game.sim.warden_ai.phase,
+                            WardenPhase::Staggered | WardenPhase::Dead
+                        )
+                    });
+                if let Some(attack_time) = interrupted_attack {
+                    let killed = game.sim.warden_ai.phase == WardenPhase::Dead;
+                    let elapsed = game.sim.warden_ai.elapsed;
+                    game.sim.warden_ai.phase = WardenPhase::Attacking;
+                    game.sim.warden_ai.elapsed =
+                        attack_time.clamp(0.0, end_game_core::warden::KNIFE_DURATION);
+                    game.sim.warden_ai.on_sword_hit(true, killed);
+                    game.sim.warden_ai.elapsed = elapsed;
+                }
                 if game.sim.warden_ai.phase == WardenPhase::Staggered {
                     game.sim.warden_ai.flinch_left = (0.22 - game.sim.warden_ai.elapsed).max(0.0);
                 }
                 if game.sim.warden_ai.phase == WardenPhase::Dead {
                     game.sim.warden_health = 0.0;
-                    let elapsed = game.sim.warden_ai.elapsed;
-                    game.sim.warden_ai.phase = WardenPhase::Hunting;
-                    game.sim.warden_ai.die();
-                    game.sim.warden_ai.elapsed = elapsed;
+                    if interrupted_attack.is_none() {
+                        let elapsed = game.sim.warden_ai.elapsed;
+                        game.sim.warden_ai.phase = WardenPhase::Hunting;
+                        game.sim.warden_ai.die();
+                        game.sim.warden_ai.elapsed = elapsed;
+                    }
                 }
             }
             Ok("combat") => {

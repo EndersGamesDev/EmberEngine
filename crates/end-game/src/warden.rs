@@ -1,9 +1,9 @@
 //! Articulated prison warden. Every motion is evaluated from the fixed-step AI state.
-use ember_engine::{Instance, MeshData, assets::load_glb};
+use ember_engine::{assets::load_glb, Instance, MeshData};
 use end_game_core::{
-    Dungeon,
     interaction::ease,
-    warden::{KNIFE_CONTACT, KNIFE_DURATION, KNIFE_FOLLOW, KNIFE_WINDUP, WardenPhase},
+    warden::{WardenPhase, KNIFE_CONTACT, KNIFE_DURATION, KNIFE_FOLLOW, KNIFE_WINDUP},
+    Dungeon,
 };
 use glam::{Quat, Vec3};
 use serde_json::Value;
@@ -152,7 +152,7 @@ impl WardenRig {
         };
         let walking = ai.walk_blend * (1.0 - dead);
         let walk = ai.walk_phase;
-        let flinch = (ai.flinch_left / 0.22).clamp(0.0, 1.0);
+        let flinch = ai.flinch_amount();
         let sleeping = ai.phase == WardenPhase::Sleeping;
         let mut joints = [Joint::IDENTITY; 20];
         let mut pelvis = Vec3::new(0.0, 0.67 + 0.31 * stand, 0.40 * (1.0 - stand));
@@ -170,16 +170,16 @@ impl WardenRig {
         // keeps its forward weight shift instead of snapping to the idle torso.
         lean -= (stand * std::f32::consts::PI).sin() * 0.24;
         let mut twist = walking * walk.sin() * 0.035;
-        if ai.phase == WardenPhase::Attacking {
-            let t = ai.elapsed;
+        if let Some((t, weight)) = ai.attack_pose() {
             let anticipation = ease(0.0, KNIFE_WINDUP, t);
             let contact = ease(KNIFE_WINDUP, KNIFE_CONTACT, t);
             let recovery = ease(KNIFE_FOLLOW, KNIFE_DURATION, t);
-            lean += (-0.07 * anticipation - 0.13 * contact) * (1.0 - recovery);
-            twist += (0.20 * anticipation - 0.38 * contact) * (1.0 - recovery);
+            lean += (-0.07 * anticipation - 0.13 * contact) * (1.0 - recovery) * weight;
+            twist += (0.20 * anticipation - 0.38 * contact) * (1.0 - recovery) * weight;
         }
         lean += flinch * 0.16;
         lean = lean * (1.0 - dead) - 1.22 * dead;
+        twist *= 1.0 - dead;
         joints[1] = joints[0].child(
             self.parts[1].pivot - self.parts[0].pivot,
             Quat::from_rotation_x(lean) * Quat::from_rotation_y(twist),
@@ -273,7 +273,7 @@ impl WardenRig {
                 sheath_wrist.mix(right_ready, ease(0.18, 1.0, draw))
             };
         }
-        if ai.phase == WardenPhase::Attacking {
+        if let Some((t, weight)) = ai.attack_pose() {
             let wind = Joint {
                 p: Vec3::new(0.42, 1.56, -0.10),
                 r: Quat::from_rotation_z(1.05)
@@ -292,8 +292,7 @@ impl WardenRig {
                     * Quat::from_rotation_y(2.35)
                     * Quat::from_rotation_x(0.80),
             };
-            let t = ai.elapsed;
-            targets[0] = if t < KNIFE_WINDUP {
+            let attack = if t < KNIFE_WINDUP {
                 right_ready.mix(wind, ease(0.0, KNIFE_WINDUP * 0.80, t))
             } else if t < KNIFE_CONTACT {
                 let u = ((t - KNIFE_WINDUP) / (KNIFE_CONTACT - KNIFE_WINDUP)).clamp(0.0, 1.0);
@@ -304,12 +303,13 @@ impl WardenRig {
             } else {
                 follow.mix(right_ready, ease(KNIFE_FOLLOW, KNIFE_DURATION, t))
             };
+            targets[0] = right_ready.mix(attack, weight);
             targets[1] = left_ready.mix(
                 Joint {
                     p: Vec3::new(-0.34, 1.36, -0.21),
                     r: Quat::from_rotation_x(0.60),
                 },
-                ease(0.0, KNIFE_WINDUP, t) * (1.0 - ease(KNIFE_FOLLOW, KNIFE_DURATION, t)),
+                ease(0.0, KNIFE_WINDUP, t) * (1.0 - ease(KNIFE_FOLLOW, KNIFE_DURATION, t)) * weight,
             );
         }
         for (side, upper, forearm, hand) in [(0, 4, 5, 6), (1, 11, 12, 13)] {
@@ -323,13 +323,12 @@ impl WardenRig {
                 dead,
             );
             let shoulder = joints[1].point(self.parts[upper].pivot - self.parts[1].pivot);
-            let chain = two_bone(
-                shoulder,
-                targets[side].p,
-                0.32,
-                0.29,
-                Vec3::new(sign, -0.20, 0.25),
-            );
+            // As a raised hand falls past its shoulder, a fixed rearward pole
+            // can align with the arm and flip the elbow. Bring the bend plane
+            // forward smoothly before the wrist crosses shoulder height.
+            let pole = Vec3::new(sign, -0.20, 0.25)
+                .lerp(Vec3::new(sign, 0.0, -1.5), ease(0.0, 0.30, dead));
+            let chain = two_bone(shoulder, targets[side].p, 0.32, 0.29, pole);
             joints[upper] = bone(shoulder, chain.middle, targets[side].r);
             joints[forearm] = bone(chain.middle, chain.end, targets[side].r);
             joints[hand] = Joint {
@@ -379,6 +378,97 @@ impl WardenRig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_same_pose(before: &[Joint; 20], after: &[Joint; 20]) {
+        for (index, (a, b)) in before.iter().zip(after).enumerate() {
+            assert!(
+                a.p.abs_diff_eq(b.p, 0.0001),
+                "{} position: {:?} -> {:?}",
+                NAMES[index],
+                a.p,
+                b.p
+            );
+            assert!(
+                a.r.abs_diff_eq(b.r, 0.0001),
+                "{} rotation: {:?} -> {:?}",
+                NAMES[index],
+                a.r,
+                b.r
+            );
+        }
+    }
+
+    #[test]
+    fn knife_interruptions_start_at_the_struck_pose_then_settle_without_detaching() {
+        let mut meshes = Vec::new();
+        let rig = WardenRig::load(&mut meshes);
+        let knife = &meshes[rig.parts[KNIFE].mesh as usize - 1];
+        for time in [KNIFE_WINDUP, KNIFE_CONTACT] {
+            for killed in [false, true] {
+                let mut game = Dungeon::default();
+                game.warden_ai.phase = WardenPhase::Attacking;
+                game.warden_ai.elapsed = time;
+                let before = rig.pose(&game).0;
+                game.warden_ai.on_sword_hit(true, killed);
+                assert_same_pose(&before, &rig.pose(&game).0);
+                let mut previous = before;
+                let duration = if killed {
+                    1.05
+                } else {
+                    end_game_core::warden::STAGGER_DURATION
+                };
+                let ticks = (duration / end_game_core::STEP).ceil() as u32;
+                for tick in 1..=ticks {
+                    let elapsed = tick as f32 * end_game_core::STEP;
+                    game.warden_ai.elapsed = elapsed;
+                    game.warden_ai.flinch_left =
+                        (end_game_core::warden::FLINCH_DURATION - elapsed).max(0.0);
+                    let (joints, chains) = rig.pose(&game);
+                    for chain in chains {
+                        assert!(
+                            chain.reached,
+                            "interrupted {time}, killed {killed}, tick {tick}"
+                        );
+                    }
+                    for (index, (a, b)) in previous.iter().zip(joints).enumerate() {
+                        assert!(a.p.distance(b.p) < 0.09, "{} jumps at interrupted attack {time}, killed {killed}, tick {tick}: {:?} -> {:?}", NAMES[index], a.p, b.p);
+                    }
+                    let socket = joints[6].point(rig.parts[KNIFE].pivot - rig.parts[6].pivot);
+                    assert!(socket.distance(joints[KNIFE].p) < 0.0001);
+                    for vertex in &knife.vertices {
+                        let p = joints[KNIFE]
+                            .point(Vec3::from_array(vertex.pos) - rig.parts[KNIFE].pivot);
+                        assert!(p.y >= -0.001, "interrupted knife below ground: {p:?}");
+                    }
+                    previous = joints;
+                }
+                let mut settled = Dungeon::default();
+                settled.warden_ai.phase = WardenPhase::Hunting;
+                if killed {
+                    settled.warden_ai.die();
+                    settled.warden_ai.elapsed = duration;
+                }
+                assert_same_pose(&rig.pose(&settled).0, &rig.pose(&game).0);
+            }
+        }
+    }
+
+    #[test]
+    fn fatal_hit_during_stagger_keeps_the_partially_recovered_pose() {
+        let rig = WardenRig::load(&mut Vec::new());
+        for time in [KNIFE_WINDUP, KNIFE_CONTACT] {
+            let mut game = Dungeon::default();
+            game.warden_ai.phase = WardenPhase::Attacking;
+            game.warden_ai.elapsed = time;
+            game.warden_ai.on_sword_hit(true, false);
+            game.warden_ai.elapsed = 0.13;
+            game.warden_ai.flinch_left = end_game_core::warden::FLINCH_DURATION - 0.13;
+            let before = rig.pose(&game).0;
+            game.warden_ai.on_sword_hit(false, true);
+            assert_same_pose(&before, &rig.pose(&game).0);
+        }
+    }
+
     #[test]
     fn collapse_preserves_partial_rise_and_keeps_the_knife_above_ground() {
         let mut meshes = Vec::new();
@@ -389,6 +479,8 @@ mod tests {
             (WardenPhase::Waking, 0.4),
             (WardenPhase::Waking, 0.9),
             (WardenPhase::Hunting, 0.0),
+            (WardenPhase::Attacking, KNIFE_WINDUP),
+            (WardenPhase::Attacking, KNIFE_CONTACT),
         ] {
             let mut game = Dungeon::default();
             game.warden_ai.phase = start_phase;
@@ -478,16 +570,12 @@ mod tests {
                 let mut instances = Vec::new();
                 rig.draw(&mut instances, &game);
                 assert_eq!(instances.len(), 20);
-                assert!(
-                    instances
-                        .iter()
-                        .all(|p| p.position.is_finite() && p.rot.is_finite())
-                );
-                assert!(
-                    instances[CHAIR]
-                        .position
-                        .abs_diff_eq(INITIAL_POSITION, 1e-6)
-                );
+                assert!(instances
+                    .iter()
+                    .all(|p| p.position.is_finite() && p.rot.is_finite()));
+                assert!(instances[CHAIR]
+                    .position
+                    .abs_diff_eq(INITIAL_POSITION, 1e-6));
             }
         }
     }
