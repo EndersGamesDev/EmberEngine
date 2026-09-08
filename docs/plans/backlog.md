@@ -332,3 +332,4 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - Add calibrated indoor light transport, shadowed local lights and normal/roughness texture maps before claiming photorealistic surfaces; v1 uses base color, scalar materials and unshadowed local torch lights.
 - Extend End Game beyond the first dungeon chapter with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.
 - Validate End Game on a physical DualSense and representative iOS/Android devices, including controller haptics, touch cancellation, fullscreen and measured 5K frame pacing.
+- Re-run the repository's Linux-host deployment suites on Linux: the broader V3 validation encountered Git Bash failures in host-kings, host-prebuilt, republish-host and host-loopback; the End Game Pages publisher uses the independently checked scoped assembly path.

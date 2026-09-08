@@ -16,6 +16,10 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v3
+
+Hands of the Wolf replaces the box gauntlets with 34 articulated parts, finger curl, thumb opposition and measured key/sword grips. Grounded, collision-checked approaches lead into contact, grasp, lift, stow and recovery; the key follows its ring socket, the gate waits for key withdrawal, and the greatsword lifts its shallow-seated tip clear before rotating. The generated three-asset kit is 644,048 bytes. Fourteen core tests, eight client/geometry/IK/input tests, three resolution tests, exported GLB checks, native contact captures and scoped publication preservation pass; the browser bundle is 24,757,936 bytes. Browser gameplay, physical DualSense/mobile devices and 5K frame pacing remain unverified (`21c289ef`).
+
 ### End Game v2
 
 The Living Cell replaces the first chapter's blockout architecture with smaller beveled and chipped masonry, generated limestone and oak surfaces, recessed mortar and barred window, fitted roof timbers, layered cage ironwork, and a fully lined barrel vault. The gate and loose floorboard animate; the gate's physical aperture follows its opening. The launcher and both publishers select v2 while retaining the original v1 page and bundle (`1ca5514a`).
