@@ -35,8 +35,8 @@
 #               source `<sha>` (not on main)
 #               source not in repository (`<sha>`)
 #               source not recorded
-#   <tag>       tag `<name>`
-#               tag `<name>` (points at `<sha>`)
+#   <tag>       tag `<series>-MAJOR.MINOR.PATCH`
+#               tag `<series>-MAJOR.MINOR.PATCH` (points at `<sha>`)
 #               no tag
 # A version the launcher lists but the published branch does not carry yet is
 # a legitimate state, not a gap: it takes `source not recorded · no tag` and
@@ -80,10 +80,10 @@ section_for() {
     esac
 }
 
-# Tags that predate this ledger. They are lightweight commit refs and are
-# deliberately never rewritten, so the annotated-object requirement below
-# cannot apply to them.
-PREEXISTING_TAGS="v20 v22"
+# Two legacy names point directly at commits rather than annotated tag objects.
+# They remain accepted only while the migration fallback resolves an absent
+# three-grade tag to its old name.
+LEGACY_LIGHTWEIGHT_TAGS="v20 v22"
 
 PARSED="$HERE/.changelog-parsed"
 LAUNCHER="$HERE/.changelog-launcher"
@@ -167,6 +167,10 @@ while i < len(lines):
         name, target = parts[1], parts[3]
     else:
         bad.append("%s %s: bad tag field %r" % (section, version, tag))
+        continue
+    if name != "-" and not re.fullmatch(r"[a-z0-9-]+-[0-9]+\.[0-9]+\.[0-9]+", name):
+        bad.append("%s %s: tag is not a series-prefixed three-grade version: %r"
+                   % (section, version, name))
         continue
 
     pubsha, pubkind = "-", "-"
@@ -530,38 +534,57 @@ echo "== every tag named points where the entry says =="
 checked=0
 skipped=0
 
+legacy_tag_for() {
+    case "$1" in
+        arena-*.0.0) echo "v${1#arena-}" | sed 's/\.0\.0$//' ;;
+        *-*.0.0)
+            series="${1%%-[0-9]*}"
+            major="${1#"$series"-}"
+            echo "$series-v${major%.0.0}"
+            ;;
+        *) echo "" ;;
+    esac
+}
+
 if [ -n "$IN_GIT" ]; then
     while IFS=$'\t' read -r _ section version _ _ _ _ sha name target _ _ _; do
         [ -n "$section" ] || continue
         [ "$name" != "-" ] || continue
         want="$target"
         [ "$want" != "-" ] || want="$sha"
-        if ! git -C "$REPO" rev-parse -q --verify "refs/tags/$name" >/dev/null 2>&1; then
-            skipped=$((skipped + 1))
-            ok "SKIP $section $version: tag $name is not in this checkout (tags are fetched separately from commits)"
-            continue
+        resolved="$name"
+        if ! git -C "$REPO" rev-parse -q --verify "refs/tags/$resolved" >/dev/null 2>&1; then
+            legacy="$(legacy_tag_for "$name")"
+            if [ -n "$legacy" ] && git -C "$REPO" rev-parse -q --verify "refs/tags/$legacy" >/dev/null 2>&1; then
+                resolved="$legacy"
+                ok "$section $version: pre-migration tag $legacy stands in for $name"
+            else
+                skipped=$((skipped + 1))
+                ok "SKIP $section $version: neither tag $name nor its pre-migration name is in this checkout"
+                continue
+            fi
         fi
         checked=$((checked + 1))
-        at="$(git -C "$REPO" rev-parse "refs/tags/$name^{commit}")"
+        at="$(git -C "$REPO" rev-parse "refs/tags/$resolved^{commit}")"
         expect="$(git -C "$REPO" rev-parse "$want^{commit}" 2>/dev/null || echo "?")"
         if [ "$at" = "$expect" ]; then
-            ok "$section $version: tag $name points at $want"
+            ok "$section $version: tag $resolved points at $want"
         else
-            bad "$section $version: tag $name points at $at, entry says $want ($expect)"
+            bad "$section $version: tag $resolved points at $at, entry says $want ($expect)"
         fi
         # A release tag carries a message and a signature, so it must be a tag
         # object. The two pre-existing lightweight tags are the stated
         # exception: they are never rewritten.
-        objtype="$(git -C "$REPO" cat-file -t "refs/tags/$name" 2>/dev/null)"
-        case " $PREEXISTING_TAGS " in
-            *" $name "*)
-                ok "$section $version: tag $name is pre-existing, its object type is left as it was ($objtype)"
+        objtype="$(git -C "$REPO" cat-file -t "refs/tags/$resolved" 2>/dev/null)"
+        case " $LEGACY_LIGHTWEIGHT_TAGS " in
+            *" $resolved "*)
+                ok "$section $version: legacy tag $resolved retains its pre-migration object type ($objtype)"
                 ;;
             *)
                 if [ "$objtype" = "tag" ]; then
-                    ok "$section $version: tag $name is an annotated tag object"
+                    ok "$section $version: tag $resolved is an annotated tag object"
                 else
-                    bad "$section $version: tag $name is a $objtype, not an annotated tag object"
+                    bad "$section $version: tag $resolved is a $objtype, not an annotated tag object"
                 fi
                 ;;
         esac
