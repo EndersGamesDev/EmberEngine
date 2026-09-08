@@ -3,6 +3,7 @@
 # and the tags.
 #
 #   bash deploy/tests/test-changelog.sh
+#   bash deploy/tests/test-changelog.sh --self-test
 #
 # The changelog is a claim about history, and a claim about history rots
 # silently: a version added to web/games.json with no entry here, an entry
@@ -59,6 +60,109 @@ REPO="$(cd "$HERE/../.." && pwd)"
 # shellcheck source=deploy/tests/lib.sh
 . "$HERE/lib.sh"
 
+check_named_tags() {
+    local repo="$1" parsed="$2"
+    local checked=0 failures_before="$TESTS_FAILED"
+
+    while IFS=$'\t' read -r _ section version _ _ _ _ sha name target _ _ _; do
+        [ -n "$section" ] || continue
+        [ "$name" != "-" ] || continue
+        want="$target"
+        [ "$want" != "-" ] || want="$sha"
+        if ! git -C "$repo" rev-parse -q --verify "refs/tags/$name" >/dev/null 2>&1; then
+            bad "$section $version: tag $name does not exist"
+            continue
+        fi
+        checked=$((checked + 1))
+        at="$(git -C "$repo" rev-parse "refs/tags/$name^{commit}" 2>/dev/null)"
+        expect="$(git -C "$repo" rev-parse "$want^{commit}" 2>/dev/null || echo "?")"
+        if [ "$at" = "$expect" ]; then
+            ok "$section $version: tag $name points at $want"
+        else
+            bad "$section $version: tag $name points at $at, entry says $want ($expect)"
+        fi
+        objtype="$(git -C "$repo" cat-file -t "refs/tags/$name" 2>/dev/null)"
+        if [ "$objtype" = "tag" ]; then
+            ok "$section $version: tag $name is an annotated tag object"
+        else
+            bad "$section $version: tag $name is a $objtype, not an annotated tag object"
+        fi
+    done < <(grep '^ROW' "$parsed")
+    echo "   ($checked tag(s) checked)"
+    [ "$TESTS_FAILED" -eq "$failures_before" ]
+}
+
+tag_fixture_passes() {
+    TESTS_RUN=0
+    TESTS_FAILED=0
+    check_named_tags "$1" "$2"
+}
+
+self_test() {
+    local started tmp commit rows output
+    started="$(date +%s)"
+    tmp="$(mktemp -d -t ember-changelogtest-XXXXXX)"
+    CHANGELOG_TEST_TMP="$tmp"
+    trap '[ -z "${CHANGELOG_TEST_TMP:-}" ] || rm -rf "$CHANGELOG_TEST_TMP"' EXIT
+
+    git -C "$tmp" init -q
+    git -C "$tmp" config user.name Fixture
+    git -C "$tmp" config user.email fixture@example.invalid
+    git -C "$tmp" config commit.gpgsign false
+    git -C "$tmp" config tag.gpgsign false
+    git -C "$tmp" commit --allow-empty -qm 'fixture commit'
+    commit="$(git -C "$tmp" rev-parse HEAD)"
+    rows="$tmp/rows"
+    printf 'ROW\tFixture\tv20\t-\t-\t-\t-\t%s\tarena-20.0.0\t-\t-\t-\t-\n' \
+        "$commit" > "$rows"
+
+    git -C "$tmp" tag -a arena-20.0.0 -m 'fixture tag' "$commit"
+    if ! output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
+        echo "SELF-TEST FAIL: an exact annotated tag was rejected: $output" >&2
+        return 1
+    fi
+
+    git -C "$tmp" tag -d arena-20.0.0 >/dev/null
+    git -C "$tmp" tag v20 "$commit"
+    if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
+        echo "SELF-TEST FAIL: a legacy-only tag was accepted: $output" >&2
+        return 1
+    fi
+    case "$output" in
+        *"tag arena-20.0.0 does not exist"*) ;;
+        *) echo "SELF-TEST FAIL: wrong legacy-only report: $output" >&2; return 1 ;;
+    esac
+
+    git -C "$tmp" tag -d v20 >/dev/null
+    if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
+        echo "SELF-TEST FAIL: an absent named tag was accepted: $output" >&2
+        return 1
+    fi
+    case "$output" in
+        *"tag arena-20.0.0 does not exist"*) ;;
+        *) echo "SELF-TEST FAIL: wrong absent-tag report: $output" >&2; return 1 ;;
+    esac
+
+    git -C "$tmp" tag arena-20.0.0 "$commit"
+    if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
+        echo "SELF-TEST FAIL: a lightweight named tag was accepted: $output" >&2
+        return 1
+    fi
+    case "$output" in
+        *"not an annotated tag object"*) ;;
+        *) echo "SELF-TEST FAIL: wrong lightweight-tag report: $output" >&2; return 1 ;;
+    esac
+
+    echo "SELF-TEST PASS: exact annotated tag accepted; legacy-only, absent, and lightweight tags rejected, $(( $(date +%s) - started ))s"
+}
+
+if [ "${1:-}" = "--self-test" ]; then
+    [ "$#" -eq 1 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test]" >&2; exit 2; }
+    self_test
+    exit $?
+fi
+[ "$#" -eq 0 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test]" >&2; exit 2; }
+
 CHANGELOG="$REPO/CHANGELOG.md"
 GAMES="$REPO/web/games.json"
 
@@ -79,11 +183,6 @@ section_for() {
         *)            echo "" ;;
     esac
 }
-
-# Two legacy names point directly at commits rather than annotated tag objects.
-# They remain accepted only while the migration fallback resolves an absent
-# three-grade tag to its old name.
-LEGACY_LIGHTWEIGHT_TAGS="v20 v22"
 
 PARSED="$HERE/.changelog-parsed"
 LAUNCHER="$HERE/.changelog-launcher"
@@ -527,69 +626,11 @@ fi
 
 echo "== every tag named points where the entry says =="
 
-# Tags travel separately from commits: a clone, a fetch without --tags and a
-# shallow CI checkout all carry the history and none of the tags. A missing
-# tag is a skip with its reason; a tag that IS here and points somewhere else
-# is a real defect.
-checked=0
-skipped=0
-
-legacy_tag_for() {
-    case "$1" in
-        arena-*.0.0) echo "v${1#arena-}" | sed 's/\.0\.0$//' ;;
-        *-*.0.0)
-            series="${1%%-[0-9]*}"
-            major="${1#"$series"-}"
-            echo "$series-v${major%.0.0}"
-            ;;
-        *) echo "" ;;
-    esac
-}
-
+# Tags travel separately from commits, so a clone or shallow checkout must
+# fetch them before running this suite. Every name claimed here must exist
+# exactly as written and resolve to an annotated tag object.
 if [ -n "$IN_GIT" ]; then
-    while IFS=$'\t' read -r _ section version _ _ _ _ sha name target _ _ _; do
-        [ -n "$section" ] || continue
-        [ "$name" != "-" ] || continue
-        want="$target"
-        [ "$want" != "-" ] || want="$sha"
-        resolved="$name"
-        if ! git -C "$REPO" rev-parse -q --verify "refs/tags/$resolved" >/dev/null 2>&1; then
-            legacy="$(legacy_tag_for "$name")"
-            if [ -n "$legacy" ] && git -C "$REPO" rev-parse -q --verify "refs/tags/$legacy" >/dev/null 2>&1; then
-                resolved="$legacy"
-                ok "$section $version: pre-migration tag $legacy stands in for $name"
-            else
-                skipped=$((skipped + 1))
-                ok "SKIP $section $version: neither tag $name nor its pre-migration name is in this checkout"
-                continue
-            fi
-        fi
-        checked=$((checked + 1))
-        at="$(git -C "$REPO" rev-parse "refs/tags/$resolved^{commit}")"
-        expect="$(git -C "$REPO" rev-parse "$want^{commit}" 2>/dev/null || echo "?")"
-        if [ "$at" = "$expect" ]; then
-            ok "$section $version: tag $resolved points at $want"
-        else
-            bad "$section $version: tag $resolved points at $at, entry says $want ($expect)"
-        fi
-        # A release tag carries a message and a signature, so it must be a tag
-        # object. The two pre-existing lightweight tags are the stated
-        # exception: they are never rewritten.
-        objtype="$(git -C "$REPO" cat-file -t "refs/tags/$resolved" 2>/dev/null)"
-        case " $LEGACY_LIGHTWEIGHT_TAGS " in
-            *" $resolved "*)
-                ok "$section $version: legacy tag $resolved retains its pre-migration object type ($objtype)"
-                ;;
-            *)
-                if [ "$objtype" = "tag" ]; then
-                    ok "$section $version: tag $resolved is an annotated tag object"
-                else
-                    bad "$section $version: tag $resolved is a $objtype, not an annotated tag object"
-                fi
-                ;;
-        esac
-    done < <(grep '^ROW' "$PARSED")
-    echo "   ($checked tag(s) checked, $skipped absent from this checkout)"
+    check_named_tags "$REPO" "$PARSED"
 fi
 
 echo "== no URL, no banned token =="
