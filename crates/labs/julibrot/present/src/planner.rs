@@ -1774,10 +1774,8 @@ mod tests {
         };
         let pair = Warp::pack_descriptor_sample(record, depth)
             .unwrap_or_else(|| panic!("{case_name} source sample packs"));
-        let (_, round_trip) =
-            Warp::reconstruct_descriptor_sample(header, &pair, direct.screen).unwrap_or_else(
-                |error| panic!("{case_name} source sample round-trips: {error}"),
-            );
+        let (_, round_trip) = Warp::reconstruct_descriptor_sample(header, &pair, direct.screen)
+            .unwrap_or_else(|error| panic!("{case_name} source sample round-trips: {error}"));
         let pixel_error = (round_trip.screen[0] - direct.screen[0])
             .hypot(round_trip.screen[1] - direct.screen[1]);
         assert!(
@@ -1789,8 +1787,7 @@ mod tests {
                 <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE),
             "{case_name} source depth moved"
         );
-        record.escaped.to_bits() == 1.0_f32.to_bits()
-            && pose.view.height_scale.to_bits() << 1 != 0
+        record.escaped.to_bits() == 1.0_f32.to_bits() && pose.view.height_scale.to_bits() << 1 != 0
     }
 
     #[test]
@@ -1896,13 +1893,8 @@ mod tests {
                 let header = Warp::pack_descriptor_header(&render, &template)
                     .unwrap_or_else(|| panic!("{} source header packs", case.name));
                 for (coordinate, record) in witnesses {
-                    if round_trip_descriptor_witness(
-                        case.name,
-                        &pose,
-                        &header,
-                        coordinate,
-                        record,
-                    ) {
+                    if round_trip_descriptor_witness(case.name, &pose, &header, coordinate, record)
+                    {
                         lifted_receipt_count += 1;
                     }
                     receipt_count += 1;

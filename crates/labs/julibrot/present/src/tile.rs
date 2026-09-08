@@ -714,8 +714,8 @@ mod tests {
         let render = TileRenderKey::from_pose_and_source(&pose, rect, source);
         let mut policy = policy_header();
         set_anchor_delta(&mut policy, [0.25, -0.5]);
-        let packed = pack_descriptor_header(&render, &policy)
-            .expect("exact byte fixture descriptor packs");
+        let packed =
+            pack_descriptor_header(&render, &policy).expect("exact byte fixture descriptor packs");
         let expected = expected_byte_pin_header();
         assert_eq!(bytes_of(&packed), bytes_of(&expected));
         assert_eq!(bytes_of(&packed).len(), TilePoseHeader::BYTE_SIZE);
@@ -748,12 +748,10 @@ mod tests {
         let packed = pack_descriptor_header(&render, &policy_header())
             .expect("finite descriptor source pose packs");
         let mut invalid_yaw = packed;
-        invalid_yaw.texels[TilePoseHeader::H10_OBSERVER].lanes[..2]
-            .copy_from_slice(&[0.0; 2]);
+        invalid_yaw.texels[TilePoseHeader::H10_OBSERVER].lanes[..2].copy_from_slice(&[0.0; 2]);
         assert!(unpack_descriptor_header(&invalid_yaw).is_none());
         let mut invalid_pitch = packed;
-        invalid_pitch.texels[TilePoseHeader::H10_OBSERVER].lanes[2..]
-            .copy_from_slice(&[0.0; 2]);
+        invalid_pitch.texels[TilePoseHeader::H10_OBSERVER].lanes[2..].copy_from_slice(&[0.0; 2]);
         assert!(unpack_descriptor_header(&invalid_pitch).is_none());
     }
 
@@ -929,8 +927,8 @@ mod tests {
         let render = TileRenderKey::from_pose(&source, rect);
         let mut policy = policy_header();
         set_anchor_delta(&mut policy, anchor_delta_px);
-        let header = pack_descriptor_header(&render, &policy)
-            .expect("maximal-zoom descriptor header packs");
+        let header =
+            pack_descriptor_header(&render, &policy).expect("maximal-zoom descriptor header packs");
         let pair = pack_descriptor_sample(record, depth).expect("source sample pair packs");
         let projected = project_descriptor_sample(&header, &pair, source_pixel, &target)
             .expect("certified maximal-zoom placement projects");
@@ -945,12 +943,8 @@ mod tests {
         assert!(anchor_effect >= ANCHOR_EFFECT_MINIMUM_PX);
 
         let mut uncertified_policy = policy_header();
-        uncertified_policy.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes = [
-            f32::MAX,
-            33_554_432.0,
-            0.0,
-            0.0,
-        ];
+        uncertified_policy.texels[TilePoseHeader::H17_ANCHOR_DELTA].lanes =
+            [f32::MAX, 33_554_432.0, 0.0, 0.0];
         let uncertified_header = pack_descriptor_header(&render, &uncertified_policy)
             .expect("finite but uncertifiable anchor split packs");
         assert_eq!(

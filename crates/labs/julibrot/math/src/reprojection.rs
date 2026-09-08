@@ -336,8 +336,10 @@ pub fn retained_value_sample(
 
 fn plane_local_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
     core::array::from_fn(|axis| {
-        f64::from(pose.plane.basis_u[axis])
-            .mul_add(coordinate[0], f64::from(pose.plane.basis_v[axis]) * coordinate[1])
+        f64::from(pose.plane.basis_u[axis]).mul_add(
+            coordinate[0],
+            f64::from(pose.plane.basis_v[axis]) * coordinate[1],
+        )
     })
 }
 
@@ -750,8 +752,7 @@ mod tests {
         );
 
         let mut above = boundary;
-        above.view.distance_four =
-            f64::from_bits(ProjectedSample::POLE_EPSILON.to_bits() + 1);
+        above.view.distance_four = f64::from_bits(ProjectedSample::POLE_EPSILON.to_bits() + 1);
         assert!(project_reconstructed_sample(&above, sample).is_ok());
     }
 
