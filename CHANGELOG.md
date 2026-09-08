@@ -22,6 +22,8 @@ Weight of the Blade adds Cut, Backhand, Finisher, Overhead and Rising arcs. One 
 
 Twenty-eight core tests, fifteen client/geometry/IK/input tests, three resolution tests, JavaScript syntax, scoped publication preservation, all 126 Pages fixtures, all 222 changelog checks, README coverage and done-list checks pass. Fifteen passive native strike-phase captures and one staged heavy-impact frame were inspected; real contact behavior is covered by simulation tests. The final release helper builds the 24,773,487-byte WASM in 7.64 seconds at Idle priority. Browser gameplay, physical DualSense/mobile controls, audible output, device vibration and 5K frame pacing remain unverified. Swept weapon collision and rigged enemy reactions remain in the backlog (`d550af5a`).
 
+Sword audio consumes event counters on each animation frame before the slower HUD refresh, preserving short windup-to-contact timing. Syntax and event ordering were checked; audible output remains unverified (`7a463b2c`).
+
 ### End Game v3
 
 Hands of the Wolf replaces the box gauntlets with 34 articulated parts, finger curl, thumb opposition and measured key/sword grips. Grounded, collision-checked approaches lead into contact, grasp, lift, stow and recovery; the key follows its ring socket, the gate waits for key withdrawal, and the greatsword lifts its shallow-seated tip clear before rotating. The generated three-asset kit is 644,048 bytes. Fourteen core tests, eight client/geometry/IK/input tests, three resolution tests, exported GLB checks, native contact captures and scoped publication preservation pass; the browser bundle is 24,757,936 bytes. Browser gameplay, physical DualSense/mobile devices and 5K frame pacing remain unverified (`21c289ef`).
