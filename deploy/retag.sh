@@ -13,6 +13,18 @@ die() {
     exit 1
 }
 
+timed() {
+    local label="$1" began=$SECONDS status=0
+    shift
+    "$@" || status=$?
+    printf 'retag: %s: %ss\n' "$label" "$((SECONDS - began))" >&2
+    return "$status"
+}
+
+verify_tag() {
+    git verify-tag "$1" >/dev/null 2>&1
+}
+
 usage() {
     echo "usage: bash deploy/retag.sh [--apply] [remote ...]"
 }
@@ -37,7 +49,7 @@ if [ -n "$apply" ]; then
 fi
 
 for remote in "${remotes[@]}"; do
-    git remote get-url "$remote" >/dev/null 2>&1 || die "unknown remote: $remote"
+    timed "inspect remote $remote" git remote get-url "$remote" >/dev/null || die "unknown remote: $remote"
 done
 
 new_for() {
@@ -68,7 +80,7 @@ while IFS= read -r old; do
         existing="$(git rev-parse "refs/tags/$new^{commit}")"
         [ "$existing" = "$target" ] || die "$new already points at $existing, expected $target from $old"
         [ "$(git cat-file -t "refs/tags/$new")" = "tag" ] || die "$new exists at the right commit but is not annotated"
-        git verify-tag "$new" >/dev/null 2>&1 || die "$new exists at the right commit but is not signed by a trusted key"
+        timed "verify existing $new" verify_tag "$new" || die "$new exists at the right commit but is not signed by a trusted key"
         state="skip-existing"
     fi
     olds+=("$old")
@@ -82,7 +94,7 @@ for index in "${!olds[@]}"; do
 done
 
 if [ -z "$apply" ]; then
-    echo "retag: dry-run; ${#olds[@]} historical tag(s), ${#remotes[@]} remote(s), ${SECONDS}s"
+    echo "retag: dry-run; ${#olds[@]} historical tag(s), ${#remotes[@]} remote(s), $((SECONDS - started))s"
     exit 0
 fi
 
@@ -101,7 +113,7 @@ for index in "${!olds[@]}"; do
         git log -1 --format=%B "$target" > "$message"
     fi
     printf '\nReplaces historical tag: %s\n' "$old" >> "$message"
-    git tag -s -F "$message" "$new" "$target"
+    timed "create $new" git tag -s -F "$message" "$new" "$target"
 done
 
 objects=()
@@ -110,7 +122,7 @@ for index in "${!news[@]}"; do
     target="${targets[$index]}"
     [ "$(git cat-file -t "refs/tags/$new")" = "tag" ] || die "$new is not an annotated tag after creation"
     [ "$(git rev-parse "refs/tags/$new^{commit}")" = "$target" ] || die "$new moved from its expected target after creation"
-    git verify-tag "$new" >/dev/null 2>&1 || die "new tag $new did not verify after signing"
+    timed "verify $new" verify_tag "$new" || die "new tag $new did not verify after signing"
     objects[$index]="$(git rev-parse "refs/tags/$new")"
 done
 
@@ -121,7 +133,7 @@ for remote in "${remotes[@]}"; do
         target="${targets[$index]}"
         object="${objects[$index]}"
 
-        remote_refs="$(git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
+        remote_refs="$(timed "inspect $remote replacement $new" git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
         direct="$(printf '%s\n' "$remote_refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
         if [ -n "$direct" ]; then
             peeled="$(printf '%s\n' "$remote_refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
@@ -130,7 +142,7 @@ for remote in "${remotes[@]}"; do
             [ "$peeled" = "$target" ] || die "$remote already has $new at $peeled, expected $target"
         fi
 
-        remote_refs="$(git ls-remote --tags "$remote" "refs/tags/$old" "refs/tags/$old^{}")"
+        remote_refs="$(timed "inspect $remote historical $old" git ls-remote --tags "$remote" "refs/tags/$old" "refs/tags/$old^{}")"
         direct="$(printf '%s\n' "$remote_refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
         [ -n "$direct" ] || continue
         peeled="$(printf '%s\n' "$remote_refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
@@ -143,27 +155,31 @@ for remote in "${remotes[@]}"; do
     for index in "${!news[@]}"; do
         new="${news[$index]}"
         object="${objects[$index]}"
-        remote_refs="$(git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
+        remote_refs="$(timed "inspect $remote before pushing $new" git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
         direct="$(printf '%s\n' "$remote_refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
         if [ -n "$direct" ]; then
             [ "$direct" = "$object" ] || die "$remote acquired conflicting $new object $direct, expected $object"
             echo "retag: $remote already has the exact $new tag object; skipping"
             continue
         fi
-        git push "$remote" "refs/tags/$new:refs/tags/$new"
+        timed "push $new to $remote" git push "$remote" "refs/tags/$new:refs/tags/$new"
     done
 done
 
+delete_remotes=()
+delete_olds=()
 for remote in "${remotes[@]}"; do
     for index in "${!olds[@]}"; do
         old="${olds[$index]}"
         target="${targets[$index]}"
-        remote_refs="$(git ls-remote --tags "$remote" "refs/tags/$old" "refs/tags/$old^{}")"
+        remote_refs="$(timed "reinspect $remote historical $old" git ls-remote --tags "$remote" "refs/tags/$old" "refs/tags/$old^{}")"
         direct="$(printf '%s\n' "$remote_refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
         [ -n "$direct" ] || continue
         peeled="$(printf '%s\n' "$remote_refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
         remote_target="${peeled:-$direct}"
         [ "$remote_target" = "$target" ] || die "$remote moved historical tag $old to $remote_target, expected $target"
+        delete_remotes+=("$remote")
+        delete_olds+=("$old")
     done
 done
 
@@ -172,7 +188,7 @@ for remote in "${remotes[@]}"; do
         new="${news[$index]}"
         target="${targets[$index]}"
         object="${objects[$index]}"
-        remote_refs="$(git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
+        remote_refs="$(timed "verify $remote replacement $new before deletion" git ls-remote --tags "$remote" "refs/tags/$new" "refs/tags/$new^{}")"
         direct="$(printf '%s\n' "$remote_refs" | awk '$2 !~ /\^\{\}$/ { print $1 }')"
         peeled="$(printf '%s\n' "$remote_refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')"
         [ "$direct" = "$object" ] || die "$remote has $new object ${direct:-missing} before deletion, expected $object"
@@ -180,16 +196,14 @@ for remote in "${remotes[@]}"; do
     done
 done
 
-for remote in "${remotes[@]}"; do
-    for old in "${olds[@]}"; do
-        if git ls-remote --exit-code --refs "$remote" "refs/tags/$old" >/dev/null 2>&1; then
-            git push "$remote" ":refs/tags/$old"
-        fi
-    done
+for index in "${!delete_olds[@]}"; do
+    remote="${delete_remotes[$index]}"
+    old="${delete_olds[$index]}"
+    timed "delete $old from $remote" git push "$remote" ":refs/tags/$old"
 done
 
-if [ "${#olds[@]}" -gt 0 ]; then
-    git tag -d "${olds[@]}"
-fi
+for old in "${olds[@]}"; do
+    timed "delete local $old" git tag -d "$old"
+done
 
-echo "retag: applied ${#olds[@]} historical tag(s) to ${#remotes[@]} remote(s) in ${SECONDS}s"
+echo "retag: applied ${#olds[@]} historical tag(s) to ${#remotes[@]} remote(s) in $((SECONDS - started))s"
