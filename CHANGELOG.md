@@ -16,6 +16,14 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v11
+
+Weight and Impact connects an upper-right-to-lower-left cut, horizontal backhand and steeper finishing diagonal through shared edge-leading sword poses. Sixteen subdivisions per 60 Hz contact tick sweep the blade and player frame against five anatomical zones and castle surfaces. Actual contact drives directional reactions, hitstop and rebound; missed cuts create no impact. Separate heavy input selects an overhead strike on the ground or a downward airborne cut that holds through landing without extra landing damage. The projected aim marker and confirmed hit label distinguish intent from contact (`9ab4fcec`).
+
+Bounded structural scratches sit on the rendered surfaces; armor scratches follow their rigid body parts. Material-specific dust, sparks and authored sound cues distinguish stone, timber, iron and body contact. Moving gates and generated-prop proxy bounds produce transient feedback. Existing textures and generated assets are reused; target volumes remain anatomical proxies, marks are cosmetic and weapon motion is authored rather than a solved mass-and-muscle simulation (`9ab4fcec`).
+
+All 116 core and 66 client tests, 36 JavaScript tests, 126 Pages fixtures, scoped publication preservation, README coverage and done-list checks pass. Tests include continuous two-hand reach, moving-frame blade collision, all five actual hit zones, jump-heavy timing and interruption, wall rebound, repeated reactions and the complete V10 escape route. Twenty-seven passive native views plus two focused floor-mark recaptures were inspected in 53.70 seconds of capture wall time. The final Idle browser helper takes 6.04 seconds and the native build 3.78 seconds. The WASM is 34,763,523 bytes; the worst sampled view including the bounded mark history has 270,892 submitted triangles, with 157,714,026 estimated resident texture bytes including mipmaps. Browser gameplay, physical controls, audible output, vibration and measured 5K frame pacing remain unverified (`9ab4fcec`).
+
 ### End Game v10
 
 The Last Seal adds eight armed soldiers and hollow knights plus the two-phase One-Eyed Castellan. Timed weapon contacts, per-attack guard costs, a single committed attacker and an unblockable slam warning create recovery openings. Castle inscriptions, an ordered Sun-Wolf-Bell puzzle, the Castellan's crown and a rising west gate lead to a physical escape ending. A discovered-clue journal, persistent castle checkpoint and three finite healing shrines support the route (`2b6a5b24`).
