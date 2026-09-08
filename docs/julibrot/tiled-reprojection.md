@@ -130,6 +130,8 @@ One header slot is exactly 32 RGBA32F texels, 512 bytes, aligned to the existing
 |`H26`|`ownership_count,ownership_revision,value_generation,lifted_generation`|Bounded same-surface mask records and sample-span generations|
 |`H27–H31`|Zero|Reserved; nonzero use requires a descriptor-map ABI revision|
 
+For version one, `coordinate_error` bounds all decoded source reconstruction coordinates, including linear `zeta_F`; `reprojection_error` bounds the independently measured screen placement.
+
 Every ID, count, extent, rank, and flag lane is an integer-valued finite `f32` strictly below `2^24`; arbitrary integer bit patterns and NaN payloads are forbidden. The rotation lanes carry the same precomputed sine/cosine factor representation already used by the present HOT payload, and the high/low lanes carry a checked compensated split rather than claiming one `f32` is the source authority.
 
 Each compact ownership-arena texel is `[first_local_cell,run_length,owner_header_slot,quality_rank]`, an exact-in-f32 run over same-surface chart cells sorted by local cell. `H01.ownership_base` and `H26.ownership_count` bound the runs for one tile; zero runs means no duplicate exclusion, and exhaustion refuses additional duplicates rather than suppressing a distinct intersection. These records implement only the same-surface tie-break and are not a CPU-selected screen cover.

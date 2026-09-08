@@ -1,13 +1,14 @@
 use ember_julibrot_math::{
-    Homography, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls, pixel_scale,
+    EscapeGridRecord, Homography, Plane, Pose, PoseMap, ProjectedSample, ReconstructedSample,
+    ReprojectionError, RetainedValueSample, SourceDepthRecord, ViewControls, pixel_scale,
     plane_chart_relation, warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    LatticePair, MeshError, PaletteRecord, SceneFrame, WarpKind, WarpPlan, WarpRefusalReason,
-    apply_homography, compose_homography, height_for_record, identity_warp_rows,
-    pack_homography_rows,
+    DescriptorSamplePair, LatticePair, MeshError, PaletteRecord, SceneFrame, TilePoseHeader,
+    TileRenderKey, WarpKind, WarpPlan, WarpRefusalReason, apply_homography, compose_homography,
+    height_for_record, identity_warp_rows, pack_homography_rows,
 };
 
 /// The escape record status the kernel writes for a pixel with no plane point.
@@ -15,7 +16,6 @@ const HORIZON_STATUS: f32 = 2.0;
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
 const ERROR_SAMPLE_CAPACITY: usize = 405;
-const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 const REDRAW_NEUTRAL_EPSILON: f64 = 1.0e-12;
 const RELIEF_EXPOSURE_STEPS: u32 = 65;
@@ -53,6 +53,74 @@ impl Warp {
     #[must_use]
     pub fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
         reproject(last_frame, from_pose, to_pose)
+    }
+
+    /// Packs the source-pose lanes of one version-one descriptor header.
+    ///
+    /// Policy and lifetime lanes arrive in `header` and remain unchanged except where the ABI
+    /// assigns source identity, pose, extent, rectangle, map, scale, or provenance.
+    #[must_use]
+    pub fn pack_descriptor_header(
+        render: &TileRenderKey,
+        header: &TilePoseHeader,
+    ) -> Option<TilePoseHeader> {
+        crate::tile::pack_descriptor_header(render, header)
+    }
+
+    /// Unpacks one version-one descriptor header into its projection-only finite source pose.
+    ///
+    /// Epoch and reference-centre displacement are not descriptor lanes and are returned neutral;
+    /// semantic equality remains the authority of the accompanying engine-neutral keys.
+    #[must_use]
+    pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
+        crate::tile::unpack_descriptor_header(header)
+    }
+
+    /// Packs one value and reconstruction record into the exact `S0/S1` lane declaration.
+    #[must_use]
+    pub fn pack_descriptor_sample(
+        value: EscapeGridRecord,
+        depth: SourceDepthRecord,
+    ) -> Option<DescriptorSamplePair> {
+        crate::tile::pack_descriptor_sample(value, depth)
+    }
+
+    /// Unpacks one `S0/S1` pair without changing either record's declared fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid lanes or non-positive valid source depth.
+    pub fn unpack_descriptor_sample(
+        pair: &DescriptorSamplePair,
+    ) -> Result<(EscapeGridRecord, SourceDepthRecord), ReprojectionError> {
+        crate::tile::unpack_descriptor_sample(pair)
+    }
+
+    /// Reconstructs one descriptor sample and returns its recomputed source screen/depth receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid descriptor or failed source self-round-trip.
+    pub fn reconstruct_descriptor_sample(
+        header: &TilePoseHeader,
+        pair: &DescriptorSamplePair,
+        source_pixel: [f64; 2],
+    ) -> Result<(ReconstructedSample, ProjectedSample), ReprojectionError> {
+        crate::tile::reconstruct_descriptor_sample(header, pair, source_pixel)
+    }
+
+    /// Reconstructs one descriptor sample and evaluates the complete requested-pose chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid descriptor, failed source receipt, or target pole.
+    pub fn project_descriptor_sample(
+        header: &TilePoseHeader,
+        pair: &DescriptorSamplePair,
+        source_pixel: [f64; 2],
+        target: &Pose,
+    ) -> Result<ProjectedSample, ReprojectionError> {
+        crate::tile::project_descriptor_sample(header, pair, source_pixel, target)
     }
 }
 
@@ -417,7 +485,8 @@ pub fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<
     ])
 }
 
-fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
+/// Inverts one finite nonsingular row-major three-by-three matrix.
+pub fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
     let determinant = matrix[2].mul_add(
         matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
         matrix[0].mul_add(
@@ -765,7 +834,7 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
                 to.centre_from_reference_px[0] + offset[0],
                 to.centre_from_reference_px[1] + offset[1],
             ];
-            let mut vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
+            let mut vector = to.plane.local_point(coordinate).map(|value| ratio * value);
             for (axis, value) in vector.iter_mut().enumerate() {
                 *value = (to.plane_origin[axis] - from.plane_origin[axis])
                     .mul_add(source_pixels_per_chart, *value);
@@ -781,8 +850,9 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .fold(0.0, f64::max)
 }
 
+#[cfg(test)]
 fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewControls) -> [f64; 5] {
-    let chart = plane_point(plane, coordinate);
+    let chart = plane.local_point(coordinate);
     let mut point = [chart[0], chart[1], chart[2], chart[3], height];
     for factor in (0..ViewControls::CAMERA_PLANES.len()).rev() {
         let (first, second) = ViewControls::CAMERA_PLANES[factor];
@@ -798,21 +868,10 @@ fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewCon
     point
 }
 
-fn plane_point(plane: Plane, coordinate: [f64; 2]) -> [f64; 4] {
-    std::array::from_fn(|axis| {
-        f64::from(plane.basis_u[axis]).mul_add(
-            coordinate[0],
-            f64::from(plane.basis_v[axis]) * coordinate[1],
-        )
-    })
-}
-
 fn plane_projection(plane: Plane, point: [f64; 4]) -> [f64; 4] {
     let u = dot4(plane.basis_u, point);
     let v = dot4(plane.basis_v, point);
-    std::array::from_fn(|axis| {
-        f64::from(plane.basis_u[axis]).mul_add(u, f64::from(plane.basis_v[axis]) * v)
-    })
+    plane.local_point([u, v])
 }
 
 fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
@@ -904,10 +963,6 @@ fn project_scene_point_with_shortcut(
         .map(|projected| projected.0)
 }
 
-#[allow(
-    clippy::float_cmp,
-    reason = "a zero lift selects the exact identity the screen-to-plane map already defines"
-)]
 fn project_scene_vertex_with_shortcut(
     pose: &Pose,
     screen: [f64; 2],
@@ -931,77 +986,31 @@ fn project_scene_vertex_with_shortcut(
     let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let chart_coordinate = [chart_scale * mapped[0], chart_scale * mapped[1]];
-    let rotated = ambient_point(pose.plane, chart_coordinate, height, &pose.view);
-    let distance_five = pose.view.distance_five;
-    let distance_four = pose.view.distance_four;
-    let denominator_five = distance_five - rotated[4];
-    if denominator_five < RELIEF_NEAR_FRACTION * distance_five || denominator_five <= POLE_EPSILON {
-        return None;
-    }
-    let scale_five = distance_five / denominator_five;
-    let projected_four = [
-        rotated[0] * scale_five,
-        rotated[1] * scale_five,
-        rotated[2] * scale_five,
-        rotated[3] * scale_five,
-    ];
-    let denominator_four = distance_four - projected_four[3];
-    if denominator_four <= POLE_EPSILON {
-        return None;
-    }
-    let scale_four = distance_four / denominator_four;
-    let world = [
-        projected_four[0] * scale_four,
-        projected_four[1] * scale_four,
-        projected_four[2] * scale_four,
-    ];
-    let (yaw_sine, yaw_cosine) = pose.view.camera_yaw.sin_cos();
-    let (pitch_sine, pitch_cosine) = pose.view.camera_pitch.sin_cos();
-    let yawed = [
-        yaw_cosine.mul_add(world[0], yaw_sine * world[2]),
-        world[1],
-        (-yaw_sine).mul_add(world[0], yaw_cosine * world[2]),
-    ];
-    let view = [
-        yawed[0],
-        pitch_cosine.mul_add(yawed[1], -pitch_sine * yawed[2]),
-        pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - distance_four,
-    ];
-    let clip_w = -view[2];
-    if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
-        return None;
-    }
-    let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
-    let perspective_scale = aspect * distance_four * 0.5;
-    let ndc = [
-        perspective_scale * view[0] / aspect / clip_w,
-        perspective_scale * view[1] / clip_w,
-    ];
-    let projected = [
-        ndc[0] * f64::from(pose.grid_width) * 0.5,
-        ndc[1] * f64::from(pose.grid_height) * 0.5,
-    ];
-    if !projected.iter().all(|value| value.is_finite()) {
-        return None;
-    }
+    let local_four = pose.plane.local_point(chart_coordinate);
+    let projected =
+        ProjectedSample::from_local_point(pose, local_four, RetainedValueSample { record_height })
+            .ok()?;
     // A sample with no lift stays in the plane, where the forward projection is the screen-to-plane
     // map's own inverse, so the screen point it came from is its exact answer and the chain's is
     // that answer with drift in it. The shortcut is taken only once the chain has placed the
     // vertex: the identity is an algebraic fact about the projective map, not a claim that the
     // point is in front of all three limits, and at this pose family the later limits do refuse
     // points the map itself still maps.
-    if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
+    if flat_shortcut
+        && height.abs().to_bits() == 0.0_f64.to_bits()
+        && map.apron_scale.to_bits() == 1.0_f64.to_bits()
+    {
         return Some((screen, 1.0));
     }
-    Some((projected, clip_w))
+    Some((projected.screen, projected.linear_depth))
 }
 
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
-        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, ViewControls,
-        construct_plane, screen_to_plane,
+        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION,
+        ViewControls, construct_plane, retained_value_sample, screen_to_plane,
     };
 
     use super::*;
@@ -1010,6 +1019,18 @@ mod tests {
     const SWEEP_ANGLES: u32 = 256;
     const RELIEF_YAW: f64 = 0.349;
     const RELIEF_PITCH: f64 = 0.262;
+    /// F32 source factors and depth must return within one hundredth of a source pixel.
+    const FROZEN_SOURCE_PIXEL_TOLERANCE_PX: f32 = 0.01;
+    /// One hundredth of linear depth bounds every frozen row after S1 f32 rounding.
+    const FROZEN_SOURCE_DEPTH_TOLERANCE: f32 = 0.01;
+    /// Nine paired corpus rows supply eighteen from/to target-path probes before refusal filters.
+    const FROZEN_CORPUS_POSE_ENTRIES: usize = 18;
+    /// Fifteen mapped, nonzero-extent from/to poses remain in the frozen planner corpus.
+    const FROZEN_TARGET_POSES: usize = 15;
+    /// Ten frozen target poses use the canonical-zero Julia plane representation.
+    const FROZEN_CANONICAL_JULIA_TARGETS: usize = 10;
+    /// Five frozen target poses carry planes produced directly by `construct_plane`.
+    const FROZEN_CONSTRUCTED_TARGETS: usize = 5;
 
     fn relief(theta: f64) -> ViewControls {
         let mut camera = [0.0; 10];
@@ -1049,10 +1070,7 @@ mod tests {
         Pose {
             epoch: 1,
             orbit_generation: 4,
-            plane: Plane {
-                basis_u: [1.0, 0.0, 0.0, 0.0],
-                basis_v: [0.0, 1.0, 0.0, 0.0],
-            },
+            plane: Plane::CANONICAL_JULIA_PLANE,
             object,
             plane_origin: [0.0; 4],
             zoom_log2: 40.0,
@@ -1201,11 +1219,11 @@ mod tests {
         );
         let denominator_five = pose.view.distance_five - rotated[4];
         let near_five = RELIEF_NEAR_FRACTION * pose.view.distance_five;
-        if denominator_five < near_five || denominator_five <= POLE_EPSILON {
+        if denominator_five < near_five || denominator_five <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "fifth-dimensional near limit",
                 value: denominator_five,
-                limit: near_five.max(POLE_EPSILON),
+                limit: near_five.max(ProjectedSample::POLE_EPSILON),
             };
         }
         let scale_five = pose.view.distance_five / denominator_five;
@@ -1216,11 +1234,11 @@ mod tests {
             rotated[3] * scale_five,
         ];
         let denominator_four = pose.view.distance_four - projected_four[3];
-        if denominator_four <= POLE_EPSILON {
+        if denominator_four <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "four-dimensional pole",
                 value: denominator_four,
-                limit: POLE_EPSILON,
+                limit: ProjectedSample::POLE_EPSILON,
             };
         }
         let scale_four = pose.view.distance_four / denominator_four;
@@ -1239,11 +1257,11 @@ mod tests {
         let view_z =
             pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - pose.view.distance_four;
         let clip_w = -view_z;
-        if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
+        if !clip_w.is_finite() || clip_w <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "observer pole",
                 value: clip_w,
-                limit: POLE_EPSILON,
+                limit: ProjectedSample::POLE_EPSILON,
             };
         }
         ProjectionRefusalProbe {
@@ -1723,6 +1741,250 @@ mod tests {
                 plan: entry(&case.frame, &case.from_pose, &case.to_pose),
             })
             .collect()
+    }
+
+    fn round_trip_descriptor_witness(
+        case_name: &str,
+        pose: &Pose,
+        header: &TilePoseHeader,
+        coordinate: [f64; 2],
+        record: EscapeGridRecord,
+    ) -> bool {
+        let value = retained_value_sample(record, 4)
+            .unwrap_or_else(|error| panic!("{case_name} value: {error}"));
+        let source_local = pose.plane.local_point(coordinate);
+        let direct = ProjectedSample::from_local_point(pose, source_local, value)
+            .unwrap_or_else(|error| panic!("{case_name} direct source receipt: {error}"));
+        let depth = SourceDepthRecord {
+            a_f: coordinate[0],
+            b_f: coordinate[1],
+            zeta_f: direct.linear_depth,
+            valid: true,
+        };
+        let pair = Warp::pack_descriptor_sample(record, depth)
+            .unwrap_or_else(|| panic!("{case_name} source sample packs"));
+        let (_, round_trip) = Warp::reconstruct_descriptor_sample(header, &pair, direct.screen)
+            .unwrap_or_else(|error| panic!("{case_name} source sample round-trips: {error}"));
+        let pixel_error = (round_trip.screen[0] - direct.screen[0])
+            .hypot(round_trip.screen[1] - direct.screen[1]);
+        assert!(
+            pixel_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX),
+            "{case_name} source pixel moved by {pixel_error}"
+        );
+        assert!(
+            (round_trip.linear_depth - direct.linear_depth).abs()
+                <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE),
+            "{case_name} source depth moved"
+        );
+        record.escaped.to_bits() == 1.0_f32.to_bits() && pose.view.height_scale.to_bits() << 1 != 0
+    }
+
+    #[test]
+    fn frozen_planner_corpus_round_trips_descriptor_source_poses() {
+        use bytemuck::Zeroable;
+
+        /// Packed factors may move by two f32 epsilon units after decode and repack.
+        const FROZEN_FACTOR_LANE_TOLERANCE: f32 = 2.0 * f32::EPSILON;
+        /// Two-word finite origins retain these corpus values within one residual rounding.
+        const FROZEN_ORIGIN_TOLERANCE: f64 = 1.0e-12;
+
+        for case in named_planner_corpus() {
+            for pose in [case.from_pose, case.to_pose] {
+                let rect =
+                    crate::SourcePixelRect::from_extent(0, 0, pose.grid_width, pose.grid_height);
+                let render = TileRenderKey::from_pose(&pose, rect);
+                let packed = Warp::pack_descriptor_header(&render, &TilePoseHeader::zeroed());
+                if pose.grid_width == 0
+                    || pose.grid_height == 0
+                    || matches!(pose.map, PoseMap::EdgeOn)
+                {
+                    assert!(packed.is_none(), "{} must refuse", case.name);
+                    continue;
+                }
+                let packed = packed.unwrap_or_else(|| panic!("{} must pack", case.name));
+                let unpacked = Warp::unpack_descriptor_header(&packed)
+                    .unwrap_or_else(|| panic!("{} must unpack", case.name));
+                for (actual, expected) in unpacked.plane_origin.into_iter().zip(pose.plane_origin) {
+                    assert!(
+                        (actual - expected).abs() <= FROZEN_ORIGIN_TOLERANCE,
+                        "{} origin moved",
+                        case.name
+                    );
+                }
+                let round_key = TileRenderKey::from_pose(&unpacked, rect);
+                let round = Warp::pack_descriptor_header(&round_key, &TilePoseHeader::zeroed())
+                    .unwrap_or_else(|| panic!("{} must repack", case.name));
+                for (actual, expected) in round.texels[2..21]
+                    .iter()
+                    .flat_map(|texel| texel.lanes)
+                    .zip(packed.texels[2..21].iter().flat_map(|texel| texel.lanes))
+                {
+                    assert!(
+                        (actual - expected).abs() <= FROZEN_FACTOR_LANE_TOLERANCE,
+                        "{} descriptor lane moved",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frozen_planner_corpus_round_trips_descriptor_source_samples() {
+        use bytemuck::Zeroable;
+
+        /// Two witnesses over fifteen valid poses produce thirty frozen descriptor receipts.
+        const FROZEN_DESCRIPTOR_RECEIPTS: usize = 30;
+        /// Four valid measured-relief poses give the nonzero witness material source lift.
+        const FROZEN_LIFTED_RECEIPTS: usize = 4;
+
+        let witnesses = [
+            (
+                [0.0, 0.0],
+                EscapeGridRecord {
+                    smooth_iter: 0.0,
+                    escaped: 0.0,
+                    rebase_count: 0.0,
+                    status: 0.0,
+                },
+            ),
+            (
+                [0.125, -0.0625],
+                EscapeGridRecord {
+                    smooth_iter: 1.0,
+                    escaped: 1.0,
+                    rebase_count: 0.0,
+                    status: 0.0,
+                },
+            ),
+        ];
+        let mut receipt_count = 0;
+        let mut lifted_receipt_count = 0;
+        for case in named_planner_corpus() {
+            for pose in [case.from_pose, case.to_pose] {
+                if pose.grid_width == 0
+                    || pose.grid_height == 0
+                    || matches!(pose.map, PoseMap::EdgeOn)
+                {
+                    continue;
+                }
+                let mut template = TilePoseHeader::zeroed();
+                template.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+                    0.0,
+                    64.0,
+                    FROZEN_SOURCE_DEPTH_TOLERANCE,
+                    FROZEN_SOURCE_PIXEL_TOLERANCE_PX,
+                ];
+                template.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 4.0;
+                let rect =
+                    crate::SourcePixelRect::from_extent(0, 0, pose.grid_width, pose.grid_height);
+                let render = TileRenderKey::from_pose(&pose, rect);
+                let header = Warp::pack_descriptor_header(&render, &template)
+                    .unwrap_or_else(|| panic!("{} source header packs", case.name));
+                for (coordinate, record) in witnesses {
+                    if round_trip_descriptor_witness(case.name, &pose, &header, coordinate, record)
+                    {
+                        lifted_receipt_count += 1;
+                    }
+                    receipt_count += 1;
+                }
+            }
+        }
+        assert_eq!(receipt_count, FROZEN_DESCRIPTOR_RECEIPTS);
+        assert_eq!(lifted_receipt_count, FROZEN_LIFTED_RECEIPTS);
+    }
+
+    #[test]
+    fn frozen_planner_corpus_projects_every_valid_pose_as_a_target() {
+        let canonical_julia_plane = Plane::CANONICAL_JULIA_PLANE;
+        let mut corpus_pose_count = 0;
+        let mut target_count = 0;
+        let mut canonical_count = 0;
+        let mut constructed_count = 0;
+        for case in named_planner_corpus() {
+            for (role, target) in [("from", case.from_pose), ("to", case.to_pose)] {
+                let sample = ReconstructedSample {
+                    ambient_four: target.plane_origin,
+                    source_local_four: [0.0; 4],
+                    source_zoom_log2: target.zoom_log2,
+                    value: RetainedValueSample {
+                        record_height: -2.0,
+                    },
+                };
+                let result = sample.project_from_anchor(&target, [0.0; 2], 0.0);
+                assert_ne!(
+                    result,
+                    Err(ReprojectionError::InvalidTarget),
+                    "{} {role} target rejected its valid plane",
+                    case.name
+                );
+                corpus_pose_count += 1;
+                if target.grid_width == 0
+                    || target.grid_height == 0
+                    || matches!(target.map, PoseMap::EdgeOn)
+                {
+                    continue;
+                }
+                assert!(
+                    result.is_ok(),
+                    "{} {role} target did not project",
+                    case.name
+                );
+                if target.plane == canonical_julia_plane {
+                    canonical_count += 1;
+                } else {
+                    constructed_count += 1;
+                }
+                target_count += 1;
+            }
+        }
+        assert_eq!(corpus_pose_count, FROZEN_CORPUS_POSE_ENTRIES);
+        assert_eq!(target_count, FROZEN_TARGET_POSES);
+        assert_eq!(canonical_count, FROZEN_CANONICAL_JULIA_TARGETS);
+        assert_eq!(constructed_count, FROZEN_CONSTRUCTED_TARGETS);
+    }
+
+    #[test]
+    fn canonical_and_constructed_julia_planes_project_equivalently() {
+        /// Binary32 `cos(pi/2)` is the constructed Julia plane's canonical-zero alternative.
+        const CONSTRUCTED_JULIA_ZERO_BITS: u32 = 0x248d_3132;
+
+        let canonical = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut constructed = canonical;
+        constructed.plane =
+            construct_plane(constructed.object).expect("Julia target plane constructs");
+        assert_ne!(canonical.plane, constructed.plane);
+        assert_eq!(
+            constructed.plane.basis_u[2].to_bits(),
+            CONSTRUCTED_JULIA_ZERO_BITS
+        );
+        assert_eq!(
+            constructed.plane.basis_v[3].to_bits(),
+            CONSTRUCTED_JULIA_ZERO_BITS
+        );
+
+        let sample = ReconstructedSample {
+            ambient_four: canonical.plane_origin,
+            source_local_four: canonical.plane.local_point([0.125, -0.0625]),
+            source_zoom_log2: canonical.zoom_log2,
+            value: RetainedValueSample {
+                record_height: -2.0,
+            },
+        };
+        let anchor = [0.25, -0.5];
+        let canonical_projection = sample
+            .project_from_anchor(&canonical, anchor, 0.0)
+            .expect("canonical Julia target projects");
+        let constructed_projection = sample
+            .project_from_anchor(&constructed, anchor, 0.0)
+            .expect("constructed Julia target projects");
+        let screen_error = (canonical_projection.screen[0] - constructed_projection.screen[0])
+            .hypot(canonical_projection.screen[1] - constructed_projection.screen[1]);
+        assert!(screen_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX));
+        assert!(
+            (canonical_projection.linear_depth - constructed_projection.linear_depth).abs()
+                <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE)
+        );
     }
 
     #[test]

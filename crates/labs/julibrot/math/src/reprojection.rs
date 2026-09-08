@@ -2,10 +2,30 @@
 
 use thiserror::Error;
 
-use crate::{EscapeGridRecord, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
+use crate::{
+    EscapeGridRecord, ObjectAngles, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls,
+    construct_plane,
+};
 
-const POLE_EPSILON: f64 = 1.0e-4;
+/// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
+
+impl Plane {
+    /// Exact-zero Julia basis accepted alongside the independently constructed rounded plane.
+    pub const CANONICAL_JULIA_PLANE: Self = Self {
+        basis_u: [1.0, 0.0, 0.0, 0.0],
+        basis_v: [0.0, 1.0, 0.0, 0.0],
+    };
+
+    /// Expands one two-dimensional chart coordinate through this plane's rounded basis.
+    #[must_use]
+    pub fn local_point(self, coordinate: [f64; 2]) -> [f64; 4] {
+        core::array::from_fn(|axis| {
+            f64::from(self.basis_u[axis])
+                .mul_add(coordinate[0], f64::from(self.basis_v[axis]) * coordinate[1])
+        })
+    }
+}
 
 /// Palette-independent value information needed to rebuild one retained sample's lift.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,8 +52,68 @@ pub struct SourceDepthRecord {
 pub struct ReconstructedSample {
     /// Absolute finite mirror of the canonical slice point.
     pub ambient_four: [f64; 4],
+    /// Source-anchor-relative point retained before finite-mirror addition can lose deep detail.
+    pub source_local_four: [f64; 4],
+    /// Source scale used to express `source_local_four` in the requested zoom frame.
+    pub source_zoom_log2: f64,
     /// Palette-independent value information that supplies target height.
     pub value: RetainedValueSample,
+}
+
+impl ReconstructedSample {
+    /// Reconstructs one source sample and verifies its pixel and linear-depth receipt.
+    ///
+    /// Separate bounds let a descriptor declare the independently measured coordinate and depth
+    /// errors introduced by its `f32` lanes, while the existing free function retains its stricter
+    /// binary64 self-check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid inputs or a source projection outside either bound.
+    pub fn from_source_receipt(
+        pose: &Pose,
+        source_pixel: [f64; 2],
+        depth: SourceDepthRecord,
+        value: RetainedValueSample,
+        pixel_tolerance: f64,
+        depth_tolerance: f64,
+    ) -> Result<Self, ReprojectionError> {
+        if !pixel_tolerance.is_finite()
+            || pixel_tolerance < 0.0
+            || !depth_tolerance.is_finite()
+            || depth_tolerance < 0.0
+        {
+            return Err(ReprojectionError::InvalidSource);
+        }
+        reconstruct_source_sample_with_tolerance(
+            pose,
+            source_pixel,
+            depth,
+            value,
+            pixel_tolerance,
+            depth_tolerance,
+        )
+    }
+
+    /// Maps this source-local point into a requested exact-anchor frame and projects it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid placement or target inputs, an error above one pixel,
+    /// or a target projection pole.
+    pub fn project_from_anchor(
+        self,
+        target: &Pose,
+        source_to_request_anchor_px: [f64; 2],
+        placement_error_px: f64,
+    ) -> Result<ProjectedSample, ReprojectionError> {
+        project_reconstructed_sample_from_anchor(
+            target,
+            self,
+            source_to_request_anchor_px,
+            placement_error_px,
+        )
+    }
 }
 
 /// Complete binary64 target projection of one reconstructed retained sample.
@@ -47,18 +127,50 @@ pub struct ProjectedSample {
     pub raster_depth: f64,
 }
 
+impl ProjectedSample {
+    /// Smallest admitted positive denominator or observer distance in the shared projection.
+    pub const POLE_EPSILON: f64 = 1.0e-4;
+    /// Descriptor placement is admitted only when its independent and split error is at most 1 px.
+    pub const PLACEMENT_ERROR_LIMIT_PX: f64 = 1.0;
+
+    /// Projects one point already expressed relative to the requested plane origin.
+    ///
+    /// This is the shared ordered five-dimensional chain used by retained-sample projection and
+    /// the whole-grid planner. Keeping plane-point construction outside this entry preserves the
+    /// planner's existing binary64 basis algebra while giving both paths one camera, translation,
+    /// perspective, observer, depth, and viewport implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid pose, an edge-on map, a non-finite input, or a
+    /// perspective pole.
+    pub fn from_local_point(
+        pose: &Pose,
+        local_four: [f64; 4],
+        value: RetainedValueSample,
+    ) -> Result<Self, ReprojectionError> {
+        project_local_point(pose, local_four, value)
+    }
+}
+
 /// Typed refusal from source reconstruction or target projection.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum ReprojectionError {
     /// The retained record, pose, or derived point was invalid or non-finite.
     #[error("the retained source sample is invalid or non-finite")]
     InvalidSource,
+    /// The requested pose's rounded plane does not match its object controls.
+    #[error("the requested target pose has an invalid sampled plane")]
+    InvalidTarget,
     /// The source sample did not reproduce its stored pixel and linear depth.
     #[error("the retained source sample failed its self-round-trip receipt")]
     SourceRoundTrip,
     /// The target is edge-on or the sample reaches a projection pole.
     #[error("the target projection has no finite visible result")]
     ProjectionPole,
+    /// The exact-anchor split cannot certify the descriptor placement below one pixel.
+    #[error("the descriptor exact-anchor placement exceeds its one-pixel error ceiling")]
+    UncertifiedPlacement,
 }
 
 /// Builds a flat-chart `S1` fixture record for one visible source sample.
@@ -88,8 +200,8 @@ pub fn source_depth_record(
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let a_f = chart_scale * homogeneous[0] / homogeneous[2];
     let b_f = chart_scale * homogeneous[1] / homogeneous[2];
-    let ambient_four = absolute_plane_point(pose, [a_f, b_f]);
-    let projected = project_ambient_point(pose, ambient_four, value)?;
+    let source_local_four = pose.plane.local_point([a_f, b_f]);
+    let projected = ProjectedSample::from_local_point(pose, source_local_four, value)?;
     Ok(SourceDepthRecord {
         a_f,
         b_f,
@@ -110,6 +222,24 @@ pub fn reconstruct_source_sample(
     depth: SourceDepthRecord,
     value: RetainedValueSample,
 ) -> Result<ReconstructedSample, ReprojectionError> {
+    ReconstructedSample::from_source_receipt(
+        pose,
+        source_pixel,
+        depth,
+        value,
+        SOURCE_ROUND_TRIP_EPSILON,
+        SOURCE_ROUND_TRIP_EPSILON,
+    )
+}
+
+fn reconstruct_source_sample_with_tolerance(
+    pose: &Pose,
+    source_pixel: [f64; 2],
+    depth: SourceDepthRecord,
+    value: RetainedValueSample,
+    pixel_tolerance: f64,
+    depth_tolerance: f64,
+) -> Result<ReconstructedSample, ReprojectionError> {
     if !depth.valid
         || !source_pixel.into_iter().all(f64::is_finite)
         || ![depth.a_f, depth.b_f, depth.zeta_f, value.record_height]
@@ -119,15 +249,18 @@ pub fn reconstruct_source_sample(
     {
         return Err(ReprojectionError::InvalidSource);
     }
+    let source_local_four = pose.plane.local_point([depth.a_f, depth.b_f]);
     let sample = ReconstructedSample {
         ambient_four: absolute_plane_point(pose, [depth.a_f, depth.b_f]),
+        source_local_four,
+        source_zoom_log2: pose.zoom_log2,
         value,
     };
-    let projected = project_ambient_point(pose, sample.ambient_four, value)?;
+    let projected = ProjectedSample::from_local_point(pose, source_local_four, value)?;
     let pixel_error =
         (projected.screen[0] - source_pixel[0]).hypot(projected.screen[1] - source_pixel[1]);
     let depth_error = (projected.linear_depth - depth.zeta_f).abs();
-    if pixel_error > SOURCE_ROUND_TRIP_EPSILON || depth_error > SOURCE_ROUND_TRIP_EPSILON {
+    if pixel_error > pixel_tolerance || depth_error > depth_tolerance {
         return Err(ReprojectionError::SourceRoundTrip);
     }
     Ok(sample)
@@ -143,6 +276,54 @@ pub fn project_reconstructed_sample(
     sample: ReconstructedSample,
 ) -> Result<ProjectedSample, ReprojectionError> {
     project_ambient_point(target, sample.ambient_four, sample.value)
+}
+
+/// Maps a reconstructed source-local point into a requested exact-anchor frame and projects it.
+///
+/// `source_to_request_anchor_px` is the exact source anchor relative to the requested anchor in
+/// requested-pose pixels. `placement_error_px` combines the independent f64 oracle bound with the
+/// compensated residual's rounding bound.
+///
+/// # Errors
+///
+/// Returns a typed refusal for invalid placement or target inputs, an error above one pixel, or a
+/// target projection pole.
+fn project_reconstructed_sample_from_anchor(
+    target: &Pose,
+    sample: ReconstructedSample,
+    source_to_request_anchor_px: [f64; 2],
+    placement_error_px: f64,
+) -> Result<ProjectedSample, ReprojectionError> {
+    let expected_plane =
+        construct_plane(target.object).map_err(|_| ReprojectionError::InvalidTarget)?;
+    let plane_matches = target.plane == expected_plane
+        || (target.object == ObjectAngles::JULIA && target.plane == Plane::CANONICAL_JULIA_PLANE);
+    if !plane_matches {
+        return Err(ReprojectionError::InvalidTarget);
+    }
+    if !source_to_request_anchor_px
+        .into_iter()
+        .chain(sample.source_local_four)
+        .chain([sample.source_zoom_log2, placement_error_px])
+        .all(f64::is_finite)
+        || placement_error_px < 0.0
+    {
+        return Err(ReprojectionError::InvalidSource);
+    }
+    if placement_error_px > ProjectedSample::PLACEMENT_ERROR_LIMIT_PX {
+        return Err(ReprojectionError::UncertifiedPlacement);
+    }
+    let scale_ratio = (target.zoom_log2 - sample.source_zoom_log2).exp2();
+    if !scale_ratio.is_finite() || scale_ratio <= 0.0 || target.grid_width == 0 {
+        return Err(ReprojectionError::ProjectionPole);
+    }
+    let chart_scale = 4.0 / f64::from(target.grid_width);
+    let anchor_chart = source_to_request_anchor_px.map(|value| chart_scale * value);
+    let anchor_local = target.plane.local_point(anchor_chart);
+    let requested_local: [f64; 4] = core::array::from_fn(|axis| {
+        scale_ratio.mul_add(sample.source_local_four[axis], anchor_local[axis])
+    });
+    ProjectedSample::from_local_point(target, requested_local, sample.value)
 }
 
 /// Converts one existing escape record into the value-height input used by reprojection.
@@ -179,12 +360,8 @@ pub fn retained_value_sample(
 }
 
 fn absolute_plane_point(pose: &Pose, coordinate: [f64; 2]) -> [f64; 4] {
-    core::array::from_fn(|axis| {
-        f64::from(pose.plane.basis_u[axis]).mul_add(
-            coordinate[0],
-            f64::from(pose.plane.basis_v[axis]).mul_add(coordinate[1], pose.plane_origin[axis]),
-        )
-    })
+    let local_four = pose.plane.local_point(coordinate);
+    core::array::from_fn(|axis| pose.plane_origin[axis] + local_four[axis])
 }
 
 fn project_ambient_point(
@@ -192,17 +369,28 @@ fn project_ambient_point(
     ambient_four: [f64; 4],
     value: RetainedValueSample,
 ) -> Result<ProjectedSample, ReprojectionError> {
+    if !ambient_four.into_iter().all(f64::is_finite) {
+        return Err(ReprojectionError::ProjectionPole);
+    }
+    let local_four: [f64; 4] =
+        core::array::from_fn(|axis| ambient_four[axis] - pose.plane_origin[axis]);
+    project_local_point(pose, local_four, value)
+}
+
+fn project_local_point(
+    pose: &Pose,
+    local_four: [f64; 4],
+    value: RetainedValueSample,
+) -> Result<ProjectedSample, ReprojectionError> {
     if pose.grid_width == 0
         || pose.grid_height == 0
         || !pose.view.is_valid()
-        || !ambient_four.into_iter().all(f64::is_finite)
+        || !local_four.into_iter().all(f64::is_finite)
         || !value.record_height.is_finite()
         || matches!(pose.map, PoseMap::EdgeOn)
     {
         return Err(ReprojectionError::ProjectionPole);
     }
-    let local_four: [f64; 4] =
-        core::array::from_fn(|axis| ambient_four[axis] - pose.plane_origin[axis]);
     let height = pose.view.height_scale * (value.record_height + 2.0) * 0.5;
     let mut ambient = [
         local_four[0],
@@ -220,7 +408,9 @@ fn project_ambient_point(
     let distance_four = pose.view.distance_four;
     let unclamped_five = distance_five - ambient[4];
     let denominator_five = unclamped_five.max(RELIEF_NEAR_FRACTION * distance_five);
-    if denominator_five <= POLE_EPSILON || unclamped_five < RELIEF_NEAR_FRACTION * distance_five {
+    if denominator_five <= ProjectedSample::POLE_EPSILON
+        || unclamped_five < RELIEF_NEAR_FRACTION * distance_five
+    {
         return Err(ReprojectionError::ProjectionPole);
     }
     let scale_five = distance_five / denominator_five;
@@ -231,7 +421,7 @@ fn project_ambient_point(
         ambient[3] * scale_five,
     ];
     let denominator_four = distance_four - projected_four[3];
-    if denominator_four <= POLE_EPSILON {
+    if denominator_four <= ProjectedSample::POLE_EPSILON {
         return Err(ReprojectionError::ProjectionPole);
     }
     let scale_four = distance_four / denominator_four;
@@ -253,7 +443,7 @@ fn project_ambient_point(
         pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - distance_four,
     ];
     let linear_depth = -view[2];
-    if !linear_depth.is_finite() || linear_depth <= POLE_EPSILON {
+    if !linear_depth.is_finite() || linear_depth <= ProjectedSample::POLE_EPSILON {
         return Err(ReprojectionError::ProjectionPole);
     }
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
@@ -306,6 +496,11 @@ const fn apply_homogeneous(matrix: [f64; 9], point: [f64; 2]) -> [f64; 3] {
 mod tests {
     use super::*;
     use crate::{ObjectAngles, construct_plane, screen_to_plane};
+
+    /// The solved binary64 fixture keeps its pixel receipt at the strict existing bound.
+    const DECLARED_PIXEL_TOLERANCE: f64 = SOURCE_ROUND_TRIP_EPSILON;
+    /// One rounded `f32` depth lane needs two millionths of linear-distance headroom.
+    const DECLARED_DEPTH_TOLERANCE: f64 = 2.0e-6;
 
     fn pose_for(object: ObjectAngles, view: ViewControls) -> Pose {
         let extent = [960, 540];
@@ -489,6 +684,28 @@ mod tests {
             reconstruct_source_sample(&source, pixel, wrong_depth, value),
             Err(ReprojectionError::SourceRoundTrip)
         );
+        assert!(
+            ReconstructedSample::from_source_receipt(
+                &source,
+                pixel,
+                wrong_depth,
+                value,
+                DECLARED_PIXEL_TOLERANCE,
+                DECLARED_DEPTH_TOLERANCE,
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            ReconstructedSample::from_source_receipt(
+                &source,
+                pixel,
+                depth,
+                value,
+                -1.0,
+                DECLARED_DEPTH_TOLERANCE,
+            ),
+            Err(ReprojectionError::InvalidSource)
+        );
     }
 
     #[test]
@@ -522,10 +739,64 @@ mod tests {
                 &pole,
                 ReconstructedSample {
                     ambient_four: source.plane_origin,
+                    source_local_four: [0.0; 4],
+                    source_zoom_log2: source.zoom_log2,
                     value,
                 }
             ),
             Err(ReprojectionError::ProjectionPole)
+        );
+    }
+
+    #[test]
+    fn exact_four_dimensional_pole_boundary_is_refused() {
+        let source = pose(ViewControls::NEUTRAL);
+        let value = RetainedValueSample {
+            record_height: -2.0,
+        };
+        let sample = ReconstructedSample {
+            ambient_four: source.plane_origin,
+            source_local_four: [0.0; 4],
+            source_zoom_log2: source.zoom_log2,
+            value,
+        };
+        let mut boundary = source;
+        boundary.view.distance_four = ProjectedSample::POLE_EPSILON;
+        assert_eq!(
+            project_reconstructed_sample(&boundary, sample),
+            Err(ReprojectionError::ProjectionPole)
+        );
+
+        let mut above = boundary;
+        above.view.distance_four = f64::from_bits(ProjectedSample::POLE_EPSILON.to_bits() + 1);
+        assert!(project_reconstructed_sample(&above, sample).is_ok());
+    }
+
+    #[test]
+    fn exact_anchor_projection_refuses_a_stale_target_plane() {
+        let target = pose(ViewControls::NEUTRAL);
+        let sample = ReconstructedSample {
+            ambient_four: target.plane_origin,
+            source_local_four: [0.0; 4],
+            source_zoom_log2: target.zoom_log2,
+            value: RetainedValueSample {
+                record_height: -2.0,
+            },
+        };
+        assert!(
+            sample
+                .project_from_anchor(&target, [0.25, -0.5], 0.0)
+                .is_ok()
+        );
+
+        let mut stale = target;
+        stale.plane = Plane {
+            basis_u: [0.0; 4],
+            basis_v: [0.0; 4],
+        };
+        assert_eq!(
+            sample.project_from_anchor(&stale, [0.25, -0.5], 0.0),
+            Err(ReprojectionError::InvalidTarget)
         );
     }
 
