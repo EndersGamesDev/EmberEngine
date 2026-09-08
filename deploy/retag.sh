@@ -8,6 +8,10 @@ started=$SECONDS
 apply=""
 remotes=()
 
+usage() {
+    echo "usage: bash deploy/retag.sh [--apply] [remote ...]"
+}
+
 die() {
     echo "retag: $*" >&2
     exit 1
@@ -23,10 +27,6 @@ timed() {
 
 verify_tag() {
     git verify-tag "$1" >/dev/null 2>&1
-}
-
-usage() {
-    echo "usage: bash deploy/retag.sh [--apply] [remote ...]"
 }
 
 for arg in "$@"; do
