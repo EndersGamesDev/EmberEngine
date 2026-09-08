@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#090b0e">
+  <meta name="description" content="Awaken beneath the castle. A dark fantasy dungeon built in Ember Engine. Play with a controller, keyboard and mouse, or touch.">
+  <title>End Game v8 â€” Edge and Guard</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main id="game" aria-label="End Game">
+    <div id="ember-root" aria-label="Dungeon game view"></div>
+    <div class="vignette" aria-hidden="true"></div>
+    <div id="hurt" aria-hidden="true"></div>
+    <div id="guard-flash" aria-hidden="true"></div>
+    <header class="topline">
+      <a class="engine-link" href="../../../">EMBER <span>/</span> END GAME</a>
+      <div class="top-actions"><span class="version">VERSION 8</span><button id="menu-button" aria-label="Open pause menu" hidden>Menu <kbd>Esc</kbd></button></div>
+    </header>
+
+    <section id="title-screen" class="screen title-screen" aria-labelledby="game-title">
+      <div class="title-art" aria-hidden="true"></div>
+      <div class="title-content">
+        <p class="overline"><span></span> CHAPTER I Â· THE AWAKENING</p>
+        <h1 id="game-title">END<br>GAME<span class="title-period">.</span></h1>
+        <p class="intro">Beneath the castle, something<br>human is waking.</p>
+        <div class="title-buttons"><button id="begin" class="primary">Enter the dungeon <span>â†—</span></button><button id="trailer-button" class="text-button">â–· Watch the prologue</button></div>
+        <div class="input-promise"><span id="device-label">Controller Â· Keyboard & mouse Â· Touch</span><span>A single-player experience</span></div>
+      </div>
+      <div class="title-footer"><span>A WORLD BUILT IN EMBER</span><button id="title-settings" class="text-button">Controls & settings</button><span>01 / THE DUNGEON</span></div>
+    </section>
+
+    <section id="hud" hidden aria-label="Player status">
+      <div class="vitals"><div class="healthline"><span id="form">WOLF</span><span id="health-value">100</span></div><meter id="health" min="0" max="100" value="100" aria-label="Health"></meter><meter id="stamina" min="0" max="100" value="100" aria-label="Stamina"></meter></div>
+      <div class="quest"><span class="overline">THE AWAKENING</span><p id="objective">Search the cell for a way out</p></div>
+      <div class="crosshair" aria-hidden="true"></div>
+      <div id="combat-hud" hidden><span class="overline">WEIGHT OF THE BLADE</span><strong id="combo-name"></strong><span id="combo-cue"></span><div class="rhythm-track"><i id="rhythm-fill"></i></div></div>
+      <div id="guard-status" hidden role="status"><strong id="guard-label">Guard down</strong><span id="guard-cue">Hold right mouse / F to guard</span></div>
+      <div id="alert" hidden><span id="warden-status">The warden hears you</span><meter id="warden-health" min="0" max="100" value="100" aria-label="Warden health" hidden></meter></div>
+      <div class="bottom-hud"><div id="hint"><kbd>E</kbd><span id="prompt"></span></div><p id="message" role="status"></p><span id="performance"></span></div>
+      <div class="shortcuts" id="shortcuts">WASD move <span>Â·</span> Mouse look <span>Â·</span> E interact <span>Â·</span> C crouch</div>
+    </section>
+
+    <aside id="dialogue" hidden role="status" aria-live="polite" aria-atomic="true"><span class="dialogue-speaker">WARDEN</span><p id="dialogue-text"></p></aside>
+
+    <section id="touch" hidden aria-label="Touch controls">
+      <div id="look-zone" aria-label="Drag to look"></div>
+      <div id="stick" role="group" aria-label="Movement joystick"><div id="stick-knob"></div><span>MOVE</span></div>
+      <div class="touch-actions"><button data-action="16" aria-label="Change armor form">Form</button><button data-hold="2" aria-label="Hold to crouch">Crouch</button><button data-action="4" aria-label="Jump">Jump</button><button data-action="8" aria-label="Dodge">Dodge</button><button class="touch-interact" data-action="1" aria-label="Interact">Use</button><button class="touch-strike" data-action="2" aria-label="Swing sword">Strike</button><button class="touch-guard" data-hold="4" aria-label="Hold to guard"><span>HOLD</span>Guard</button></div>
+    </section>
+
+    <dialog id="settings" aria-labelledby="settings-title">
+      <div class="dialog-head"><p class="overline">END GAME</p><button id="close-settings" aria-label="Close settings">Ã—</button></div>
+      <h2 id="settings-title">Take a breath.</h2>
+      <p class="muted">The dungeon will wait.</p>
+      <div class="setting-row"><label for="quality">Resolution</label><select id="quality"><option value="auto">Adaptive Â· up to 5K</option><option value="performance">Performance</option><option value="native">Native Â· up to 5K</option></select></div>
+      <p class="setting-note">Adaptive resolution follows your display and frame rate. Higher pixel counts need more graphics power.</p>
+      <div class="setting-row"><label for="volume">Sound</label><input id="volume" type="range" min="0" max="100" value="55"></div>
+      <p class="setting-note">Includes the wardenâ€™s voice. Dialogue subtitles remain visible when sound is muted.</p>
+      <button id="fullscreen" class="secondary">Fullscreen</button>
+      <div class="controls"><h3>Choose your way through.</h3><table><thead><tr><th>Action</th><th>Keyboard</th><th>PS5 controller</th></tr></thead><tbody><tr><td>Move / look</td><td>WASD / mouse</td><td>Left / right stick</td></tr><tr><td>Interact</td><td>E</td><td>â–¡ Square</td></tr><tr><td>Strike</td><td>Left click</td><td>R2 / R1</td></tr><tr><td>Hold guard</td><td>Right mouse / F</td><td>L2</td></tr><tr><td>Jump / dodge</td><td>Space / Alt</td><td>Ã— / â—‹</td></tr><tr><td>Crouch / sprint</td><td>Hold C / Shift</td><td>Hold L1 / L3</td></tr><tr><td>Armor / camera</td><td>Q / V</td><td>â–³ / R3</td></tr><tr><td>Pause</td><td>Esc</td><td>Options</td></tr></tbody></table><p class="setting-note">Touch: left thumb to move, drag the right side to look, tap the action buttons, and hold Guard to defend. Press any controller button to connect. Vibration depends on your browser.</p></div>
+      <div class="combo-guide"><h3>Feel the weight.</h3><p>Tap left click, R2 / R1, or Strike. Each press adds one swing.</p><dl><dt>Single strike</dt><dd>One tap</dd><dt>Wolf's Fang</dt><dd>Tap Â· tap Â· tap</dd><dt>Gravebreaker</dt><dd>Tap Â· pause Â· tap</dd><dt>Rising Wolf</dt><dd>Tap Â· tap Â· pause Â· tap</dd></dl><p>Quick taps: within 0.3 seconds. A deliberate pause: 0.3â€“0.9 seconds between taps. Your next swings are buffered. Holding attack does not repeat. Hold right mouse, F, L2, or Guard to raise the blade after committed swings finish. Face the knife: each block costs 28 stamina; an exhausted guard breaks. Release guard to recover stamina.</p></div>
+      <button id="resume" class="primary">Return</button><button id="restart" class="text-button" hidden>Restart the chapter</button>
+    </dialog>
+
+    <dialog id="prologue" aria-label="End Game prologue"><video id="film" src="./prologue.mp4" controls playsinline preload="none" poster="./cover.png"></video><button id="skip-film" class="secondary">Return to game</button></dialog>
+    <div id="boot" class="boot" hidden><p class="overline">END GAME</p><h2>Entering the darkâ€¦</h2><p id="boot-detail">Loading the dungeon and its inhabitants.</p><progress aria-label="Loading"></progress></div>
+    <section id="complete" class="screen completion" hidden><p class="overline">CHAPTER I</p><h2>The first<br>chains fall.</h2><p>Beyond the iron, the hunt begins.</p><div class="title-buttons"><button id="play-again" class="primary">Awaken again</button><a href="../../../" class="secondary">Back to Ember</a></div><span class="version">END GAME Â· VERSION 8</span></section>
+  </main>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

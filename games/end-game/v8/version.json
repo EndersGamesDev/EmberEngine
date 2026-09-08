@@ -1,0 +1,21 @@
+{
+  "game": "end-game",
+  "version": "8.0.0",
+  "source": "47c944f9773a7a30cd0525db0d9eb87c0d8f1f1a",
+  "files": {
+    "index.html": "1b987da2ae8985ea45346433ad05549e2d8d00b44c6ba23a95d1e47d373677ed",
+    "main.js": "8d305638b6532cd4bf13220e124b888783d767e6cd37558f13f36e1105d10f40",
+    "quality.js": "6a24e4240df8d62b386a8b5f95e3fef30a210bab612e554fdda4e4dc5f790117",
+    "style.css": "a7b8777a542f43251ea179e909071bc13033f7df0af65d62a38b5a15e58134db",
+    "cover.png": "49ff994de7263c799ef8b3e36a3b15f86fb26a43222094ecccdc2a255d8586e8",
+    "prologue.mp4": "ca6fe16a50fb3dd305fb2d49f53573da19af2c850dfb1814ca86bfe4d75a7741",
+    "ambience.wav": "09eda9da41f6750c0d30c9a7dbf4b16d0b96bc00e72dbe783c2f9d77466174b1",
+    "dialogue.js": "7dc26d1f7174afb9a4b2b3908cf53c857112382275dc2464c1918383408d02e7",
+    "warden-movement.wav": "9c86ca56c8194dff57937cc551fe92fb345a4868d3f914ad2f4455939e240ad4",
+    "warden-unlocking.wav": "e3acdbeb63de89a89a715c1fb1279b61b914727324102abdb78545d55121b1cb",
+    "warden-sword.wav": "5af7895a73da17c473b8e02513f1dc8543bb8820562ff25eb6c9f1a32f7e6777",
+    "warden-death.wav": "e93e577b78a3ff170514d749ab98107a3bd4e1a6e8c39d35b339e91ead264fb8",
+    "pkg/end_game.js": "b1687f9814a53202e446b9a4d0847fbd113b9327facf4e36d3c5d9648c2b94a4",
+    "pkg/end_game_bg.wasm": "ebc179d300b360f4f5531101dd5943c34d6f8d724c5fd1b4c82f7be7a4d5d3c5"
+  }
+}

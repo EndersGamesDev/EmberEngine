@@ -242,10 +242,17 @@
       "desc": "Awaken in a detailed castle prison. Explore weathered masonry, aged timber and handmade ironwork, slip past the sleeping warden and claim the greatsword. Controller, keyboard/mouse and touch controls with adaptive resolution.",
       "versions": [
         {
+          "v": "v8",
+          "version": "8.0.0",
+          "path": "games/end-game/v8/",
+          "live": true,
+          "note": "Edge and Guard: edge-leading sword cuts, connected combos and directional blocking"
+        },
+        {
           "v": "v7",
           "version": "7.0.0",
           "path": "games/end-game/v7/",
-          "live": true,
+          "live": false,
           "note": "The Dread Warden: a generated textured jailer, stronger silhouette and weighted rise, pursuit and knife animations"
         },
         {
