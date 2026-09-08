@@ -96,6 +96,8 @@ pub enum TileJobError {
     OutputShapeMismatch,
     #[error("the value and reconstruction outputs alias one span")]
     OutputAlias,
+    #[error("the resident output profile cannot hold the paired reservation")]
+    OutputProfileTooSmall,
     #[error("the queue already contains the stable job ID")]
     DuplicateJob,
     #[error("the resident profile has fewer tiles than protected backdrop slots")]
@@ -694,6 +696,74 @@ impl PairedTileSpanIdentities {
     }
 }
 
+/// Generation-tagged allocation receipt for one `S0`/`S1` output pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PairedOutputAllocation {
+    /// MAIN generation shared by both span identities.
+    pub generation: u32,
+    /// Non-aliasing value and reconstruction span identities.
+    pub spans: PairedTileSpanIdentities,
+    /// Exact logical bytes in both sample columns, excluding physical padding.
+    pub logical_bytes: u64,
+    /// Exact physical bytes reserved by both sample spans.
+    pub reserved_bytes: u64,
+}
+
+impl PairedOutputAllocation {
+    /// Paired-allocation schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 48;
+
+    /// Records two spans allocated together under one MAIN generation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses aliased or unequal spans, byte arithmetic overflow, or a resident profile whose
+    /// DATA capacity cannot hold the exact paired reservation.
+    pub fn from_spans(
+        generation: u32,
+        value: &DataSpan,
+        reconstruction: &DataSpan,
+        profile_reserved_bytes: u64,
+    ) -> Result<Self, TileJobError> {
+        let spans = PairedTileSpanIdentities::new(
+            TileSpanIdentity::new(value.directory_index, generation, value.logical_len),
+            TileSpanIdentity::new(
+                reconstruction.directory_index,
+                generation,
+                reconstruction.logical_len,
+            ),
+        )?;
+        let logical_bytes =
+            DescriptorCostLedger::paired_sample_logical_bytes(u64::from(value.logical_len))
+                .ok_or(TileJobError::ArithmeticOverflow)?;
+        let value_reserved_bytes = value
+            .reserved_records()
+            .checked_mul(DescriptorCostLedger::TEXEL_BYTES)
+            .ok_or(TileJobError::ArithmeticOverflow)?;
+        let reconstruction_reserved_bytes = reconstruction
+            .reserved_records()
+            .checked_mul(DescriptorCostLedger::TEXEL_BYTES)
+            .ok_or(TileJobError::ArithmeticOverflow)?;
+        let reserved_bytes = DescriptorCostLedger::paired_reserved_bytes(
+            value_reserved_bytes,
+            reconstruction_reserved_bytes,
+        )
+        .ok_or(TileJobError::ArithmeticOverflow)?;
+        if reserved_bytes > profile_reserved_bytes {
+            return Err(TileJobError::OutputProfileTooSmall);
+        }
+        Ok(Self {
+            generation,
+            spans,
+            logical_bytes,
+            reserved_bytes,
+        })
+    }
+}
+
 /// One physical RGBA32F descriptor-map texel.
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C, align(16))]
@@ -1016,6 +1086,24 @@ impl DescriptorCostLedger {
     /// Logical bytes in one complete resident tile.
     pub const LOGICAL_BYTES_PER_TILE: u64 =
         Self::SAMPLE_BYTES_PER_TILE + Self::HEADER_BYTES_PER_TILE;
+
+    /// Computes exact logical bytes for equal-length `S0` and `S1` sample columns.
+    #[must_use]
+    pub const fn paired_sample_logical_bytes(sample_count: u64) -> Option<u64> {
+        match sample_count.checked_mul(2) {
+            Some(records) => records.checked_mul(Self::TEXEL_BYTES),
+            None => None,
+        }
+    }
+
+    /// Adds the exact physical reservations for two independently padded sample spans.
+    #[must_use]
+    pub const fn paired_reserved_bytes(
+        value_reserved_bytes: u64,
+        reconstruction_reserved_bytes: u64,
+    ) -> Option<u64> {
+        value_reserved_bytes.checked_add(reconstruction_reserved_bytes)
+    }
 
     /// Computes the exact logical bytes for a resident tile count.
     #[must_use]
@@ -2254,6 +2342,7 @@ mod tests {
         assert_record!(TileMeshHandle, 1, 8);
         assert_record!(TileSpanIdentity, 1, 12);
         assert_record!(PairedTileSpanIdentities, 1, 24);
+        assert_record!(PairedOutputAllocation, 1, 48);
         assert_record!(DescriptorTexel, 1, 16);
         assert_record!(TilePoseHeader, 1, 512);
         assert_record!(DescriptorSamplePair, 1, 32);
@@ -2297,6 +2386,18 @@ mod tests {
         assert_eq!(DescriptorCostLedger::DATA_PAGE_BYTES, 1_048_576);
         assert_eq!(DescriptorCostLedger::SAMPLE_PAGES_PER_TILE, 2);
         assert_eq!(
+            DescriptorCostLedger::paired_sample_logical_bytes(65_536),
+            Some(2_097_152)
+        );
+        assert_eq!(
+            DescriptorCostLedger::paired_reserved_bytes(1_048_576, 1_048_576),
+            Some(2_097_152)
+        );
+        assert_eq!(
+            DescriptorCostLedger::paired_reserved_bytes(u64::MAX, 1),
+            None
+        );
+        assert_eq!(
             DescriptorCostLedger::ACTIVE_PREFIX_RECORDS
                 + DescriptorCostLedger::HEADER_SLOTS * TilePoseHeader::TEXELS as u64
                 + DescriptorCostLedger::OWNERSHIP_RECORDS,
@@ -2313,6 +2414,49 @@ mod tests {
         ] {
             assert_eq!(DescriptorCostLedger::logical_bytes(count), Some(bytes));
         }
+    }
+
+    #[test]
+    fn paired_allocation_is_generation_tagged_non_aliasing_and_profile_checked() {
+        let mut arena = SpanArena::new(256, 2, 8, 512, 16).expect("fixture arena");
+        let [value, reconstruction] = arena
+            .allocate_pair(65_536, 256)
+            .expect("one whole-grid pair fits atomically");
+        let allocation = PairedOutputAllocation::from_spans(23, &value, &reconstruction, 2_097_152)
+            .expect("the exact pair fits its resident profile");
+        assert_eq!(
+            allocation,
+            PairedOutputAllocation {
+                generation: 23,
+                spans: PairedTileSpanIdentities {
+                    value: TileSpanIdentity::new(value.directory_index, 23, 65_536),
+                    reconstruction: TileSpanIdentity::new(
+                        reconstruction.directory_index,
+                        23,
+                        65_536,
+                    ),
+                },
+                logical_bytes: 2_097_152,
+                reserved_bytes: 2_097_152,
+            }
+        );
+        assert_ne!(
+            allocation.spans.value.directory_index,
+            allocation.spans.reconstruction.directory_index
+        );
+        assert_eq!(allocation.spans.value.generation, allocation.generation);
+        assert_eq!(
+            allocation.spans.reconstruction.generation,
+            allocation.generation
+        );
+        assert_eq!(
+            PairedOutputAllocation::from_spans(23, &value, &reconstruction, 2_097_151),
+            Err(TileJobError::OutputProfileTooSmall)
+        );
+        assert_eq!(
+            PairedOutputAllocation::from_spans(23, &value, &value, 2_097_152),
+            Err(TileJobError::OutputAlias)
+        );
     }
 
     #[test]
