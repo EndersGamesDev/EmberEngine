@@ -413,10 +413,7 @@ impl Presenter {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
                 || previous.state.precision_mode != main.state.precision_mode
         });
-        let revision_advanced = self
-            .main
-            .as_ref()
-            .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
+        let reference_advanced = accepted_reference_advanced(self.main.as_ref(), &main);
         let selection_replaced = self
             .main
             .as_ref()
@@ -430,7 +427,7 @@ impl Presenter {
             main.plane,
             precision_mode_name,
         );
-        if revision_advanced {
+        if reference_advanced {
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
                 main.state.centre_revision,
@@ -495,6 +492,11 @@ impl Presenter {
         self.facts.iteration_cap = Some(held.frame.iteration_cap);
         self.active_warp_scene = Some(held.frame.scene_id);
     }
+}
+
+fn accepted_reference_advanced(previous: Option<&PresentMain>, next: &PresentMain) -> bool {
+    previous
+        .is_none_or(|previous| previous.state.generation_applied != next.state.generation_applied)
 }
 
 fn scene_selection_replaced(previous: &PresentMain, current: &PresentMain) -> bool {

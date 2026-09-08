@@ -186,7 +186,7 @@ impl SceneLedger {
         shift_px: [f64; 2],
     ) {
         if let Some(frame) = &mut self.retained
-            && frame.centre_revision != new_revision
+            && frame.pose.orbit_generation != new_generation
         {
             let sampled_pose = frame.pose;
             rebase_pose(&mut frame.pose, &sampled_pose, shift_px);
@@ -194,7 +194,7 @@ impl SceneLedger {
             frame.centre_revision = new_revision;
         }
         if let Some(pending) = &mut self.pending
-            && pending.centre_revision != new_revision
+            && pending.pose.orbit_generation != new_generation
         {
             let sampled_pose = pending.pose;
             rebase_pose(&mut pending.pose, &sampled_pose, shift_px);
@@ -522,7 +522,7 @@ mod tests {
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
         begin(&mut ledger, 2, 1);
-        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 1, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -535,12 +535,17 @@ mod tests {
                 .map(|pending| pending.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
-        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, [40.0, -80.0]);
         assert_eq!(
             ledger
                 .retained()
                 .map(|frame| frame.pose.centre_from_reference_px),
             Some([7.0, 5.0])
+        );
+        assert_eq!(
+            ledger.retained().map(|frame| frame.centre_revision),
+            Some(1),
+            "a centre revision without a new accepted reference cannot replay its shift"
         );
     }
 
