@@ -1828,11 +1828,11 @@ mod tests {
                     ambient_four: pose.plane_origin,
                     value,
                 };
-                let direct = ember_julibrot_math::project_reconstructed_sample(
-                    &pose,
-                    direct_sample,
-                )
-                .unwrap_or_else(|error| panic!("{} direct source receipt: {error}", case.name));
+                let direct =
+                    ember_julibrot_math::project_reconstructed_sample(&pose, direct_sample)
+                        .unwrap_or_else(|error| {
+                            panic!("{} direct source receipt: {error}", case.name)
+                        });
                 let depth = SourceDepthRecord {
                     a_f: 0.0,
                     b_f: 0.0,

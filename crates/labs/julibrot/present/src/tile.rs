@@ -203,8 +203,8 @@ pub fn unpack_descriptor_sample(
     .into_iter()
     .all(f32::is_finite)
         || ![depth.a_f, depth.b_f, depth.zeta_f]
-        .into_iter()
-        .all(f64::is_finite)
+            .into_iter()
+            .all(f64::is_finite)
         || (valid && depth.zeta_f <= 0.0)
     {
         return Err(ReprojectionError::InvalidSource);
@@ -718,7 +718,11 @@ mod tests {
 
         let exact = reconstruct_source_sample(&source, source_pixel, depth, value)
             .expect("binary64 source fixture round-trips");
-        for (actual, expected) in reconstructed.ambient_four.into_iter().zip(exact.ambient_four) {
+        for (actual, expected) in reconstructed
+            .ambient_four
+            .into_iter()
+            .zip(exact.ambient_four)
+        {
             assert!((actual - expected).abs() <= SOURCE_COORDINATE_TOLERANCE);
         }
     }
@@ -749,13 +753,12 @@ mod tests {
             .expect("binary64 source sample projects to the requested pose");
         let projected = project_descriptor_sample(&header, &pair, source_pixel, &target)
             .expect("descriptor sample projects through the requested pose");
-        let target_error = (projected.screen[0] - direct.screen[0])
-            .hypot(projected.screen[1] - direct.screen[1]);
+        let target_error =
+            (projected.screen[0] - direct.screen[0]).hypot(projected.screen[1] - direct.screen[1]);
         assert!(target_error <= TARGET_PROJECTION_TOLERANCE_PX);
         assert!((projected.linear_depth - direct.linear_depth).abs() <= TARGET_DEPTH_TOLERANCE);
         assert!(
-            (projected.raster_depth - direct.raster_depth).abs()
-                <= TARGET_RASTER_DEPTH_TOLERANCE
+            (projected.raster_depth - direct.raster_depth).abs() <= TARGET_RASTER_DEPTH_TOLERANCE
         );
 
         let mut edge = target;
