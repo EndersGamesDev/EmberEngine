@@ -891,6 +891,75 @@ impl DescriptorSamplePair {
     }
 }
 
+/// Source-pose lanes appended to a value kernel when it produces `S0` and `S1` together.
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct SourceReconstructionUniform {
+    /// Five ordered ambient-camera factor pairs.
+    pub camera_rotation_pairs: [[f32; 4]; 5],
+    /// Four low coordinates followed by the padded fifth coordinate.
+    pub camera_translation: [[f32; 4]; 2],
+    /// `(cos_yaw,sin_yaw,cos_pitch,sin_pitch)`.
+    pub observer_rotation: [f32; 4],
+    /// `(height_scale,distance_five,distance_four,chart_scale)`.
+    pub view_scale: [f32; 4],
+}
+
+impl SourceReconstructionUniform {
+    /// Source-reconstruction uniform schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 144;
+
+    /// Selects the source projection lanes from one validated descriptor header.
+    #[must_use]
+    pub fn from_header(header: &TilePoseHeader) -> Option<Self> {
+        if validate_pose_header(header).is_err() {
+            return None;
+        }
+        let camera_rotation_pairs = core::array::from_fn(|index| {
+            header.texels[TilePoseHeader::H05_CAMERA_12_13 + index].lanes
+        });
+        let projection = header.texels[TilePoseHeader::H14_PROJECTION].lanes;
+        let chart_scale = header.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes;
+        let uniform = Self {
+            camera_rotation_pairs,
+            camera_translation: [
+                header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes,
+                [projection[0], 0.0, 0.0, 0.0],
+            ],
+            observer_rotation: header.texels[TilePoseHeader::H10_OBSERVER].lanes,
+            view_scale: [
+                projection[1],
+                projection[2],
+                projection[3],
+                chart_scale[0] + chart_scale[1],
+            ],
+        };
+        let finite = uniform
+            .camera_rotation_pairs
+            .into_iter()
+            .flatten()
+            .chain(uniform.camera_translation.into_iter().flatten())
+            .chain(uniform.observer_rotation)
+            .chain(uniform.view_scale)
+            .all(f32::is_finite);
+        let [height_scale, distance_five, distance_four, source_scale] = uniform.view_scale;
+        (finite
+            && height_scale >= 0.0
+            && distance_five > 0.0
+            && distance_four > 0.0
+            && source_scale > 0.0)
+            .then_some(uniform)
+    }
+
+    /// Returns the exact little-endian wasm/native payload bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
+
 /// One row of the exact descriptor-map ABI table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DescriptorAbiField {
@@ -2346,6 +2415,7 @@ mod tests {
         assert_record!(DescriptorTexel, 1, 16);
         assert_record!(TilePoseHeader, 1, 512);
         assert_record!(DescriptorSamplePair, 1, 32);
+        assert_record!(SourceReconstructionUniform, 1, 144);
         assert_record!(TileResidency, 1, 4);
         assert_record!(TileRung, 1, 4);
         assert_eq!(TileRung::Preview as u32, 0);
@@ -2457,6 +2527,35 @@ mod tests {
             PairedOutputAllocation::from_spans(23, &value, &value, 2_097_152),
             Err(TileJobError::OutputAlias)
         );
+    }
+
+    #[test]
+    fn reconstruction_uniform_selects_exact_source_header_lanes() {
+        let mut header = TilePoseHeader::zeroed();
+        for texel in
+            &mut header.texels[TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45]
+        {
+            texel.lanes = [1.0, 0.0, 1.0, 0.0];
+        }
+        header.texels[TilePoseHeader::H10_OBSERVER].lanes = [1.0, 0.0, 1.0, 0.0];
+        header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes = [1.0, 2.0, 3.0, 4.0];
+        header.texels[TilePoseHeader::H14_PROJECTION].lanes = [5.0, 2.0, 8.0, 16.0];
+        header.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes =
+            [0.003_906_25, 0.000_000_25, 0.0, 0.0];
+        let uniform = SourceReconstructionUniform::from_header(&header)
+            .expect("valid source lanes construct the paired uniform");
+        assert_eq!(uniform.camera_rotation_pairs, [[1.0, 0.0, 1.0, 0.0]; 5]);
+        assert_eq!(uniform.camera_translation[0], [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(uniform.camera_translation[1], [5.0, 0.0, 0.0, 0.0]);
+        assert_eq!(uniform.observer_rotation, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(uniform.view_scale, [2.0, 8.0, 16.0, 0.003_906_5]);
+        assert_eq!(
+            uniform.bytes().len(),
+            SourceReconstructionUniform::BYTE_SIZE
+        );
+
+        header.texels[TilePoseHeader::H14_PROJECTION].lanes[2] = 0.0;
+        assert_eq!(SourceReconstructionUniform::from_header(&header), None);
     }
 
     #[test]

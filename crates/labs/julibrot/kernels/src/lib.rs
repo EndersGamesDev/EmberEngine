@@ -23,7 +23,7 @@ pub use ember_julibrot_math::{
     CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
 };
 pub use error::KernelError;
-pub use gpu::JulibrotKernels;
+pub use gpu::{JulibrotKernels, PAIRED_KERNEL_UNIFORM_BYTES};
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
 pub use records::{
     EscapeGrid, GLITCH_NUMERIC_FAILURE, GLITCH_REFERENCE_EXHAUSTED, GridExtent, KernelMode,
@@ -42,9 +42,10 @@ pub use tile_job::{
     PairedOutputAllocation, PairedOutputCompletion, PairedOutputSpanPlan, PairedTileSpanIdentities,
     PoseMapKey, PublishedTileOutputs, ReferenceIdentity, ReferenceLease, ReferenceLeaseSet,
     RenderControlChange, ResidentTileCost, ResidentTileProfile, SliceIdentity, SourceIdentity,
-    SourceScreenRect, StableJobId, TILE_HEADER_BYTES, TILE_SAMPLE_RECORD_BYTES, TileContentKey,
-    TileDemandQueue, TileGeometry, TileInvalidation, TileJob, TileJobError, TileMeshHandle,
-    TileOutput, TilePoseHeader, TileQuality, TileRenderKey, TileResidency, TileRung,
-    TileSpanIdentity, TransitionPresentation, resident_tile_cost, select_same_surface_owner,
-    tile_cost, tile_invalidation, transition_presentation, validate_pose_header,
+    SourceReconstructionUniform, SourceScreenRect, StableJobId, TILE_HEADER_BYTES,
+    TILE_SAMPLE_RECORD_BYTES, TileContentKey, TileDemandQueue, TileGeometry, TileInvalidation,
+    TileJob, TileJobError, TileMeshHandle, TileOutput, TilePoseHeader, TileQuality, TileRenderKey,
+    TileResidency, TileRung, TileSpanIdentity, TransitionPresentation, resident_tile_cost,
+    select_same_surface_owner, tile_cost, tile_invalidation, transition_presentation,
+    validate_pose_header,
 };
