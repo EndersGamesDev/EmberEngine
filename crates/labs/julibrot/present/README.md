@@ -7,3 +7,5 @@ The application supplies HOT controls and MAIN scene resources; this crate alone
 Pure planners and CPU mirrors keep homography, mesh placement, palette, coverage, and transition decisions testable without claiming that those checks execute the shipping GPU pipelines.
 
 Resource ownership, event order, shader interfaces, retention, and measurement rules are defined in [`../../../../docs/julibrot/present.md`](../../../../docs/julibrot/present.md), with tiled evolution in [`../../../../docs/julibrot/tiled-reprojection.md`](../../../../docs/julibrot/tiled-reprojection.md).
+
+The shade pass is the first consumer of the lab-local runtime shader-template mechanism documented in [`../../../../docs/julibrot/shaders.md`](../../../../docs/julibrot/shaders.md).
