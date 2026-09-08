@@ -1,6 +1,18 @@
 
 {{ "PaletteUniform"|wgsl_type }}
 {{ "PaletteId"|wgsl_enum -}}
+{{ "REGULAR_STATUS"|wgsl_constant }}
+{{ "GLITCH_STATUS"|wgsl_constant }}
+{{ "HORIZON_STATUS"|wgsl_constant }}
+{{ "MAP_UNCERTAIN_STATUS"|wgsl_constant }}
+{{ "CLEAR_STATUS"|wgsl_constant }}
+{{ "EXPOSED_STATUS"|wgsl_constant }}
+{{ "SKY_STATUS"|wgsl_constant }}
+{{ "MALFORMED_STATUS"|wgsl_constant }}
+{{ "MIN_SCENE_LIGHT"|wgsl_constant }}
+{{ "MAX_SCENE_LIGHT"|wgsl_constant }}
+{{ "DEBUG_TINT"|wgsl_constant }}
+{{ "GLITCH_DIAGNOSTIC"|wgsl_constant }}
 {{ "presentation_values"|wgsl_binding }} var presentation_values: texture_2d<f32>;
 {{ "nearest_value"|wgsl_binding }} var nearest_value: sampler;
 {{ "palette"|wgsl_binding }} var<uniform> palette: PaletteUniform;
@@ -24,27 +36,27 @@ fn exterior_zero() -> vec4<f32> {
 }
 fn colour(value: vec4<f32>) -> vec4<f32> {
     let status = value.z;
-    if (status == 7.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (status == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (status == 4.0 || status == 5.0) { return palette.clear_rgba; }
-    if (status == 2.0 || status == 6.0) { return exterior_zero(); }
-    if (status != 0.0 && status != 3.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (!binary(value.y)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (status == MALFORMED_STATUS) { return DEBUG_TINT; }
+    if (status == GLITCH_STATUS) { return GLITCH_DIAGNOSTIC; }
+    if (status == CLEAR_STATUS || status == EXPOSED_STATUS) { return palette.clear_rgba; }
+    if (status == HORIZON_STATUS || status == SKY_STATUS) { return exterior_zero(); }
+    if (status != REGULAR_STATUS && status != MAP_UNCERTAIN_STATUS) { return DEBUG_TINT; }
+    if (!binary(value.y)) { return DEBUG_TINT; }
     var base = vec4<f32>(0.0);
     if (value.y == 0.0) {
-        if (value.x != -1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+        if (value.x != -1.0) { return DEBUG_TINT; }
         base = palette.interior_rgba;
     } else {
         if (!finite(value.x) || !finite(palette.map.x) || palette.map.x <= 0.0) {
-            return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+            return DEBUG_TINT;
         }
         let hue = fract(max(value.x, 0.0) / palette.map.x + palette.map.y);
         let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
         let rgb = palette.map.w * mix(vec3<f32>(1.0), phase_rgb, palette.map.z);
         base = vec4<f32>(rgb, 1.0);
     }
-    if (!finite(value.w) || value.w < 0.58 || value.w > 0.82) {
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+    if (!finite(value.w) || value.w < MIN_SCENE_LIGHT || value.w > MAX_SCENE_LIGHT) {
+        return DEBUG_TINT;
     }
     return vec4<f32>(base.rgb * value.w, base.a);
 }

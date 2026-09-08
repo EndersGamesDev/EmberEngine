@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::error::Error;
 use std::fmt::{self, Write as _};
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
 
 use minijinja::{Environment, ErrorKind, UndefinedBehavior};
 
@@ -32,6 +34,24 @@ const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
 #[cfg(test)]
 const UNREGISTERED_TYPE_TEST_SOURCE: &str =
     include_str!("../templates/unregistered-type-test.wgsl.jinja");
+#[cfg(test)]
+const UNTRACED_TYPE_TEST_NAME: &str = "untraced-type-test.wgsl.jinja";
+#[cfg(test)]
+const UNTRACED_TYPE_TEST_SOURCE: &str = include_str!("../templates/untraced-type-test.wgsl.jinja");
+#[cfg(test)]
+const UNTRACED_ENUM_TEST_NAME: &str = "untraced-enum-test.wgsl.jinja";
+#[cfg(test)]
+const UNTRACED_ENUM_TEST_SOURCE: &str = include_str!("../templates/untraced-enum-test.wgsl.jinja");
+#[cfg(test)]
+const UNTRACED_BINDING_TEST_NAME: &str = "untraced-binding-test.wgsl.jinja";
+#[cfg(test)]
+const UNTRACED_BINDING_TEST_SOURCE: &str =
+    include_str!("../templates/untraced-binding-test.wgsl.jinja");
+#[cfg(test)]
+const UNTRACED_CONSTANT_TEST_NAME: &str = "untraced-constant-test.wgsl.jinja";
+#[cfg(test)]
+const UNTRACED_CONSTANT_TEST_SOURCE: &str =
+    include_str!("../templates/untraced-constant-test.wgsl.jinja");
 const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[(PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE)];
 #[cfg(test)]
 const TEST_TEMPLATES: &[(&str, &str)] = &[
@@ -40,10 +60,58 @@ const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
     (ORACLE_TEST_NAME, ORACLE_TEST_SOURCE),
     (UNREGISTERED_TYPE_TEST_NAME, UNREGISTERED_TYPE_TEST_SOURCE),
+    (UNTRACED_TYPE_TEST_NAME, UNTRACED_TYPE_TEST_SOURCE),
+    (UNTRACED_ENUM_TEST_NAME, UNTRACED_ENUM_TEST_SOURCE),
+    (UNTRACED_BINDING_TEST_NAME, UNTRACED_BINDING_TEST_SOURCE),
+    (UNTRACED_CONSTANT_TEST_NAME, UNTRACED_CONSTANT_TEST_SOURCE),
 ];
 
 const FNV_OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
 const FNV_PRIME: u64 = 1_099_511_628_211;
+const EMISSION_MARKER_PREFIX: &str = "__EMBER_WGSL_EMISSION_";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmissionKind {
+    Structure,
+    Enumeration,
+    Binding,
+    Constant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Emission {
+    kind: EmissionKind,
+    name: String,
+    range: Range<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingEmission {
+    kind: EmissionKind,
+    name: String,
+}
+
+#[derive(Debug, Default)]
+struct EmissionRecorder {
+    pending: Vec<PendingEmission>,
+}
+
+impl EmissionRecorder {
+    fn record(&mut self, kind: EmissionKind, name: &str, declaration: &str) -> String {
+        let id = self.pending.len();
+        self.pending.push(PendingEmission {
+            kind,
+            name: name.to_owned(),
+        });
+        let mut marked = String::new();
+        write!(marked, "/*{EMISSION_MARKER_PREFIX}{id}_START__*/")
+            .expect("String writes are infallible");
+        marked.push_str(declaration);
+        write!(marked, "/*{EMISSION_MARKER_PREFIX}{id}_END__*/")
+            .expect("String writes are infallible");
+        marked
+    }
+}
 
 /// One bind-group and binding-number pair owned by Rust pipeline setup.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -63,6 +131,8 @@ pub enum ShaderConstant {
     Unsigned(u32),
     /// A finite WGSL `f32` constant.
     Float(f32),
+    /// A finite WGSL `vec4<f32>` constant.
+    Float4([f32; 4]),
 }
 
 /// Validated WGSL source and its deterministic content hash.
@@ -269,17 +339,27 @@ impl ShaderContext {
         name: &'static str,
         value: ShaderConstant,
     ) -> Result<(), RenderError> {
-        if let ShaderConstant::Float(number) = value
-            && !number.is_finite()
-        {
+        let finite = match value {
+            ShaderConstant::Float(number) => number.is_finite(),
+            ShaderConstant::Float4(numbers) => numbers.into_iter().all(f32::is_finite),
+            ShaderConstant::Signed(_) | ShaderConstant::Unsigned(_) => true,
+        };
+        if !finite {
             return Err(RenderError::NonFiniteConstant { name });
         }
         register_once(&mut self.constant_values, name, value, "constant")
     }
 
-    fn expand(&self, template_name: &str) -> Result<String, RenderError> {
-        let environment = environment(self)?;
-        Ok(environment.get_template(template_name)?.render(())?)
+    fn expand(&self, template_name: &str) -> Result<(String, Vec<Emission>), RenderError> {
+        let recorder = Arc::new(Mutex::new(EmissionRecorder::default()));
+        let environment = environment(self, &recorder)?;
+        let marked_source = environment.get_template(template_name)?.render(())?;
+        let pending = recorder
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
+            .clone();
+        strip_emission_markers(template_name, &marked_source, &pending)
     }
 }
 
@@ -294,9 +374,11 @@ impl ShaderContext {
 /// [`RenderError::WgslParse`] for WGSL syntax failures or [`RenderError::WgslValidation`] for
 /// invalid shader semantics.
 pub fn render(template_name: &str, context: &ShaderContext) -> Result<RenderedShader, RenderError> {
-    let source = context.expand(template_name)?;
+    let (source, trace) = context.expand(template_name)?;
     #[cfg(not(target_arch = "wasm32"))]
-    validate_wgsl(template_name, &source, context)?;
+    validate_wgsl(template_name, &source, context, &trace)?;
+    #[cfg(target_arch = "wasm32")]
+    drop(trace);
     Ok(RenderedShader {
         hash: stable_hash(&source),
         source,
@@ -328,6 +410,7 @@ fn validate_wgsl(
     template_name: &str,
     source: &str,
     context: &ShaderContext,
+    trace: &[Emission],
 ) -> Result<(), RenderError> {
     let module = naga::front::wgsl::parse_str(source).map_err(|error| RenderError::WgslParse {
         template: template_name.to_owned(),
@@ -344,7 +427,7 @@ fn validate_wgsl(
         line: error.location(source).map(|location| location.line_number),
         diagnostic: error.emit_to_string(source),
     })?;
-    audit_context(template_name, &module, context)?;
+    audit_context(template_name, &module, context, trace)?;
     Ok(())
 }
 
@@ -353,6 +436,7 @@ fn audit_context(
     template_name: &str,
     module: &naga::Module,
     context: &ShaderContext,
+    trace: &[Emission],
 ) -> Result<(), RenderError> {
     let mut layouter = naga::proc::Layouter::default();
     layouter.update(module.to_ctx()).map_err(|error| {
@@ -363,19 +447,116 @@ fn audit_context(
         )
     })?;
 
+    audit_bound_globals(template_name, module, context, trace)?;
+    audit_module_constants(template_name, module, trace)?;
     for description in context.structures.values() {
-        audit_structure(template_name, module, &layouter, description)?;
+        audit_structure(template_name, module, &layouter, trace, description)?;
     }
     for description in context.enumerations.values() {
-        audit_enumeration(template_name, module, description)?;
+        audit_enumeration(template_name, module, trace, description)?;
     }
     for (&name, expected) in &context.binding_slots {
-        audit_binding(template_name, module, name, *expected)?;
+        audit_binding(template_name, module, trace, name, *expected)?;
     }
     for (&name, expected) in &context.constant_values {
-        audit_constant(template_name, module, name, *expected)?;
+        audit_constant(template_name, module, trace, name, *expected)?;
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_bound_globals(
+    template_name: &str,
+    module: &naga::Module,
+    context: &ShaderContext,
+    trace: &[Emission],
+) -> Result<(), RenderError> {
+    for (handle, variable) in module.global_variables.iter() {
+        if variable.binding.is_none() {
+            continue;
+        }
+        let Some(name) = variable.name.as_deref() else {
+            return Err(context_audit_error(
+                template_name,
+                "unnamed binding",
+                "WGSL contains an unnamed bound global",
+            ));
+        };
+        if !context.binding_slots.contains_key(name)
+            || !has_emission(
+                trace,
+                EmissionKind::Binding,
+                name,
+                module.global_variables.get_span(handle),
+            )
+        {
+            return Err(context_audit_error(
+                template_name,
+                name,
+                format!(
+                    "WGSL binding '{name}' was declared without a registered wgsl_binding emission"
+                ),
+            ));
+        }
+
+        let shader_type = &module.types[variable.ty];
+        if matches!(&shader_type.inner, naga::TypeInner::Struct { .. }) {
+            let structure_name = shader_type.name.as_deref().unwrap_or("unnamed structure");
+            if !context.structures.contains_key(structure_name) {
+                return Err(context_audit_error(
+                    template_name,
+                    structure_name,
+                    format!(
+                        "WGSL structure '{structure_name}' backs a resource binding without a registered wgsl_type emission"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_module_constants(
+    template_name: &str,
+    module: &naga::Module,
+    trace: &[Emission],
+) -> Result<(), RenderError> {
+    for (handle, constant) in module.constants.iter() {
+        let name = constant.name.as_deref().unwrap_or("unnamed constant");
+        let span = module.constants.get_span(handle);
+        let traced = has_emission(trace, EmissionKind::Constant, name, span)
+            || trace.iter().any(|entry| {
+                entry.kind == EmissionKind::Enumeration
+                    && ranges_overlap(&entry.range, span.to_range().as_ref())
+            });
+        if !traced {
+            return Err(context_audit_error(
+                template_name,
+                name,
+                format!(
+                    "WGSL constant '{name}' was declared without a registered wgsl_constant or wgsl_enum emission"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn has_emission(trace: &[Emission], kind: EmissionKind, name: &str, span: naga::Span) -> bool {
+    trace.iter().any(|entry| {
+        entry.kind == kind
+            && entry.name == name
+            && ranges_overlap(&entry.range, span.to_range().as_ref())
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ranges_overlap(emission: &Range<usize>, declaration: Option<&Range<usize>>) -> bool {
+    declaration.is_some_and(|declaration| {
+        emission.start < declaration.end && declaration.start < emission.end
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -383,6 +564,7 @@ fn audit_structure(
     template_name: &str,
     module: &naga::Module,
     layouter: &naga::proc::Layouter,
+    trace: &[Emission],
     description: &WgslTypeDescription,
 ) -> Result<(), RenderError> {
     let Some((handle, shader_type)) = module
@@ -403,6 +585,21 @@ fn audit_structure(
             "registered type is not a WGSL structure",
         ));
     };
+    if !has_emission(
+        trace,
+        EmissionKind::Structure,
+        description.name,
+        module.types.get_span(handle),
+    ) {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            format!(
+                "WGSL structure '{}' was declared without a registered wgsl_type emission",
+                description.name
+            ),
+        ));
+    }
     if members.len() != description.fields.len() {
         return Err(context_audit_error(
             template_name,
@@ -549,11 +746,14 @@ const fn vector_width(size: naga::VectorSize) -> u8 {
 fn audit_enumeration(
     template_name: &str,
     module: &naga::Module,
+    trace: &[Emission],
     description: &WgslEnumDescription,
 ) -> Result<(), RenderError> {
     for variant in description.variants {
-        let name = format!("{}_{}", description.name, variant.name);
-        let Some((_, constant)) = module
+        let enum_name = description.name;
+        let variant_name = variant.name;
+        let name = format!("{enum_name}_{variant_name}");
+        let Some((handle, constant)) = module
             .constants
             .iter()
             .find(|(_, constant)| constant.name.as_deref() == Some(name.as_str()))
@@ -564,6 +764,21 @@ fn audit_enumeration(
                 "registered enum value is missing from the parsed module",
             ));
         };
+        if !has_emission(
+            trace,
+            EmissionKind::Enumeration,
+            description.name,
+            module.constants.get_span(handle),
+        ) {
+            return Err(context_audit_error(
+                template_name,
+                &name,
+                format!(
+                    "WGSL enum '{}' was declared without a registered wgsl_enum emission",
+                    description.name
+                ),
+            ));
+        }
         let expression = &module.global_expressions[constant.init];
         let matches = match (variant.discriminant, expression) {
             (
@@ -591,10 +806,11 @@ fn audit_enumeration(
 fn audit_binding(
     template_name: &str,
     module: &naga::Module,
+    trace: &[Emission],
     name: &str,
     expected: WgslBinding,
 ) -> Result<(), RenderError> {
-    let Some((_, variable)) = module
+    let Some((handle, variable)) = module
         .global_variables
         .iter()
         .find(|(_, variable)| variable.name.as_deref() == Some(name))
@@ -612,6 +828,20 @@ fn audit_binding(
             "registered binding has no WGSL resource binding",
         ));
     };
+    if !has_emission(
+        trace,
+        EmissionKind::Binding,
+        name,
+        module.global_variables.get_span(handle),
+    ) {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            format!(
+                "WGSL binding '{name}' was declared without a registered wgsl_binding emission"
+            ),
+        ));
+    }
     if actual.group != expected.group || actual.binding != expected.binding {
         return Err(context_audit_error(
             template_name,
@@ -629,10 +859,11 @@ fn audit_binding(
 fn audit_constant(
     template_name: &str,
     module: &naga::Module,
+    trace: &[Emission],
     name: &str,
     expected: ShaderConstant,
 ) -> Result<(), RenderError> {
-    let Some((_, constant)) = module
+    let Some((handle, constant)) = module
         .constants
         .iter()
         .find(|(_, constant)| constant.name.as_deref() == Some(name))
@@ -643,6 +874,20 @@ fn audit_constant(
             "registered constant is missing from the parsed module",
         ));
     };
+    if !has_emission(
+        trace,
+        EmissionKind::Constant,
+        name,
+        module.constants.get_span(handle),
+    ) {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            format!(
+                "WGSL constant '{name}' was declared without a registered wgsl_constant emission"
+            ),
+        ));
+    }
     let expression = &module.global_expressions[constant.init];
     let matches = match (expected, expression) {
         (
@@ -657,6 +902,9 @@ fn audit_constant(
             ShaderConstant::Float(expected),
             naga::Expression::Literal(naga::Literal::F32(actual)),
         ) => expected.to_bits() == actual.to_bits(),
+        (ShaderConstant::Float4(expected), naga::Expression::Compose { components, .. }) => {
+            float4_expression_matches(module, components, expected)
+        }
         _ => false,
     };
     if !matches {
@@ -667,6 +915,28 @@ fn audit_constant(
         ));
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn float4_expression_matches(
+    module: &naga::Module,
+    components: &[naga::Handle<naga::Expression>],
+    expected: [f32; 4],
+) -> bool {
+    let [x, y, z, w] = components else {
+        return false;
+    };
+    [*x, *y, *z, *w]
+        .into_iter()
+        .zip(expected)
+        .all(|(handle, expected)| {
+            let naga::Expression::Literal(naga::Literal::F32(actual)) =
+                &module.global_expressions[handle]
+            else {
+                return false;
+            };
+            actual.to_bits() == expected.to_bits()
+        })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -707,7 +977,10 @@ fn register_once<T: Copy + PartialEq>(
     }
 }
 
-fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderError> {
+fn environment(
+    context: &ShaderContext,
+    recorder: &Arc<Mutex<EmissionRecorder>>,
+) -> Result<Environment<'static>, RenderError> {
     let mut environment = Environment::empty();
     #[cfg(any(test, feature = "template-debug"))]
     environment.set_debug(true);
@@ -715,28 +988,41 @@ fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderEr
     environment.set_undefined_behavior(UndefinedBehavior::Strict);
 
     let structures = context.structures.clone();
+    let type_recorder = Arc::clone(recorder);
     environment.add_filter(
         "wgsl_type",
         move |name: String| -> Result<String, minijinja::Error> {
             let description = structures
                 .get(name.as_str())
                 .ok_or_else(|| missing_registration("type", &name))?;
-            Ok(render_type(description))
+            Ok(record_emission(
+                &type_recorder,
+                EmissionKind::Structure,
+                &name,
+                &render_type(description),
+            ))
         },
     );
 
     let variants = context.enumerations.clone();
+    let enum_recorder = Arc::clone(recorder);
     environment.add_filter(
         "wgsl_enum",
         move |name: String| -> Result<String, minijinja::Error> {
             let description = variants
                 .get(name.as_str())
                 .ok_or_else(|| missing_registration("enum", &name))?;
-            Ok(render_enum(description))
+            Ok(record_emission(
+                &enum_recorder,
+                EmissionKind::Enumeration,
+                &name,
+                &render_enum(description),
+            ))
         },
     );
 
     let slots = context.binding_slots.clone();
+    let binding_recorder = Arc::clone(recorder);
     environment.add_filter(
         "wgsl_binding",
         move |name: String| -> Result<String, minijinja::Error> {
@@ -744,18 +1030,29 @@ fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderEr
                 .get(name.as_str())
                 .copied()
                 .ok_or_else(|| missing_registration("binding", &name))?;
-            Ok(format!("@group({group}) @binding({binding})"))
+            Ok(record_emission(
+                &binding_recorder,
+                EmissionKind::Binding,
+                &name,
+                &format!("@group({group}) @binding({binding})"),
+            ))
         },
     );
 
     let values = context.constant_values.clone();
+    let constant_recorder = Arc::clone(recorder);
     environment.add_filter(
         "wgsl_constant",
         move |name: String| -> Result<String, minijinja::Error> {
             let value = values
                 .get(name.as_str())
                 .ok_or_else(|| missing_registration("constant", &name))?;
-            Ok(render_constant(&name, *value))
+            Ok(record_emission(
+                &constant_recorder,
+                EmissionKind::Constant,
+                &name,
+                &render_constant(&name, *value),
+            ))
         },
     );
 
@@ -767,6 +1064,89 @@ fn environment(context: &ShaderContext) -> Result<Environment<'static>, RenderEr
         environment.add_template(name, source)?;
     }
     Ok(environment)
+}
+
+fn record_emission(
+    recorder: &Mutex<EmissionRecorder>,
+    kind: EmissionKind,
+    name: &str,
+    declaration: &str,
+) -> String {
+    recorder
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .record(kind, name, declaration)
+}
+
+fn strip_emission_markers(
+    template_name: &str,
+    marked_source: &str,
+    pending: &[PendingEmission],
+) -> Result<(String, Vec<Emission>), RenderError> {
+    let mut source = String::with_capacity(marked_source.len());
+    let mut trace = Vec::with_capacity(pending.len());
+    let mut cursor = 0;
+    for (id, pending_emission) in pending.iter().enumerate() {
+        let start_marker = emission_marker(id, "START");
+        let end_marker = emission_marker(id, "END");
+        let start = marked_source[cursor..]
+            .find(&start_marker)
+            .map(|offset| cursor + offset)
+            .ok_or_else(|| emission_trace_error(template_name, id, "start marker is missing"))?;
+        source.push_str(&marked_source[cursor..start]);
+        let declaration_start = start + start_marker.len();
+        let end = marked_source[declaration_start..]
+            .find(&end_marker)
+            .map(|offset| declaration_start + offset)
+            .ok_or_else(|| emission_trace_error(template_name, id, "end marker is missing"))?;
+        let range_start = source.len();
+        source.push_str(&marked_source[declaration_start..end]);
+        trace.push(Emission {
+            kind: pending_emission.kind,
+            name: pending_emission.name.clone(),
+            range: range_start..source.len(),
+        });
+        cursor = end + end_marker.len();
+    }
+    source.push_str(&marked_source[cursor..]);
+    if source.contains(EMISSION_MARKER_PREFIX) {
+        return Err(emission_trace_error(
+            template_name,
+            pending.len(),
+            "an unrecorded marker remains",
+        ));
+    }
+    extend_binding_emissions(&source, &mut trace);
+    Ok((source, trace))
+}
+
+fn extend_binding_emissions(source: &str, trace: &mut [Emission]) {
+    for entry in trace {
+        if entry.kind != EmissionKind::Binding {
+            continue;
+        }
+        let trailing = &source[entry.range.end..];
+        let declaration = trailing.trim_start();
+        if !declaration.starts_with("var") {
+            continue;
+        }
+        if let Some(semicolon) = declaration.find(';') {
+            let leading_whitespace = trailing.len() - declaration.len();
+            entry.range.end += leading_whitespace + semicolon + 1;
+        }
+    }
+}
+
+fn emission_marker(id: usize, boundary: &str) -> String {
+    format!("/*{EMISSION_MARKER_PREFIX}{id}_{boundary}__*/")
+}
+
+fn emission_trace_error(template_name: &str, id: usize, diagnostic: &str) -> RenderError {
+    minijinja::Error::new(
+        ErrorKind::InvalidOperation,
+        format!("template `{template_name}` corrupted WGSL emission {id}: {diagnostic}"),
+    )
+    .into()
 }
 
 fn missing_registration(category: &str, name: &str) -> minijinja::Error {
@@ -822,6 +1202,9 @@ fn render_constant(name: &str, value: ShaderConstant) -> String {
         ShaderConstant::Signed(number) => format!("const {name}: i32 = {number}i;"),
         ShaderConstant::Unsigned(number) => format!("const {name}: u32 = {number}u;"),
         ShaderConstant::Float(number) => format!("const {name}: f32 = {number};"),
+        ShaderConstant::Float4([x, y, z, w]) => {
+            format!("const {name}: vec4<f32> = vec4<f32>({x}, {y}, {z}, {w});")
+        }
     }
 }
 
@@ -833,7 +1216,8 @@ mod tests {
 
     use super::{
         INTERFACE_TEST_NAME, INVALID_TEST_NAME, INVALID_VALIDATION_TEST_NAME, RenderError,
-        ShaderConstant, ShaderContext, render, stable_hash,
+        ShaderConstant, ShaderContext, UNTRACED_BINDING_TEST_NAME, UNTRACED_CONSTANT_TEST_NAME,
+        UNTRACED_ENUM_TEST_NAME, UNTRACED_TYPE_TEST_NAME, render, stable_hash,
     };
 
     #[derive(Clone, Copy, Pod, Zeroable)]
@@ -906,6 +1290,23 @@ mod tests {
         let error = render(INTERFACE_TEST_NAME, &context)
             .expect_err("a parsed layout that disagrees with Rust must fail");
         assert!(matches!(error, RenderError::ContextAudit { .. }));
+    }
+
+    #[test]
+    fn declarations_must_overlap_their_named_filter_emissions() {
+        for (template_name, expected) in [
+            (UNTRACED_TYPE_TEST_NAME, "wgsl_type emission"),
+            (UNTRACED_ENUM_TEST_NAME, "wgsl_enum emission"),
+            (UNTRACED_BINDING_TEST_NAME, "wgsl_binding emission"),
+            (UNTRACED_CONSTANT_TEST_NAME, "wgsl_constant"),
+        ] {
+            let error = render(template_name, &test_context())
+                .expect_err("a declaration outside its filter emission must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "{template_name} returned the wrong audit error: {error}"
+            );
+        }
     }
 
     #[test]

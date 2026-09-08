@@ -752,7 +752,7 @@ fn create_gpu_state(
         config.surface_format,
         &warp_texture_layout,
         &palette_layout,
-        shade_source.source(),
+        &shade_source,
     );
     Ok(GpuState {
         heap_group,

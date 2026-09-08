@@ -1,8 +1,14 @@
 use bytemuck::{Pod, Zeroable};
 use ember_julibrot_shader::{
-    F32Vec4, PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderContext, render,
+    F32Vec4, PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderConstant, ShaderContext,
+    render,
 };
 
+use crate::palette::{
+    CLEAR_STATUS, DEBUG_TINT, EXPOSED_STATUS, GLITCH_DIAGNOSTIC, GLITCH_STATUS, HORIZON_STATUS,
+    MALFORMED_STATUS, MAP_UNCERTAIN_STATUS, MAX_SCENE_LIGHT, MIN_SCENE_LIGHT, REGULAR_STATUS,
+    SKY_STATUS,
+};
 use crate::{PaletteId, PaletteRecord};
 
 pub const SHADE_VALUES_GROUP: u32 = 0;
@@ -55,6 +61,25 @@ pub fn shade_shader() -> Result<RenderedShader, RenderError> {
     )?;
     context.register_binding("nearest_value", SHADE_VALUES_GROUP, NEAREST_VALUE_BINDING)?;
     context.register_binding("palette", SHADE_PALETTE_GROUP, PALETTE_UNIFORM_BINDING)?;
+    for (name, value) in [
+        ("REGULAR_STATUS", REGULAR_STATUS),
+        ("GLITCH_STATUS", GLITCH_STATUS),
+        ("HORIZON_STATUS", HORIZON_STATUS),
+        ("MAP_UNCERTAIN_STATUS", MAP_UNCERTAIN_STATUS),
+        ("CLEAR_STATUS", CLEAR_STATUS),
+        ("EXPOSED_STATUS", EXPOSED_STATUS),
+        ("SKY_STATUS", SKY_STATUS),
+        ("MALFORMED_STATUS", MALFORMED_STATUS),
+        ("MIN_SCENE_LIGHT", MIN_SCENE_LIGHT),
+        ("MAX_SCENE_LIGHT", MAX_SCENE_LIGHT),
+    ] {
+        context.register_constant(name, ShaderConstant::Float(value))?;
+    }
+    context.register_constant("DEBUG_TINT", ShaderConstant::Float4(DEBUG_TINT))?;
+    context.register_constant(
+        "GLITCH_DIAGNOSTIC",
+        ShaderConstant::Float4(GLITCH_DIAGNOSTIC),
+    )?;
     render(PRESENT_SHADE_TEMPLATE, &context)
 }
 
@@ -119,7 +144,26 @@ mod tests {
 
     use super::*;
 
-    const RENDERED_SHADE_HASH: u64 = 0x57fe_070b_02fa_9c44;
+    const RENDERED_SHADE_HASH: u64 = 0x855d_a4bc_80e3_906e;
+
+    fn normalize_rendered_constants(source: &str) -> String {
+        source
+            .split_inclusive('\n')
+            .filter(|line| !line.starts_with("const "))
+            .collect::<String>()
+            .replace("REGULAR_STATUS", "0.0")
+            .replace("GLITCH_STATUS", "1.0")
+            .replace("HORIZON_STATUS", "2.0")
+            .replace("MAP_UNCERTAIN_STATUS", "3.0")
+            .replace("CLEAR_STATUS", "4.0")
+            .replace("EXPOSED_STATUS", "5.0")
+            .replace("SKY_STATUS", "6.0")
+            .replace("MALFORMED_STATUS", "7.0")
+            .replace("MIN_SCENE_LIGHT", "0.58")
+            .replace("MAX_SCENE_LIGHT", "0.82")
+            .replace("DEBUG_TINT", "vec4<f32>(1.0, 0.0, 1.0, 1.0)")
+            .replace("GLITCH_DIAGNOSTIC", "vec4<f32>(1.0, 0.375, 0.0, 1.0)")
+    }
 
     fn assert_palette_layout(module: &naga::Module) {
         let description = PaletteUniform::DESCRIPTION;
@@ -169,11 +213,7 @@ mod tests {
             assert_eq!(bytemuck::bytes_of(&uniform), bytemuck::bytes_of(&record));
         }
         let shader = shade_shader().expect("shade template renders");
-        let legacy_source: String = shader
-            .source()
-            .split_inclusive('\n')
-            .filter(|line| !line.starts_with("const PaletteId_"))
-            .collect();
+        let legacy_source = normalize_rendered_constants(shader.source());
         assert_eq!(legacy_source, LEGACY_SHADE_SOURCE);
         assert_eq!(
             shader.hash(),
@@ -198,10 +238,12 @@ mod tests {
         let shader = shade_shader().expect("shade template renders");
         let source = shader.source();
         assert!(source.contains("var<uniform> palette: PaletteUniform"));
-        assert!(source.contains("status == 4.0 || status == 5.0"));
-        assert!(source.contains("status == 2.0 || status == 6.0"));
-        assert!(source.contains("status == 7.0"));
-        assert!(source.contains("status == 1.0"));
+        assert!(source.contains("status == CLEAR_STATUS || status == EXPOSED_STATUS"));
+        assert!(source.contains("status == HORIZON_STATUS || status == SKY_STATUS"));
+        assert!(source.contains("status == MALFORMED_STATUS"));
+        assert!(source.contains("status == GLITCH_STATUS"));
+        assert!(source.contains("return DEBUG_TINT;"));
+        assert!(source.contains("return GLITCH_DIAGNOSTIC;"));
         assert!(source.contains("base = palette.interior_rgba;"));
         assert!(source.contains("textureSample(presentation_values, nearest_value, input.uv)"));
         assert!(!source.contains("textureSampleLevel"));

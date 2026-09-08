@@ -57,11 +57,11 @@ pub(super) fn create_shade_pipeline(
     surface_format: wgpu::TextureFormat,
     value_layout: &wgpu::BindGroupLayout,
     palette_layout: &wgpu::BindGroupLayout,
-    source: &str,
+    shader: &ember_julibrot_shader::RenderedShader,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Julibrot sole shade shader"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
+        source: wgpu::ShaderSource::Wgsl(shader.source().into()),
     });
     let bind_group_layouts = shade_bind_group_layouts(value_layout, palette_layout);
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

@@ -6,14 +6,44 @@ pub const DEBUG_TINT: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 /// Opaque diagnostic colour used for a measured perturbation glitch.
 pub const GLITCH_DIAGNOSTIC: [f32; 4] = [1.0, 0.375, 0.0, 1.0];
 
+/// Ordinary escape-record status.
+pub const REGULAR_STATUS: f32 = 0.0;
+
+/// Measured perturbation-glitch status.
+pub const GLITCH_STATUS: f32 = 1.0;
+
+/// Horizon status with no finite plane point.
+pub const HORIZON_STATUS: f32 = 2.0;
+
+/// Sticky map-uncertainty status.
+pub const MAP_UNCERTAIN_STATUS: f32 = 3.0;
+
+/// Clear presentation-value status.
+pub const CLEAR_STATUS: f32 = 4.0;
+
+/// Exposed presentation-value status.
+pub const EXPOSED_STATUS: f32 = 5.0;
+
+/// Edge-on sky presentation-value status.
+pub const SKY_STATUS: f32 = 6.0;
+
+/// Malformed presentation-value status.
+pub const MALFORMED_STATUS: f32 = 7.0;
+
+/// Lowest valid scene-light multiplier.
+pub const MIN_SCENE_LIGHT: f32 = 0.58;
+
+/// Highest valid scene-light multiplier.
+pub const MAX_SCENE_LIGHT: f32 = 0.82;
+
 /// Value-target status left where no mesh geometry covers a pixel.
-pub const CLEAR_VALUE: [f32; 4] = [0.0, 0.0, 4.0, 1.0];
+pub const CLEAR_VALUE: [f32; 4] = [0.0, 0.0, CLEAR_STATUS, 1.0];
 
 /// Value-target status written when a warp asks outside its retained source.
-pub const EXPOSED_VALUE: [f32; 4] = [0.0, 0.0, 5.0, 1.0];
+pub const EXPOSED_VALUE: [f32; 4] = [0.0, 0.0, EXPOSED_STATUS, 1.0];
 
 /// Value-target status written for an edge-on destination with no finite chart.
-pub const SKY_VALUE: [f32; 4] = [0.0, 1.0, 6.0, 1.0];
+pub const SKY_VALUE: [f32; 4] = [0.0, 1.0, SKY_STATUS, 1.0];
 
 /// A stable identifier for one present-owned palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,7 +120,13 @@ fn is_binary(value: f32) -> bool {
 fn record_is_malformed(record: [f32; 4]) -> bool {
     let [_smooth_iter, escaped, rebase_count, status] = record;
     !is_binary(escaped)
-        || !matches!(status, 0.0 | 1.0 | 2.0 | 3.0)
+        || ![
+            REGULAR_STATUS,
+            GLITCH_STATUS,
+            HORIZON_STATUS,
+            MAP_UNCERTAIN_STATUS,
+        ]
+        .contains(&status)
         || !rebase_count.is_finite()
         || rebase_count < 0.0
         || rebase_count.fract() != 0.0
@@ -122,14 +158,14 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
             contract_violation: true,
         };
     }
-    if status == 1.0 {
+    if status == GLITCH_STATUS {
         return PaletteOutcome {
             rgba: GLITCH_DIAGNOSTIC,
             contract_violation: false,
         };
     }
-    if status == 2.0 {
-        return shade_escape_record([0.0, 1.0, rebase_count, 0.0], selected);
+    if status == HORIZON_STATUS {
+        return shade_escape_record([0.0, 1.0, rebase_count, REGULAR_STATUS], selected);
     }
     if escaped == 0.0 {
         return if smooth_iter == -1.0 {
@@ -182,7 +218,7 @@ pub fn shade_lit_escape_record(
     if outcome.rgba == DEBUG_TINT || outcome.rgba == GLITCH_DIAGNOSTIC {
         return outcome;
     }
-    if !(0.58..=0.82).contains(&light) {
+    if !(MIN_SCENE_LIGHT..=MAX_SCENE_LIGHT).contains(&light) {
         return PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: true,
@@ -205,12 +241,15 @@ pub fn exterior_zero(selected: PaletteRecord) -> [f32; 4] {
 #[allow(clippy::float_cmp)]
 pub fn presentation_value(record: [f32; 4], light: f32) -> [f32; 4] {
     if record_is_malformed(record) {
-        return [0.0, 0.0, 7.0, 1.0];
+        return [0.0, 0.0, MALFORMED_STATUS, 1.0];
     }
-    match record[3] {
-        1.0 => [record[0], record[1], 1.0, 1.0],
-        2.0 => [0.0, 1.0, 2.0, 1.0],
-        status => [record[0], record[1], status, light],
+    let status = record[3];
+    if status == GLITCH_STATUS {
+        [record[0], record[1], GLITCH_STATUS, 1.0]
+    } else if status == HORIZON_STATUS {
+        [0.0, 1.0, HORIZON_STATUS, 1.0]
+    } else {
+        [record[0], record[1], status, light]
     }
 }
 
@@ -219,21 +258,25 @@ pub fn presentation_value(record: [f32; 4], light: f32) -> [f32; 4] {
 #[allow(clippy::float_cmp)]
 pub fn shade_presentation_value(value: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
     let [smooth_iter, escaped, status, light] = value;
-    match status {
-        1.0 => PaletteOutcome {
+    if status == GLITCH_STATUS {
+        PaletteOutcome {
             rgba: GLITCH_DIAGNOSTIC,
             contract_violation: false,
-        },
-        4.0 | 5.0 => PaletteOutcome {
+        }
+    } else if status == CLEAR_STATUS || status == EXPOSED_STATUS {
+        PaletteOutcome {
             rgba: selected.clear_rgba,
             contract_violation: false,
-        },
-        2.0 | 6.0 => shade_escape_record([0.0, 1.0, 0.0, 0.0], selected),
-        0.0 | 3.0 => shade_lit_escape_record([smooth_iter, escaped, 0.0, status], selected, light),
-        _ => PaletteOutcome {
+        }
+    } else if status == HORIZON_STATUS || status == SKY_STATUS {
+        shade_escape_record([0.0, 1.0, 0.0, REGULAR_STATUS], selected)
+    } else if status == REGULAR_STATUS || status == MAP_UNCERTAIN_STATUS {
+        shade_lit_escape_record([smooth_iter, escaped, 0.0, status], selected, light)
+    } else {
+        PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: true,
-        },
+        }
     }
 }
 
