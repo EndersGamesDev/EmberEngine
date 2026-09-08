@@ -1023,6 +1023,14 @@ mod tests {
     const FROZEN_SOURCE_PIXEL_TOLERANCE_PX: f32 = 0.01;
     /// One hundredth of linear depth bounds every frozen row after S1 f32 rounding.
     const FROZEN_SOURCE_DEPTH_TOLERANCE: f32 = 0.01;
+    /// Nine paired corpus rows supply eighteen from/to target-path probes before refusal filters.
+    const FROZEN_CORPUS_POSE_ENTRIES: usize = 18;
+    /// Fifteen mapped, nonzero-extent from/to poses remain in the frozen planner corpus.
+    const FROZEN_TARGET_POSES: usize = 15;
+    /// Ten frozen target poses use the canonical-zero Julia plane representation.
+    const FROZEN_CANONICAL_JULIA_TARGETS: usize = 10;
+    /// Five frozen target poses carry planes produced directly by `construct_plane`.
+    const FROZEN_CONSTRUCTED_TARGETS: usize = 5;
 
     fn relief(theta: f64) -> ViewControls {
         let mut camera = [0.0; 10];
@@ -1887,6 +1895,95 @@ mod tests {
         }
         assert_eq!(receipt_count, FROZEN_DESCRIPTOR_RECEIPTS);
         assert_eq!(lifted_receipt_count, FROZEN_LIFTED_RECEIPTS);
+    }
+
+    #[test]
+    fn frozen_planner_corpus_projects_every_valid_pose_as_a_target() {
+        let canonical_julia_plane = pose(ViewControls::NEUTRAL, [0.0; 2]).plane;
+        let mut corpus_pose_count = 0;
+        let mut target_count = 0;
+        let mut canonical_count = 0;
+        let mut constructed_count = 0;
+        for case in named_planner_corpus() {
+            for (role, target) in [("from", case.from_pose), ("to", case.to_pose)] {
+                let sample = ReconstructedSample {
+                    ambient_four: target.plane_origin,
+                    source_local_four: [0.0; 4],
+                    source_zoom_log2: target.zoom_log2,
+                    value: RetainedValueSample {
+                        record_height: -2.0,
+                    },
+                };
+                let result = sample.project_from_anchor(&target, [0.0; 2], 0.0);
+                assert_ne!(
+                    result,
+                    Err(ReprojectionError::InvalidTarget),
+                    "{} {role} target rejected its valid plane",
+                    case.name
+                );
+                corpus_pose_count += 1;
+                if target.grid_width == 0
+                    || target.grid_height == 0
+                    || matches!(target.map, PoseMap::EdgeOn)
+                {
+                    continue;
+                }
+                assert!(result.is_ok(), "{} {role} target did not project", case.name);
+                if target.plane == canonical_julia_plane {
+                    canonical_count += 1;
+                } else {
+                    constructed_count += 1;
+                }
+                target_count += 1;
+            }
+        }
+        assert_eq!(corpus_pose_count, FROZEN_CORPUS_POSE_ENTRIES);
+        assert_eq!(target_count, FROZEN_TARGET_POSES);
+        assert_eq!(canonical_count, FROZEN_CANONICAL_JULIA_TARGETS);
+        assert_eq!(constructed_count, FROZEN_CONSTRUCTED_TARGETS);
+    }
+
+    #[test]
+    fn canonical_and_constructed_julia_planes_project_equivalently() {
+        /// Binary32 `cos(pi/2)` is the constructed Julia plane's canonical-zero alternative.
+        const CONSTRUCTED_JULIA_ZERO_BITS: u32 = 0x248d_3132;
+
+        let canonical = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut constructed = canonical;
+        constructed.plane =
+            construct_plane(constructed.object).expect("Julia target plane constructs");
+        assert_ne!(canonical.plane, constructed.plane);
+        assert_eq!(
+            constructed.plane.basis_u[2].to_bits(),
+            CONSTRUCTED_JULIA_ZERO_BITS
+        );
+        assert_eq!(
+            constructed.plane.basis_v[3].to_bits(),
+            CONSTRUCTED_JULIA_ZERO_BITS
+        );
+
+        let sample = ReconstructedSample {
+            ambient_four: canonical.plane_origin,
+            source_local_four: canonical.plane.local_point([0.125, -0.0625]),
+            source_zoom_log2: canonical.zoom_log2,
+            value: RetainedValueSample {
+                record_height: -2.0,
+            },
+        };
+        let anchor = [0.25, -0.5];
+        let canonical_projection = sample
+            .project_from_anchor(&canonical, anchor, 0.0)
+            .expect("canonical Julia target projects");
+        let constructed_projection = sample
+            .project_from_anchor(&constructed, anchor, 0.0)
+            .expect("constructed Julia target projects");
+        let screen_error = (canonical_projection.screen[0] - constructed_projection.screen[0])
+            .hypot(canonical_projection.screen[1] - constructed_projection.screen[1]);
+        assert!(screen_error <= f64::from(FROZEN_SOURCE_PIXEL_TOLERANCE_PX));
+        assert!(
+            (canonical_projection.linear_depth - constructed_projection.linear_depth).abs()
+                <= f64::from(FROZEN_SOURCE_DEPTH_TOLERANCE)
+        );
     }
 
     #[test]
