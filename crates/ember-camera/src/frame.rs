@@ -1,18 +1,47 @@
-use crate::basis::rotate_rows;
 use crate::{Basis, CameraError, Fixed, Orientation, Turn, View, rebuild_basis};
 
-/// Squared residual below which two directions cannot define another frame axis.
+/// One fixed CORDIC angle per representable binary turn bit.
 ///
-/// The threshold is far below one turn quantum at screen scale while staying above binary64 noise
-/// left by repeated Gram-Schmidt subtraction.
-const FRAME_DEGENERACY_NORM_SQUARED: f64 = 1.0e-24;
-
-/// Fixed iteration count for the dependency-free Newton square root.
-const SQRT_NEWTON_STEPS: usize = 64;
-
-const ATAN_SERIES_DENOMINATORS: [f64; 15] = [
-    3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0, 19.0, 21.0, 23.0, 25.0, 27.0, 29.0, 31.0,
+/// Entry `i` is `atan(2^-i)` rounded to the nearest `u32` turn. 31 iterations exhaust the nonzero
+/// rounded micro-rotation table; accumulated table rounding is covered by `ALIGNMENT_TOLERANCE`.
+const CORDIC_ATAN_TURNS: [u32; 31] = [
+    0x2000_0000,
+    0x12e4_051e,
+    0x09fb_385b,
+    0x0511_11d4,
+    0x028b_0d43,
+    0x0145_d7e1,
+    0x00a2_f61e,
+    0x0051_7c55,
+    0x0028_be53,
+    0x0014_5f2f,
+    0x000a_2f98,
+    0x0005_17cc,
+    0x0002_8be6,
+    0x0001_45f3,
+    0x0000_a2fa,
+    0x0000_517d,
+    0x0000_28be,
+    0x0000_145f,
+    0x0000_0a30,
+    0x0000_0518,
+    0x0000_028c,
+    0x0000_0146,
+    0x0000_00a3,
+    0x0000_0051,
+    0x0000_0029,
+    0x0000_0014,
+    0x0000_000a,
+    0x0000_0005,
+    0x0000_0003,
+    0x0000_0001,
+    0x0000_0001,
 ];
+
+/// Exact binary64 bits of the 31-step CORDIC inverse gain.
+const CORDIC_INVERSE_GAIN_BITS: u64 = 0x3fe3_6e9d_b508_6bcc;
+
+const HALF_TURN: Turn = Turn::from_bits(1_u32 << (u32::BITS - 1));
 
 /// Reconstructs an orientation whose first axis follows an exact segment.
 ///
@@ -23,205 +52,110 @@ pub fn orientation_for_segment<const N: usize, const LIMBS: usize>(
     view: &View<N, LIMBS>,
     segment: &[Fixed<LIMBS>; N],
 ) -> Result<Orientation<N>, CameraError> {
-    let previous = rebuild_basis(&view.orientation)?;
-    let mut direction = [0.0; N];
-    for (output, coordinate) in direction.iter_mut().zip(segment) {
-        *output = coordinate.to_f64()?;
-    }
-    let mut target = [[0.0; N]; N];
-    target[0] = normalized(direction)?;
-    let previous_frame = joined_frame(previous);
-    for target_index in 1..N {
-        let preferred = if target_index == 1 { 1 } else { target_index };
-        let preferred_residual = residual(previous_frame[preferred], &target, target_index);
-        if norm_squared(&preferred_residual) > FRAME_DEGENERACY_NORM_SQUARED {
-            target[target_index] = normalized(preferred_residual)?;
-            continue;
-        }
-        let mut best = [0.0; N];
-        let mut best_norm = 0.0;
-        for candidate in previous_frame {
-            let candidate_residual = residual(candidate, &target, target_index);
-            let candidate_norm = norm_squared(&candidate_residual);
-            if candidate_norm > best_norm {
-                best = candidate_residual;
-                best_norm = candidate_norm;
-            }
-        }
-        if best_norm <= FRAME_DEGENERACY_NORM_SQUARED {
-            return Err(CameraError::DegenerateFrame);
-        }
-        target[target_index] = normalized(best)?;
-    }
-    orientation_from_frame(&target)
-}
-
-fn joined_frame<const N: usize>(basis: Basis<N>) -> [[f64; N]; N] {
-    let mut frame = basis.remaining;
-    frame[0] = basis.u;
-    frame[1] = basis.v;
-    frame
-}
-
-fn residual<const N: usize>(
-    candidate: [f64; N],
-    target: &[[f64; N]; N],
-    completed: usize,
-) -> [f64; N] {
-    let mut output = candidate;
-    for axis in target.iter().take(completed) {
-        let projection = dot(&output, axis);
-        for (component, axis_component) in output.iter_mut().zip(axis) {
-            *component -= projection * axis_component;
-        }
-    }
-    output
-}
-
-fn normalized<const N: usize>(mut vector: [f64; N]) -> Result<[f64; N], CameraError> {
-    let maximum = vector
-        .iter()
-        .map(|component| component.abs())
-        .fold(0.0_f64, f64::max);
-    if !maximum.is_finite() || maximum == 0.0 {
-        return Err(CameraError::DegenerateFrame);
-    }
-    for component in &mut vector {
-        *component /= maximum;
-    }
-    let length = square_root(norm_squared(&vector));
-    if !length.is_finite() || length == 0.0 {
-        return Err(CameraError::DegenerateFrame);
-    }
-    for component in &mut vector {
-        *component /= length;
-    }
-    Ok(vector)
-}
-
-fn norm_squared<const N: usize>(vector: &[f64; N]) -> f64 {
-    dot(vector, vector)
-}
-
-fn dot<const N: usize>(left: &[f64; N], right: &[f64; N]) -> f64 {
-    left.iter()
-        .zip(right)
-        .map(|(left_component, right_component)| left_component * right_component)
-        .sum()
-}
-
-fn square_root(value: f64) -> f64 {
-    if value <= 0.0 {
-        return 0.0;
-    }
-    let mut estimate = if value < 1.0 { 1.0 } else { value };
-    for _ in 0..SQRT_NEWTON_STEPS {
-        estimate = estimate.midpoint(value / estimate);
-    }
-    estimate
-}
-
-fn orientation_from_frame<const N: usize>(
-    target: &[[f64; N]; N],
-) -> Result<Orientation<N>, CameraError> {
-    let mut current = [[0.0; N]; N];
-    for (index, vector) in current.iter_mut().enumerate() {
-        vector[index] = 1.0;
+    if N < 2 {
+        return Err(CameraError::DimensionTooSmall);
     }
     let mut angles = [[Turn::ZERO; N]; N];
-    for first in 0..N.saturating_sub(1) {
-        let mut coefficients = [0.0; N];
-        for (second, coefficient) in coefficients.iter_mut().enumerate().skip(first) {
-            *coefficient = dot(&target[first], &current[second]);
-        }
-        let coefficient_norm = square_root(
-            coefficients[first..]
-                .iter()
-                .map(|coefficient| coefficient * coefficient)
-                .sum(),
-        );
-        if coefficient_norm <= FRAME_DEGENERACY_NORM_SQUARED {
-            return Err(CameraError::DegenerateFrame);
-        }
-        for coefficient in &mut coefficients[first..] {
-            *coefficient /= coefficient_norm;
-        }
-        for (second, angle) in angles[first].iter_mut().enumerate().skip(first + 2).rev() {
-            let prefix_norm = square_root(
-                coefficients[first..second]
-                    .iter()
-                    .map(|coefficient| coefficient * coefficient)
-                    .sum(),
-            );
-            let tail = coefficients[second];
-            *angle = Turn::from_radians(atan2(tail, prefix_norm))?;
-            if prefix_norm <= FRAME_DEGENERACY_NORM_SQUARED {
-                coefficients[first] = 1.0;
-                for coefficient in &mut coefficients[first + 1..second] {
-                    *coefficient = 0.0;
-                }
-            } else {
-                let total_norm = square_root(prefix_norm * prefix_norm + tail * tail);
-                let factor = total_norm / prefix_norm;
-                for coefficient in &mut coefficients[first..second] {
-                    *coefficient *= factor;
+    let mut radius = segment[0];
+    for (second, component) in segment.iter().enumerate().skip(1) {
+        let (next_radius, angle) = vectoring_turn(&radius, component)?;
+        angles[0][second] = angle;
+        radius = next_radius;
+    }
+    if radius.is_zero() {
+        return Err(CameraError::DegenerateFrame);
+    }
+    if N == 2 {
+        return Orientation::new(angles);
+    }
+
+    let partial_orientation = Orientation::new(angles)?;
+    let previous_basis = rebuild_basis(&view.orientation)?;
+    let partial_basis = rebuild_basis(&partial_orientation)?;
+    let mut coefficients = projected_coefficients(&previous_basis.v, &partial_basis)?;
+    if coefficients.iter().skip(1).all(Fixed::is_zero) {
+        coefficients = 'fallback: {
+            for candidate_index in 2..N {
+                let candidate = previous_basis
+                    .vector(candidate_index)
+                    .ok_or(CameraError::DegenerateFrame)?;
+                let projected = projected_coefficients(candidate, &partial_basis)?;
+                if projected.iter().skip(1).any(|value| !value.is_zero()) {
+                    break 'fallback projected;
                 }
             }
-            coefficients[second] = 0.0;
-        }
-        angles[first][first + 1] =
-            Turn::from_radians(atan2(coefficients[first + 1], coefficients[first]))?;
-        for (second, angle) in angles[first].iter().copied().enumerate().skip(first + 1) {
-            rotate_rows(&mut current, first, second, angle);
-        }
+            projected_coefficients(&previous_basis.u, &partial_basis)?
+        };
+    }
+    if coefficients.iter().skip(1).all(Fixed::is_zero) {
+        return Err(CameraError::DegenerateFrame);
+    }
+    radius = coefficients[1];
+    for (second, component) in coefficients.iter().enumerate().skip(2) {
+        let (next_radius, angle) = vectoring_turn(&radius, component)?;
+        angles[1][second] = angle;
+        radius = next_radius;
     }
     Orientation::new(angles)
 }
 
-fn atan2(vertical: f64, horizontal: f64) -> f64 {
-    if horizontal == 0.0 {
-        return if vertical > 0.0 {
-            core::f64::consts::FRAC_PI_2
-        } else if vertical < 0.0 {
-            -core::f64::consts::FRAC_PI_2
+fn projected_coefficients<const N: usize, const LIMBS: usize>(
+    candidate: &[f64; N],
+    basis: &Basis<N>,
+) -> Result<[Fixed<LIMBS>; N], CameraError> {
+    let mut fixed_candidate = [Fixed::ZERO; N];
+    for (output, component) in fixed_candidate.iter_mut().zip(candidate) {
+        *output = Fixed::from_f64(*component)?;
+    }
+    let mut coefficients = [Fixed::ZERO; N];
+    for (axis_index, coefficient) in coefficients.iter_mut().enumerate().skip(1) {
+        let axis = basis
+            .vector(axis_index)
+            .ok_or(CameraError::DegenerateFrame)?;
+        for (candidate_component, axis_component) in fixed_candidate.iter().zip(axis) {
+            let fixed_axis_component = Fixed::from_f64(*axis_component)?;
+            *coefficient = coefficient.add(&candidate_component.mul(&fixed_axis_component)?)?;
+        }
+    }
+    Ok(coefficients)
+}
+
+fn vectoring_turn<const LIMBS: usize>(
+    horizontal: &Fixed<LIMBS>,
+    vertical: &Fixed<LIMBS>,
+) -> Result<(Fixed<LIMBS>, Turn), CameraError> {
+    if vertical.is_zero() {
+        return if horizontal.is_negative() {
+            Ok((horizontal.neg()?, HALF_TURN))
         } else {
-            0.0
+            Ok((*horizontal, Turn::ZERO))
         };
     }
-    let unsigned = if horizontal > 0.0 {
-        atan_positive(vertical.abs() / horizontal)
+    let mut horizontal_work = *horizontal;
+    let mut vertical_work = *vertical;
+    let mut angle = if horizontal_work.is_negative() {
+        horizontal_work = horizontal_work.neg()?;
+        vertical_work = vertical_work.neg()?;
+        HALF_TURN
     } else {
-        core::f64::consts::PI - atan_positive(vertical.abs() / -horizontal)
+        Turn::ZERO
     };
-    if vertical < 0.0 { -unsigned } else { unsigned }
-}
-
-fn atan_positive(value: f64) -> f64 {
-    if value > 1.0 {
-        return core::f64::consts::FRAC_PI_2 - atan_positive(1.0 / value);
-    }
-    if value > core::f64::consts::SQRT_2 - 1.0 {
-        return core::f64::consts::FRAC_PI_4 + atan_series((value - 1.0) / (value + 1.0));
-    }
-    atan_series(value)
-}
-
-fn atan_series(value: f64) -> f64 {
-    let squared = value * value;
-    let mut power = value;
-    let mut sum = value;
-    let mut subtract = true;
-    for denominator in ATAN_SERIES_DENOMINATORS {
-        power *= squared;
-        let term = power / denominator;
-        if subtract {
-            sum -= term;
+    for (shift, angle_bits) in CORDIC_ATAN_TURNS.iter().copied().enumerate() {
+        let horizontal_shift = horizontal_work.shift_right(shift)?;
+        let vertical_shift = vertical_work.shift_right(shift)?;
+        let step = Turn::from_bits(angle_bits);
+        if vertical_work.is_negative() {
+            horizontal_work = horizontal_work.sub(&vertical_shift)?;
+            vertical_work = vertical_work.add(&horizontal_shift)?;
+            angle = angle.wrapping_add(step.inverse());
         } else {
-            sum += term;
+            horizontal_work = horizontal_work.add(&vertical_shift)?;
+            vertical_work = vertical_work.sub(&horizontal_shift)?;
+            angle = angle.wrapping_add(step);
         }
-        subtract = !subtract;
     }
-    sum
+    let inverse_gain = Fixed::from_binary64_bits(CORDIC_INVERSE_GAIN_BITS)?;
+    Ok((horizontal_work.mul(&inverse_gain)?, angle))
 }
 
 #[cfg(test)]
@@ -229,7 +163,7 @@ mod tests {
     use super::orientation_for_segment;
     use crate::{CameraError, Exponent, Fixed, Orientation, View, rebuild_basis};
 
-    /// Two Turn quanta plus deterministic polynomial and decomposition error.
+    /// Two Turn quanta plus deterministic CORDIC and basis-polynomial error.
     const ALIGNMENT_TOLERANCE: f64 = 2.0e-8;
 
     #[test]
@@ -253,7 +187,7 @@ mod tests {
             .u
             .iter()
             .zip(basis.v)
-            .map(|(left, right)| left * right)
+            .map(|(horizontal, vertical)| horizontal * vertical)
             .sum();
         assert!(orthogonality.abs() <= ALIGNMENT_TOLERANCE);
         Ok(())
