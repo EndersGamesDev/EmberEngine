@@ -2,7 +2,9 @@
 
 use thiserror::Error;
 
-use crate::{EscapeGridRecord, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
+use crate::{
+    EscapeGridRecord, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls, construct_plane,
+};
 
 /// Binary64 self-reprojection has nine decimal pixel/depth digits of rounding headroom.
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
@@ -92,8 +94,8 @@ impl ReconstructedSample {
     ///
     /// # Errors
     ///
-    /// Returns a typed refusal for invalid placement inputs, an error above one pixel, or a target
-    /// projection pole.
+    /// Returns a typed refusal for invalid placement or target inputs, an error above one pixel,
+    /// or a target projection pole.
     pub fn project_from_anchor(
         self,
         target: &Pose,
@@ -152,6 +154,9 @@ pub enum ReprojectionError {
     /// The retained record, pose, or derived point was invalid or non-finite.
     #[error("the retained source sample is invalid or non-finite")]
     InvalidSource,
+    /// The requested pose's rounded plane does not match its object controls.
+    #[error("the requested target pose has an invalid sampled plane")]
+    InvalidTarget,
     /// The source sample did not reproduce its stored pixel and linear depth.
     #[error("the retained source sample failed its self-round-trip receipt")]
     SourceRoundTrip,
@@ -276,14 +281,19 @@ pub fn project_reconstructed_sample(
 ///
 /// # Errors
 ///
-/// Returns a typed refusal for invalid placement inputs, an error above one pixel, or a target
-/// projection pole.
+/// Returns a typed refusal for invalid placement or target inputs, an error above one pixel, or a
+/// target projection pole.
 fn project_reconstructed_sample_from_anchor(
     target: &Pose,
     sample: ReconstructedSample,
     source_to_request_anchor_px: [f64; 2],
     placement_error_px: f64,
 ) -> Result<ProjectedSample, ReprojectionError> {
+    let expected_plane =
+        construct_plane(target.object).map_err(|_| ReprojectionError::InvalidTarget)?;
+    if target.plane != expected_plane {
+        return Err(ReprojectionError::InvalidTarget);
+    }
     if !source_to_request_anchor_px
         .into_iter()
         .chain(sample.source_local_four)
@@ -753,6 +763,30 @@ mod tests {
         let mut above = boundary;
         above.view.distance_four = f64::from_bits(ProjectedSample::POLE_EPSILON.to_bits() + 1);
         assert!(project_reconstructed_sample(&above, sample).is_ok());
+    }
+
+    #[test]
+    fn exact_anchor_projection_refuses_a_stale_target_plane() {
+        let target = pose(ViewControls::NEUTRAL);
+        let sample = ReconstructedSample {
+            ambient_four: target.plane_origin,
+            source_local_four: [0.0; 4],
+            source_zoom_log2: target.zoom_log2,
+            value: RetainedValueSample {
+                record_height: -2.0,
+            },
+        };
+        assert!(sample.project_from_anchor(&target, [0.25, -0.5], 0.0).is_ok());
+
+        let mut stale = target;
+        stale.plane = Plane {
+            basis_u: [0.0; 4],
+            basis_v: [0.0; 4],
+        };
+        assert_eq!(
+            sample.project_from_anchor(&stale, [0.25, -0.5], 0.0),
+            Err(ReprojectionError::InvalidTarget)
+        );
     }
 
     #[test]
