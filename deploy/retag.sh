@@ -119,6 +119,10 @@ done
 
 for remote in "${remotes[@]}"; do
     for new in "${news[@]}"; do
+        if git ls-remote --exit-code --refs "$remote" "refs/tags/$new" >/dev/null 2>&1; then
+            echo "retag: $remote already has $new at the expected commit; skipping"
+            continue
+        fi
         git push "$remote" "refs/tags/$new:refs/tags/$new"
     done
 done
