@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v5
+
+The Warden’s Knife replaces proximity damage with an enemy who wakes, stands, draws a knife, pursues around the corridor plinth and commits to a visible windup, contact and recovery. A knife strike deals 15 damage once when range, facing, height, walls, the sliding gate and dodge timing allow it. Heavy greatsword hits interrupt upright attacks; feet settle when movement stops, the chair stays behind, and death preserves a partial rise (`7d4dae50`).
+
+The deterministic 20-part warden and knife use 11,830 triangles and a 486,824-byte GLB, with measured grips, planted-foot rise and authored gait, draw, strike, stagger and death poses. Enemy health, attack status, hit sound, camera movement and rumble accompany the fight. Forty-five core tests, eighteen client/geometry/IK/input tests, three resolution tests, JavaScript syntax, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. Eighteen passive native pose captures were inspected. The final Idle-priority release build takes 7.08 seconds and produces a 24,166,325-byte WASM. Browser gameplay, physical DualSense/mobile controls, audible output, device vibration and 5K frame pacing remain unverified; direction-specific enemy hit reactions remain in the backlog (`7d4dae50`).
+
 ### End Game v4
 
 Weight of the Blade adds Cut, Backhand, Finisher, Overhead and Rising arcs. One tap strikes once; three quick taps select Wolf's Fang, tap-pause-tap selects Gravebreaker, and tap-tap-pause-tap selects Rising Wolf. Counted input preserves rapid mouse/touch taps, held buttons do not repeat, and valid follow-ups buffer through recovery. Damage occurs at contact, with a short impact freeze, sparks, camera movement, sound and rumble; final gate recovery completes before the chapter overlay. Both V3 gauntlets retain their hilt grips throughout the authored arcs (`d550af5a`).
