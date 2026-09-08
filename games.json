@@ -242,10 +242,17 @@
       "desc": "Escape a dark fantasy castle: claim a greatsword, battle armed soldiers and hollow knights, defeat the cyclops Castellan, and follow ancient clues to break the last seal. Generated 3D characters and voices, heavy sword combos, blocking, adaptive resolution, and controller, keyboard and touch controls.",
       "versions": [
         {
+          "v": "v11",
+          "version": "11.0.0",
+          "path": "games/end-game/v11/",
+          "live": true,
+          "note": "Weight and Impact — aimed sword combos, jumping heavy attacks and visible impacts"
+        },
+        {
           "v": "v10",
           "version": "10.0.0",
           "path": "games/end-game/v10/",
-          "live": true,
+          "live": false,
           "note": "The Last Seal: armed soldiers, hollow knights, a cyclops boss and a castle escape mystery"
         },
         {
