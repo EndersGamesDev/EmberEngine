@@ -16,16 +16,16 @@ use std::{
 use bytemuck::Zeroable as _;
 use ember_julibrot_kernels::{
     DescriptorSamplePair, DescriptorTexel, DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels,
-    KernelError, KernelMode, PairedOutputAllocation, PairedTileSpanIdentities, PerturbUniform,
-    RefinementPlan, SampleStatus, SourceReconstructionUniform, SourceScreenRect, TileOutput,
-    TileOutputCompletion, TilePoseHeader, TileRenderKey, TileSpanIdentity, perturb_scaled_pixel,
-    plan_refinement,
+    KernelError, KernelMode, OUTPUT_PAGE_SIDE, PairedOutputAllocation, PairedTileSpanIdentities,
+    PerturbUniform, RefinementPlan, SampleStatus, SourceReconstructionUniform, SourceScreenRect,
+    TileOutput, TileOutputCompletion, TilePoseHeader, TileRenderKey, TileSpanIdentity,
+    perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
     OrbitStep, Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ScaledPixelScale,
-    ViewControls, pixel_scale, precision_for, retained_value_sample, scale_split, screen_to_plane,
-    source_depth_record, warp_matrix,
+    ViewControls, pixel_scale, precision_for, reference_shift_px, retained_value_sample,
+    scale_split, screen_to_plane, source_depth_record, warp_matrix,
 };
 
 use super::super::schedule::{
@@ -60,13 +60,14 @@ use crate::{
     PictureState, SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
 };
 use ember_julibrot_present::{
-    DropReason, FrameReceipt, HotSlot, LatticePair, PresentEvent, PresentEvents, PresentStatus,
-    SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason,
-    apply_homography, relief_redraw_source_covers_destination, renders_same_picture,
+    DropReason, FrameReceipt, HotSlot, LatticePair, PresentConfig, PresentEvent, PresentEvents,
+    PresentHot, PresentMain, PresentStatus, Presenter, SampleClass, SceneFrame,
+    SubmissionMeasurement, Warp, WarpKind, WarpRefusalReason, apply_homography, hot_stride,
+    relief_redraw_source_covers_destination, renders_same_picture,
 };
 use ember_julibrot_worker::{
-    EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
-    SubmitOutcome, WorkerFacts, WorkerMode,
+    EncodedCentre, HotState, MainState, OrbitDisposition, OrbitReason, OrbitRequest,
+    ReferenceVerification, SubmitOutcome, WorkerFacts, WorkerMode,
 };
 use ember_lab_heap::{GpuKernelExecutor, GpuKernelExecutorConfig, HeapPresentResources, SpanArena};
 
@@ -7906,6 +7907,14 @@ const ANCHOR_TRACE_ORBIT_LENGTH: u32 = 512;
 const ANCHOR_TRACE_EXTRA_SETTLED_FRAMES: u32 = 4;
 const ANCHOR_TRACE_MINIMUM_POST_INPUT_FRAMES: usize = 12;
 const ANCHOR_TRACE_SAMPLE_INDEX: u32 = 405 * MEASURED_FINAL_EXTENT[0] + 720;
+/// Covers the F32 plane-basis and pixel-scale residual without admitting a visible correction.
+const PRESENTED_ANCHOR_TOLERANCE_PX: f64 = 1.0e-3;
+const ANCHOR_PRESENT_HEAP_SIDE: u16 = 1_024;
+const ANCHOR_PRESENT_DESCRIPTOR_CAPACITY: u32 = 256;
+const ANCHOR_PRESENT_SPAN_CAPACITY: u32 = 1;
+const ANCHOR_PRESENT_HANDLE_CAPACITY: u32 = 256;
+const ANCHOR_PRESENT_DIRECTORY_BYTES: u32 =
+    ANCHOR_PRESENT_SPAN_CAPACITY * 16 + ANCHOR_PRESENT_HANDLE_CAPACITY.div_ceil(4) * 16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AnchorPresentation {
@@ -7958,9 +7967,121 @@ struct AnchorTraceHarness {
     frame_loop: FrameLoop,
     plan: RefinementPlan,
     policy_trace: Vec<ZoomTurnRecord>,
+    presenter: Presenter,
+    present_grid: EscapeGrid,
+    present_hot_stride: u32,
+    next_present_refresh: u64,
     source: SceneFrame,
     fast_final: SceneFrame,
     frames: Vec<AnchorPlacementFrame>,
+}
+
+fn anchor_present_resources(device: &wgpu::Device) -> (EscapeGrid, HeapPresentResources) {
+    let mut arena = SpanArena::new(
+        ANCHOR_PRESENT_HEAP_SIDE,
+        1,
+        ANCHOR_PRESENT_DESCRIPTOR_CAPACITY,
+        ANCHOR_PRESENT_DIRECTORY_BYTES,
+        ANCHOR_PRESENT_SPAN_CAPACITY,
+    )
+    .expect("anchor presenter span arena");
+    let span = arena
+        .allocate_span(
+            MEASURED_FINAL_EXTENT[0] * MEASURED_FINAL_EXTENT[1],
+            OUTPUT_PAGE_SIDE,
+        )
+        .expect("anchor presenter grid span");
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot anchor presenter heap"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let data_view = Arc::from(texture.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    }));
+    let buffer = |label, size| {
+        Arc::from(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        }))
+    };
+    let resources = HeapPresentResources {
+        data_view,
+        descriptor_buffer: buffer(
+            "Julibrot anchor presenter descriptors",
+            u64::from(ANCHOR_PRESENT_DESCRIPTOR_CAPACITY) * 16,
+        ),
+        span_directory_buffer: buffer(
+            "Julibrot anchor presenter directory",
+            u64::from(ANCHOR_PRESENT_DIRECTORY_BYTES),
+        ),
+        descriptor_capacity: ANCHOR_PRESENT_DESCRIPTOR_CAPACITY,
+        span_capacity: ANCHOR_PRESENT_SPAN_CAPACITY,
+        handle_capacity: ANCHOR_PRESENT_HANDLE_CAPACITY,
+    };
+    let grid = EscapeGrid {
+        span,
+        width: MEASURED_FINAL_EXTENT[0],
+        height: MEASURED_FINAL_EXTENT[1],
+        level: RefinementLevel::Final,
+    };
+    (grid, resources)
+}
+
+fn anchor_present_main(mut state: MainState, grid: &EscapeGrid, pose: &Pose) -> PresentMain {
+    state.delivered_iter_cap = ANCHOR_TRACE_ORBIT_LENGTH;
+    state.precision_mode = PrecisionMode::PictureFast as u32;
+    PresentMain {
+        epoch: pose.epoch,
+        state,
+        grid: grid.clone(),
+        object: pose.object,
+        plane: pose.plane,
+        map: pose.map,
+        backdrop: None,
+    }
+}
+
+const fn anchor_present_hot(pose: &Pose) -> PresentHot {
+    PresentHot {
+        epoch: pose.epoch,
+        state: HotState {
+            zoom_log2: pose.zoom_log2,
+            plane_theta_1: pose.object.rho_13,
+            plane_theta_2: pose.object.rho_24,
+            centre_from_reference_px: pose.centre_from_reference_px,
+        },
+        plane: pose.plane,
+        object: pose.object,
+        view: pose.view,
+        map: pose.map,
+    }
+}
+
+fn wait_for_anchor_scene(presenter: &mut Presenter, scene_id: u64) -> SceneFrame {
+    for poll in 0..SCENE_POLLS {
+        for event in presenter.poll_fixed(f64::from(poll)) {
+            if let PresentEvent::SceneCompleted { frame, .. } = event
+                && frame.scene_id == scene_id
+            {
+                return frame;
+            }
+        }
+        std::thread::yield_now();
+    }
+    panic!("anchor presenter scene {scene_id} did not complete")
 }
 
 fn anchor_trace_scene(
@@ -8000,14 +8121,30 @@ fn accept_anchor_trace_reference(
     viewer: &mut ViewerController,
     submission: ReferenceSubmission,
     orbit_id: u32,
-) {
+) -> [f64; 2] {
     let generation = submission.navigation.generation;
     let centre_revision = submission.navigation.centre_revision;
     let mode = KernelMode::for_zoom(submission.navigation.zoom_log2);
     if mode == KernelMode::Shallow {
         assert!(viewer.accept_navigation_without_orbit(generation, centre_revision));
-        return;
+        return [0.0; 2];
     }
+    let plane = viewer
+        .navigation_plane()
+        .expect("the anchor trace has a navigation plane");
+    let old_reference = viewer
+        .reference_centre()
+        .expect("the anchor trace has an accepted reference")
+        .with_precision(submission.reference_centre.precision_bits)
+        .expect("the old anchor-trace reference widens");
+    let shift = reference_shift_px(
+        &old_reference,
+        &submission.reference_centre,
+        &plane,
+        submission.navigation.zoom_log2,
+        MEASURED_FINAL_EXTENT[0],
+    )
+    .expect("the anchor-trace reference shift projects");
     let precision = precision_for(
         submission.navigation.zoom_log2,
         MEASURED_FINAL_EXTENT[0],
@@ -8025,9 +8162,10 @@ fn accept_anchor_trace_reference(
         .configure_navigation_context(
             submission.navigation.centre,
             submission.reference_centre,
-            viewer.checked_plane(),
+            plane,
         )
         .expect("accepted anchor trace navigation context");
+    shift
 }
 
 fn push_anchor_placement(
@@ -8090,7 +8228,12 @@ fn complete_anchor_trace_level(
 }
 
 impl AnchorTraceHarness {
-    fn new(script: ZoomScript<'_>, initial_zoom_log2: f64) -> (Self, ReferenceSubmission) {
+    fn new(
+        script: ZoomScript<'_>,
+        initial_zoom_log2: f64,
+        device: &Arc<wgpu::Device>,
+        queue: &Arc<wgpu::Queue>,
+    ) -> (Self, ReferenceSubmission) {
         let policy_trace = drive_measured_zoom_trace(script);
         let mut viewer = ViewerController::new(MEASURED_FINAL_EXTENT).expect("anchor trace viewer");
         viewer
@@ -8103,12 +8246,51 @@ impl AnchorTraceHarness {
         let initial = viewer
             .take_reference_submission()
             .expect("anchor trace initial reference");
-        accept_anchor_trace_reference(&mut viewer, initial, 1);
+        let _initial_shift = accept_anchor_trace_reference(&mut viewer, initial, 1);
         let source = anchor_trace_scene(
             &mut viewer,
             1,
             RefinementLevel::Final,
             PrecisionMode::PictureFast,
+        );
+        let (present_grid, resources) = anchor_present_resources(device);
+        let config = PresentConfig {
+            surface_format: wgpu::TextureFormat::Rgba8Unorm,
+            min_uniform_buffer_offset_alignment: device
+                .limits()
+                .min_uniform_buffer_offset_alignment,
+            fence_deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
+            max_fence_polls: PresentConfig::V1_MAX_FENCE_POLLS,
+        };
+        let present_hot_stride = hot_stride(config.min_uniform_buffer_offset_alignment)
+            .expect("anchor presenter HOT stride");
+        let mut presenter =
+            Presenter::new(Arc::clone(device), Arc::clone(queue), resources, config)
+                .expect("anchor presenter");
+        presenter.set_main(anchor_present_main(
+            viewer.published_main(),
+            &present_grid,
+            &source.pose,
+        ));
+        let retained_slot = HotSlot::for_refresh(0, present_hot_stride, source.pose.epoch)
+            .expect("retained anchor HOT slot");
+        presenter.write_hot(retained_slot, anchor_present_hot(&source.pose), false);
+        let retained_scene_id = presenter
+            .submit_scene(retained_slot, 0.0)
+            .expect("retained anchor scene submits");
+        let source = wait_for_anchor_scene(&mut presenter, retained_scene_id);
+        let pending_slot = HotSlot::for_refresh(1, present_hot_stride, source.pose.epoch)
+            .expect("pending anchor HOT slot");
+        presenter.write_hot(pending_slot, anchor_present_hot(&source.pose), false);
+        let _pending_scene_id = presenter
+            .submit_scene(pending_slot, 0.0)
+            .expect("pending anchor scene submits");
+        assert!(
+            presenter
+                .reference_pose_snapshots()
+                .iter()
+                .all(Option::is_some),
+            "the production presenter has retained and pending poses"
         );
         let (_, delta_log2, crosshair) = script.edits[0];
         viewer
@@ -8133,6 +8315,10 @@ impl AnchorTraceHarness {
             frame_loop,
             plan,
             policy_trace,
+            presenter,
+            present_grid,
+            present_hot_stride,
+            next_present_refresh: 2,
             source,
             fast_final: draft.clone(),
             frames: Vec::new(),
@@ -8183,9 +8369,98 @@ impl AnchorTraceHarness {
         );
     }
 
-    fn present_fast_ladder(&mut self, requested: ReferenceSubmission) {
+    fn apply_accepted_reference(
+        &mut self,
+        requested: ReferenceSubmission,
+        orbit_id: u32,
+        accepted_pose: &Pose,
+    ) -> u32 {
         let generation = requested.navigation.generation;
-        accept_anchor_trace_reference(&mut self.viewer, requested, 2);
+        let revision = requested.navigation.centre_revision;
+        let draft_state = self
+            .viewer
+            .drain_main()
+            .expect("navigation draft MAIN publishes")
+            .main;
+        let draft = anchor_present_main(draft_state, &self.present_grid, accepted_pose);
+        self.presenter.set_main(draft);
+        let slot = HotSlot::for_refresh(
+            self.next_present_refresh,
+            self.present_hot_stride,
+            accepted_pose.epoch,
+        )
+        .expect("accepted-reference HOT slot");
+        self.next_present_refresh = self.next_present_refresh.saturating_add(1);
+        self.presenter
+            .write_hot(slot, anchor_present_hot(accepted_pose), false);
+        let before = self.presenter.reference_pose_snapshots();
+        let shift = accept_anchor_trace_reference(&mut self.viewer, requested, orbit_id);
+        let mut accepted_state = self
+            .viewer
+            .drain_main()
+            .expect("accepted anchor MAIN publishes")
+            .main;
+        accepted_state.reference_shift_px = shift;
+        let accepted = anchor_present_main(accepted_state, &self.present_grid, accepted_pose);
+        self.presenter.set_main(accepted.clone());
+        let after = self.presenter.reference_pose_snapshots();
+        for (before, after) in before.into_iter().zip(after) {
+            let (before_pose, _) = before.expect("reference transition starts with both poses");
+            let (after_pose, after_revision) =
+                after.expect("reference transition retains both poses");
+            assert_eq!(after_pose.orbit_generation, generation);
+            assert_eq!(
+                after_revision, revision,
+                "a rebased pose carries the accepted MAIN revision because its offset is expressed against that accepted reference"
+            );
+            assert!(
+                after_pose
+                    .centre_from_reference_px
+                    .iter()
+                    .all(|component| component.is_finite()),
+                "the presenter publishes finite rebased offsets"
+            );
+            let before_bits = before_pose.centre_from_reference_px.map(f64::to_bits);
+            let after_bits = after_pose.centre_from_reference_px.map(f64::to_bits);
+            if shift.map(f64::to_bits) == [0_u64; 2] {
+                assert_eq!(
+                    after_bits, before_bits,
+                    "a zero shift stamps without moving"
+                );
+            } else {
+                assert_ne!(
+                    after_bits, before_bits,
+                    "a sampled shift re-expresses the pose"
+                );
+            }
+        }
+        let [retained, pending] = after;
+        let (retained_pose, retained_revision) = retained.expect("retained reference pose");
+        let (pending_pose, pending_revision) = pending.expect("pending reference pose");
+        assert_eq!(
+            retained_pose.centre_from_reference_px.map(f64::to_bits),
+            pending_pose.centre_from_reference_px.map(f64::to_bits),
+            "retained and pending offsets share the accepted reference"
+        );
+        assert_eq!(
+            retained_pose.orbit_generation,
+            pending_pose.orbit_generation
+        );
+        assert_eq!(retained_revision, pending_revision);
+        self.presenter.set_main(accepted);
+        assert_eq!(
+            self.presenter.reference_pose_snapshots(),
+            after,
+            "replaying an accepted MAIN record is idempotent"
+        );
+        self.source.pose = retained_pose;
+        self.source.centre_revision = retained_revision;
+        generation
+    }
+
+    fn present_fast_ladder(&mut self, requested: ReferenceSubmission) {
+        let accepted_pose = self.fast_final.pose;
+        let generation = self.apply_accepted_reference(requested, 2, &accepted_pose);
         self.frame_loop.scene_input_ready(generation);
         let fast_preview = anchor_trace_scene(
             &mut self.viewer,
@@ -8243,7 +8518,9 @@ impl AnchorTraceHarness {
                 ..self.fast_settled_state()
             },
         );
-        accept_anchor_trace_reference(&mut self.viewer, sampled, 3);
+        let accepted_pose = self.fast_final.pose;
+        let applied_generation = self.apply_accepted_reference(sampled, 3, &accepted_pose);
+        assert_eq!(applied_generation, generation);
         self.frame_loop
             .scene_input_resumed(generation, RefinementLevel::Final);
         self.fast_final = anchor_trace_scene(
@@ -8366,6 +8643,8 @@ fn drive_anchor_zoom_trace(
     scenario: &'static str,
     initial_zoom_log2: f64,
     sampled_reference: bool,
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
 ) -> Vec<AnchorPlacementFrame> {
     let edits = [(
         0,
@@ -8383,7 +8662,8 @@ fn drive_anchor_zoom_trace(
         destination_extent: MEASURED_FINAL_EXTENT,
         lattice_probe: ZoomLatticeProbe::Skip,
     };
-    let (mut harness, requested) = AnchorTraceHarness::new(script, initial_zoom_log2);
+    let (mut harness, requested) =
+        AnchorTraceHarness::new(script, initial_zoom_log2, device, queue);
     harness.present_fast_ladder(requested);
     if sampled_reference {
         harness.present_sampled_correction();
@@ -8424,6 +8704,12 @@ fn anchor_trace_report(all_runs: &[Vec<AnchorPlacementFrame>]) -> String {
                 row.turn.retained_level,
                 row.precision_mode.as_str(),
             );
+            assert!(
+                from_settled <= PRESENTED_ANCHOR_TOLERANCE_PX,
+                "{} frame {} moved its anchor {from_settled:.9} px from settlement",
+                row.turn.scenario,
+                row.turn.turn
+            );
             assert_eq!(row.frame.pose.grid_width, MEASURED_FINAL_EXTENT[0]);
         }
     }
@@ -8432,7 +8718,11 @@ fn anchor_trace_report(all_runs: &[Vec<AnchorPlacementFrame>]) -> String {
 
 /// Records the cursor anchor carried by every post-wheel presented frame until settlement.
 ///
-/// Phase-A gate table:
+/// The rows below are the Phase-A failure at `813ab115`. Through the production presenter order
+/// they were 390.103627165 pixels off for the sampled perturbation run and 114.059265925 pixels off
+/// beyond binary64 depth; the regression now emits zero in every displacement cell.
+///
+/// Phase-A gate table at the failing base:
 ///
 /// ```text
 /// scenario | frame | tier | presented | visible | records | level | precision | previous_px | settled_px
@@ -8489,10 +8779,26 @@ fn cursor_anchor_placement_across_shallow_perturbation_and_binary64_depths() {
         KernelMode::for_zoom(BINARY64_DEPTH_ZOOM_LOG2),
         KernelMode::Perturbation,
     );
+    let _guard = PAIRED_GPU_TEST_MUTEX
+        .lock()
+        .expect("the native GPU test mutex is not poisoned");
+    let (device, queue) = paired_gpu_test_device();
     let runs = [
-        drive_anchor_zoom_trace("shallow", SHALLOW_ZOOM_LOG2, false),
-        drive_anchor_zoom_trace("perturbation sampled", PERTURBATION_ZOOM_LOG2, true),
-        drive_anchor_zoom_trace("binary64 depth", BINARY64_DEPTH_ZOOM_LOG2, false),
+        drive_anchor_zoom_trace("shallow", SHALLOW_ZOOM_LOG2, false, &device, &queue),
+        drive_anchor_zoom_trace(
+            "perturbation sampled",
+            PERTURBATION_ZOOM_LOG2,
+            true,
+            &device,
+            &queue,
+        ),
+        drive_anchor_zoom_trace(
+            "binary64 depth",
+            BINARY64_DEPTH_ZOOM_LOG2,
+            false,
+            &device,
+            &queue,
+        ),
     ];
     let report = anchor_trace_report(&runs);
     std::io::Write::write_all(&mut std::io::stdout().lock(), report.as_bytes())

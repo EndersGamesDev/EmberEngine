@@ -253,7 +253,6 @@ impl SceneLedger {
         matches
     }
 
-    #[cfg(test)]
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
