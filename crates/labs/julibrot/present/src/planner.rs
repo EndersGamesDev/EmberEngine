@@ -1707,15 +1707,10 @@ mod tests {
 
         for case in named_planner_corpus() {
             for pose in [case.from_pose, case.to_pose] {
-                let rect = crate::SourcePixelRect::from_extent(
-                    0,
-                    0,
-                    pose.grid_width,
-                    pose.grid_height,
-                );
+                let rect =
+                    crate::SourcePixelRect::from_extent(0, 0, pose.grid_width, pose.grid_height);
                 let render = TileRenderKey::from_pose(&pose, rect);
-                let packed =
-                    Warp::pack_descriptor_header(&render, &TilePoseHeader::zeroed());
+                let packed = Warp::pack_descriptor_header(&render, &TilePoseHeader::zeroed());
                 if pose.grid_width == 0
                     || pose.grid_height == 0
                     || matches!(pose.map, PoseMap::EdgeOn)
@@ -1739,11 +1734,7 @@ mod tests {
                 for (actual, expected) in round.texels[2..21]
                     .iter()
                     .flat_map(|texel| texel.lanes)
-                    .zip(
-                        packed.texels[2..21]
-                            .iter()
-                            .flat_map(|texel| texel.lanes),
-                    )
+                    .zip(packed.texels[2..21].iter().flat_map(|texel| texel.lanes))
                 {
                     assert!(
                         (actual - expected).abs() <= FROZEN_FACTOR_LANE_TOLERANCE,

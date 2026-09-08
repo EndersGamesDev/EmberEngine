@@ -1,8 +1,6 @@
 //! Compatibility re-exports for the kernels-owned rendered-tile record vocabulary.
 
-use ember_julibrot_math::{
-    Homography, ObjectAngles, Pose, PoseMap, ViewControls, construct_plane,
-};
+use ember_julibrot_math::{Homography, ObjectAngles, Pose, PoseMap, ViewControls, construct_plane};
 
 pub use ember_julibrot_kernels::{
     CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
@@ -34,13 +32,11 @@ pub(crate) fn pack_descriptor_header(
     };
     pack_angle_factors(
         &render.object,
-        &mut header.texels
-            [TilePoseHeader::H02_OBJECT_12_13..=TilePoseHeader::H04_OBJECT_24_34],
+        &mut header.texels[TilePoseHeader::H02_OBJECT_12_13..=TilePoseHeader::H04_OBJECT_24_34],
     )?;
     pack_angle_factors(
         &render.camera,
-        &mut header.texels
-            [TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45],
+        &mut header.texels[TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45],
     )?;
     header.texels[TilePoseHeader::H10_OBSERVER].lanes = [
         pack_finite(render.yaw.get().cos())?,
@@ -51,9 +47,8 @@ pub(crate) fn pack_descriptor_header(
     let (origin_high, origin_low) = pack_split_array(render.origin.map(ExactF64::get))?;
     header.texels[TilePoseHeader::H11_ORIGIN_HIGH].lanes = origin_high;
     header.texels[TilePoseHeader::H12_ORIGIN_LOW].lanes = origin_low;
-    header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes = pack_finite_array(
-        core::array::from_fn(|axis| render.translation[axis].get()),
-    )?;
+    header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes =
+        pack_finite_array(core::array::from_fn(|axis| render.translation[axis].get()))?;
     header.texels[TilePoseHeader::H14_PROJECTION].lanes = pack_finite_array([
         render.translation[4].get(),
         render.height.get(),
@@ -63,8 +58,7 @@ pub(crate) fn pack_descriptor_header(
     pack_extent_rect_and_map(render, source_map, &mut header)?;
     header.texels[TilePoseHeader::H00_IDENTITIES].lanes[2] =
         pack_unsigned(render.source_identity.anchor_id)?;
-    header.texels[TilePoseHeader::H25_PROVENANCE].lanes[1] =
-        pack_unsigned(render.main_generation)?;
+    header.texels[TilePoseHeader::H25_PROVENANCE].lanes[1] = pack_unsigned(render.main_generation)?;
     let chart_scale = 4.0 * source_map[19].get() / f64::from(render.extent[0]);
     if !chart_scale.is_finite() || chart_scale <= 0.0 {
         return None;
@@ -82,8 +76,7 @@ pub(crate) fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> 
         return None;
     }
     let object_factors: [f64; 6] = unpack_angle_factors(
-        &header.texels
-            [TilePoseHeader::H02_OBJECT_12_13..=TilePoseHeader::H04_OBJECT_24_34],
+        &header.texels[TilePoseHeader::H02_OBJECT_12_13..=TilePoseHeader::H04_OBJECT_24_34],
     )?;
     let object = ObjectAngles {
         rho_12: object_factors[0],
@@ -94,8 +87,7 @@ pub(crate) fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> 
         rho_34: object_factors[5],
     };
     let camera: [f64; 10] = unpack_angle_factors(
-        &header.texels
-            [TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45],
+        &header.texels[TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45],
     )?;
     let observer = header.texels[TilePoseHeader::H10_OBSERVER].lanes;
     let extent = header.texels[TilePoseHeader::H15_EXTENT_DENSITY].lanes;
@@ -111,9 +103,7 @@ pub(crate) fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> 
     let projection = header.texels[TilePoseHeader::H14_PROJECTION].lanes;
     let pose = Pose {
         epoch: 0,
-        orbit_generation: unpack_unsigned(
-            header.texels[TilePoseHeader::H25_PROVENANCE].lanes[1],
-        )?,
+        orbit_generation: unpack_unsigned(header.texels[TilePoseHeader::H25_PROVENANCE].lanes[1])?,
         plane: construct_plane(object).ok()?,
         object,
         plane_origin: unpack_split_array(
@@ -148,9 +138,7 @@ fn pack_extent_rect_and_map(
     source_map: [ExactF64; 20],
     header: &mut TilePoseHeader,
 ) -> Option<()> {
-    if render.extent.contains(&0)
-        || render.source_rect.width == 0
-        || render.source_rect.height == 0
+    if render.extent.contains(&0) || render.source_rect.width == 0 || render.source_rect.height == 0
     {
         return None;
     }
@@ -306,7 +294,9 @@ fn descriptor_lanes_are_valid(header: &TilePoseHeader) -> bool {
         .flat_map(|texel| texel.lanes)
         .all(f32::is_finite)
         && unsigned.into_iter().all(|(texel, lanes)| {
-            header.texels[texel].lanes[lanes].iter().all(|lane| exact_unsigned(*lane))
+            header.texels[texel].lanes[lanes]
+                .iter()
+                .all(|lane| exact_unsigned(*lane))
         })
         && header.texels[TilePoseHeader::H16_SOURCE_RECT].lanes[..2]
             .iter()
@@ -318,9 +308,10 @@ fn descriptor_lanes_are_valid(header: &TilePoseHeader) -> bool {
 
 fn unpack_source_map(header: &TilePoseHeader) -> Option<[f64; 9]> {
     let mut rows = [0.0; 9];
-    for (row, texel) in rows.chunks_exact_mut(3).zip(
-        &header.texels[TilePoseHeader::H18_SOURCE_MAP_0..=TilePoseHeader::H20_SOURCE_MAP_2],
-    ) {
+    for (row, texel) in rows
+        .chunks_exact_mut(3)
+        .zip(&header.texels[TilePoseHeader::H18_SOURCE_MAP_0..=TilePoseHeader::H20_SOURCE_MAP_2])
+    {
         for (value, lane) in row.iter_mut().zip(texel.lanes) {
             *value = f64::from(lane);
         }
