@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "format": {
+    "container": "WAV",
+    "encoding": "PCM signed 16-bit little-endian",
+    "channels": 1,
+    "sample_rate": 24000
+  },
+  "files": [
+    {
+      "id": "movement",
+      "file": "warden-movement.wav",
+      "text": "Shut up and go back to your place",
+      "source_sha256": "50ccd641cc2c84ffde43d69bd22149f32070512e6ae90c38bd27eeae4e05d3c3",
+      "bytes": 109008,
+      "frames": 54482,
+      "seconds": 2.27008,
+      "sha256": "9c86ca56c8194dff57937cc551fe92fb345a4868d3f914ad2f4455939e240ad4"
+    },
+    {
+      "id": "unlocking",
+      "file": "warden-unlocking.wav",
+      "text": "Where did you get that key from?",
+      "source_sha256": "8d962818832fe9e6e5cef732649a719c9cc9ec2141af0cb1f3d6c9aee92429f6",
+      "bytes": 99186,
+      "frames": 49571,
+      "seconds": 2.06546,
+      "sha256": "e3acdbeb63de89a89a715c1fb1279b61b914727324102abdb78545d55121b1cb"
+    },
+    {
+      "id": "sword",
+      "file": "warden-sword.wav",
+      "text": "Why you have a sword here?",
+      "source_sha256": "36fcc1e71f14fece4cba1e25ebe96c6ee9a8e63266c7bf9896524254fe275135",
+      "bytes": 94466,
+      "frames": 47211,
+      "seconds": 1.96713,
+      "sha256": "5af7895a73da17c473b8e02513f1dc8543bb8820562ff25eb6c9f1a32f7e6777"
+    },
+    {
+      "id": "death",
+      "file": "warden-death.wav",
+      "text": "Arrrrrghhhh, I will get revenge!",
+      "source_sha256": "2995ba43f933f6cc5f6ac6def4869f53892e312029477d318e9f4c6e4c41e556",
+      "bytes": 101628,
+      "frames": 50792,
+      "seconds": 2.11633,
+      "sha256": "e93e577b78a3ff170514d749ab98107a3bd4e1a6e8c39d35b339e91ead264fb8"
+    }
+  ],
+  "total_bytes": 404288,
+  "provenance": {
+    "schema_version": 1,
+    "model": "hexgrad/Kokoro-82M",
+    "model_revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+    "voices": {
+      "bm_george": 0.7,
+      "bm_lewis": 0.3
+    },
+    "seed": 60908,
+    "device": "CPU",
+    "threads": 2,
+    "priority": "nice 19",
+    "offline": true,
+    "versions": {
+      "kokoro": "0.9.4",
+      "torch": "2.14.0+cpu",
+      "misaki": "0.9.4",
+      "numpy": "2.5.3"
+    },
+    "files": [
+      {
+        "id": "movement",
+        "text": "Shut up and go back to your place",
+        "synthesis_text": "Shut up, and go back to your place!",
+        "speed": 0.98,
+        "file": "warden-movement-raw.wav",
+        "phonemes": [
+          "\u0283\u02c8\u028ct \u02cc\u028cp, and \u0261\u02ccQ b\u02c8ak t\u0259 j\u0254\u02d0 pl\u02c8As!"
+        ],
+        "graphemes": [
+          "Shut up, and go back to your place!"
+        ],
+        "seconds": 2.725,
+        "peak": 0.37307989597320557,
+        "sha256": "50ccd641cc2c84ffde43d69bd22149f32070512e6ae90c38bd27eeae4e05d3c3",
+        "generation_seconds": 0.7773
+      },
+      {
+        "id": "unlocking",
+        "text": "Where did you get that key from?",
+        "synthesis_text": "Where did you get that key from?",
+        "speed": 0.96,
+        "file": "warden-unlocking-raw.wav",
+        "phonemes": [
+          "w\u02cc\u025b\u02d0 d\u02c8\u026ad ju\u02d0 \u0261\u025bt \u00f0\u02c8at k\u02c8i\u02d0 f\u0279\u0252m?"
+        ],
+        "graphemes": [
+          "Where did you get that key from?"
+        ],
+        "seconds": 2.525,
+        "peak": 0.392421692609787,
+        "sha256": "8d962818832fe9e6e5cef732649a719c9cc9ec2141af0cb1f3d6c9aee92429f6",
+        "generation_seconds": 0.6766
+      },
+      {
+        "id": "sword",
+        "text": "Why you have a sword here?",
+        "synthesis_text": "Why you have a sword here?",
+        "speed": 0.94,
+        "file": "warden-sword-raw.wav",
+        "phonemes": [
+          "w\u02ccI ju\u02d0 hav \u0250 s\u02c8\u0254\u02d0d h\u02c8\u026a\u0259?"
+        ],
+        "graphemes": [
+          "Why you have a sword here?"
+        ],
+        "seconds": 2.5,
+        "peak": 0.3855971693992615,
+        "sha256": "36fcc1e71f14fece4cba1e25ebe96c6ee9a8e63266c7bf9896524254fe275135",
+        "generation_seconds": 0.691
+      },
+      {
+        "id": "death",
+        "text": "Arrrrrghhhh, I will get revenge!",
+        "synthesis_text": "Arrrrrghhhh! I will get revenge!",
+        "speed": 0.9,
+        "file": "warden-death-raw.wav",
+        "phonemes": [
+          "\u02c8a\u0279\u0279\u0261! \u02ccI w\u026al \u0261\u025bt \u0279\u026av\u02c8\u025bn\u02a4!"
+        ],
+        "graphemes": [
+          "Arrrrrghhhh! I will get revenge!"
+        ],
+        "seconds": 2.65,
+        "peak": 0.33095329999923706,
+        "sha256": "2995ba43f933f6cc5f6ac6def4869f53892e312029477d318e9f4c6e4c41e556",
+        "generation_seconds": 0.6948
+      }
+    ],
+    "generation_seconds": 3.6794
+  },
+  "processing": {
+    "script": "tools/end-game/v6_finish_voice.py",
+    "pitch_rate": 0.98,
+    "pitch_semitones": -0.3498,
+    "highpass_hz": 55,
+    "lowpass_hz": 7600,
+    "bass_body_gain": 0.1,
+    "saturation_drive": 1.2,
+    "rasp_hz": 39,
+    "rasp_depth": 0.025,
+    "death_initial_rasp_depth": 0.05,
+    "peak_dbfs": -2.5,
+    "fade_seconds": 0.012,
+    "trim_pre_roll_seconds": 0.16,
+    "trim_post_roll_seconds": 0.055,
+    "leading_pad_seconds": 0.025,
+    "trailing_pad_seconds": 0.07
+  },
+  "processing_seconds": 0.045,
+  "verification": "Run tools/end-game/v6_verify_voice.py for decoded waveform checks. Speech phonemes/graphemes are recorded; no speaker playback or in-game audio review was performed by the generator."
+}

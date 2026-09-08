@@ -442,6 +442,12 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
+### v6 — In preparation
+
+no proto · stamp — · source not recorded · no tag
+
+The Warden’s Voice adds spoken reactions to noisy movement, the unlocked cell, claiming the greatsword and the warden’s death. Subtitles accompany the four lines, movement barks have a cooldown, and V1–V5 remain available.
+
 ### v5 — 2026-09-08
 
 no proto · stamp — · source `c79a32cd7706a141d5fff6d3dcb9ed29e4298a1d` (not on main) · no tag · published `1a1080695f9f9f0d35bff2477843a57ce1e5fb69` (release stamp)

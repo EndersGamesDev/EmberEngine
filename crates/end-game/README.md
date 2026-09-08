@@ -1,8 +1,8 @@
 # End Game
 
-Version 5.0.0, The Warden’s Knife, is a single-player dark fantasy dungeon built on Ember. The chapter begins in a prison cell and ends after the player retrieves the greatsword and breaks the far gate's chain. Rules and material physics live in `end-game-core`; this client owns scene construction, input translation, the camera and presentation.
+Version 6.0.0, The Warden’s Voice, is a single-player dark fantasy dungeon built on Ember. The chapter begins in a prison cell and ends after the player retrieves the greatsword and breaks the far gate's chain. Rules and material physics live in `end-game-core`; this client owns scene construction, input translation, the camera and presentation.
 
-Build the browser game from PowerShell with `& ./tools/end-game/build.ps1` at the repository root, then serve `web/` and open `games/end-game/v5/`. Run the native client with `cargo run -p end-game --bin end-game-app`. Builds run at Idle priority through the helper. Native player launches take focus; unattended captures use `EMBER_CAPTURE_PATH` and disable activation and input capture.
+Build the browser game from PowerShell with `& ./tools/end-game/build.ps1` at the repository root, then serve `web/` and open `games/end-game/v6/`. Run the native client with `cargo run -p end-game --bin end-game-app`. Builds run at Idle priority through the helper. Native player launches take focus; unattended captures use `EMBER_CAPTURE_PATH` and disable activation and input capture.
 
 The game is a vertical slice. Shapes are assembled from material-based parts with seeded per-face surface coordinates, gravity and friction. The renderer supports scalar roughness/metallicity, local inverse-square torch lights, directional shadows, alpha dust/embers and adaptive browser resolution. This is not a path-traced renderer or a measured photorealistic 5K result. V3 first-person arms use 34 named rigid parts, finger curl and thumb opposition, Ember arm IK, and item grip sockets. Full-body imported hero meshes remain unrigged; armor evolution swaps forms under a close camera and particles. The supplied film is a prerecorded prologue, including the dragon encounter, and retains the original asset set's continuity limitations.
 
@@ -19,3 +19,5 @@ V5 replaces the fused seated warden with named articulated body parts, a separat
 Passive native `END_GAME_SCENE=warden` accepts `END_GAME_WARDEN_PHASE=sleeping|waking|hunting|attacking|staggered|dead`, `END_GAME_ACTION_TIME` in seconds and optional `END_GAME_WALK_PHASE`. `END_GAME_WARDEN_DISTANCE` selects a 1–3 metre camera distance, defaulting to 2.8 metres. These stage an inspection pose and never synthesize machine input. `EMBER_CAPTURE_PATH` still selects the scene PNG and exit behavior.
 
 For interrupted knife poses, set `END_GAME_WARDEN_INTERRUPT_TIME` to the attack time in seconds and select `staggered` or `dead`; `END_GAME_ACTION_TIME` then measures time since the hit. The native fixture uses the same sword-hit transition as gameplay.
+
+V6 exports the simulation’s non-consuming dialogue history in HUD JSON, including the life ID, event sequence, stable cue keys and event times. The versioned browser shell owns prerecorded audio, subtitles, pause offsets, priority, ambience ducking and failure fallback. Native scene presentation and the V5 warden rig remain unchanged.

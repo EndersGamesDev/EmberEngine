@@ -1,9 +1,11 @@
 //! End Game's local, fixed-step dungeon simulation. All lengths are metres.
 use glam::{Vec2, Vec3};
 pub mod combat;
+pub mod dialogue;
 pub mod interaction;
 pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
+pub use dialogue::{Dialogue, VoiceEvent, VoiceKind};
 pub use interaction::{Interaction, InteractionKind};
 pub use warden::{Warden, WardenPhase};
 
@@ -269,6 +271,7 @@ pub struct Dungeon {
     pub warden: Vec2,
     pub warden_health: f32,
     pub warden_ai: Warden,
+    pub dialogue: Dialogue,
     pub time: f32,
     pub body: Body,
     pub event: u32,
@@ -301,6 +304,7 @@ impl Default for Dungeon {
             warden: Vec2::new(-2.9, -3.7),
             warden_health: 100.0,
             warden_ai: Warden::default(),
+            dialogue: Dialogue::default(),
             time: 0.0,
             event: 0,
             message: "Cold iron. Old wood. You are still alive.",
@@ -418,12 +422,18 @@ impl Dungeon {
             }
             InteractionKind::Lock => {
                 self.stage = 3;
-                self.say("The lock gives. The warden still sleeps.");
+                if self.warden_health > 0.0 && self.warden_ai.phase != WardenPhase::Dead {
+                    self.dialogue.emit(VoiceKind::GateUnlocked, self.time);
+                }
+                self.say("The lock gives. The cell door slides aside.");
             }
             InteractionKind::Sword => {
                 self.stage = 4;
                 self.werewolf = true;
                 self.transformation = 0.0;
+                if self.warden_health > 0.0 && self.warden_ai.phase != WardenPhase::Dead {
+                    self.dialogue.emit(VoiceKind::SwordClaimed, self.time);
+                }
                 self.say("The blade remembers. The wolf awakens.");
             }
         }
@@ -450,6 +460,9 @@ impl Dungeon {
             self.alert = 1.0;
             self.warden_ai
                 .on_sword_hit(kind.heavy(), self.warden_health == 0.0);
+            if self.warden_health == 0.0 {
+                self.dialogue.emit(VoiceKind::WardenDeath, self.time);
+            }
             self.combat.impact(
                 kind,
                 ImpactKind::Warden,
@@ -520,6 +533,9 @@ impl Dungeon {
     }
 
     fn tick_warden(&mut self, running: bool) {
+        if self.warden_health <= 0.0 {
+            self.dialogue.emit(VoiceKind::WardenDeath, self.time);
+        }
         if self.warden_health <= 0.0 && self.warden_ai.phase != WardenPhase::Dead {
             self.warden_ai.on_sword_hit(false, true);
         }
@@ -594,6 +610,7 @@ impl Dungeon {
             self.attack_time = self.combat.remaining();
             if !progress.frozen {
                 self.time += STEP;
+                self.dialogue.advance();
             }
             return;
         }
@@ -645,6 +662,7 @@ impl Dungeon {
             }
         }
         self.time += STEP;
+        self.dialogue.advance();
         self.gate_open = (self.gate_open
             + if self.stage >= 3 {
                 STEP / 0.85
@@ -739,6 +757,14 @@ impl Dungeon {
         if self.step_distance > 0.65 && self.position.y == 0.0 {
             self.step_distance = 0.0;
             self.footsteps += 1;
+            if walked > 0.0
+                && !self.crouched
+                && self.position.z > 0.38
+                && self.warden_health > 0.0
+                && self.warden_ai.phase != WardenPhase::Dead
+            {
+                self.dialogue.emit(VoiceKind::Movement, self.time);
+            }
         }
         if self
             .position
@@ -757,7 +783,9 @@ impl Dungeon {
         }
         self.tick_warden(running);
         if self.health <= 0.0 {
+            let next_life = self.dialogue.life.wrapping_add(1);
             *self = Self::default();
+            self.dialogue = Dialogue::new(next_life);
             self.say("The dark takes you. Try again.");
         }
     }
@@ -1403,6 +1431,7 @@ mod tests {
             assert_eq!(s.velocity_y, frozen.velocity_y);
             assert_eq!(s.warden, frozen.warden);
             assert_eq!(s.warden_ai, frozen.warden_ai);
+            assert_eq!(s.dialogue, frozen.dialogue);
             assert_eq!(s.body.position, frozen.body.position);
             assert_eq!(s.body.velocity, frozen.body.velocity);
             assert_eq!(s.combat.active, frozen.combat.active);
@@ -1816,5 +1845,211 @@ mod tests {
         s.tick(Controls::default());
         assert_eq!(s.health, 85.0);
         assert_eq!(s.warden_ai.hit_event, 1);
+    }
+
+    #[test]
+    fn movement_voice_needs_audible_footsteps_not_looking_crouching_or_a_blocked_wall() {
+        let mut quiet = Dungeon::default();
+        for _ in 0..180 {
+            quiet.yaw += STEP;
+            quiet.tick(Controls::default());
+        }
+        assert_eq!(quiet.footsteps, 0);
+        assert_eq!(quiet.dialogue.sequence, 0);
+        quiet.yaw = 0.0;
+        for _ in 0..180 {
+            quiet.tick(Controls {
+                movement: Vec2::X,
+                crouch: true,
+                ..Controls::default()
+            });
+        }
+        assert!(quiet.footsteps > 0);
+        assert_eq!(quiet.dialogue.sequence, 0);
+
+        let mut audible = Dungeon::default();
+        for _ in 0..100 {
+            audible.tick(Controls {
+                movement: Vec2::X,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(audible.dialogue.sequence, 1);
+        assert_eq!(
+            audible.dialogue.events().next().unwrap().kind,
+            VoiceKind::Movement
+        );
+        let stopped = audible.position;
+        let footsteps = audible.footsteps;
+        for _ in 0..900 {
+            audible.tick(Controls {
+                movement: Vec2::X,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(audible.position, stopped);
+        assert_eq!(audible.footsteps, footsteps);
+        assert_eq!(audible.dialogue.sequence, 1);
+    }
+
+    #[test]
+    fn cell_movement_voice_repeats_after_cooldown_without_waking_the_warden() {
+        let mut s = Dungeon::default();
+        let mut direction = 1.0;
+        for _ in 0..810 {
+            if s.position.x > 0.8 {
+                direction = -1.0;
+            }
+            if s.position.x < -0.8 {
+                direction = 1.0;
+            }
+            s.tick(Controls {
+                movement: Vec2::X * direction,
+                ..Controls::default()
+            });
+        }
+        let events: Vec<_> = s.dialogue.events().copied().collect();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.kind == VoiceKind::Movement));
+        assert!(events[1].time - events[0].time >= 11.999);
+        assert_eq!(s.alert, 0.0);
+        assert_eq!(s.warden_ai.phase, WardenPhase::Sleeping);
+
+        let mut corridor = Dungeon {
+            stage: 3,
+            position: Vec3::new(0.0, 0.0, -2.0),
+            ..Dungeon::default()
+        };
+        for _ in 0..60 {
+            corridor.tick(Controls {
+                movement: Vec2::X,
+                ..Controls::default()
+            });
+        }
+        assert!(corridor.footsteps > 0);
+        assert_eq!(corridor.dialogue.sequence, 0);
+    }
+
+    #[test]
+    fn story_voice_fires_at_the_lock_and_sword_commit_not_the_press_or_reach() {
+        for (kind, stage, voice) in [
+            (InteractionKind::Lock, 2, VoiceKind::GateUnlocked),
+            (InteractionKind::Sword, 3, VoiceKind::SwordClaimed),
+        ] {
+            let mut s = Dungeon {
+                stage,
+                position: kind.approach(),
+                ..Dungeon::default()
+            };
+            s.tick(Controls {
+                interact: true,
+                ..Controls::default()
+            });
+            assert_eq!(s.dialogue.sequence, 0);
+            for _ in 0..180 {
+                s.tick(Controls {
+                    interact: true,
+                    ..Controls::default()
+                });
+                if let Some(action) = s.interaction {
+                    if action.elapsed < kind.commit_time() {
+                        assert_eq!(s.dialogue.sequence, 0, "early {kind:?} reaction");
+                        assert_eq!(s.stage, stage);
+                    } else {
+                        assert_eq!(s.dialogue.sequence, 1);
+                        assert_eq!(s.stage, stage + 1);
+                    }
+                }
+            }
+            assert_eq!(s.dialogue.sequence, 1);
+            let events: Vec<_> = s.dialogue.events().collect();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].kind, voice);
+            assert!(events[0].time >= kind.commit_time() - STEP - 0.00001);
+            assert!(events[0].time < kind.commit_time() + STEP);
+        }
+    }
+
+    #[test]
+    fn fatal_sword_voice_is_once_only_and_retained_through_hitstop_and_collapse() {
+        let mut s = knife_fixture();
+        s.strike_contact(StrikeKind::Cut);
+        assert!(s.warden_health > 0.0);
+        assert_eq!(s.dialogue.sequence, 0);
+        s.warden_health = 10.0;
+        s.strike_contact(StrikeKind::Cut);
+        assert_eq!(s.dialogue.sequence, 1);
+        assert!(s.dialogue.dead());
+        assert_eq!(
+            s.dialogue.events().next().unwrap().kind,
+            VoiceKind::WardenDeath
+        );
+        let frozen = s.dialogue.clone();
+        while s.combat.hitstop_left > 0.0 {
+            s.tick(Controls::default());
+            assert_eq!(s.dialogue, frozen);
+        }
+        for _ in 0..180 {
+            s.tick(Controls::default());
+        }
+        s.strike_contact(StrikeKind::Cut);
+        assert_eq!(s.dialogue.sequence, 1);
+        s.stage = 5;
+        for _ in 0..180 {
+            s.tick(Controls {
+                movement: Vec2::X,
+                attack: true,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(s.dialogue.sequence, 1);
+    }
+
+    #[test]
+    fn observed_warden_death_emits_on_tick_and_blocks_later_live_lines() {
+        let mut s = Dungeon {
+            stage: 3,
+            warden_health: 0.0,
+            ..Dungeon::default()
+        };
+        s.tick(Controls::default());
+        assert_eq!(s.warden_ai.phase, WardenPhase::Dead);
+        assert!(s.dialogue.dead());
+        assert_eq!(
+            s.dialogue.events().next().unwrap().kind,
+            VoiceKind::WardenDeath
+        );
+        s.commit_interaction(InteractionKind::Lock);
+        s.commit_interaction(InteractionKind::Sword);
+        for _ in 0..900 {
+            s.tick(Controls {
+                movement: Vec2::X,
+                ..Controls::default()
+            });
+        }
+        assert!(s.footsteps > 0);
+        assert_eq!(s.dialogue.sequence, 1);
+    }
+
+    #[test]
+    fn prisoner_death_changes_voice_life_and_clears_old_story_history() {
+        let mut s = Dungeon::default();
+        s.commit_interaction(InteractionKind::Lock);
+        s.commit_interaction(InteractionKind::Sword);
+        let old_life = s.dialogue.life;
+        let old_first = *s.dialogue.events().next().unwrap();
+        assert_eq!(s.dialogue.sequence, 2);
+        s.health = 0.0;
+        s.tick(Controls::default());
+        assert_eq!(s.stage, 0);
+        assert_eq!(s.dialogue.life, old_life + 1);
+        assert_eq!(s.dialogue.sequence, 0);
+        assert_eq!(s.dialogue.events().count(), 0);
+        assert!(!s.dialogue.dead());
+        s.commit_interaction(InteractionKind::Lock);
+        let new_first = *s.dialogue.events().next().unwrap();
+        assert_eq!(new_first.id, old_first.id);
+        assert_ne!((s.dialogue.life, new_first.id), (old_life, old_first.id));
+        assert_eq!(new_first.kind, VoiceKind::GateUnlocked);
     }
 }

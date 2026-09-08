@@ -1,4 +1,4 @@
-//! End Game v5: a single-player Ember dungeon, native and WASM.
+//! End Game v6: a single-player Ember dungeon, native and WASM.
 mod cell;
 mod hands;
 mod scene;
@@ -88,6 +88,40 @@ mod tests {
         assert!(g.third_person);
         g.update(&InputState::default(), STEP);
         assert!(g.third_person);
+    }
+
+    #[test]
+    fn dialogue_snapshot_keeps_story_events_across_pause_and_clears_on_respawn() {
+        let mut g = game();
+        g.sim.stage = 2;
+        g.sim.position = end_game_core::InteractionKind::Lock.approach();
+        g.sim.interact();
+        for _ in 0..23 {
+            g.update(&InputState::default(), 0.1);
+        }
+        let snapshot =
+            || HUD.with(|hud| serde_json::from_str::<serde_json::Value>(&hud.borrow()).unwrap());
+        let before = snapshot()["dialogue"].clone();
+        assert!(
+            before["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["kind"] == "key")
+        );
+        UI.with(|u| u.borrow_mut().paused = true);
+        g.update(&InputState::default(), 1.0);
+        assert_eq!(snapshot()["dialogue"], before);
+        UI.with(|u| u.borrow_mut().paused = false);
+        g.sim.health = 0.0;
+        g.update(&InputState::default(), STEP);
+        let after = snapshot()["dialogue"].clone();
+        assert_eq!(
+            after["life"].as_u64().unwrap(),
+            before["life"].as_u64().unwrap() + 1
+        );
+        assert!(after["events"].as_array().unwrap().is_empty());
+        assert_eq!(after["dead"], false);
     }
 
     #[test]
@@ -696,6 +730,13 @@ impl EmberGame for Game {
             "position": self.sim.position.to_array(), "time": self.sim.time,
             "interacting": self.sim.interaction.is_some(),
             "finished": self.sim.finished(),
+            "dialogue": {
+                "life": self.sim.dialogue.life, "sequence": self.sim.dialogue.sequence,
+                "dead": self.sim.dialogue.dead(),
+                "events": self.sim.dialogue.events().map(|event| serde_json::json!({
+                    "id": event.id, "kind": event.kind.key(), "time": event.time
+                })).collect::<Vec<_>>()
+            },
             "warden": {
                 "phase": format!("{:?}", self.sim.warden_ai.phase),
                 "label": self.sim.warden_ai.label(), "health": self.sim.warden_health,
