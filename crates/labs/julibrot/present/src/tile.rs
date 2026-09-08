@@ -513,8 +513,8 @@ impl ChartFootprintAccumulator {
             conservative_maximum: self
                 .maximum
                 .map(|value| (value + coordinate_error).next_up()),
-            density_minimum: self.density_minimum.next_down(),
-            density_maximum: self.density_maximum.next_up(),
+            density_minimum: self.density_minimum,
+            density_maximum: self.density_maximum,
             coordinate_error,
             valid_sample_count: self.valid_sample_count,
         })
@@ -542,39 +542,250 @@ fn source_chart_scale(source: &Pose) -> Option<f64> {
     (scale.is_finite() && scale > 0.0).then_some(scale)
 }
 
+/// Closed binary64 interval whose arithmetic expands every nearest-rounded result by one
+/// representable value toward each infinity.
+#[derive(Clone, Copy)]
+struct DirectedInterval {
+    lower: f64,
+    upper: f64,
+}
+
+impl DirectedInterval {
+    const fn point(value: f64) -> Option<Self> {
+        if value.is_finite() {
+            Some(Self {
+                lower: value,
+                upper: value,
+            })
+        } else {
+            None
+        }
+    }
+
+    const fn contains_zero(self) -> bool {
+        self.lower <= 0.0 && self.upper >= 0.0
+    }
+
+    const fn negated(self) -> Self {
+        Self {
+            lower: -self.upper,
+            upper: -self.lower,
+        }
+    }
+
+    fn add(self, addend: Self) -> Option<Self> {
+        outward_interval([
+            self.lower + addend.lower,
+            self.upper + addend.upper,
+        ])
+    }
+
+    fn subtract(self, subtrahend: Self) -> Option<Self> {
+        outward_interval([
+            self.lower - subtrahend.upper,
+            self.upper - subtrahend.lower,
+        ])
+    }
+
+    fn multiply(self, multiplier: Self) -> Option<Self> {
+        outward_interval([
+            self.lower * multiplier.lower,
+            self.lower * multiplier.upper,
+            self.upper * multiplier.lower,
+            self.upper * multiplier.upper,
+        ])
+    }
+
+    fn divide(self, divisor: Self) -> Option<Self> {
+        if divisor.contains_zero() {
+            return None;
+        }
+        outward_interval([
+            self.lower / divisor.lower,
+            self.lower / divisor.upper,
+            self.upper / divisor.lower,
+            self.upper / divisor.upper,
+        ])
+    }
+
+    fn mul_add(self, multiplier: Self, addend: Self) -> Option<Self> {
+        outward_interval([
+            self.lower.mul_add(multiplier.lower, addend.lower),
+            self.lower.mul_add(multiplier.lower, addend.upper),
+            self.lower.mul_add(multiplier.upper, addend.lower),
+            self.lower.mul_add(multiplier.upper, addend.upper),
+            self.upper.mul_add(multiplier.lower, addend.lower),
+            self.upper.mul_add(multiplier.lower, addend.upper),
+            self.upper.mul_add(multiplier.upper, addend.lower),
+            self.upper.mul_add(multiplier.upper, addend.upper),
+        ])
+    }
+
+    const fn absolute(self) -> Self {
+        if self.contains_zero() {
+            Self {
+                lower: 0.0,
+                upper: self.lower.abs().max(self.upper.abs()),
+            }
+        } else {
+            Self {
+                lower: self.lower.abs().min(self.upper.abs()),
+                upper: self.lower.abs().max(self.upper.abs()),
+            }
+        }
+    }
+
+    fn hypot(self, other: Self) -> Option<Self> {
+        let left = self.absolute();
+        let right = other.absolute();
+        outward_interval([
+            left.lower.hypot(right.lower),
+            left.upper.hypot(right.upper),
+        ])
+        .map(|interval| Self {
+            lower: interval.lower.max(0.0),
+            upper: interval.upper,
+        })
+    }
+
+    fn square_root(self) -> Option<Self> {
+        if self.upper < 0.0 {
+            return None;
+        }
+        outward_interval([self.lower.max(0.0).sqrt(), self.upper.sqrt()]).map(|interval| Self {
+            lower: interval.lower.max(0.0),
+            upper: interval.upper,
+        })
+    }
+}
+
+fn outward_interval(values: impl IntoIterator<Item = f64>) -> Option<DirectedInterval> {
+    let mut values = values.into_iter();
+    let first = values.next()?;
+    if !first.is_finite() {
+        return None;
+    }
+    let mut lower = first;
+    let mut upper = first;
+    for value in values {
+        if !value.is_finite() {
+            return None;
+        }
+        lower = lower.min(value);
+        upper = upper.max(value);
+    }
+    let interval = DirectedInterval {
+        lower: lower.next_down(),
+        upper: upper.next_up(),
+    };
+    (interval.lower.is_finite() && interval.upper.is_finite()).then_some(interval)
+}
+
 fn source_density_interval(source: &Pose, pixel: [f64; 2]) -> Option<[f64; 2]> {
     let PoseMap::Mapped(map) = source.map else {
         return None;
     };
-    let scale = source_chart_scale(source)?;
-    let [x, y] = pixel;
-    let denominator = map.rows[6].mul_add(x, map.rows[7].mul_add(y, map.rows[8]));
-    if !denominator.is_finite() || denominator <= 0.0 {
+    if source.grid_width == 0 {
         return None;
     }
-    let numerator_x = map.rows[0].mul_add(x, map.rows[1].mul_add(y, map.rows[2]));
-    let numerator_y = map.rows[3].mul_add(x, map.rows[4].mul_add(y, map.rows[5]));
-    let denominator_squared = denominator * denominator;
-    let jacobian = [
-        scale * map.rows[0].mul_add(denominator, -numerator_x * map.rows[6]) / denominator_squared,
-        scale * map.rows[1].mul_add(denominator, -numerator_x * map.rows[7]) / denominator_squared,
-        scale * map.rows[3].mul_add(denominator, -numerator_y * map.rows[6]) / denominator_squared,
-        scale * map.rows[4].mul_add(denominator, -numerator_y * map.rows[7]) / denominator_squared,
+    let [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth] =
+        map.rows.map(DirectedInterval::point);
+    let coefficients = [
+        first?, second?, third?, fourth?, fifth?, sixth?, seventh?, eighth?, ninth?,
     ];
-    let horizontal_metric = jacobian[0].mul_add(jacobian[0], jacobian[2] * jacobian[2]);
-    let mixed_metric = jacobian[0].mul_add(jacobian[1], jacobian[2] * jacobian[3]);
-    let vertical_metric = jacobian[1].mul_add(jacobian[1], jacobian[3] * jacobian[3]);
-    let discriminant = (horizontal_metric - vertical_metric).hypot(2.0 * mixed_metric);
-    let sigma_maximum = (0.5 * (horizontal_metric + vertical_metric + discriminant)).sqrt();
-    let determinant = jacobian[0]
-        .mul_add(jacobian[3], -jacobian[1] * jacobian[2])
-        .abs();
-    let sigma_minimum = determinant / sigma_maximum;
-    let density = [1.0 / sigma_maximum, 1.0 / sigma_minimum];
-    density
-        .into_iter()
-        .all(|value| value.is_finite() && value > 0.0)
-        .then_some(density)
+    let four = DirectedInterval::point(4.0)?;
+    let width = DirectedInterval::point(f64::from(source.grid_width))?;
+    let scale = four
+        .multiply(DirectedInterval::point(map.apron_scale)?)?
+        .divide(width)?;
+    let jacobian = density_jacobian(&coefficients, scale, pixel)?;
+    density_from_jacobian(jacobian)
+}
+
+fn density_jacobian(
+    coefficients: &[DirectedInterval; 9],
+    scale: DirectedInterval,
+    pixel: [f64; 2],
+) -> Option<[DirectedInterval; 4]> {
+    let [x, y] = pixel.map(DirectedInterval::point);
+    let x = x?;
+    let y = y?;
+    let denominator = coefficients[6].mul_add(
+        x,
+        coefficients[7].mul_add(y, coefficients[8])?,
+    )?;
+    if denominator.lower <= 0.0 {
+        return None;
+    }
+    let numerator_x =
+        coefficients[0].mul_add(x, coefficients[1].mul_add(y, coefficients[2])?)?;
+    let numerator_y =
+        coefficients[3].mul_add(x, coefficients[4].mul_add(y, coefficients[5])?)?;
+    let denominator_squared = denominator.multiply(denominator)?;
+    Some([
+        scale
+            .multiply(coefficients[0].mul_add(
+                denominator,
+                numerator_x.multiply(coefficients[6])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[1].mul_add(
+                denominator,
+                numerator_x.multiply(coefficients[7])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[3].mul_add(
+                denominator,
+                numerator_y.multiply(coefficients[6])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+        scale
+            .multiply(coefficients[4].mul_add(
+                denominator,
+                numerator_y.multiply(coefficients[7])?.negated(),
+            )?)?
+            .divide(denominator_squared)?,
+    ])
+}
+
+fn density_from_jacobian(jacobian: [DirectedInterval; 4]) -> Option<[f64; 2]> {
+    let horizontal_metric =
+        jacobian[0].mul_add(jacobian[0], jacobian[2].multiply(jacobian[2])?)?;
+    let mixed_metric =
+        jacobian[0].mul_add(jacobian[1], jacobian[2].multiply(jacobian[3])?)?;
+    let vertical_metric =
+        jacobian[1].mul_add(jacobian[1], jacobian[3].multiply(jacobian[3])?)?;
+    let two = DirectedInterval::point(2.0)?;
+    let discriminant = horizontal_metric
+        .subtract(vertical_metric)?
+        .hypot(two.multiply(mixed_metric)?)?;
+    let metric_sum = horizontal_metric
+        .add(vertical_metric)?
+        .add(discriminant)?;
+    let sigma_maximum = DirectedInterval::point(0.5)?
+        .multiply(metric_sum)?
+        .square_root()?;
+    if sigma_maximum.contains_zero() {
+        return None;
+    }
+    let determinant = jacobian[0].mul_add(
+        jacobian[3],
+        jacobian[1].multiply(jacobian[2])?.negated(),
+    )?;
+    if determinant.contains_zero() {
+        return None;
+    }
+    let sigma_minimum = determinant.absolute().divide(sigma_maximum)?;
+    if sigma_minimum.contains_zero() {
+        return None;
+    }
+    let one = DirectedInterval::point(1.0)?;
+    let minimum_density = one.divide(sigma_maximum)?;
+    let maximum_density = one.divide(sigma_minimum)?;
+    (minimum_density.lower > 0.0 && maximum_density.upper >= minimum_density.lower)
+        .then_some([minimum_density.lower, maximum_density.upper])
 }
 
 fn canonical_coordinate_error(transform: SliceChartTransform, source_error: f64) -> Option<f64> {
@@ -1055,6 +1266,9 @@ mod tests {
     const MAXIMAL_DESCRIPTOR_ZOOM_LOG2: f64 = 1000.25;
     /// A quarter-pixel exact anchor delta must have a material projected effect.
     const ANCHOR_EFFECT_MINIMUM_PX: f64 = 0.1;
+    /// The identity density chain has fewer than 128 outward-rounded endpoint operations; at
+    /// density 64 each endpoint ulp is 64 binary64 epsilon units.
+    const IDENTITY_DENSITY_INTERVAL_BOUND: f64 = 8_192.0 * f64::EPSILON;
     const FOOTPRINT_CORPUS: [[f64; 2]; 9] = [
         [-95.5, -47.25],
         [0.25, -47.25],
@@ -1234,6 +1448,14 @@ mod tests {
         source
     }
 
+    fn rounded_density_source_pose() -> Pose {
+        let mut source = footprint_source_pose();
+        source.view.camera[0] = 0.17;
+        source.view.camera[1] += 0.1;
+        rebuild_map(&mut source);
+        source
+    }
+
     fn expected_byte_pin_header() -> TilePoseHeader {
         let mut expected = TilePoseHeader::zeroed();
         expected.texels[TilePoseHeader::H00_IDENTITIES].lanes = [41.0, 42.0, 73.0, 1.0];
@@ -1300,8 +1522,8 @@ mod tests {
         assert!((footprint.coordinate_error - expected_error).abs() <= 4.0 * f64::EPSILON);
         assert!(footprint.density_minimum < 64.0);
         assert!(footprint.density_maximum > 64.0);
-        assert!(64.0 - footprint.density_minimum <= 64.0 * f64::EPSILON);
-        assert!(footprint.density_maximum - 64.0 <= 64.0 * f64::EPSILON);
+        assert!(64.0 - footprint.density_minimum <= IDENTITY_DENSITY_INTERVAL_BOUND);
+        assert!(footprint.density_maximum - 64.0 <= IDENTITY_DENSITY_INTERVAL_BOUND);
 
         for sample in samples {
             let (reconstructed, _) =
@@ -1322,6 +1544,47 @@ mod tests {
                 assert!(*maximum >= value + source_error);
             }
         }
+    }
+
+    #[test]
+    fn density_interval_covers_multi_operation_rounding_regression() {
+        const EXACT_MINIMUM_FLOOR: f64 = f64::from_bits(0x4050_4fd2_1e53_46e3);
+        const EXACT_MAXIMUM_CEILING: f64 = f64::from_bits(0x4050_9345_fbf6_67bf);
+
+        // The reviewer's packed projective tuple is stopped by the R3-02 SourceRoundTrip receipt
+        // before density. This pose-derived map crosses that gate while rotation and
+        // foreshortening exercise the complete non-identity density chain.
+        let source = rounded_density_source_pose();
+        let header = footprint_header(&source);
+        let slice = SliceIdentity::new(source.plane, source.plane_origin);
+        let content = footprint_content(&source, slice);
+        let source_pixel = [95.75, 47.75];
+        let samples = [footprint_sample(&source, source_pixel)];
+        let footprint = derive_chart_footprint(&content, &header, &samples)
+            .expect("pose-derived source derives one density interval");
+
+        // Exact arithmetic over the packed map puts the lower endpoint above the floor and the
+        // upper endpoint below the ceiling, so covering both constants proves outwardness.
+        assert!(footprint.density_minimum <= EXACT_MINIMUM_FLOOR);
+        assert!(footprint.density_maximum >= EXACT_MAXIMUM_CEILING);
+        assert!(footprint.density_minimum > 65.24);
+        assert!(footprint.density_maximum < 66.31);
+    }
+
+    #[test]
+    fn density_interval_refuses_zero_denominator_and_determinant_intervals() {
+        let mut source = footprint_source_pose();
+        source.map = PoseMap::Mapped(Homography {
+            rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            ..Homography::IDENTITY
+        });
+        assert!(source_density_interval(&source, [0.0; 2]).is_none());
+
+        source.map = PoseMap::Mapped(Homography {
+            rows: [1.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ..Homography::IDENTITY
+        });
+        assert!(source_density_interval(&source, [0.0; 2]).is_none());
     }
 
     #[test]
