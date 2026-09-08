@@ -1,6 +1,6 @@
 # marketing
 
-The home of this engine's promotion: the plan, the log, the board, the launch material, and the heartbeat that keeps the work moving between sessions. The repo is the medium — anything one worker needs another to know goes here, not in a chat transcript (`docs/worker-protocol.md`).
+The home of this engine's promotion: the plan, the log, the board, the launch material, and the heartbeat that keeps the work moving between sessions. The repo is the medium — anything one worker needs another to know goes here, not in a chat transcript ([`docs/worker-protocol.md`](../docs/worker-protocol.md)).
 
 | File | What it is |
 |---|---|
