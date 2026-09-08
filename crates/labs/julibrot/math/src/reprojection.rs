@@ -14,10 +14,8 @@ impl Plane {
     #[must_use]
     pub fn local_point(self, coordinate: [f64; 2]) -> [f64; 4] {
         core::array::from_fn(|axis| {
-            f64::from(self.basis_u[axis]).mul_add(
-                coordinate[0],
-                f64::from(self.basis_v[axis]) * coordinate[1],
-            )
+            f64::from(self.basis_u[axis])
+                .mul_add(coordinate[0], f64::from(self.basis_v[axis]) * coordinate[1])
         })
     }
 }
@@ -776,7 +774,11 @@ mod tests {
                 record_height: -2.0,
             },
         };
-        assert!(sample.project_from_anchor(&target, [0.25, -0.5], 0.0).is_ok());
+        assert!(
+            sample
+                .project_from_anchor(&target, [0.25, -0.5], 0.0)
+                .is_ok()
+        );
 
         let mut stale = target;
         stale.plane = Plane {
