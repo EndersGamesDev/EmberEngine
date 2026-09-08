@@ -96,6 +96,12 @@ pub enum TileJobError {
     OutputShapeMismatch,
     #[error("the value and reconstruction outputs alias one span")]
     OutputAlias,
+    #[error("the resident output profile cannot hold the paired reservation")]
+    OutputProfileTooSmall,
+    #[error("a paired output completion belongs to a stale MAIN generation")]
+    StaleOutputCompletion,
+    #[error("a paired output completion names the wrong output side")]
+    OutputCompletionMismatch,
     #[error("the queue already contains the stable job ID")]
     DuplicateJob,
     #[error("the resident profile has fewer tiles than protected backdrop slots")]
@@ -694,6 +700,74 @@ impl PairedTileSpanIdentities {
     }
 }
 
+/// Generation-tagged allocation receipt for one `S0`/`S1` output pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PairedOutputAllocation {
+    /// MAIN generation shared by both span identities.
+    pub generation: u32,
+    /// Non-aliasing value and reconstruction span identities.
+    pub spans: PairedTileSpanIdentities,
+    /// Exact logical bytes in both sample columns, excluding physical padding.
+    pub logical_bytes: u64,
+    /// Exact physical bytes reserved by both sample spans.
+    pub reserved_bytes: u64,
+}
+
+impl PairedOutputAllocation {
+    /// Paired-allocation schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 48;
+
+    /// Records two spans allocated together under one MAIN generation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses aliased or unequal spans, byte arithmetic overflow, or a resident profile whose
+    /// DATA capacity cannot hold the exact paired reservation.
+    pub fn from_spans(
+        generation: u32,
+        value: &DataSpan,
+        reconstruction: &DataSpan,
+        profile_reserved_bytes: u64,
+    ) -> Result<Self, TileJobError> {
+        let spans = PairedTileSpanIdentities::new(
+            TileSpanIdentity::new(value.directory_index, generation, value.logical_len),
+            TileSpanIdentity::new(
+                reconstruction.directory_index,
+                generation,
+                reconstruction.logical_len,
+            ),
+        )?;
+        let logical_bytes =
+            DescriptorCostLedger::paired_sample_logical_bytes(u64::from(value.logical_len))
+                .ok_or(TileJobError::ArithmeticOverflow)?;
+        let value_reserved_bytes = value
+            .reserved_records()
+            .checked_mul(DescriptorCostLedger::TEXEL_BYTES)
+            .ok_or(TileJobError::ArithmeticOverflow)?;
+        let reconstruction_reserved_bytes = reconstruction
+            .reserved_records()
+            .checked_mul(DescriptorCostLedger::TEXEL_BYTES)
+            .ok_or(TileJobError::ArithmeticOverflow)?;
+        let reserved_bytes = DescriptorCostLedger::paired_reserved_bytes(
+            value_reserved_bytes,
+            reconstruction_reserved_bytes,
+        )
+        .ok_or(TileJobError::ArithmeticOverflow)?;
+        if reserved_bytes > profile_reserved_bytes {
+            return Err(TileJobError::OutputProfileTooSmall);
+        }
+        Ok(Self {
+            generation,
+            spans,
+            logical_bytes,
+            reserved_bytes,
+        })
+    }
+}
+
 /// One physical RGBA32F descriptor-map texel.
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C, align(16))]
@@ -818,6 +892,75 @@ impl DescriptorSamplePair {
             s0: DescriptorTexel { lanes: value },
             s1: DescriptorTexel { lanes: lifted },
         }
+    }
+}
+
+/// Source-pose lanes appended to a value kernel when it produces `S0` and `S1` together.
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct SourceReconstructionUniform {
+    /// Five ordered ambient-camera factor pairs.
+    pub camera_rotation_pairs: [[f32; 4]; 5],
+    /// Four low coordinates followed by the padded fifth coordinate.
+    pub camera_translation: [[f32; 4]; 2],
+    /// `(cos_yaw,sin_yaw,cos_pitch,sin_pitch)`.
+    pub observer_rotation: [f32; 4],
+    /// `(height_scale,distance_five,distance_four,chart_scale)`.
+    pub view_scale: [f32; 4],
+}
+
+impl SourceReconstructionUniform {
+    /// Source-reconstruction uniform schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 144;
+
+    /// Selects the source projection lanes from one validated descriptor header.
+    #[must_use]
+    pub fn from_header(header: &TilePoseHeader) -> Option<Self> {
+        if validate_pose_header(header).is_err() {
+            return None;
+        }
+        let camera_rotation_pairs = core::array::from_fn(|index| {
+            header.texels[TilePoseHeader::H05_CAMERA_12_13 + index].lanes
+        });
+        let projection = header.texels[TilePoseHeader::H14_PROJECTION].lanes;
+        let chart_scale = header.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes;
+        let uniform = Self {
+            camera_rotation_pairs,
+            camera_translation: [
+                header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes,
+                [projection[0], 0.0, 0.0, 0.0],
+            ],
+            observer_rotation: header.texels[TilePoseHeader::H10_OBSERVER].lanes,
+            view_scale: [
+                projection[1],
+                projection[2],
+                projection[3],
+                chart_scale[0] + chart_scale[1],
+            ],
+        };
+        let finite = uniform
+            .camera_rotation_pairs
+            .into_iter()
+            .flatten()
+            .chain(uniform.camera_translation.into_iter().flatten())
+            .chain(uniform.observer_rotation)
+            .chain(uniform.view_scale)
+            .all(f32::is_finite);
+        let [height_scale, distance_five, distance_four, source_scale] = uniform.view_scale;
+        (finite
+            && height_scale >= 0.0
+            && distance_five > 0.0
+            && distance_four > 0.0
+            && source_scale > 0.0)
+            .then_some(uniform)
+    }
+
+    /// Returns the exact little-endian wasm/native payload bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
     }
 }
 
@@ -1016,6 +1159,24 @@ impl DescriptorCostLedger {
     /// Logical bytes in one complete resident tile.
     pub const LOGICAL_BYTES_PER_TILE: u64 =
         Self::SAMPLE_BYTES_PER_TILE + Self::HEADER_BYTES_PER_TILE;
+
+    /// Computes exact logical bytes for equal-length `S0` and `S1` sample columns.
+    #[must_use]
+    pub const fn paired_sample_logical_bytes(sample_count: u64) -> Option<u64> {
+        match sample_count.checked_mul(2) {
+            Some(records) => records.checked_mul(Self::TEXEL_BYTES),
+            None => None,
+        }
+    }
+
+    /// Adds the exact physical reservations for two independently padded sample spans.
+    #[must_use]
+    pub const fn paired_reserved_bytes(
+        value_reserved_bytes: u64,
+        reconstruction_reserved_bytes: u64,
+    ) -> Option<u64> {
+        value_reserved_bytes.checked_add(reconstruction_reserved_bytes)
+    }
 
     /// Computes the exact logical bytes for a resident tile count.
     #[must_use]
@@ -1499,9 +1660,83 @@ impl PairedOutputSpanPlan {
 
 /// One side of a paired tile output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum TileOutput {
     Value,
     Reconstruction,
+}
+
+impl TileOutput {
+    /// Output-side schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 4;
+}
+
+/// One generation-tagged observation that a paired output side completed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct TileOutputCompletion {
+    /// MAIN generation observed at completion.
+    pub generation: u32,
+    /// Output side whose commands completed.
+    pub output: TileOutput,
+}
+
+impl TileOutputCompletion {
+    /// Output-completion schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 8;
+
+    /// Records one completed side of a generation-tagged output pair.
+    #[must_use]
+    pub const fn new(generation: u32, output: TileOutput) -> Self {
+        Self { generation, output }
+    }
+}
+
+/// One receipt that represents both completions of an allocated output pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PairedOutputReceipt {
+    /// The generation-tagged allocation whose two sides completed.
+    pub allocation: PairedOutputAllocation,
+    /// Value followed by reconstruction completion.
+    pub completions: [TileOutputCompletion; 2],
+}
+
+impl PairedOutputReceipt {
+    /// Paired-output receipt schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 64;
+
+    /// Joins the two correctly ordered completions into one publication receipt.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a completion from another generation or one naming the wrong output side.
+    pub const fn new(
+        allocation: PairedOutputAllocation,
+        value: TileOutputCompletion,
+        reconstruction: TileOutputCompletion,
+    ) -> Result<Self, TileJobError> {
+        if value.generation != allocation.generation
+            || reconstruction.generation != allocation.generation
+        {
+            return Err(TileJobError::StaleOutputCompletion);
+        }
+        if !matches!(value.output, TileOutput::Value)
+            || !matches!(reconstruction.output, TileOutput::Reconstruction)
+        {
+            return Err(TileJobError::OutputCompletionMismatch);
+        }
+        Ok(Self {
+            allocation,
+            completions: [value, reconstruction],
+        })
+    }
 }
 
 /// Completion state that cannot yield a publication until both output spans finish.
@@ -2254,9 +2489,14 @@ mod tests {
         assert_record!(TileMeshHandle, 1, 8);
         assert_record!(TileSpanIdentity, 1, 12);
         assert_record!(PairedTileSpanIdentities, 1, 24);
+        assert_record!(PairedOutputAllocation, 1, 48);
+        assert_record!(TileOutput, 1, 4);
+        assert_record!(TileOutputCompletion, 1, 8);
+        assert_record!(PairedOutputReceipt, 1, 64);
         assert_record!(DescriptorTexel, 1, 16);
         assert_record!(TilePoseHeader, 1, 512);
         assert_record!(DescriptorSamplePair, 1, 32);
+        assert_record!(SourceReconstructionUniform, 1, 144);
         assert_record!(TileResidency, 1, 4);
         assert_record!(TileRung, 1, 4);
         assert_eq!(TileRung::Preview as u32, 0);
@@ -2297,6 +2537,22 @@ mod tests {
         assert_eq!(DescriptorCostLedger::DATA_PAGE_BYTES, 1_048_576);
         assert_eq!(DescriptorCostLedger::SAMPLE_PAGES_PER_TILE, 2);
         assert_eq!(
+            DescriptorCostLedger::paired_sample_logical_bytes(65_536),
+            Some(2_097_152)
+        );
+        assert_eq!(
+            DescriptorCostLedger::paired_reserved_bytes(1_048_576, 1_048_576),
+            Some(2_097_152)
+        );
+        assert_eq!(
+            DescriptorCostLedger::paired_reserved_bytes(u64::MAX, 1),
+            None
+        );
+        assert_eq!(
+            DescriptorCostLedger::paired_sample_logical_bytes(u64::MAX),
+            None
+        );
+        assert_eq!(
             DescriptorCostLedger::ACTIVE_PREFIX_RECORDS
                 + DescriptorCostLedger::HEADER_SLOTS * TilePoseHeader::TEXELS as u64
                 + DescriptorCostLedger::OWNERSHIP_RECORDS,
@@ -2313,6 +2569,104 @@ mod tests {
         ] {
             assert_eq!(DescriptorCostLedger::logical_bytes(count), Some(bytes));
         }
+    }
+
+    #[test]
+    fn paired_allocation_is_generation_tagged_non_aliasing_and_profile_checked() {
+        let mut arena = SpanArena::new(256, 2, 8, 512, 16).expect("fixture arena");
+        let [value, reconstruction] = arena
+            .allocate_pair(65_536, 256)
+            .expect("one whole-grid pair fits atomically");
+        let allocation = PairedOutputAllocation::from_spans(23, &value, &reconstruction, 2_097_152)
+            .expect("the exact pair fits its resident profile");
+        assert_eq!(
+            allocation,
+            PairedOutputAllocation {
+                generation: 23,
+                spans: PairedTileSpanIdentities {
+                    value: TileSpanIdentity::new(value.directory_index, 23, 65_536),
+                    reconstruction: TileSpanIdentity::new(
+                        reconstruction.directory_index,
+                        23,
+                        65_536,
+                    ),
+                },
+                logical_bytes: 2_097_152,
+                reserved_bytes: 2_097_152,
+            }
+        );
+        assert_ne!(
+            allocation.spans.value.directory_index,
+            allocation.spans.reconstruction.directory_index
+        );
+        assert_eq!(allocation.spans.value.generation, allocation.generation);
+        assert_eq!(
+            allocation.spans.reconstruction.generation,
+            allocation.generation
+        );
+        assert_eq!(
+            PairedOutputAllocation::from_spans(23, &value, &reconstruction, 2_097_151),
+            Err(TileJobError::OutputProfileTooSmall)
+        );
+        assert_eq!(
+            PairedOutputAllocation::from_spans(23, &value, &value, 2_097_152),
+            Err(TileJobError::OutputAlias)
+        );
+        let value_completion = TileOutputCompletion::new(23, TileOutput::Value);
+        let reconstruction_completion = TileOutputCompletion::new(23, TileOutput::Reconstruction);
+        let receipt =
+            PairedOutputReceipt::new(allocation, value_completion, reconstruction_completion)
+                .expect("both current-generation completions produce one receipt");
+        assert_eq!(receipt.allocation, allocation);
+        assert_eq!(
+            receipt.completions,
+            [value_completion, reconstruction_completion]
+        );
+        assert_eq!(
+            PairedOutputReceipt::new(
+                allocation,
+                TileOutputCompletion::new(22, TileOutput::Value),
+                reconstruction_completion,
+            ),
+            Err(TileJobError::StaleOutputCompletion)
+        );
+        assert_eq!(
+            PairedOutputReceipt::new(
+                allocation,
+                reconstruction_completion,
+                reconstruction_completion,
+            ),
+            Err(TileJobError::OutputCompletionMismatch)
+        );
+    }
+
+    #[test]
+    fn reconstruction_uniform_selects_exact_source_header_lanes() {
+        let mut header = TilePoseHeader::zeroed();
+        for texel in
+            &mut header.texels[TilePoseHeader::H05_CAMERA_12_13..=TilePoseHeader::H09_CAMERA_35_45]
+        {
+            texel.lanes = [1.0, 0.0, 1.0, 0.0];
+        }
+        header.texels[TilePoseHeader::H10_OBSERVER].lanes = [1.0, 0.0, 1.0, 0.0];
+        header.texels[TilePoseHeader::H13_TRANSLATION_0_3].lanes = [1.0, 2.0, 3.0, 4.0];
+        header.texels[TilePoseHeader::H14_PROJECTION].lanes = [5.0, 2.0, 8.0, 16.0];
+        header.texels[TilePoseHeader::H24_SCALE_ANCHOR].lanes =
+            [0.003_906_25, 0.000_000_25, 0.0, 0.0];
+        let uniform = SourceReconstructionUniform::from_header(&header)
+            .expect("valid source lanes construct the paired uniform");
+        assert_eq!(uniform.camera_rotation_pairs, [[1.0, 0.0, 1.0, 0.0]; 5]);
+        assert_eq!(uniform.camera_translation[0], [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(uniform.camera_translation[1], [5.0, 0.0, 0.0, 0.0]);
+        assert_eq!(uniform.observer_rotation, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(uniform.view_scale, [2.0, 8.0, 16.0, 0.003_906_5]);
+        assert_eq!(
+            uniform.bytes().len(),
+            SourceReconstructionUniform::BYTE_SIZE
+        );
+
+        header.texels[TilePoseHeader::H14_PROJECTION].lanes[2] = 0.0;
+        assert_eq!(SourceReconstructionUniform::from_header(&header), None);
     }
 
     #[test]

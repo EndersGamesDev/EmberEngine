@@ -1,17 +1,31 @@
+//! Replay, policy, and device oracles for the frame-loop owners.
+//!
+//! R3-04 proves the paired kernel path on a native device. A served/browser paired-mode capture
+//! requires the capability switch owned by R3-08; this lane keeps that switch off by default.
+//! The mapped-S1 cross-crate oracle lives here because present consumes kernels; placing its
+//! `Warp` call in the kernels crate would introduce a dependency cycle.
+
 use std::{
     fmt::Write as _,
+    future::Future,
     num::NonZeroU32,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use bytemuck::Zeroable as _;
 use ember_julibrot_kernels::{
-    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan,
-    SampleStatus, perturb_scaled_pixel, plan_refinement,
+    DescriptorSamplePair, DescriptorTexel, DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels,
+    KernelError, KernelMode, PairedOutputAllocation, PairedTileSpanIdentities, PerturbUniform,
+    RefinementPlan, SampleStatus, SourceReconstructionUniform, SourceScreenRect, TileOutput,
+    TileOutputCompletion, TilePoseHeader, TileRenderKey, TileSpanIdentity, perturb_scaled_pixel,
+    plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
     OrbitStep, Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ScaledPixelScale,
-    ViewControls, pixel_scale, precision_for, scale_split, screen_to_plane,
+    ViewControls, pixel_scale, precision_for, retained_value_sample, scale_split, screen_to_plane,
+    source_depth_record,
 };
 
 use super::super::schedule::{
@@ -20,25 +34,25 @@ use super::super::schedule::{
 };
 use super::{
     BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn, FenceRefusal,
-    FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity, KernelGridTarget,
-    KernelJob, KernelPlan, KernelPlanning, KernelPublication, KernelReferenceIdentity,
-    KernelRetirement, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort, LEVELS,
-    OrderedRefresh, PresentEventEffect, PresentEventFacts, PresentEventOwner, PresentEventPort,
-    PresentEventTransaction, PresentEventTurn, PresentEventView, PresentFenceRefusal,
-    PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES,
-    REFERENCE_TEXEL_BYTES, ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule,
-    RefusalClass, SceneConsidered, SceneMode, SubmissionKind, SurfacePort, SurfaceResolutionAction,
-    SurfaceResolutionEvent, SurfaceResolutionOutcome, SurfaceResolutionOwner,
-    SurfaceResolutionTransaction, SurfaceResolutionTurn, SurfaceSubmission, SurfaceWarpJob,
-    WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication, WorkerArrival,
-    WorkerServiceOwner, WorkerServicePort, WorkerSubmission, accepted_reference_facts,
-    apply_precision_mode, arrival_is_current, backdrop_extent, coverage_pre_empts,
-    defer_scene_until_relief_redraw, execute_ordered_refresh, expand_reference_texels_into,
-    fence_error, hold_redraw_during_scene, horizon_facts, main_for_grid, optional_backdrop_plan,
-    perturbation_reference_is_current, published_iteration_cap,
-    reference_submission_requires_worker, renew_reference_lease_identity, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed, warp_submission_due,
+    FencesObserved, FrameLoop, HotWritten, KernelAllocation, KernelGridIdentity,
+    KernelGridPairAllocation, KernelGridTarget, KernelJob, KernelPlan, KernelPlanning,
+    KernelPublication, KernelReferenceIdentity, KernelRetirement, KernelSpanGeneration,
+    KernelSubmissionOwner, KernelSubmissionPort, LEVELS, OrderedRefresh, PresentEventEffect,
+    PresentEventFacts, PresentEventOwner, PresentEventPort, PresentEventTransaction,
+    PresentEventTurn, PresentEventView, PresentFenceRefusal, PresentSceneCompletion,
+    PresentSceneDrop, PresentWarpCompletion, REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES,
+    ReferenceLeaseIdentity, RefinementLevel, RefinementSchedule, RefusalClass, SceneConsidered,
+    SceneMode, SubmissionKind, SurfacePort, SurfaceResolutionAction, SurfaceResolutionEvent,
+    SurfaceResolutionOutcome, SurfaceResolutionOwner, SurfaceResolutionTransaction,
+    SurfaceResolutionTurn, SurfaceSubmission, SurfaceWarpJob, WholeGridJob, WholeGridMode,
+    WorkerAcceptance, WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort,
+    WorkerSubmission, accepted_reference_facts, apply_precision_mode, arrival_is_current,
+    backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw, execute_ordered_refresh,
+    expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, reference_submission_requires_worker, renew_reference_lease_identity,
+    sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
+    stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
 use crate::{
     AppError, CaptureArming, FramePolicy, LevelTimingLedger, PendingSurface, PictureState,
@@ -53,7 +67,7 @@ use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
     SubmitOutcome, WorkerFacts, WorkerMode,
 };
-use ember_lab_heap::SpanArena;
+use ember_lab_heap::{GpuKernelExecutor, GpuKernelExecutorConfig, HeapPresentResources, SpanArena};
 
 /// Poll budget and wall the version-three present configuration refuses at.
 const SCENE_POLLS: u32 = 4_096;
@@ -923,6 +937,9 @@ enum KernelSubmissionEvent {
     Planned(KernelPlanning),
     Allocated(KernelAllocation),
     Retired(KernelRetirement),
+    Pending(Box<KernelPublication>),
+    FenceBound { generation: u32, scene_id: u64 },
+    FenceObserved { generation: u32, scene_id: u64 },
     Published(Box<KernelPublication>),
 }
 
@@ -984,6 +1001,7 @@ impl KernelGridIdentity for ReplayKernelGrid {
 struct ReplayKernelSubmission {
     plans: std::collections::VecDeque<RefinementPlan>,
     grids: std::collections::VecDeque<ReplayKernelGrid>,
+    paired_allocations: std::collections::VecDeque<PairedOutputAllocation>,
     dispatch_facts: std::collections::VecDeque<DispatchFacts>,
 }
 
@@ -1032,7 +1050,8 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
         &mut self,
         (): Self::AllocationContext<'_>,
         _plan: &RefinementPlan,
-    ) -> Result<[Self::Grid; 2], Self::Error> {
+        generation: Option<u32>,
+    ) -> Result<KernelGridPairAllocation<Self::Grid>, Self::Error> {
         let first = self
             .grids
             .pop_front()
@@ -1041,7 +1060,15 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
             .grids
             .pop_front()
             .unwrap_or_else(|| unreachable!("second replay grid input is present"));
-        Ok([first, second])
+        let paired_allocation = generation.map(|expected_generation| {
+            let allocation = self
+                .paired_allocations
+                .pop_front()
+                .unwrap_or_else(|| unreachable!("replay paired allocation input is present"));
+            debug_assert_eq!(allocation.generation, expected_generation);
+            allocation
+        });
+        Ok(([first, second], paired_allocation))
     }
 
     fn retire(
@@ -1058,7 +1085,7 @@ impl KernelSubmissionPort for ReplayKernelSubmission {
     fn submit(
         &mut self,
         (): Self::SubmissionContext<'_>,
-        _grid: &mut Self::Grid,
+        _grids: &mut [Self::Grid],
         job: &KernelJob,
     ) -> Result<DispatchFacts, Self::Error> {
         Ok(self
@@ -1362,6 +1389,7 @@ struct FakePresenter {
     main_epoch: u64,
     kernel_submission: KernelSubmissionOwner<ReplayKernelSubmission>,
     kernel_main: Option<ReplayKernelGrid>,
+    kernel_reconstruction: Option<ReplayKernelGrid>,
     kernel_spare: Option<ReplayKernelGrid>,
     kernel_backdrop: Option<ReplayKernelGrid>,
     kernel_plan: Option<RefinementPlan>,
@@ -1448,6 +1476,7 @@ impl FakePresenter {
                         (),
                         KernelGridTarget::Main,
                         &plan,
+                        None,
                     ) {
                         Ok(allocation) => allocation,
                         Err(error) => match error {},
@@ -1481,21 +1510,74 @@ impl FakePresenter {
     }
 
     fn publish_kernel(&mut self, job: &KernelJob) {
-        let grid = match job.whole_grid().target {
-            KernelGridTarget::Main => self
-                .kernel_main
-                .get_or_insert_with(ReplayKernelGrid::default),
-            KernelGridTarget::Backdrop => self
-                .kernel_backdrop
-                .get_or_insert_with(ReplayKernelGrid::default),
-        };
-        let publication = match self.kernel_submission.submit((), grid, job) {
-            Ok(publication) => publication,
-            Err(error) => match error {},
+        let target = job.whole_grid().target;
+        let publication = if job.whole_grid().paired_allocation.is_some() {
+            let value_grid = match target {
+                KernelGridTarget::Main => self.kernel_main.take().unwrap_or_default(),
+                KernelGridTarget::Backdrop => self.kernel_backdrop.take().unwrap_or_default(),
+            };
+            let reconstruction_grid = self.kernel_reconstruction.take().unwrap_or_default();
+            let mut grids = [value_grid, reconstruction_grid];
+            let publication = match self.kernel_submission.submit((), &mut grids, job) {
+                Ok(publication) => publication,
+                Err(error) => match error {},
+            };
+            match target {
+                KernelGridTarget::Main => self.kernel_main = Some(grids[0]),
+                KernelGridTarget::Backdrop => self.kernel_backdrop = Some(grids[0]),
+            }
+            self.kernel_reconstruction = Some(grids[1]);
+            publication
+        } else {
+            let grid = match target {
+                KernelGridTarget::Main => self
+                    .kernel_main
+                    .get_or_insert_with(ReplayKernelGrid::default),
+                KernelGridTarget::Backdrop => self
+                    .kernel_backdrop
+                    .get_or_insert_with(ReplayKernelGrid::default),
+            };
+            match self
+                .kernel_submission
+                .submit((), std::slice::from_mut(grid), job)
+            {
+                Ok(publication) => publication,
+                Err(error) => match error {},
+            }
         };
         let _facts = publication.into_facts();
-        self.kernel_events
-            .push(KernelSubmissionEvent::Published(Box::new(publication)));
+        let event = if job.whole_grid().paired_allocation.is_some() {
+            KernelSubmissionEvent::Pending(Box::new(publication))
+        } else {
+            KernelSubmissionEvent::Published(Box::new(publication))
+        };
+        self.kernel_events.push(event);
+    }
+
+    fn bind_kernel_fence(&mut self, scene_id: u64) {
+        if let Some(generation) = self.kernel_submission.bind_paired_fence(scene_id) {
+            self.kernel_events.push(KernelSubmissionEvent::FenceBound {
+                generation,
+                scene_id,
+            });
+        }
+    }
+
+    fn observe_kernel_fence(&mut self, scene_id: u64) {
+        if let Some(publication) = self.kernel_submission.observe_paired_fence(scene_id) {
+            let generation = publication
+                .paired_receipt
+                .unwrap_or_else(|| unreachable!("observed paired fence carries its receipt"))
+                .allocation
+                .generation;
+            self.kernel_events
+                .push(KernelSubmissionEvent::FenceObserved {
+                    generation,
+                    scene_id,
+                });
+            self.kernel_events
+                .push(KernelSubmissionEvent::Published(Box::new(publication)));
+        }
     }
 
     fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
@@ -2029,6 +2111,7 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
         &mut self,
         event: &PresentSceneCompletion,
     ) -> Result<PresentEventEffect, Self::Error> {
+        self.presenter.observe_kernel_fence(event.frame.scene_id);
         self.frame_loop.completed(
             event.frame.scene_id,
             event.frame.pose.orbit_generation,
@@ -2042,6 +2125,7 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
         &mut self,
         event: &PresentSceneDrop,
     ) -> Result<PresentEventEffect, Self::Error> {
+        self.presenter.observe_kernel_fence(event.scene_id);
         self.frame_loop.retired(event.scene_id);
         Ok(self.effect(false, false, false))
     }
@@ -2084,6 +2168,12 @@ impl PresentEventPort for ReplayPresentEvents<'_> {
         &mut self,
         event: &PresentFenceRefusal,
     ) -> Result<PresentEventEffect, Self::Error> {
+        if matches!(event.kind, SubmissionKind::Scene) {
+            let _pair_refused = self
+                .presenter
+                .kernel_submission
+                .refuse_paired_fence(event.id);
+        }
         match event.kind {
             SubmissionKind::Scene => self.outcome.refused_scene_id = Some(event.id),
             SubmissionKind::Warp => self.outcome.refused_warp_id = Some(event.id),
@@ -2244,6 +2334,7 @@ impl OrderedRefresh for NativeRefreshTurn<'_> {
             let target = job.whole_grid().target;
             self.presenter.publish_kernel(&job);
             let id = self.presenter.submit(self.frame_loop.generation(), level);
+            self.presenter.bind_kernel_fence(id);
             if target == KernelGridTarget::Main {
                 self.frame_loop.submitted(id, level);
             }
@@ -2369,6 +2460,8 @@ const fn default_replay_kernel_job(owner_epoch: u64, level: RefinementLevel) -> 
             },
             pixel_scale: 1.0,
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
 }
 
@@ -2395,6 +2488,8 @@ const fn main_shallow_replay_job() -> KernelJob {
             },
             pixel_scale: 0.125,
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
 }
 
@@ -2433,7 +2528,39 @@ const fn backdrop_perturbation_replay_job() -> KernelJob {
                 precision_mode: "PictureFast",
             },
         },
+        paired_allocation: None,
+        source_reconstruction: None,
     })
+}
+
+const fn paired_replay_allocation(generation: u32) -> PairedOutputAllocation {
+    PairedOutputAllocation {
+        generation,
+        spans: PairedTileSpanIdentities {
+            value: TileSpanIdentity::new(8, generation, 2_048),
+            reconstruction: TileSpanIdentity::new(9, generation, 2_048),
+        },
+        logical_bytes: 65_536,
+        reserved_bytes: 2_097_152,
+    }
+}
+
+const fn paired_reconstruction_uniform() -> SourceReconstructionUniform {
+    SourceReconstructionUniform {
+        camera_rotation_pairs: [[1.0, 0.0, 1.0, 0.0]; 5],
+        camera_translation: [[0.0; 4]; 2],
+        observer_rotation: [1.0, 0.0, 1.0, 0.0],
+        view_scale: [2.0, 8.0, 16.0, 0.0625],
+    }
+}
+
+const fn paired_replay_job(owner_epoch: u64, level: RefinementLevel, generation: u32) -> KernelJob {
+    let KernelJob::WholeGrid(mut job) = main_shallow_replay_job();
+    job.owner_epoch = owner_epoch;
+    job.level = level;
+    job.paired_allocation = Some(paired_replay_allocation(generation));
+    job.source_reconstruction = Some(paired_reconstruction_uniform());
+    KernelJob::WholeGrid(job)
 }
 
 fn kernel_turn_inputs() -> [KernelTurnInput; 2] {
@@ -2508,6 +2635,7 @@ fn record_kernel_submission_turn(input: KernelTurnInput) -> KernelTurn {
         kernel_submission: KernelSubmissionOwner::new(ReplayKernelSubmission {
             plans: input.plans.iter().copied().collect(),
             grids: input.allocated_grids.iter().copied().collect(),
+            paired_allocations: std::collections::VecDeque::new(),
             dispatch_facts: std::collections::VecDeque::from([input.dispatch_facts]),
         }),
         kernel_main: Some(input.main),
@@ -2679,7 +2807,7 @@ fn append_dispatch_facts(output: &mut String, facts: &DispatchFacts) {
 
 fn append_kernel_publication(output: &mut String, publication: &KernelPublication) {
     let job = publication.job.whole_grid();
-    let span = publication.span;
+    let span = publication.spans[0];
     let _written = writeln!(
         output,
         "published target={:?} directory={} pages={} first_generation={} fingerprint={}",
@@ -2739,12 +2867,224 @@ fn append_kernel_turn(output: &mut String, turn: &KernelTurn) {
                 }
                 let _written = writeln!(output);
             }
+            KernelSubmissionEvent::Pending(publication) => {
+                let _written = writeln!(
+                    output,
+                    "pending generation={}",
+                    publication
+                        .job
+                        .whole_grid()
+                        .paired_allocation
+                        .unwrap_or_else(|| {
+                            unreachable!("a pending publication carries its paired allocation")
+                        })
+                        .generation,
+                );
+            }
+            KernelSubmissionEvent::FenceBound {
+                generation,
+                scene_id,
+            } => {
+                let _written = writeln!(
+                    output,
+                    "fence-bound generation={generation} scene_id={scene_id}",
+                );
+            }
+            KernelSubmissionEvent::FenceObserved {
+                generation,
+                scene_id,
+            } => {
+                let _written = writeln!(
+                    output,
+                    "fence-observed generation={generation} scene_id={scene_id}",
+                );
+            }
             KernelSubmissionEvent::Published(publication) => {
                 append_kernel_publication(output, publication);
             }
         }
     }
     let _written = writeln!(output, "scene_id={:?}", turn.scene_id);
+}
+
+const fn tile_output_name(output: TileOutput) -> &'static str {
+    match output {
+        TileOutput::Value => "Value",
+        TileOutput::Reconstruction => "Reconstruction",
+    }
+}
+
+fn append_tile_span(output: &mut String, span: TileSpanIdentity) {
+    let _written = write!(
+        output,
+        "{}/{}/{}",
+        span.directory_index, span.generation, span.logical_len,
+    );
+}
+
+fn append_source_reconstruction(output: &mut String, source: &SourceReconstructionUniform) {
+    let _written = write!(output, "source camera_rotation_pair_bits=");
+    for (index, pair) in source.camera_rotation_pairs.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, "/");
+        }
+        append_f32_bits(output, pair);
+    }
+    let _written = write!(output, " camera_translation_bits=");
+    for (index, translation) in source.camera_translation.iter().enumerate() {
+        if index > 0 {
+            let _written = write!(output, "/");
+        }
+        append_f32_bits(output, translation);
+    }
+    let _written = write!(output, " observer_rotation_bits=");
+    append_f32_bits(output, &source.observer_rotation);
+    let _written = write!(output, " view_scale_bits=");
+    append_f32_bits(output, &source.view_scale);
+    let _written = writeln!(output);
+}
+
+struct PairedKernelSubmissionReplay {
+    transaction: KernelAllocation,
+    pending: KernelPublication,
+    publication: KernelPublication,
+    stale: TileOutputCompletion,
+    scene_id: u64,
+}
+
+fn append_paired_kernel_submission(output: &mut String, replay: &PairedKernelSubmissionReplay) {
+    let receipt = replay
+        .publication
+        .paired_receipt
+        .expect("paired replay publishes one receipt after its fence");
+    let _written = writeln!(output, "turn=pending");
+    let _written = write!(output, "allocated target=Main first=");
+    append_kernel_span(
+        output,
+        replay.transaction.spans[0].expect("paired allocation has a value grid"),
+    );
+    let _written = write!(output, " second=");
+    append_kernel_span(
+        output,
+        replay.transaction.spans[1].expect("paired allocation has a reconstruction grid"),
+    );
+    let _written = writeln!(output);
+    let _written = write!(output, "pending value=");
+    append_kernel_span(output, replay.pending.spans[0]);
+    let _written = write!(output, " reconstruction=");
+    append_kernel_span(output, replay.pending.spans[1]);
+    let _written = writeln!(output);
+    append_whole_grid_job(output, replay.pending.job.whole_grid());
+    let allocation = receipt.allocation;
+    let _written = write!(output, "paired generation={} value=", allocation.generation);
+    append_tile_span(output, allocation.spans.value);
+    let _written = write!(output, " reconstruction=");
+    append_tile_span(output, allocation.spans.reconstruction);
+    let _written = writeln!(
+        output,
+        " logical_bytes={} reserved_bytes={}",
+        allocation.logical_bytes, allocation.reserved_bytes,
+    );
+    append_source_reconstruction(
+        output,
+        replay
+            .pending
+            .job
+            .whole_grid()
+            .source_reconstruction
+            .as_ref()
+            .expect("paired job carries source reconstruction by value"),
+    );
+    let _written = writeln!(output, "turn=fence-observation");
+    let _written = writeln!(
+        output,
+        "fence-observed generation={} scene_id={}",
+        allocation.generation, replay.scene_id,
+    );
+    let _written = writeln!(
+        output,
+        "refused generation={} output={}",
+        replay.stale.generation,
+        tile_output_name(replay.stale.output),
+    );
+    let _written = writeln!(output, "turn=receipt");
+    let _written = write!(output, "published value=");
+    append_kernel_span(output, replay.publication.spans[0]);
+    let _written = write!(output, " reconstruction=");
+    append_kernel_span(output, replay.publication.spans[1]);
+    let _written = writeln!(output);
+    for completion in receipt.completions {
+        let _written = writeln!(
+            output,
+            "completion generation={} output={}",
+            completion.generation,
+            tile_output_name(completion.output),
+        );
+    }
+    let _written = writeln!(
+        output,
+        "receipt generation={} outputs={},{}",
+        receipt.allocation.generation,
+        tile_output_name(receipt.completions[0].output),
+        tile_output_name(receipt.completions[1].output),
+    );
+}
+
+fn record_paired_kernel_submission() -> String {
+    let expected_allocation = paired_replay_allocation(7);
+    let job = paired_replay_job(42, RefinementLevel::Preview, 7);
+    let plan = plan_refinement(
+        GridExtent {
+            width: 64,
+            height: 32,
+        },
+        EscapeParams::new(512),
+        |_| true,
+    )
+    .expect("paired replay plan is admitted");
+    let mut owner = KernelSubmissionOwner::new(ReplayKernelSubmission {
+        grids: std::collections::VecDeque::from([replay_span(8, 7, 708), replay_span(9, 7, 709)]),
+        paired_allocations: std::collections::VecDeque::from([expected_allocation]),
+        ..ReplayKernelSubmission::default()
+    });
+    let allocated = owner
+        .allocate_grid_pair((), KernelGridTarget::Main, &plan, Some(7))
+        .expect("paired replay allocation is infallible");
+    assert_eq!(allocated.paired_allocation, Some(expected_allocation));
+    let transaction = allocated.transaction;
+    assert_ne!(transaction.spans[0], transaction.spans[1]);
+    let mut grids = allocated.grids;
+    let pending = owner
+        .submit((), &mut grids, &job)
+        .expect("paired replay submission is infallible");
+    assert_eq!(pending.job, job);
+    assert_eq!(pending.paired_receipt, None);
+    assert_eq!(owner.paired_completions, [None, None]);
+    assert_eq!(owner.paired_receipt, None);
+    let scene_id = 19;
+    assert_eq!(owner.bind_paired_fence(scene_id), Some(7));
+    assert_eq!(owner.paired_fence, Some((7, scene_id)));
+    let stale = TileOutputCompletion::new(6, TileOutput::Reconstruction);
+    assert_eq!(owner.observe_paired_completion(stale), Err(stale));
+    assert_eq!(owner.refused_completions, [stale]);
+    assert_eq!(owner.paired_completions, [None, None]);
+    let publication = owner
+        .observe_paired_fence(scene_id)
+        .expect("the observed shared fence publishes the pair");
+    assert_eq!(publication.spans, [grids[0].span, grids[1].span]);
+
+    let mut output = String::new();
+    append_paired_kernel_submission(
+        &mut output,
+        &PairedKernelSubmissionReplay {
+            transaction,
+            pending,
+            publication,
+            stale,
+            scene_id,
+        },
+    );
+    output
 }
 
 #[test]
@@ -2846,6 +3186,817 @@ fn native_refresh_replays_plain_kernel_submission_transactions() {
             }
         )
     ));
+}
+
+const PAIRED_KERNEL_SUBMISSION_REPLAY_FIXTURE: &str = "\
+turn=pending
+allocated target=Main first=8/4/7/708 second=9/4/7/709
+pending value=8/4/7/708 reconstruction=9/4/7/709
+job owner_epoch=42 precision=PictureFast level=Preview requested=64x32 max_iter=512 bailout_bits=43800000
+plane basis_u_bits=[3f800000,00000000,00000000,00000000] basis_v_bits=[00000000,3f800000,00000000,00000000]
+map rows_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] inverse_bits=[3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000] condition_bits=3ff0000000000000 apron_bits=3ff0000000000000
+mode=Shallow centre_hi_bits=[3e800000,bf000000,00000000,3f800000] centre_lo_bits=[00000000,00000000,00000000,00000000] pixel_scale_bits=3e000000
+paired generation=7 value=8/7/2048 reconstruction=9/7/2048 logical_bytes=65536 reserved_bytes=2097152
+source camera_rotation_pair_bits=[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000]/[3f800000,00000000,3f800000,00000000] camera_translation_bits=[00000000,00000000,00000000,00000000]/[00000000,00000000,00000000,00000000] observer_rotation_bits=[3f800000,00000000,3f800000,00000000] view_scale_bits=[40000000,41000000,41800000,3d800000]
+turn=fence-observation
+fence-observed generation=7 scene_id=19
+refused generation=6 output=Reconstruction
+turn=receipt
+published value=8/4/7/708 reconstruction=9/4/7/709
+completion generation=7 output=Value
+completion generation=7 output=Reconstruction
+receipt generation=7 outputs=Value,Reconstruction
+";
+
+#[test]
+fn paired_kernel_submission_replay_is_additive_and_exact() {
+    let recorded = record_paired_kernel_submission();
+    assert_eq!(record_paired_kernel_submission(), recorded);
+    assert_eq!(recorded, PAIRED_KERNEL_SUBMISSION_REPLAY_FIXTURE);
+}
+
+#[test]
+fn paired_owner_attests_both_completions_only_after_its_shared_fence_and_retains_stale() {
+    let job = paired_replay_job(42, RefinementLevel::Preview, 7);
+    let allocation = paired_replay_allocation(7);
+    let mut owner = KernelSubmissionOwner::new(ReplayKernelSubmission {
+        dispatch_facts: std::collections::VecDeque::from([replay_dispatch_facts(&job)]),
+        ..ReplayKernelSubmission::default()
+    });
+    let mut grids = [replay_span(8, 7, 708), replay_span(9, 7, 709)];
+    let pending = owner
+        .submit((), &mut grids, &job)
+        .expect("paired replay submission is infallible");
+    assert_eq!(pending.paired_receipt, None);
+    assert_eq!(owner.paired_pending, Some(pending));
+    assert_eq!(owner.paired_fence, None);
+    assert_eq!(owner.bind_paired_fence(19), Some(7));
+    let stale = TileOutputCompletion::new(6, TileOutput::Reconstruction);
+    assert_eq!(owner.observe_paired_completion(stale), Err(stale));
+    assert_eq!(owner.refused_completions, [stale]);
+    assert_eq!(owner.paired_completions, [None, None]);
+    assert_eq!(owner.paired_receipt, None);
+    assert_eq!(owner.observe_paired_fence(18), None);
+    assert_eq!(owner.paired_receipt, None);
+    let publication = owner
+        .observe_paired_fence(19)
+        .expect("the matching shared fence publishes the pair");
+    let receipt = publication
+        .paired_receipt
+        .expect("the matching fence produces one receipt");
+    let value = TileOutputCompletion::new(7, TileOutput::Value);
+    let reconstruction = TileOutputCompletion::new(7, TileOutput::Reconstruction);
+    assert_eq!(receipt.allocation, allocation);
+    assert_eq!(receipt.completions, [value, reconstruction]);
+    assert_eq!(owner.paired_receipt, Some(receipt));
+    assert_eq!(owner.paired_pending, None);
+    assert_eq!(owner.paired_fence, None);
+    assert_eq!(owner.refused_completions, [stale]);
+
+    let mut refused_owner = KernelSubmissionOwner::new(ReplayKernelSubmission {
+        dispatch_facts: std::collections::VecDeque::from([replay_dispatch_facts(&job)]),
+        ..ReplayKernelSubmission::default()
+    });
+    let mut refused_grids = [replay_span(8, 7, 708), replay_span(9, 7, 709)];
+    let refused_pending = refused_owner
+        .submit((), &mut refused_grids, &job)
+        .expect("the refused paired submission reaches its queue");
+    assert_eq!(refused_pending.paired_receipt, None);
+    assert_eq!(refused_owner.bind_paired_fence(20), Some(7));
+    assert!(refused_owner.refuse_paired_fence(20));
+    assert_eq!(refused_owner.paired_pending, None);
+    assert_eq!(refused_owner.paired_completions, [None, None]);
+    assert_eq!(refused_owner.paired_receipt, None);
+    assert_eq!(refused_owner.paired_job, Some(job));
+
+    let mut abandoned_owner = KernelSubmissionOwner::new(ReplayKernelSubmission {
+        dispatch_facts: std::collections::VecDeque::from([replay_dispatch_facts(&job)]),
+        ..ReplayKernelSubmission::default()
+    });
+    let mut abandoned_grids = [replay_span(8, 7, 708), replay_span(9, 7, 709)];
+    let abandoned_pending = abandoned_owner
+        .submit((), &mut abandoned_grids, &job)
+        .expect("the unbound paired submission reaches its queue");
+    assert_eq!(abandoned_pending.paired_receipt, None);
+    assert!(abandoned_owner.abandon_unbound_pair());
+    assert_eq!(abandoned_owner.paired_pending, None);
+    assert_eq!(abandoned_owner.paired_completions, [None, None]);
+    assert_eq!(abandoned_owner.paired_receipt, None);
+    assert!(!abandoned_owner.abandon_unbound_pair());
+}
+
+#[test]
+fn cpu_packed_s1_round_trips_through_descriptor_path() {
+    /// S1 is binary32, and its declared H21 depth receipt admits one hundredth of source depth.
+    const S1_READBACK_DEPTH_TOLERANCE: f32 = 0.01;
+    /// Packed source factors and S1 lanes must reproduce this fixture within a quarter pixel.
+    const S1_READBACK_PIXEL_TOLERANCE_PX: f32 = 0.25;
+
+    let source = fake_scene_frame(
+        PendingFakeScene {
+            id: 1,
+            generation: 7,
+            level: RefinementLevel::Final,
+        },
+        1,
+    )
+    .pose;
+    let source_pixel = [0.0, 0.0];
+    let record = EscapeGridRecord {
+        smooth_iter: 1.0,
+        escaped: 1.0,
+        rebase_count: 0.0,
+        status: 0.0,
+    };
+    let value = retained_value_sample(record, 4).expect("readback value is finite");
+    let depth = source_depth_record(&source, source_pixel, value)
+        .expect("flat source sample has a depth receipt");
+    let render = TileRenderKey::from_pose(
+        &source,
+        SourceScreenRect::from_extent(0, 0, source.grid_width, source.grid_height),
+    );
+    let mut policy = TilePoseHeader::zeroed();
+    policy.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+        1.0,
+        12.0,
+        S1_READBACK_DEPTH_TOLERANCE,
+        S1_READBACK_PIXEL_TOLERANCE_PX,
+    ];
+    policy.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 4.0;
+    let header =
+        Warp::pack_descriptor_header(&render, &policy).expect("readback descriptor header packs");
+    let pair = Warp::pack_descriptor_sample(record, depth)
+        .expect("value and reconstruction records pack together");
+    let mut span_bytes = [0_u8; DescriptorSamplePair::BYTE_SIZE];
+    let (span_records, remainder) = span_bytes.as_chunks_mut::<16>();
+    assert_eq!(remainder.len(), 0);
+    let [value_record, reconstruction_record] = span_records else {
+        unreachable!("paired readback has exactly two descriptor records")
+    };
+    value_record.copy_from_slice(bytemuck::bytes_of(&pair.s0));
+    reconstruction_record.copy_from_slice(bytemuck::bytes_of(&pair.s1));
+    assert_eq!(&value_record[..], bytemuck::bytes_of(&pair.s0));
+    assert_eq!(&reconstruction_record[..], bytemuck::bytes_of(&pair.s1));
+    let readback: DescriptorSamplePair = bytemuck::pod_read_unaligned(&span_bytes);
+    assert_eq!(readback, pair);
+
+    let (reconstructed, source_receipt) =
+        Warp::reconstruct_descriptor_sample(&header, &readback, source_pixel)
+            .expect("S1 readback passes the R3-02 descriptor receipt");
+    let pixel_error = (source_receipt.screen[0] - source_pixel[0])
+        .hypot(source_receipt.screen[1] - source_pixel[1]);
+    assert!(pixel_error <= f64::from(S1_READBACK_PIXEL_TOLERANCE_PX));
+    assert!(
+        (source_receipt.linear_depth - depth.zeta_f).abs()
+            <= f64::from(S1_READBACK_DEPTH_TOLERANCE)
+    );
+    assert_eq!(reconstructed.value, value);
+}
+
+static PAIRED_GPU_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+fn wait_for_gpu_future<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    loop {
+        if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return output;
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn paired_gpu_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter,
+    };
+    let adapter = wait_for_gpu_future(instance.request_adapter(&request(true)))
+        .or_else(|| wait_for_gpu_future(instance.request_adapter(&request(false))))
+        .expect("a native GPU or software adapter is available for the paired kernel test");
+    let required = wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC;
+    assert!(
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba32Float)
+            .allowed_usages
+            .contains(required),
+        "the adapter supports the paired RGBA32F output and readback contract"
+    );
+    let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+    let (device, queue) = wait_for_gpu_future(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("Julibrot paired kernel native test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+        },
+        None,
+    ))
+    .expect("the paired kernel native test device is created");
+    (Arc::from(device), Arc::from(queue))
+}
+
+fn paired_gpu_readback_source(directory_indices: [u32; 3]) -> String {
+    const TEMPLATE: &str = r"
+struct HeapDescriptors { entries: array<vec4<u32>, 8>, }
+struct HeapDirectory {
+    spans: array<vec4<u32>, 8>,
+    handles: array<vec4<u32>, 4>,
+}
+@group(0) @binding(0) var heap_data: texture_2d_array<f32>;
+@group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
+@group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
+
+fn heap_handle(slot: u32) -> u32 {
+    return heap_directory.handles[slot / 4u][slot % 4u];
+}
+
+fn load_record(directory_index: u32, index: u32) -> vec4<f32> {
+    let span = heap_directory.spans[directory_index];
+    let page = index / span.x;
+    let local = index % span.x;
+    let heap_id = heap_handle(span.z + page);
+    let descriptor = heap_descriptors.entries[heap_id & 1048575u];
+    let width = descriptor.y >> 16u;
+    let origin = vec2<u32>(descriptor.x >> 16u, descriptor.y & 65535u);
+    let coordinate = origin + vec2<u32>(local % width, local / width);
+    return textureLoad(
+        heap_data,
+        vec2<i32>(coordinate),
+        i32(descriptor.x & 65535u),
+        0,
+    );
+}
+
+struct ReadbackVertex { @builtin(position) position: vec4<f32>, }
+@vertex fn readback_vertex(@builtin(vertex_index) vertex: u32) -> ReadbackVertex {
+    var points = array<vec2<f32>, 3>(
+        vec2(-1.0, -1.0),
+        vec2(3.0, -1.0),
+        vec2(-1.0, 3.0),
+    );
+    var output: ReadbackVertex;
+    output.position = vec4(points[vertex], 0.0, 1.0);
+    return output;
+}
+
+struct ValueReadbackFragment {
+    @location(0) legacy: vec4<f32>,
+    @location(1) value: vec4<f32>,
+}
+@fragment fn readback_value_fragment(
+    @builtin(position) position: vec4<f32>,
+) -> ValueReadbackFragment {
+    let index = u32(position.y) * 64u + u32(position.x);
+    var output: ValueReadbackFragment;
+    output.legacy = load_record(__LEGACY__, index);
+    output.value = load_record(__VALUE__, index);
+    return output;
+}
+
+struct ReconstructionReadbackFragment {
+    @location(0) reconstruction: vec4<f32>,
+}
+@fragment fn readback_reconstruction_fragment(
+    @builtin(position) position: vec4<f32>,
+) -> ReconstructionReadbackFragment {
+    let index = u32(position.y) * 64u + u32(position.x);
+    var output: ReconstructionReadbackFragment;
+    output.reconstruction = load_record(__RECONSTRUCTION__, index);
+    return output;
+}
+";
+    let directory_names = directory_indices.map(|directory_index| {
+        let mut name = String::new();
+        let _written = write!(name, "{directory_index}u");
+        name
+    });
+    TEMPLATE
+        .replace("__LEGACY__", &directory_names[0])
+        .replace("__VALUE__", &directory_names[1])
+        .replace("__RECONSTRUCTION__", &directory_names[2])
+}
+
+fn paired_gpu_heap_binding(
+    device: &wgpu::Device,
+    heap: &HeapPresentResources,
+) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
+    let uniform_entry = |binding, bytes| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(bytes),
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Julibrot paired readback heap layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            uniform_entry(1, u64::from(heap.descriptor_capacity) * 16),
+            uniform_entry(
+                2,
+                u64::from(heap.span_capacity + heap.handle_capacity.div_ceil(4)) * 16,
+            ),
+        ],
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Julibrot paired readback heap group"),
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&heap.data_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: heap.descriptor_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: heap.span_directory_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    (layout, group)
+}
+
+fn create_paired_gpu_readback_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    label: &str,
+    fragment_entry: &str,
+    output_count: usize,
+) -> wgpu::RenderPipeline {
+    let targets = vec![
+        Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba32Float,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        output_count
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("readback_vertex"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(fragment_entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &targets,
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn paired_gpu_readback_pipelines(
+    device: &wgpu::Device,
+    heap_layout: &wgpu::BindGroupLayout,
+    directory_indices: [u32; 3],
+) -> [wgpu::RenderPipeline; 2] {
+    let source = paired_gpu_readback_source(directory_indices);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Julibrot paired readback shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Julibrot paired readback pipeline layout"),
+        bind_group_layouts: &[heap_layout],
+        push_constant_ranges: &[],
+    });
+    [
+        create_paired_gpu_readback_pipeline(
+            device,
+            &module,
+            &pipeline_layout,
+            "Julibrot paired value readback pipeline",
+            "readback_value_fragment",
+            2,
+        ),
+        create_paired_gpu_readback_pipeline(
+            device,
+            &module,
+            &pipeline_layout,
+            "Julibrot paired reconstruction readback pipeline",
+            "readback_reconstruction_fragment",
+            1,
+        ),
+    ]
+}
+
+fn map_paired_gpu_buffer(device: &wgpu::Device, readback: &wgpu::Buffer) -> Vec<u8> {
+    let mapped_result = Arc::new(Mutex::new(None));
+    let callback_result = Arc::clone(&mapped_result);
+    let readback_slice = readback.slice(..);
+    readback_slice.map_async(wgpu::MapMode::Read, move |result| {
+        *callback_result
+            .lock()
+            .expect("paired map callback lock is available") = Some(result);
+    });
+    let _poll = device.poll(wgpu::Maintain::Wait);
+    mapped_result
+        .lock()
+        .expect("paired map result lock is available")
+        .take()
+        .expect("paired record mapping completed")
+        .expect("paired record mapping succeeded");
+    let mapped = readback_slice.get_mapped_range();
+    let bytes = mapped.to_vec();
+    drop(mapped);
+    readback.unmap();
+    bytes
+}
+
+fn paired_gpu_readback_target(device: &wgpu::Device, extent: wgpu::Extent3d) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot paired mapped record target"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+fn read_paired_gpu_records(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    heap: &HeapPresentResources,
+    mut encoder: wgpu::CommandEncoder,
+    directory_indices: [u32; 3],
+) -> Vec<u8> {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+    const RECORD_BYTES: u32 = 16;
+    const OUTPUT_COUNT: u64 = 3;
+
+    let (heap_layout, heap_group) = paired_gpu_heap_binding(device, heap);
+    let [value_pipeline, reconstruction_pipeline] =
+        paired_gpu_readback_pipelines(device, &heap_layout, directory_indices);
+    let target_extent = wgpu::Extent3d {
+        width: WIDTH,
+        height: HEIGHT,
+        depth_or_array_layers: 1,
+    };
+    let targets: [wgpu::Texture; 3] =
+        std::array::from_fn(|_| paired_gpu_readback_target(device, target_extent));
+    let views = targets
+        .each_ref()
+        .map(|target| target.create_view(&wgpu::TextureViewDescriptor::default()));
+    let color_attachments = views.each_ref().map(|view| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot paired mapped value record pass"),
+            color_attachments: &color_attachments[..2],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&value_pipeline);
+        pass.set_bind_group(0, &heap_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot paired mapped reconstruction record pass"),
+            color_attachments: &color_attachments[2..],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&reconstruction_pipeline);
+        pass.set_bind_group(0, &heap_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    let row_bytes = WIDTH * RECORD_BYTES;
+    let output_bytes = u64::from(row_bytes) * u64::from(HEIGHT);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Julibrot paired mapped record buffer"),
+        size: output_bytes * OUTPUT_COUNT,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    for (output_index, target) in targets.iter().enumerate() {
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: u64::try_from(output_index).expect("output index fits") * output_bytes,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(HEIGHT),
+                },
+            },
+            target_extent,
+        );
+    }
+    queue.submit([encoder.finish()]);
+    map_paired_gpu_buffer(device, &readback)
+}
+
+fn dispatch_paired_gpu_corpus(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    source: &Pose,
+    source_uniform: &SourceReconstructionUniform,
+) -> Vec<u8> {
+    let config = GpuKernelExecutorConfig {
+        heap_side: 256,
+        heap_layers: 4,
+        descriptor_capacity: 8,
+        span_capacity: 8,
+        directory_binding_bytes: 8 * 16 + 16 * 4,
+        scratch_layers: 2,
+        max_header_pages: 1,
+        max_header_sets: 9,
+        kernel_uniform_bytes: 288,
+    };
+    let mut executor = GpuKernelExecutor::new(Arc::clone(device), Arc::clone(queue), config)
+        .expect("the paired GPU test executor is created");
+    let mut kernels = JulibrotKernels::new(&mut executor).expect("value kernels register");
+    kernels
+        .enable_paired_outputs(&mut executor)
+        .expect("paired kernels register");
+    let extent = GridExtent {
+        width: 64,
+        height: 32,
+    };
+    let params = EscapeParams::new(64);
+    let plan = JulibrotKernels::plan_grid_pair(&executor, extent, params)
+        .expect("the frozen paired GPU job plans");
+    assert_eq!(plan.delivered_extent, extent);
+    let mut legacy = kernels
+        .allocate_grid(&mut executor, &plan)
+        .expect("the legacy output span allocates");
+    let (mut paired, allocation) = kernels
+        .allocate_output_pair(&mut executor, &plan, 7)
+        .expect("the paired output spans allocate");
+    let directory_indices = [
+        legacy.span.directory_index,
+        paired[0].span.directory_index,
+        paired[1].span.directory_index,
+    ];
+    let centre = CentreSplit {
+        hi: [0.25, -0.5, 0.0, 1.0],
+        lo: [0.0; 4],
+    };
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Julibrot paired GPU oracle transaction"),
+    });
+    kernels
+        .encode_shallow(
+            &executor,
+            &mut encoder,
+            &mut legacy,
+            41,
+            PrecisionMode::PictureFast,
+            RefinementLevel::Final,
+            &source.plane,
+            &Homography::IDENTITY,
+            &centre,
+            0.125,
+            params,
+        )
+        .expect("the legacy job encodes");
+    kernels
+        .encode_shallow_pair(
+            &executor,
+            &mut encoder,
+            device.limits().max_color_attachment_bytes_per_sample,
+            (&mut paired, allocation),
+            (42, PrecisionMode::PictureFast, RefinementLevel::Final),
+            (
+                &source.plane,
+                &Homography::IDENTITY,
+                &centre,
+                0.125,
+                params,
+                source_uniform,
+            ),
+        )
+        .expect("the paired job encodes both spans");
+    let heap = executor.present_resources();
+    read_paired_gpu_records(device, queue, &heap, encoder, directory_indices)
+}
+
+fn paired_gpu_source_pose() -> Pose {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    let mut source = fake_scene_frame(
+        PendingFakeScene {
+            id: 1,
+            generation: 7,
+            level: RefinementLevel::Final,
+        },
+        1,
+    )
+    .pose;
+    // R3-02 admits the exact-zero canonical Julia basis with the matching Julia object angles.
+    source.object = ObjectAngles::JULIA;
+    source.plane = Plane::CANONICAL_JULIA_PLANE;
+    source.grid_width = WIDTH;
+    source.grid_height = HEIGHT;
+    source
+}
+
+fn paired_gpu_source_pixel(record_index: u32) -> [f64; 2] {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    [
+        (-0.5_f64).mul_add(f64::from(WIDTH), f64::from(record_index % WIDTH) + 0.5),
+        (-0.5_f64).mul_add(f64::from(HEIGHT), f64::from(record_index / WIDTH) + 0.5),
+    ]
+}
+
+fn cpu_packed_gpu_s1(source: &Pose, value_record: &[u8; 16], record_index: u32) -> [u8; 16] {
+    const ITERATION_CAP: u32 = 64;
+
+    let value_texel = bytemuck::pod_read_unaligned::<DescriptorTexel>(value_record);
+    let [smooth_iter, escaped, rebase_count, status] = value_texel.lanes;
+    let record = EscapeGridRecord {
+        smooth_iter,
+        escaped,
+        rebase_count,
+        status,
+    };
+    let value = retained_value_sample(record, ITERATION_CAP)
+        .expect("mapped S0 record has a finite retained value");
+    let depth = source_depth_record(source, paired_gpu_source_pixel(record_index), value)
+        .expect("mapped S0 record has a CPU source-depth receipt");
+    let pair =
+        Warp::pack_descriptor_sample(record, depth).expect("CPU source-depth receipt packs as S1");
+    let mut packed = [0_u8; 16];
+    packed.copy_from_slice(bytemuck::bytes_of(&pair.s1));
+    packed
+}
+
+fn first_differing_s1_lane(expected: &[u8; 16], actual: &[u8; 16]) -> Option<usize> {
+    let (expected_lanes, expected_remainder) = expected.as_chunks::<4>();
+    let (actual_lanes, actual_remainder) = actual.as_chunks::<4>();
+    debug_assert_eq!(expected_remainder.len(), 0);
+    debug_assert_eq!(actual_remainder.len(), 0);
+    expected_lanes
+        .iter()
+        .zip(actual_lanes)
+        .position(|(expected_lane, actual_lane)| expected_lane != actual_lane)
+}
+
+fn paired_gpu_s1_diagnostics(
+    source: &Pose,
+    value_records: &[[u8; 16]],
+    reconstruction_records: &[[u8; 16]],
+) -> String {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    let interior_index = (HEIGHT / 2) * WIDTH + WIDTH / 2;
+    let mut output = String::new();
+    for diagnostic_index in [0, interior_index] {
+        let offset = usize::try_from(diagnostic_index).expect("diagnostic index fits usize");
+        let expected = cpu_packed_gpu_s1(source, &value_records[offset], diagnostic_index);
+        let actual = reconstruction_records[offset];
+        let first_differing_lane = first_differing_s1_lane(&expected, &actual);
+        let _written = write!(
+            output,
+            "texel={diagnostic_index} cpu={expected:02x?} gpu={actual:02x?} \
+             first_differing_lane={first_differing_lane:?}; "
+        );
+    }
+    output
+}
+
+#[test]
+fn paired_gpu_dispatch_matches_legacy_s0_and_mapped_s1_reconstructs() {
+    /// Mapped binary32 reconstruction must reproduce the source within a quarter pixel.
+    const GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX: f32 = 0.25;
+    /// Mapped binary32 depth must reproduce the source receipt within one hundredth.
+    const GPU_RECONSTRUCTION_DEPTH_TOLERANCE: f32 = 0.01;
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+    const RECORD_BYTES: usize = 16;
+
+    let _guard = PAIRED_GPU_TEST_MUTEX
+        .lock()
+        .expect("the paired GPU test mutex is available");
+    let (device, queue) = paired_gpu_test_device();
+    let source = paired_gpu_source_pose();
+    let render =
+        TileRenderKey::from_pose(&source, SourceScreenRect::from_extent(0, 0, WIDTH, HEIGHT));
+    let mut policy = TilePoseHeader::zeroed();
+    policy.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+        0.0,
+        16.0,
+        GPU_RECONSTRUCTION_DEPTH_TOLERANCE,
+        GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX,
+    ];
+    policy.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 64.0;
+    let header = Warp::pack_descriptor_header(&render, &policy)
+        .expect("the mapped GPU reconstruction header packs");
+    let source_uniform = SourceReconstructionUniform::from_header(&header)
+        .expect("the paired GPU source uniform derives from the reconstruction header");
+    let mapped = dispatch_paired_gpu_corpus(&device, &queue, &source, &source_uniform);
+    let plane_bytes = usize::try_from(WIDTH * HEIGHT).expect("record count fits") * RECORD_BYTES;
+    let legacy_bytes = &mapped[..plane_bytes];
+    let paired_value_bytes = &mapped[plane_bytes..plane_bytes * 2];
+    let reconstruction_bytes = &mapped[plane_bytes * 2..];
+    assert_eq!(paired_value_bytes, legacy_bytes);
+    let (legacy_records, legacy_remainder) = legacy_bytes.as_chunks::<RECORD_BYTES>();
+    let (paired_value_records, value_remainder) = paired_value_bytes.as_chunks::<RECORD_BYTES>();
+    let (reconstruction_records, reconstruction_remainder) =
+        reconstruction_bytes.as_chunks::<RECORD_BYTES>();
+    assert_eq!(legacy_remainder.len(), 0);
+    assert_eq!(value_remainder.len(), 0);
+    assert_eq!(reconstruction_remainder.len(), 0);
+
+    let diagnostics =
+        paired_gpu_s1_diagnostics(&source, paired_value_records, reconstruction_records);
+    for (record_offset, ((legacy_record, value_record), reconstruction_record)) in legacy_records
+        .iter()
+        .zip(paired_value_records)
+        .zip(reconstruction_records)
+        .enumerate()
+    {
+        assert_eq!(value_record, legacy_record, "S0 record {record_offset}");
+        let pair = DescriptorSamplePair {
+            s0: bytemuck::pod_read_unaligned::<DescriptorTexel>(value_record),
+            s1: bytemuck::pod_read_unaligned::<DescriptorTexel>(reconstruction_record),
+        };
+        let record_index = u32::try_from(record_offset).expect("record index fits u32");
+        let expected_s1 = cpu_packed_gpu_s1(&source, value_record, record_index);
+        assert_eq!(
+            reconstruction_record,
+            &expected_s1,
+            "mapped S1 record {record_index} differs from CPU packing at lane {:?}; \
+             {diagnostics}",
+            first_differing_s1_lane(&expected_s1, reconstruction_record)
+        );
+        let source_pixel = paired_gpu_source_pixel(record_index);
+        let (_, receipt) = Warp::reconstruct_descriptor_sample(&header, &pair, source_pixel)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "mapped S1 record {record_index} failed reconstruction: {error}; \
+                     {diagnostics}"
+                )
+            });
+        let pixel_error =
+            (receipt.screen[0] - source_pixel[0]).hypot(receipt.screen[1] - source_pixel[1]);
+        assert!(
+            pixel_error <= f64::from(GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX),
+            "mapped S1 record {record_index} has {pixel_error} px error"
+        );
+        assert!(
+            (receipt.linear_depth - f64::from(pair.s1.lanes[2])).abs()
+                <= f64::from(GPU_RECONSTRUCTION_DEPTH_TOLERANCE),
+            "mapped S1 record {record_index} changes its depth receipt"
+        );
+    }
 }
 
 const WORKER_SERVICE_REPLAY_FIXTURE: &str = "\
@@ -4739,6 +5890,120 @@ fn assert_browser_surface_order(
             turn.turn
         );
     }
+}
+
+fn assert_paired_kernel_is_pending_before_warp(fixture: &FrameTraceFixture, job: &KernelJob) {
+    assert!(matches!(
+        fixture.presenter.kernel_events.as_slice(),
+        [
+            KernelSubmissionEvent::Pending(publication),
+            KernelSubmissionEvent::FenceBound {
+                generation: 7,
+                scene_id: 1,
+            },
+        ]
+            if publication.job == *job
+                && publication.spans
+                    == [replay_span(8, 7, 708).span, replay_span(9, 7, 709).span]
+                && publication.paired_receipt.is_none()
+    ));
+    let first_turn = &fixture.trace.browser_turns[0];
+    let scene_submission = first_turn
+        .actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                BrowserAction::Submitted {
+                    kind: SubmissionKind::Scene,
+                    id: 1,
+                }
+            )
+        })
+        .expect("paired turn submits scene one");
+    let warp_submission = first_turn
+        .actions
+        .iter()
+        .position(|action| {
+            matches!(
+                action,
+                BrowserAction::Submitted {
+                    kind: SubmissionKind::Warp,
+                    id: 2,
+                }
+            )
+        })
+        .expect("paired turn submits warp two");
+    assert!(scene_submission < warp_submission);
+}
+
+fn assert_paired_kernel_publishes_after_observed_fences(fixture: &FrameTraceFixture) {
+    assert!(matches!(
+        fixture.presenter.kernel_events.as_slice(),
+        [
+            KernelSubmissionEvent::Pending(_),
+            KernelSubmissionEvent::FenceBound {
+                generation: 7,
+                scene_id: 1,
+            },
+            KernelSubmissionEvent::FenceObserved {
+                generation: 7,
+                scene_id: 1,
+            },
+            KernelSubmissionEvent::Published(publication),
+        ] if publication.spans
+            == [replay_span(8, 7, 708).span, replay_span(9, 7, 709).span]
+            && matches!(
+                publication.paired_receipt,
+                Some(receipt)
+                    if receipt.allocation == paired_replay_allocation(7)
+                        && receipt.completions
+                            == [
+                                TileOutputCompletion::new(7, TileOutput::Value),
+                                TileOutputCompletion::new(7, TileOutput::Reconstruction),
+                            ]
+            )
+    ));
+    assert_eq!(
+        fixture.trace.frame_turns[1].fence_observations,
+        [
+            TraceFenceObservation {
+                order: 0,
+                kind: TraceFenceKind::Scene,
+                id: 1,
+                result: TraceFenceResult::SceneCompleted {
+                    generation: 7,
+                    level: RefinementLevel::Final,
+                },
+            },
+            TraceFenceObservation {
+                order: 1,
+                kind: TraceFenceKind::Warp,
+                id: 2,
+                result: TraceFenceResult::WarpCompleted {
+                    kind: Some(WarpKind::ClearOnly),
+                    source_scene_id: None,
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn paired_kernel_in_flight_keeps_scene_before_warp_and_fence_observation_order() {
+    let job = paired_replay_job(1, RefinementLevel::Final, 7);
+    let mut fixture = FrameTraceFixture::completed("paired-output");
+    fixture.presenter.kernel_main = Some(replay_span(8, 7, 708));
+    fixture.presenter.kernel_reconstruction = Some(replay_span(9, 7, 709));
+    fixture.presenter.kernel_job = Some(job);
+    fixture.record_turn(true);
+    assert_paired_kernel_is_pending_before_warp(&fixture, &job);
+
+    fixture.complete_scene();
+    fixture.complete_warp();
+    fixture.advance();
+    fixture.record_turn(false);
+    assert_paired_kernel_publishes_after_observed_fences(&fixture);
 }
 
 #[test]
@@ -7152,7 +8417,9 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     assert!(source.contains("main_grid_pair: Option<MainGridPair>,"));
     assert!(source.contains("grid_round: u64,"));
     assert!(source.contains("JulibrotKernels::plan_grid_pair"));
-    assert!(source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)"));
+    assert!(
+        source.contains("allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan, None)")
+    );
     assert!(submit.contains("std::mem::swap(&mut grids.current, &mut grids.spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
 }

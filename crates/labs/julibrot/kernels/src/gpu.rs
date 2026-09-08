@@ -4,17 +4,28 @@ use ember_julibrot_math::{
     CentreSplit, EscapeParams, Homography, Plane, PrecisionMode, ScaleSplit,
 };
 use ember_lab_heap::{
-    DataSpan, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle, RegisteredKernel,
-    SpanPlan,
+    DataSpan, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle, KernelDesc,
+    RegisteredKernel, SpanPlan,
 };
 
 use crate::{
-    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform,
-    ReferenceOrbitInput, RefinementLevel, RefinementPlan, ShallowUniform, dispatch_facts,
-    perturbation_kernel, refinement::validate_plan, shallow_kernel,
+    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PairedOutputAllocation,
+    PerturbUniform, ReferenceOrbitInput, RefinementLevel, RefinementPlan, ShallowUniform,
+    SourceReconstructionUniform, TileJobError, dispatch_facts, perturbation_kernel,
+    refinement::validate_plan, shallow_kernel,
 };
 
 const LEVEL_COUNT: u32 = 3;
+const RECONSTRUCTION_ACCESSORS: &[&str] = &["escape"];
+const PERTURBATION_RECONSTRUCTION_ACCESSORS: &[&str] = &["reference", "escape"];
+const RECONSTRUCTION_OUTPUT_FIELDS: &[&str] = &["reconstruction"];
+const RGBA32F_COLOR_ATTACHMENT_BYTES: u32 = 16;
+#[cfg(test)]
+const PAIRED_TRANSACTION_COLOR_ATTACHMENT_BYTES: u32 = 2 * RGBA32F_COLOR_ATTACHMENT_BYTES;
+const PAIRED_PERTURB_UNIFORM_BYTES: u32 = 256;
+
+/// Uniform capacity required when reconstruction follows an existing value pass.
+pub const PAIRED_KERNEL_UNIFORM_BYTES: u32 = 288;
 
 #[derive(Clone, Debug)]
 struct GridAllocation {
@@ -41,11 +52,14 @@ struct AcceptedReference {
     precision_mode: &'static str,
 }
 
-/// The two registered Julibrot pipelines and their private grid-lifetime records.
+/// The registered Julibrot pipelines and their private grid-lifetime records.
 pub struct JulibrotKernels {
     shallow: GpuKernel,
     perturbation: GpuKernel,
+    shallow_reconstruction: Option<GpuKernel>,
+    perturbation_reconstruction: Option<GpuKernel>,
     grids: Vec<GridAllocation>,
+    paired_outputs: Vec<PairedOutputAllocation>,
     latest_reference: RefCell<Option<AcceptedReference>>,
 }
 
@@ -74,9 +88,49 @@ impl JulibrotKernels {
         Ok(Self {
             shallow,
             perturbation,
+            shallow_reconstruction: None,
+            perturbation_reconstruction: None,
             grids: Vec::new(),
+            paired_outputs: Vec::new(),
             latest_reference: RefCell::new(None),
         })
+    }
+
+    /// Registers one-output reconstruction passes that follow both existing value kernels.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Register` when the executor cannot admit both reconstruction descriptors. The
+    /// original single-output pipelines remain available after every refusal.
+    pub fn enable_paired_outputs(
+        &mut self,
+        executor: &mut GpuKernelExecutor,
+    ) -> Result<(), KernelError> {
+        if self.shallow_reconstruction.is_some() && self.perturbation_reconstruction.is_some() {
+            return Ok(());
+        }
+        if self.shallow_reconstruction.is_some() || self.perturbation_reconstruction.is_some() {
+            return Err(KernelError::Register);
+        }
+        let shallow = register_reconstruction_kernel(
+            executor,
+            "julibrot_shallow_reconstruction",
+            RECONSTRUCTION_ACCESSORS,
+            "PairedShallowUniform",
+            &shallow_kernel(),
+            PAIRED_KERNEL_UNIFORM_BYTES,
+        )?;
+        let perturbation = register_reconstruction_kernel(
+            executor,
+            "julibrot_perturbation_reconstruction",
+            PERTURBATION_RECONSTRUCTION_ACCESSORS,
+            "PairedPerturbUniform",
+            &perturbation_kernel(),
+            PAIRED_PERTURB_UNIFORM_BYTES,
+        )?;
+        self.shallow_reconstruction = Some(shallow);
+        self.perturbation_reconstruction = Some(perturbation);
+        Ok(())
     }
 
     /// Selects the first power-of-two-degraded plan admitted by exact live heap and header trials.
@@ -257,6 +311,39 @@ impl JulibrotKernels {
         Ok([first_grid, second_grid])
     }
 
+    /// Allocates one generation-tagged value/reconstruction pair as an atomic heap operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed plan, allocation, header-capacity, arithmetic, or profile refusal. Both
+    /// spans are retired if their generation-tagged allocation record cannot be constructed.
+    pub fn allocate_output_pair(
+        &mut self,
+        executor: &mut GpuKernelExecutor,
+        plan: &RefinementPlan,
+        generation: u32,
+    ) -> Result<([EscapeGrid; 2], PairedOutputAllocation), KernelError> {
+        let grids = self.allocate_grid_pair(executor, plan)?;
+        let [value_grid, reconstruction_grid] = &grids;
+        let allocation = PairedOutputAllocation::from_spans(
+            generation,
+            &value_grid.span,
+            &reconstruction_grid.span,
+            executor.capacity_report().data_bytes,
+        );
+        let allocation = match allocation {
+            Ok(allocation) => allocation,
+            Err(error) => {
+                for grid in grids {
+                    self.free_grid(executor, grid)?;
+                }
+                return Err(tile_job_error(error));
+            }
+        };
+        self.paired_outputs.push(allocation);
+        Ok((grids, allocation))
+    }
+
     /// Encodes one shallow logical level through SCRATCH and exact DATA copies.
     ///
     /// # Errors
@@ -417,6 +504,206 @@ impl JulibrotKernels {
         Ok(facts)
     }
 
+    /// Encodes byte-identical shallow values and source reconstruction as two ordered passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed pair, uniform, planning, resident-header, or copy-encoding refusal before
+    /// publishing either active span extent.
+    pub fn encode_shallow_pair(
+        &self,
+        executor: &GpuKernelExecutor,
+        encoder: &mut wgpu::CommandEncoder,
+        max_color_attachment_bytes_per_sample: u32,
+        pair: (&mut [EscapeGrid; 2], PairedOutputAllocation),
+        identity: (u64, PrecisionMode, RefinementLevel),
+        render: (
+            &Plane,
+            &Homography,
+            &CentreSplit,
+            f32,
+            EscapeParams,
+            &SourceReconstructionUniform,
+        ),
+    ) -> Result<DispatchFacts, KernelError> {
+        admit_paired_color_attachment_limit(max_color_attachment_bytes_per_sample)?;
+        let reconstruction_kernel = self
+            .shallow_reconstruction
+            .as_ref()
+            .ok_or(KernelError::Register)?;
+        let (outputs, allocation) = pair;
+        let (owner_epoch, precision_mode, level) = identity;
+        let (plane, screen_to_plane, centre, pixel_scale, params, source_uniform) = render;
+        let [value_grid, reconstruction_grid] = outputs;
+        let [value_allocation, reconstruction_allocation] =
+            self.paired_allocations(value_grid, reconstruction_grid, allocation)?;
+        ensure_requested_params(&value_allocation.plan, params)?;
+        let selected = paired_level(value_allocation, reconstruction_allocation, level)?;
+        let value_uniform = ShallowUniform::pack(
+            *plane,
+            screen_to_plane,
+            *centre,
+            pixel_scale,
+            selected.extent,
+            delivered_params(params, selected.iteration_cap),
+            level,
+        )?;
+        let uniform_bytes = paired_uniform_bytes(value_uniform.bytes(), source_uniform.bytes());
+        let value_dispatch = &value_allocation.shallow_dispatches[level_index(level)];
+        let reconstruction_dispatch = executor
+            .plan_prefix_dispatch(
+                reconstruction_kernel,
+                &[&value_allocation.span],
+                &[&reconstruction_allocation.span],
+                pixel_count(selected.extent)?,
+                &uniform_bytes,
+            )
+            .map_err(|_| KernelError::Dispatch)?;
+        let facts = checked_paired_facts(
+            executor,
+            (value_allocation, allocation),
+            [value_dispatch, &reconstruction_dispatch],
+            (level, KernelMode::Shallow, owner_epoch, precision_mode),
+            None,
+        )?;
+        encode_pages(
+            executor,
+            encoder,
+            &self.shallow,
+            value_dispatch,
+            &value_allocation.headers,
+            level,
+            value_uniform.bytes(),
+        )?;
+        executor.sync_dispatch_resources(&reconstruction_dispatch);
+        encode_pages(
+            executor,
+            encoder,
+            reconstruction_kernel,
+            &reconstruction_dispatch,
+            &reconstruction_allocation.headers,
+            level,
+            &uniform_bytes,
+        )?;
+        publish_level(value_grid, selected.extent, level);
+        publish_level(reconstruction_grid, selected.extent, level);
+        Ok(facts)
+    }
+
+    /// Encodes byte-identical perturbation values and reconstruction as two ordered passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed pair, reference, uniform, planning, resident-header, or copy-encoding
+    /// refusal before publishing either active span extent.
+    pub fn encode_perturbation_pair(
+        &self,
+        executor: &GpuKernelExecutor,
+        encoder: &mut wgpu::CommandEncoder,
+        max_color_attachment_bytes_per_sample: u32,
+        pair: (&mut [EscapeGrid; 2], PairedOutputAllocation),
+        identity: (u64, PrecisionMode, RefinementLevel),
+        render: (
+            &Plane,
+            &Homography,
+            [f64; 2],
+            ScaleSplit,
+            EscapeParams,
+            &SourceReconstructionUniform,
+            ReferenceOrbitInput<'_>,
+        ),
+    ) -> Result<DispatchFacts, KernelError> {
+        admit_paired_color_attachment_limit(max_color_attachment_bytes_per_sample)?;
+        let reconstruction_kernel = self
+            .perturbation_reconstruction
+            .as_ref()
+            .ok_or(KernelError::Register)?;
+        let (outputs, allocation) = pair;
+        let (owner_epoch, precision_mode, level) = identity;
+        let (
+            plane,
+            screen_to_plane,
+            centre_from_reference_px,
+            scale,
+            params,
+            source_uniform,
+            reference,
+        ) = render;
+        let [value_grid, reconstruction_grid] = outputs;
+        let [value_allocation, reconstruction_allocation] =
+            self.paired_allocations(value_grid, reconstruction_grid, allocation)?;
+        ensure_requested_params(&value_allocation.plan, params)?;
+        self.validate_reference(reference, value_allocation.plan.requested_max_iter)?;
+        if reference.precision_mode != precision_mode.as_str() {
+            return Err(KernelError::ReferencePrecisionMismatch);
+        }
+        let selected = paired_level(value_allocation, reconstruction_allocation, level)?;
+        let used_orbit_length = reference.length.min(selected.iteration_cap);
+        let value_uniform = PerturbUniform::pack_referenced(
+            *plane,
+            screen_to_plane,
+            centre_from_reference_px,
+            scale,
+            selected.extent,
+            delivered_params(params, selected.iteration_cap),
+            used_orbit_length,
+            level,
+        )?;
+        let uniform_bytes = paired_uniform_bytes(value_uniform.bytes(), source_uniform.bytes());
+        let resource_words = ensure_paired_reference_dispatches(
+            executor,
+            &self.perturbation,
+            value_allocation,
+            reference,
+        )?;
+        let cached = value_allocation.reference_dispatches.borrow();
+        let value_dispatch = &cached
+            .iter()
+            .find(|cached| cached.resource_words == resource_words)
+            .ok_or(KernelError::Dispatch)?
+            .levels[level_index(level)];
+        let reconstruction_dispatch = executor
+            .plan_prefix_dispatch(
+                reconstruction_kernel,
+                &[reference.span, &value_allocation.span],
+                &[&reconstruction_allocation.span],
+                pixel_count(selected.extent)?,
+                &uniform_bytes,
+            )
+            .map_err(|_| KernelError::Dispatch)?;
+        let facts = checked_paired_facts(
+            executor,
+            (value_allocation, allocation),
+            [value_dispatch, &reconstruction_dispatch],
+            (level, KernelMode::Perturbation, owner_epoch, precision_mode),
+            Some((reference.generation, reference.length)),
+        )?;
+        let _resources_changed =
+            self.accept_reference(reference, value_allocation.plan.requested_max_iter)?;
+        encode_pages(
+            executor,
+            encoder,
+            &self.perturbation,
+            value_dispatch,
+            &value_allocation.headers,
+            level,
+            value_uniform.bytes(),
+        )?;
+        executor.sync_dispatch_resources(&reconstruction_dispatch);
+        encode_pages(
+            executor,
+            encoder,
+            reconstruction_kernel,
+            &reconstruction_dispatch,
+            &reconstruction_allocation.headers,
+            level,
+            &uniform_bytes,
+        )?;
+        publish_level(value_grid, selected.extent, level);
+        publish_level(reconstruction_grid, selected.extent, level);
+        Ok(facts)
+    }
+
     /// Frees one kernels-owned grid after presentation has relinquished every clone.
     ///
     /// # Errors
@@ -433,10 +720,15 @@ impl JulibrotKernels {
             .iter()
             .position(|allocation| allocation.span == grid.span)
             .ok_or(KernelError::Heap)?;
+        let directory_index = grid.span.directory_index;
         executor
             .free_span(grid.span)
             .map_err(|_| KernelError::Heap)?;
         self.grids.swap_remove(position);
+        self.paired_outputs.retain(|allocation| {
+            allocation.spans.value.directory_index != directory_index
+                && allocation.spans.reconstruction.directory_index != directory_index
+        });
         Ok(())
     }
 
@@ -445,6 +737,27 @@ impl JulibrotKernels {
             .iter()
             .find(|allocation| allocation.span == grid.span)
             .ok_or(KernelError::Heap)
+    }
+
+    fn paired_allocations(
+        &self,
+        value_grid: &EscapeGrid,
+        reconstruction_grid: &EscapeGrid,
+        allocation: PairedOutputAllocation,
+    ) -> Result<[&GridAllocation; 2], KernelError> {
+        if !self.paired_outputs.contains(&allocation)
+            || allocation.spans.value.directory_index != value_grid.span.directory_index
+            || allocation.spans.value.logical_len != value_grid.span.logical_len
+            || allocation.spans.reconstruction.directory_index
+                != reconstruction_grid.span.directory_index
+            || allocation.spans.reconstruction.logical_len != reconstruction_grid.span.logical_len
+        {
+            return Err(KernelError::Heap);
+        }
+        Ok([
+            self.allocation(value_grid)?,
+            self.allocation(reconstruction_grid)?,
+        ])
     }
 
     fn accept_reference(
@@ -470,6 +783,286 @@ impl JulibrotKernels {
             requested_max_iter,
         )
         .map(|_| ())
+    }
+}
+
+const RECONSTRUCTION_BODY: &str = r"
+
+struct SourceReconstructionUniform {
+    camera_rotation_pairs: array<vec4<f32>, 5>,
+    camera_translation: array<vec4<f32>, 2>,
+    observer_rotation: vec4<f32>,
+    view_scale: vec4<f32>,
+}
+
+struct __PAIRED_UNIFORM__ {
+    value: __VALUE_UNIFORM__,
+    source: SourceReconstructionUniform,
+}
+
+struct ReconstructionResult {
+    reconstruction: vec4<f32>,
+}
+
+struct PairedAmbient5 {
+    low: vec4<f32>,
+    fifth: f32,
+}
+
+fn paired_finite(value: f32) -> bool {
+    return abs(value) <= 3.402823e38;
+}
+
+fn paired_binary(value: f32) -> bool {
+    return value == 0.0 || value == 1.0;
+}
+
+fn paired_terminal_status(value: f32) -> bool {
+    return value == 0.0 || value == 1.0 || value == 2.0 || value == 3.0;
+}
+
+fn paired_record_height(record: vec4<f32>, max_iter: u32) -> f32 {
+    let malformed = !paired_binary(record.y)
+        || !paired_terminal_status(record.w)
+        || !paired_finite(record.z)
+        || record.z < 0.0
+        || record.z != floor(record.z);
+    if (malformed || record.w == 1.0 || record.w == 2.0) {
+        return 0.0;
+    }
+    if (record.y == 0.0) {
+        if (record.x == -1.0) {
+            return -2.0;
+        }
+        return 0.0;
+    }
+    if (!paired_finite(record.x)) {
+        return 0.0;
+    }
+    return 4.0 * clamp(record.x / max(f32(max_iter), 1.0), 0.0, 1.0) - 2.0;
+}
+
+fn paired_rotate(value: PairedAmbient5, axes: vec2<u32>, pair: vec2<f32>) -> PairedAmbient5 {
+    var coordinates = array<f32, 5>(
+        value.low.x,
+        value.low.y,
+        value.low.z,
+        value.low.w,
+        value.fifth,
+    );
+    let first = coordinates[axes.x];
+    let second = coordinates[axes.y];
+    coordinates[axes.x] = pair.x * first - pair.y * second;
+    coordinates[axes.y] = pair.y * first + pair.x * second;
+    var result: PairedAmbient5;
+    result.low = vec4<f32>(coordinates[0], coordinates[1], coordinates[2], coordinates[3]);
+    result.fifth = coordinates[4];
+    return result;
+}
+
+fn paired_camera(value: PairedAmbient5, source: SourceReconstructionUniform) -> PairedAmbient5 {
+    var rotated = paired_rotate(value, vec2<u32>(3u, 4u), source.camera_rotation_pairs[4].zw);
+    rotated = paired_rotate(rotated, vec2<u32>(2u, 4u), source.camera_rotation_pairs[4].xy);
+    rotated = paired_rotate(rotated, vec2<u32>(1u, 4u), source.camera_rotation_pairs[3].zw);
+    rotated = paired_rotate(rotated, vec2<u32>(0u, 4u), source.camera_rotation_pairs[3].xy);
+    rotated = paired_rotate(rotated, vec2<u32>(2u, 3u), source.camera_rotation_pairs[2].zw);
+    rotated = paired_rotate(rotated, vec2<u32>(1u, 3u), source.camera_rotation_pairs[2].xy);
+    rotated = paired_rotate(rotated, vec2<u32>(1u, 2u), source.camera_rotation_pairs[1].zw);
+    rotated = paired_rotate(rotated, vec2<u32>(0u, 3u), source.camera_rotation_pairs[1].xy);
+    rotated = paired_rotate(rotated, vec2<u32>(0u, 2u), source.camera_rotation_pairs[0].zw);
+    rotated = paired_rotate(rotated, vec2<u32>(0u, 1u), source.camera_rotation_pairs[0].xy);
+    rotated.low += source.camera_translation[0];
+    rotated.fifth += source.camera_translation[1].x;
+    return rotated;
+}
+
+fn paired_reconstruction(
+    index: u32,
+    record: vec4<f32>,
+    uniforms: __PAIRED_UNIFORM__,
+) -> vec4<f32> {
+    if (!paired_binary(record.y) || !paired_terminal_status(record.w) || record.w == 2.0) {
+        return vec4<f32>(0.0);
+    }
+    let column = index % uniforms.value.width;
+    let row = index / uniforms.value.width;
+    let x = f32(column) + 0.5 - 0.5 * f32(uniforms.value.width);
+    let y = f32(row) + 0.5 - 0.5 * f32(uniforms.value.height);
+    let screen = vec3<f32>(x, y, 1.0);
+    let homogeneous = vec3<f32>(
+        dot(uniforms.value.screen_to_plane_row_0.xyz, screen),
+        dot(uniforms.value.screen_to_plane_row_1.xyz, screen),
+        dot(uniforms.value.screen_to_plane_row_2.xyz, screen),
+    );
+    if (!all(vec3<bool>(
+        paired_finite(homogeneous.x),
+        paired_finite(homogeneous.y),
+        paired_finite(homogeneous.z),
+    )) || homogeneous.z <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    let chart = uniforms.source.view_scale.w * homogeneous.xy / homogeneous.z;
+    if (!all(vec2<bool>(paired_finite(chart.x), paired_finite(chart.y)))) {
+        return vec4<f32>(0.0);
+    }
+    let local = chart.x * uniforms.value.basis_u + chart.y * uniforms.value.basis_v;
+    let height = uniforms.source.view_scale.x
+        * (paired_record_height(record, uniforms.value.max_iter) + 2.0)
+        * 0.5;
+    let ambient = paired_camera(PairedAmbient5(local, height), uniforms.source);
+    let distance_five = uniforms.source.view_scale.y;
+    let denominator_five = distance_five - ambient.fifth;
+    if (denominator_five < 0.05 * distance_five || denominator_five <= 1.0e-4) {
+        return vec4<f32>(0.0);
+    }
+    let projected_four = ambient.low * (distance_five / denominator_five);
+    let distance_four = uniforms.source.view_scale.z;
+    let denominator_four = distance_four - projected_four.w;
+    if (denominator_four <= 1.0e-4) {
+        return vec4<f32>(0.0);
+    }
+    let world = projected_four.xyz * (distance_four / denominator_four);
+    let observer = uniforms.source.observer_rotation;
+    let yawed_z = -observer.y * world.x + observer.x * world.z;
+    let linear_depth = distance_four - observer.w * world.y - observer.z * yawed_z;
+    if (!paired_finite(linear_depth) || linear_depth <= 1.0e-4) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(chart, linear_depth, 1.0);
+}
+
+fn kernel(index: u32, uniforms: __PAIRED_UNIFORM__) -> ReconstructionResult {
+    let value = load_escape(index);
+    var result: ReconstructionResult;
+    result.reconstruction = paired_reconstruction(index, value, uniforms);
+    return result;
+}
+";
+
+fn register_reconstruction_kernel(
+    executor: &mut GpuKernelExecutor,
+    name: &str,
+    accessors: &[&str],
+    uniform_type: &str,
+    value_descriptor: &KernelDesc<'_>,
+    uniform_size: u32,
+) -> Result<GpuKernel, KernelError> {
+    let body = reconstruction_kernel_body(value_descriptor, uniform_type)?;
+    let descriptor = KernelDesc {
+        name,
+        body: &body,
+        accessors,
+        output_fields: RECONSTRUCTION_OUTPUT_FIELDS,
+        uniform_type,
+        uniform_size,
+        output_page_side: crate::OUTPUT_PAGE_SIDE,
+    };
+    let registered = RegisteredKernel::register(&descriptor, executor.dialect_limits())
+        .map_err(|_| KernelError::Register)?;
+    executor
+        .register_kernel(registered)
+        .map_err(|_| KernelError::Register)
+}
+
+fn reconstruction_kernel_body(
+    value_descriptor: &KernelDesc<'_>,
+    paired_uniform: &str,
+) -> Result<String, KernelError> {
+    let value_declaration = value_uniform_declaration(value_descriptor)?;
+    let reconstruction = RECONSTRUCTION_BODY
+        .replace("__PAIRED_UNIFORM__", paired_uniform)
+        .replace("__VALUE_UNIFORM__", value_descriptor.uniform_type);
+    let mut body = String::with_capacity(value_declaration.len() + reconstruction.len());
+    body.push_str(value_declaration);
+    body.push_str(&reconstruction);
+    Ok(body)
+}
+
+fn value_uniform_declaration<'a>(
+    value_descriptor: &KernelDesc<'a>,
+) -> Result<&'a str, KernelError> {
+    let (declaration, _) = value_descriptor
+        .body
+        .split_once("\n\n")
+        .ok_or(KernelError::Register)?;
+    let declaration_start = format!("struct {} {{", value_descriptor.uniform_type);
+    if !declaration.starts_with(&declaration_start) || !declaration.ends_with('}') {
+        return Err(KernelError::Register);
+    }
+    Ok(declaration)
+}
+
+fn paired_uniform_bytes(value: &[u8], source: &[u8]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(value.len() + source.len());
+    bytes.extend_from_slice(value);
+    bytes.extend_from_slice(source);
+    bytes
+}
+
+fn ensure_paired_reference_dispatches(
+    executor: &GpuKernelExecutor,
+    kernel: &GpuKernel,
+    allocation: &GridAllocation,
+    reference: ReferenceOrbitInput<'_>,
+) -> Result<[u32; 4], KernelError> {
+    let resource_words = [
+        reference.span.directory_index,
+        reference.span.logical_len,
+        0,
+        0,
+    ];
+    let is_cached = allocation
+        .reference_dispatches
+        .borrow()
+        .iter()
+        .any(|cached| cached.resource_words == resource_words);
+    if !is_cached {
+        let levels = dispatch_templates(
+            executor,
+            kernel,
+            &[reference.span],
+            &allocation.span,
+            &allocation.plan,
+            &[0; core::mem::size_of::<PerturbUniform>()],
+        )?;
+        let mut cached = allocation.reference_dispatches.borrow_mut();
+        if cached.len() == 2 {
+            cached.swap_remove(0);
+        }
+        cached.push(ReferenceDispatches {
+            resource_words,
+            levels,
+        });
+    }
+    Ok(resource_words)
+}
+
+const fn admit_paired_color_attachment_limit(
+    max_color_attachment_bytes_per_sample: u32,
+) -> Result<(), KernelError> {
+    if max_color_attachment_bytes_per_sample < RGBA32F_COLOR_ATTACHMENT_BYTES {
+        Err(KernelError::OutputTransferUnsupported)
+    } else {
+        Ok(())
+    }
+}
+
+fn paired_level(
+    value: &GridAllocation,
+    reconstruction: &GridAllocation,
+    level: RefinementLevel,
+) -> Result<crate::LevelSpec, KernelError> {
+    let selected = value.plan.level(level);
+    if value.plan != reconstruction.plan {
+        return Err(KernelError::Dispatch);
+    }
+    Ok(selected)
+}
+
+const fn tile_job_error(error: TileJobError) -> KernelError {
+    match error {
+        TileJobError::ArithmeticOverflow => KernelError::ArithmeticOverflow,
+        _ => KernelError::Heap,
     }
 }
 
@@ -678,6 +1271,57 @@ fn checked_facts(
     Ok(facts)
 }
 
+fn checked_paired_facts(
+    executor: &GpuKernelExecutor,
+    allocation: (&GridAllocation, PairedOutputAllocation),
+    dispatches: [&ExecutorDispatch; 2],
+    identity: (RefinementLevel, KernelMode, u64, PrecisionMode),
+    orbit: Option<(u32, u32)>,
+) -> Result<DispatchFacts, KernelError> {
+    let (value_allocation, paired_allocation) = allocation;
+    let (level, mode, owner_epoch, precision_mode) = identity;
+    let mut facts = dispatch_facts(
+        &value_allocation.plan,
+        level,
+        mode,
+        owner_epoch,
+        precision_mode,
+        executor.capacity_report().scratch_bytes,
+        orbit,
+    )?;
+    let page_passes = facts
+        .page_passes
+        .checked_mul(2)
+        .ok_or(KernelError::ArithmeticOverflow)?;
+    let paired_copy_commands = facts
+        .copy_commands
+        .checked_mul(2)
+        .ok_or(KernelError::ArithmeticOverflow)?;
+    let paired_copy_bytes = facts
+        .gpu_copy_bytes
+        .checked_mul(2)
+        .ok_or(KernelError::ArithmeticOverflow)?;
+    for dispatch in dispatches {
+        let dispatch_page_passes = u32::try_from(dispatch.plan().passes.len())
+            .map_err(|_| KernelError::ArithmeticOverflow)?;
+        if dispatch_page_passes != facts.page_passes
+            || dispatch.copy_commands() != facts.copy_commands
+            || dispatch.plan().gpu_copy_bytes != facts.gpu_copy_bytes
+        {
+            return Err(KernelError::Dispatch);
+        }
+    }
+    facts.page_passes = page_passes;
+    facts.copy_commands = paired_copy_commands;
+    facts.gpu_copy_bytes = paired_copy_bytes;
+    facts.logical_heap_bytes = facts
+        .logical_heap_bytes
+        .checked_mul(2)
+        .ok_or(KernelError::ArithmeticOverflow)?;
+    facts.reserved_heap_bytes = paired_allocation.reserved_bytes;
+    Ok(facts)
+}
+
 fn encode_pages(
     executor: &GpuKernelExecutor,
     encoder: &mut wgpu::CommandEncoder,
@@ -705,14 +1349,22 @@ const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: Refinem
 mod tests {
     use std::time::Instant;
 
+    use ember_julibrot_math::{CentreSplit, Homography, Plane};
     use ember_lab_heap::{
         DataSpan, DialectLimits, DispatchPlan, RegisteredKernel, SpanArena, StaticHeaders,
     };
 
-    use super::{AcceptedReference, accept_reference_transition};
+    use super::{
+        AcceptedReference, PAIRED_KERNEL_UNIFORM_BYTES, PAIRED_PERTURB_UNIFORM_BYTES,
+        PAIRED_TRANSACTION_COLOR_ATTACHMENT_BYTES, PERTURBATION_RECONSTRUCTION_ACCESSORS,
+        RECONSTRUCTION_ACCESSORS, RECONSTRUCTION_OUTPUT_FIELDS, RGBA32F_COLOR_ATTACHMENT_BYTES,
+        accept_reference_transition, admit_paired_color_attachment_limit,
+        reconstruction_kernel_body, value_uniform_declaration,
+    };
     use crate::{
-        EscapeParams, GridExtent, KernelError, ReferenceOrbitInput, RefinementLevel,
-        perturbation_kernel, plan_refinement,
+        DescriptorSamplePair, DescriptorTexel, EscapeParams, GridExtent, KernelError,
+        ReferenceOrbitInput, RefinementLevel, ShallowUniform, SourceReconstructionUniform,
+        escape_shallow_pixel, perturbation_kernel, plan_refinement, shallow_kernel,
     };
 
     struct NativeDispatchHarness {
@@ -792,7 +1444,150 @@ mod tests {
     }
 
     #[test]
-    fn browser_final_pair_admission_degrades_only_extents_that_exceed_63_pages() {
+    fn reconstruction_descriptors_read_s0_and_register_one_output_per_pass() {
+        let limits = DialectLimits {
+            descriptor_capacity: 64,
+            span_capacity: 16,
+            handle_capacity: 64,
+        };
+        for (name, accessors, paired_uniform, value_descriptor, uniform_size) in [
+            (
+                "julibrot_shallow_reconstruction",
+                RECONSTRUCTION_ACCESSORS,
+                "PairedShallowUniform",
+                shallow_kernel(),
+                PAIRED_KERNEL_UNIFORM_BYTES,
+            ),
+            (
+                "julibrot_perturbation_reconstruction",
+                PERTURBATION_RECONSTRUCTION_ACCESSORS,
+                "PairedPerturbUniform",
+                perturbation_kernel(),
+                PAIRED_PERTURB_UNIFORM_BYTES,
+            ),
+        ] {
+            let declaration = value_uniform_declaration(&value_descriptor)
+                .expect("value uniform declaration is present");
+            let body = reconstruction_kernel_body(&value_descriptor, paired_uniform)
+                .expect("reconstruction body derives from the value descriptor");
+            let copied_declaration = body.split_once("\n\n").map(|(block, _)| block);
+            assert_eq!(copied_declaration, Some(declaration));
+            let descriptor = ember_lab_heap::KernelDesc {
+                name,
+                body: &body,
+                accessors,
+                output_fields: RECONSTRUCTION_OUTPUT_FIELDS,
+                uniform_type: paired_uniform,
+                uniform_size,
+                output_page_side: crate::OUTPUT_PAGE_SIDE,
+            };
+            let registered = RegisteredKernel::register(&descriptor, limits)
+                .expect("reconstruction descriptor satisfies dialect v2");
+            assert_eq!(registered.output_count(), 1);
+            assert_eq!(registered.uniform_size(), uniform_size);
+            assert!(
+                registered
+                    .source()
+                    .contains("let value = load_escape(index);")
+            );
+            assert!(
+                registered
+                    .source()
+                    .contains("return vec4<f32>(chart, linear_depth, 1.0);")
+            );
+        }
+        assert_eq!(
+            PAIRED_KERNEL_UNIFORM_BYTES,
+            u32::try_from(
+                core::mem::size_of::<ShallowUniform>()
+                    + core::mem::size_of::<SourceReconstructionUniform>()
+            )
+            .expect("paired shallow uniform size fits u32")
+        );
+        assert_eq!(
+            PAIRED_PERTURB_UNIFORM_BYTES,
+            u32::try_from(
+                core::mem::size_of::<crate::PerturbUniform>()
+                    + core::mem::size_of::<SourceReconstructionUniform>()
+            )
+            .expect("paired perturbation uniform size fits u32")
+        );
+    }
+
+    #[test]
+    fn paired_s0_layout_matches_single_span_layout_over_cpu_mirror_corpus() {
+        const FROZEN_PLANNER_EXTENTS: [GridExtent; 3] = [
+            GridExtent {
+                width: 1,
+                height: 1,
+            },
+            GridExtent {
+                width: 64,
+                height: 32,
+            },
+            GridExtent {
+                width: 257,
+                height: 129,
+            },
+        ];
+        let plane = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        };
+        let centre = CentreSplit {
+            hi: [0.25, -0.5, 0.0, 1.0],
+            lo: [0.0; 4],
+        };
+        for requested_extent in FROZEN_PLANNER_EXTENTS {
+            let (_, plan) = app_main_pair_plan(requested_extent);
+            for selected in plan.levels {
+                let uniform = ShallowUniform::pack(
+                    plane,
+                    &Homography::IDENTITY,
+                    centre,
+                    0.125,
+                    selected.extent,
+                    EscapeParams::new(selected.iteration_cap),
+                    selected.level,
+                )
+                .expect("frozen planner level packs");
+                let final_index = selected.extent.width * selected.extent.height - 1;
+                for index in [0, final_index / 2, final_index] {
+                    let record = escape_shallow_pixel(&uniform, index)
+                        .expect("frozen planner sample evaluates")
+                        .record;
+                    let lanes = [
+                        record.smooth_iter,
+                        record.escaped,
+                        record.rebase_count,
+                        record.status,
+                    ];
+                    let paired = DescriptorSamplePair::new(lanes, [0.0; 4]);
+                    let old_single = DescriptorTexel { lanes };
+                    assert_eq!(
+                        bytemuck::bytes_of(&paired.s0),
+                        bytemuck::bytes_of(&old_single),
+                        "{requested_extent:?} {:?} sample {index}",
+                        selected.level,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn browser_final_pair_admission_rejects_when_equal_spans_need_more_than_63_live_descriptor_slots()
+     {
+        let floor = wgpu::Limits::downlevel_webgl2_defaults().max_color_attachment_bytes_per_sample;
+        assert_eq!(RGBA32F_COLOR_ATTACHMENT_BYTES, 16);
+        assert_eq!(PAIRED_TRANSACTION_COLOR_ATTACHMENT_BYTES, 32);
+        assert_eq!(floor, PAIRED_TRANSACTION_COLOR_ATTACHMENT_BYTES);
+        assert!(RGBA32F_COLOR_ATTACHMENT_BYTES < floor);
+        assert_eq!(admit_paired_color_attachment_limit(floor), Ok(()));
+        assert_eq!(
+            admit_paired_color_attachment_limit(RGBA32F_COLOR_ATTACHMENT_BYTES - 1),
+            Err(KernelError::OutputTransferUnsupported)
+        );
         for (requested_extent, delivered_extent, divisor) in [
             (
                 GridExtent {
@@ -842,6 +1637,13 @@ mod tests {
             width: 1_920,
             height: 1_080,
         });
+        let page_records = u32::from(crate::OUTPUT_PAGE_SIDE).pow(2);
+        let admitted_span_pages = 2_031_616_u32.div_ceil(page_records);
+        let refused_span_pages = 2_031_617_u32.div_ceil(page_records);
+        assert_eq!(admitted_span_pages, 31);
+        assert_eq!(refused_span_pages, 32);
+        assert_eq!(admitted_span_pages * 2, 62);
+        assert_eq!(refused_span_pages * 2, 64);
         assert_eq!(
             arena.plan_paired_copies(1, 2_031_616, crate::OUTPUT_PAGE_SIDE),
             1

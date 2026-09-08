@@ -13,7 +13,9 @@ use super::schedule::{RefinementSchedule, classify_refusal, stamped_extent};
 use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::{
-    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, RefinementLevel, RefinementPlan,
+    DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode, PairedOutputAllocation,
+    PairedOutputReceipt, RefinementLevel, RefinementPlan, SourceReconstructionUniform, TileOutput,
+    TileOutputCompletion,
 };
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::{
@@ -1464,6 +1466,7 @@ impl<G> AllocatedKernelGrid<G> {
 #[derive(Debug)]
 struct AllocatedKernelGridPair<G> {
     grids: [G; 2],
+    paired_allocation: Option<PairedOutputAllocation>,
     #[cfg(test)]
     transaction: KernelAllocation,
 }
@@ -1471,6 +1474,7 @@ struct AllocatedKernelGridPair<G> {
 #[cfg(any(target_arch = "wasm32", test))]
 impl<G> AllocatedKernelGridPair<G> {
     fn into_grids(self) -> [G; 2] {
+        debug_assert!(self.paired_allocation.is_none());
         self.grids
     }
 }
@@ -1547,6 +1551,8 @@ struct WholeGridJob {
     screen_to_plane: Homography,
     params: EscapeParams,
     mode: WholeGridMode,
+    paired_allocation: Option<PairedOutputAllocation>,
+    source_reconstruction: Option<SourceReconstructionUniform>,
 }
 
 /// Plain input to one kernel publication.
@@ -1572,16 +1578,21 @@ struct KernelPublication {
     #[cfg(test)]
     job: KernelJob,
     #[cfg(test)]
-    span: KernelSpanGeneration,
+    spans: [KernelSpanGeneration; 2],
+    paired_receipt: Option<PairedOutputReceipt>,
     facts: DispatchFacts,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl KernelPublication {
     const fn into_facts(self) -> DispatchFacts {
+        debug_assert!(self.paired_receipt.is_none() || self.facts.copy_commands > 0);
         self.facts
     }
 }
+
+#[cfg(any(target_arch = "wasm32", test))]
+type KernelGridPairAllocation<G> = ([G; 2], Option<PairedOutputAllocation>);
 
 /// App-local lowering used by the replayable kernel-submission transaction owner.
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1612,7 +1623,8 @@ trait KernelSubmissionPort {
         &mut self,
         context: Self::AllocationContext<'_>,
         plan: &RefinementPlan,
-    ) -> Result<[Self::Grid; 2], Self::Error>;
+        generation: Option<u32>,
+    ) -> Result<KernelGridPairAllocation<Self::Grid>, Self::Error>;
     fn retire(
         &mut self,
         context: Self::AllocationContext<'_>,
@@ -1625,7 +1637,7 @@ trait KernelSubmissionPort {
     fn submit(
         &mut self,
         context: Self::SubmissionContext<'_>,
-        grid: &mut Self::Grid,
+        grids: &mut [Self::Grid],
         job: &KernelJob,
     ) -> Result<DispatchFacts, Self::Error>;
 }
@@ -1635,12 +1647,26 @@ trait KernelSubmissionPort {
 #[derive(Debug, Default)]
 struct KernelSubmissionOwner<P> {
     port: P,
+    paired_job: Option<KernelJob>,
+    paired_pending: Option<KernelPublication>,
+    paired_fence: Option<(u32, u64)>,
+    paired_completions: [Option<TileOutputCompletion>; 2],
+    paired_receipt: Option<PairedOutputReceipt>,
+    refused_completions: Vec<TileOutputCompletion>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
     const fn new(port: P) -> Self {
-        Self { port }
+        Self {
+            port,
+            paired_job: None,
+            paired_pending: None,
+            paired_fence: None,
+            paired_completions: [None; 2],
+            paired_receipt: None,
+            refused_completions: Vec::new(),
+        }
     }
 
     fn plan(
@@ -1685,8 +1711,9 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
         #[cfg(test)] target: KernelGridTarget,
         #[cfg(target_arch = "wasm32")] _target: KernelGridTarget,
         plan: &RefinementPlan,
+        generation: Option<u32>,
     ) -> Result<AllocatedKernelGridPair<P::Grid>, P::Error> {
-        let grids = self.port.allocate_grid_pair(context, plan)?;
+        let (grids, paired_allocation) = self.port.allocate_grid_pair(context, plan, generation)?;
         #[cfg(test)]
         let transaction = KernelAllocation {
             target,
@@ -1697,6 +1724,7 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
         };
         Ok(AllocatedKernelGridPair {
             grids,
+            paired_allocation,
             #[cfg(test)]
             transaction,
         })
@@ -1738,19 +1766,115 @@ impl<P: KernelSubmissionPort> KernelSubmissionOwner<P> {
     fn submit(
         &mut self,
         context: P::SubmissionContext<'_>,
-        grid: &mut P::Grid,
+        grids: &mut [P::Grid],
         job: &KernelJob,
     ) -> Result<KernelPublication, P::Error> {
         #[cfg(test)]
-        let span = grid.span_generation();
-        let facts = self.port.submit(context, grid, job)?;
-        Ok(KernelPublication {
+        let first_span = grids[0].span_generation();
+        #[cfg(test)]
+        let second_span = grids
+            .get(1)
+            .map_or(first_span, KernelGridIdentity::span_generation);
+        let facts = self.port.submit(context, grids, job)?;
+        let publication = KernelPublication {
             #[cfg(test)]
             job: *job,
             #[cfg(test)]
-            span,
+            spans: [first_span, second_span],
+            paired_receipt: None,
             facts,
-        })
+        };
+        if job.whole_grid().paired_allocation.is_some() {
+            debug_assert!(self.paired_pending.is_none());
+            self.paired_job = Some(*job);
+            self.paired_pending = Some(publication);
+            self.paired_fence = None;
+            self.paired_completions = [None; 2];
+            self.paired_receipt = None;
+        }
+        Ok(publication)
+    }
+
+    fn bind_paired_fence(&mut self, scene_id: u64) -> Option<u32> {
+        let allocation = self.paired_job?.whole_grid().paired_allocation?;
+        self.paired_pending.as_ref()?;
+        self.paired_fence = Some((allocation.generation, scene_id));
+        Some(allocation.generation)
+    }
+
+    fn observe_paired_fence(&mut self, scene_id: u64) -> Option<KernelPublication> {
+        let (generation, expected_scene_id) = self.paired_fence?;
+        if scene_id != expected_scene_id {
+            return None;
+        }
+        let value = TileOutputCompletion::new(generation, TileOutput::Value);
+        let reconstruction = TileOutputCompletion::new(generation, TileOutput::Reconstruction);
+        let first = self.observe_paired_completion(value);
+        debug_assert_eq!(first, Ok(None));
+        let Ok(Some(receipt)) = self.observe_paired_completion(reconstruction) else {
+            unreachable!("one observed fence completes both outputs from its queue submission")
+        };
+        let mut publication = self
+            .paired_pending
+            .take()
+            .unwrap_or_else(|| unreachable!("a bound paired fence retains its publication"));
+        publication.paired_receipt = Some(receipt);
+        self.paired_fence = None;
+        Some(publication)
+    }
+
+    fn refuse_paired_fence(&mut self, scene_id: u64) -> bool {
+        if self
+            .paired_fence
+            .is_none_or(|(_, expected_scene_id)| expected_scene_id != scene_id)
+        {
+            return false;
+        }
+        self.paired_pending = None;
+        self.paired_fence = None;
+        self.paired_completions = [None; 2];
+        true
+    }
+
+    const fn abandon_unbound_pair(&mut self) -> bool {
+        if self.paired_pending.is_none() || self.paired_fence.is_some() {
+            return false;
+        }
+        self.paired_pending = None;
+        self.paired_completions = [None; 2];
+        true
+    }
+
+    fn observe_paired_completion(
+        &mut self,
+        completion: TileOutputCompletion,
+    ) -> Result<Option<PairedOutputReceipt>, TileOutputCompletion> {
+        let Some(job) = self.paired_job else {
+            self.refused_completions.push(completion);
+            return Err(completion);
+        };
+        let Some(allocation) = job.whole_grid().paired_allocation else {
+            self.refused_completions.push(completion);
+            return Err(completion);
+        };
+        if completion.generation != allocation.generation {
+            self.refused_completions.push(completion);
+            return Err(completion);
+        }
+        let completion_index = match completion.output {
+            TileOutput::Value => 0,
+            TileOutput::Reconstruction => 1,
+        };
+        self.paired_completions[completion_index] = Some(completion);
+        let [Some(value), Some(reconstruction)] = self.paired_completions else {
+            return Ok(None);
+        };
+        let Ok(receipt) = PairedOutputReceipt::new(allocation, value, reconstruction) else {
+            self.refused_completions.push(completion);
+            return Err(completion);
+        };
+        self.paired_receipt = Some(receipt);
+        Ok(Some(receipt))
     }
 }
 
@@ -1908,8 +2032,9 @@ impl<P: WorkerServicePort> WorkerServiceOwner<P> {
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
-        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelError,
-        KernelMode, OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
+        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KernelError, KernelMode,
+        OUTPUT_PAGE_SIDE, PAIRED_KERNEL_UNIFORM_BYTES, ReferenceOrbitInput, RefinementLevel,
+        RefinementPlan,
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,
@@ -1928,15 +2053,15 @@ mod browser {
 
     use super::{
         AllocatedKernelGrid, BACKDROP_PRESENT_LEVEL, CaptureDrained, CaptureStaged, CoverageTurn,
-        FencesObserved, FrameLoop, HotWritten, KernelGridIdentity, KernelGridTarget, KernelJob,
-        KernelPlan, KernelSpanGeneration, KernelSubmissionOwner, KernelSubmissionPort,
-        OrderedRefresh, PAGE_MAX_ITERATION_CAP, PresentEventEffect, PresentEventFacts,
-        PresentEventOwner, PresentEventPort, PresentFenceRefusal, PresentSceneCompletion,
-        PresentSceneDrop, PresentWarpCompletion, RefusalClass, SceneConsidered, SceneMode,
-        SurfacePort, SurfaceResolutionEvent, SurfaceResolutionOwner, SurfaceSubmission,
-        SurfaceWarpJob, WholeGridJob, WholeGridMode, WorkerAcceptance, WorkerApplication,
-        WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission, backdrop_extent,
-        coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
+        FencesObserved, FrameLoop, HotWritten, KernelGridIdentity, KernelGridPairAllocation,
+        KernelGridTarget, KernelJob, KernelPlan, KernelSpanGeneration, KernelSubmissionOwner,
+        KernelSubmissionPort, OrderedRefresh, PAGE_MAX_ITERATION_CAP, PresentEventEffect,
+        PresentEventFacts, PresentEventOwner, PresentEventPort, PresentFenceRefusal,
+        PresentSceneCompletion, PresentSceneDrop, PresentWarpCompletion, RefusalClass,
+        SceneConsidered, SceneMode, SurfacePort, SurfaceResolutionEvent, SurfaceResolutionOwner,
+        SurfaceSubmission, SurfaceWarpJob, WholeGridJob, WholeGridMode, WorkerAcceptance,
+        WorkerApplication, WorkerArrival, WorkerServiceOwner, WorkerServicePort, WorkerSubmission,
+        backdrop_extent, coverage_pre_empts, execute_ordered_refresh, horizon_facts, main_for_grid,
         published_iteration_cap, sampling_zoom_log2, stamp_scene_level, stamped_screen_map,
     };
     use crate::timing::ReferenceTimingSample;
@@ -2044,8 +2169,18 @@ mod browser {
             &mut self,
             executor: Self::AllocationContext<'_>,
             plan: &RefinementPlan,
-        ) -> Result<[Self::Grid; 2], Self::Error> {
-            self.kernels.allocate_grid_pair(executor, plan)
+            generation: Option<u32>,
+        ) -> Result<KernelGridPairAllocation<Self::Grid>, Self::Error> {
+            if let Some(generation) = generation {
+                self.kernels.enable_paired_outputs(executor)?;
+                let (grids, allocation) = self
+                    .kernels
+                    .allocate_output_pair(executor, plan, generation)?;
+                Ok((grids, Some(allocation)))
+            } else {
+                let grids = self.kernels.allocate_grid_pair(executor, plan)?;
+                Ok((grids, None))
+            }
         }
 
         fn retire(
@@ -2066,7 +2201,7 @@ mod browser {
         fn submit(
             &mut self,
             dispatch: Self::SubmissionContext<'_>,
-            grid: &mut Self::Grid,
+            grids: &mut [Self::Grid],
             job: &KernelJob,
         ) -> Result<DispatchFacts, Self::Error> {
             let job = job.whole_grid();
@@ -2077,55 +2212,125 @@ mod browser {
             let mut encoder = dispatch
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-            let facts = match job.mode {
-                WholeGridMode::Shallow {
-                    centre,
-                    pixel_scale,
-                } => self.kernels.encode_shallow(
-                    dispatch.executor,
-                    &mut encoder,
-                    grid,
-                    job.owner_epoch,
-                    job.precision_mode,
-                    job.level,
-                    &job.plane,
-                    &job.screen_to_plane,
-                    &centre,
-                    pixel_scale,
-                    job.params,
-                )?,
-                WholeGridMode::Perturbation {
-                    centre_from_reference_px,
-                    scale,
-                    reference,
-                } => {
-                    let span = dispatch
-                        .reference_span
-                        .ok_or(KernelError::MissingReference)?;
-                    if reference.span != KernelSpanGeneration::from_span(span) {
-                        return Err(KernelError::StaleReference);
+            let facts = match (job.paired_allocation, job.source_reconstruction) {
+                (None, None) => {
+                    let [grid] = grids else {
+                        return Err(KernelError::Dispatch);
+                    };
+                    match job.mode {
+                        WholeGridMode::Shallow {
+                            centre,
+                            pixel_scale,
+                        } => self.kernels.encode_shallow(
+                            dispatch.executor,
+                            &mut encoder,
+                            grid,
+                            job.owner_epoch,
+                            job.precision_mode,
+                            job.level,
+                            &job.plane,
+                            &job.screen_to_plane,
+                            &centre,
+                            pixel_scale,
+                            job.params,
+                        )?,
+                        WholeGridMode::Perturbation {
+                            centre_from_reference_px,
+                            scale,
+                            reference,
+                        } => {
+                            let span = dispatch
+                                .reference_span
+                                .ok_or(KernelError::MissingReference)?;
+                            if reference.span != KernelSpanGeneration::from_span(span) {
+                                return Err(KernelError::StaleReference);
+                            }
+                            self.kernels.encode_perturbation(
+                                dispatch.executor,
+                                &mut encoder,
+                                grid,
+                                job.owner_epoch,
+                                job.precision_mode,
+                                job.level,
+                                &job.plane,
+                                &job.screen_to_plane,
+                                centre_from_reference_px,
+                                scale,
+                                job.params,
+                                ReferenceOrbitInput {
+                                    span,
+                                    generation: reference.generation,
+                                    length: reference.length,
+                                    precision_bits: reference.precision_bits,
+                                    precision_mode: reference.precision_mode,
+                                },
+                            )?
+                        }
                     }
-                    self.kernels.encode_perturbation(
-                        dispatch.executor,
-                        &mut encoder,
-                        grid,
-                        job.owner_epoch,
-                        job.precision_mode,
-                        job.level,
-                        &job.plane,
-                        &job.screen_to_plane,
-                        centre_from_reference_px,
-                        scale,
-                        job.params,
-                        ReferenceOrbitInput {
-                            span,
-                            generation: reference.generation,
-                            length: reference.length,
-                            precision_bits: reference.precision_bits,
-                            precision_mode: reference.precision_mode,
-                        },
-                    )?
                 }
+                (Some(allocation), Some(source_reconstruction)) => {
+                    let outputs = <&mut [EscapeGrid; 2]>::try_from(grids)
+                        .map_err(|_| KernelError::Dispatch)?;
+                    let color_attachment_limit = dispatch
+                        .device
+                        .limits()
+                        .max_color_attachment_bytes_per_sample;
+                    match job.mode {
+                        WholeGridMode::Shallow {
+                            centre,
+                            pixel_scale,
+                        } => self.kernels.encode_shallow_pair(
+                            dispatch.executor,
+                            &mut encoder,
+                            color_attachment_limit,
+                            (outputs, allocation),
+                            (job.owner_epoch, job.precision_mode, job.level),
+                            (
+                                &job.plane,
+                                &job.screen_to_plane,
+                                &centre,
+                                pixel_scale,
+                                job.params,
+                                &source_reconstruction,
+                            ),
+                        )?,
+                        WholeGridMode::Perturbation {
+                            centre_from_reference_px,
+                            scale,
+                            reference,
+                        } => {
+                            let span = dispatch
+                                .reference_span
+                                .ok_or(KernelError::MissingReference)?;
+                            if reference.span != KernelSpanGeneration::from_span(span) {
+                                return Err(KernelError::StaleReference);
+                            }
+                            self.kernels.encode_perturbation_pair(
+                                dispatch.executor,
+                                &mut encoder,
+                                color_attachment_limit,
+                                (outputs, allocation),
+                                (job.owner_epoch, job.precision_mode, job.level),
+                                (
+                                    &job.plane,
+                                    &job.screen_to_plane,
+                                    centre_from_reference_px,
+                                    scale,
+                                    job.params,
+                                    &source_reconstruction,
+                                    ReferenceOrbitInput {
+                                        span,
+                                        generation: reference.generation,
+                                        length: reference.length,
+                                        precision_bits: reference.precision_bits,
+                                        precision_mode: reference.precision_mode,
+                                    },
+                                ),
+                            )?
+                        }
+                    }
+                }
+                _ => return Err(KernelError::Dispatch),
             };
             debug_assert_eq!(facts.mode, job.mode.kernel_mode());
             debug_assert_eq!(facts.requested_extent, job.requested_extent);
@@ -2913,7 +3118,7 @@ mod browser {
                     scratch_layers: 4,
                     max_header_pages: MAX_HEADER_PAGES,
                     max_header_sets: MAX_HEADER_SETS,
-                    kernel_uniform_bytes: KERNEL_UNIFORM_BYTES,
+                    kernel_uniform_bytes: PAIRED_KERNEL_UNIFORM_BYTES,
                 },
             )
             .map_err(heap_error)?;
@@ -2956,7 +3161,7 @@ mod browser {
                 .reference_centre()
                 .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let [grid, spare_grid] = kernel_submission
-                .allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan)
+                .allocate_grid_pair(&mut executor, KernelGridTarget::Main, &plan, None)
                 .map_err(kernel_error)?
                 .into_grids();
             let config = PresentConfig {
@@ -3490,6 +3695,10 @@ mod browser {
             &mut self,
             event: &PresentSceneCompletion,
         ) -> Result<PresentEventEffect, Self::Error> {
+            let _paired_publication = self
+                .frame_loop
+                .kernel_submission
+                .observe_paired_fence(event.frame.scene_id);
             self.complete_scene(&event.frame, event.reference_sample);
             #[cfg(test)]
             let effect = self.event_effect(false, false, false);
@@ -3502,6 +3711,10 @@ mod browser {
             &mut self,
             event: &PresentSceneDrop,
         ) -> Result<PresentEventEffect, Self::Error> {
+            let _paired_publication = self
+                .frame_loop
+                .kernel_submission
+                .observe_paired_fence(event.scene_id);
             self.drop_scene(event.scene_id, event.measurement);
             #[cfg(test)]
             let effect = self.event_effect(false, false, false);
@@ -3526,6 +3739,12 @@ mod browser {
             &mut self,
             event: &PresentFenceRefusal,
         ) -> Result<PresentEventEffect, Self::Error> {
+            if matches!(event.kind, SubmissionKind::Scene) {
+                let _pair_refused = self
+                    .frame_loop
+                    .kernel_submission
+                    .refuse_paired_fence(event.id);
+            }
             let (refused, cancelled) = self.refuse_fence(
                 event.kind,
                 event.id,
