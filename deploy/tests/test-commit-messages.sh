@@ -7,9 +7,10 @@ subject_pattern='^(feat|fix|refactor|docs|test|chore|build|ci|perf|style|revert)
 valid_subject() {
     subject=$1
 
-    [ "${#subject}" -le 72 ] || return 1
     printf '%s\n' "$subject" | grep -Eq "$subject_pattern" || return 1
-    ! printf '%s\n' "$subject" | grep -Eq '^[^(]+\(ember-'
+    ! printf '%s\n' "$subject" | grep -Eq '^[^(]+\(ember-' || return 1
+    summary=${subject#*: }
+    [ "${#summary}" -le 72 ]
 }
 
 self_test() {
@@ -25,6 +26,7 @@ feat(arena): add spectator controls
 fix(arena-core)!: reject stale protocol frames
 docs(workspace): explain release ownership
 chore(deploy): refresh service metadata
+docs(workspace): document why verification results belong in every commit body for review
 GOOD
 
     while IFS= read -r subject; do

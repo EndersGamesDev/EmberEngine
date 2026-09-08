@@ -16,7 +16,7 @@ The `!` is optional and marks a breaking change.
 
 `<scope>` is a crate name with any leading `ember-` removed, a game id, a lab name, or one of `deploy`, `docs`, `tools`, `web`, or `workspace`.
 
-`<summary>` uses the imperative mood, begins with a lower-case letter, has no trailing period, and keeps the complete subject to at most 72 columns.
+`<summary>` uses the imperative mood, begins with a lower-case letter, has no trailing period, and is at most 72 columns long.
 
 Examples:
 
