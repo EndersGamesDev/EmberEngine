@@ -1,6 +1,6 @@
 {
   "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788894034",
+  "v": "1788894046",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -77,11 +77,11 @@
     },
     {
       "name": "dusky-osprey-league-v3",
-      "league_ws": "wss://explanation-room-releases-says.trycloudflare.com",
+      "league_ws": "wss://consumers-visual-powder-kernel.trycloudflare.com",
       "league_proto": 2,
       "league_version": "r1759",
       "league_commit": "cf4a95f0e206abc6ee519c98f4ea8478962dfdb4",
-      "updated": "2026-09-07T11:25:53Z"
+      "updated": "2026-09-08T19:00:46Z"
     }
   ],
   "mirrors": [
