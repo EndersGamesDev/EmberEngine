@@ -68,7 +68,7 @@ pub fn rebuild_basis<const N: usize>(
     })
 }
 
-fn rotate_rows<const N: usize>(
+pub fn rotate_rows<const N: usize>(
     frame: &mut [[f64; N]; N],
     first: usize,
     second: usize,

@@ -37,6 +37,10 @@ pub enum CameraError {
     DegenerateFrame,
     /// Perspective parameters cannot define a forward ray.
     InvalidPerspective,
+    /// A pixel coordinate is outside the named screen-space working range.
+    ScreenCoordinateOutOfRange,
+    /// A box or point span has zero extent.
+    EmptySelection,
 }
 
 impl fmt::Display for CameraError {
@@ -57,6 +61,10 @@ impl fmt::Display for CameraError {
             Self::InvalidPerspective => {
                 formatter.write_str("observer perspective does not define a forward ray")
             }
+            Self::ScreenCoordinateOutOfRange => {
+                formatter.write_str("pixel coordinate is outside the screen working range")
+            }
+            Self::EmptySelection => formatter.write_str("selection has zero extent"),
         }
     }
 }
@@ -453,6 +461,38 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
             return Err(CameraError::Overflow);
         }
         Self::from_magnitude(quotient, negative)
+    }
+
+    /// Returns the nonnegative magnitude without wrapping the signed minimum.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CameraError::Overflow`] when the value is the signed minimum.
+    pub fn abs_checked(&self) -> Result<Self, CameraError> {
+        if self.is_negative() {
+            self.neg()
+        } else {
+            Ok(*self)
+        }
+    }
+
+    /// Returns the midpoint, dropping a half-lowest-bit result toward negative infinity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid width or checked intermediate arithmetic failure.
+    pub fn midpoint_floor(&self, other: &Self) -> Result<Self, CameraError> {
+        Self::validate_width()?;
+        if let Ok(sum) = self.add(other) {
+            return sum.shift_right(1);
+        }
+        let mut midpoint = self.shift_right(1)?.add(&other.shift_right(1)?)?;
+        if self.limbs[0] & 1 != 0 && other.limbs[0] & 1 != 0 {
+            let mut lowest_bit = [0; LIMBS];
+            lowest_bit[0] = 1;
+            midpoint = midpoint.add(&Self { limbs: lowest_bit })?;
+        }
+        Ok(midpoint)
     }
 
     /// Compares two values numerically.

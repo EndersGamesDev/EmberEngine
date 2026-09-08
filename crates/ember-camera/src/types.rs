@@ -122,6 +122,71 @@ impl Turn {
     pub const fn from_le_bytes(bytes: [u8; 4]) -> Self {
         Self(u32::from_le_bytes(bytes))
     }
+
+    /// Quantises a finite radian angle into the canonical fraction of one turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite angle or failed integer conversion.
+    pub fn from_radians(radians: f64) -> Result<Self, CameraError> {
+        if !radians.is_finite() {
+            return Err(CameraError::NonFinite);
+        }
+        let fraction = unit_turn_fraction(radians / core::f64::consts::TAU);
+        let scaled = fraction * 4_294_967_296.0;
+        let rounded = round_nonnegative_binary64(scaled)?;
+        if rounded == 1_u64 << u32::BITS {
+            Ok(Self::ZERO)
+        } else {
+            Ok(Self(
+                u32::try_from(rounded).map_err(|_| CameraError::Overflow)?,
+            ))
+        }
+    }
+}
+
+/// Reduces a finite turn count modulo one using only core floating-point arithmetic.
+///
+/// `%` leaves a negative remainder for a negative dividend. One bounded addition maps that result
+/// into the Euclidean interval, and the final comparison canonicalises signed zero and a value
+/// rounded up to one.
+const fn unit_turn_fraction(turns: f64) -> f64 {
+    let remainder = turns % 1.0;
+    let nonnegative = if remainder < 0.0 {
+        remainder + 1.0
+    } else {
+        remainder
+    };
+    if nonnegative == 0.0 || nonnegative >= 1.0 {
+        0.0
+    } else {
+        nonnegative
+    }
+}
+
+fn round_nonnegative_binary64(value: f64) -> Result<u64, CameraError> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(CameraError::NonFinite);
+    }
+    if value == 0.0 {
+        return Ok(0);
+    }
+    let bits = value.to_bits();
+    let exponent_field = (bits >> 52) & 0x7ff;
+    let exponent = i64::try_from(exponent_field).map_err(|_| CameraError::Overflow)? - 1_023;
+    let significand = (1_u64 << 52) | (bits & ((1_u64 << 52) - 1));
+    if exponent >= 52 {
+        let shift = u32::try_from(exponent - 52).map_err(|_| CameraError::Overflow)?;
+        return significand.checked_shl(shift).ok_or(CameraError::Overflow);
+    }
+    let shift = usize::try_from(52 - exponent).map_err(|_| CameraError::Overflow)?;
+    if shift >= 64 {
+        return Ok(0);
+    }
+    let retained = significand >> shift;
+    let round_bit = significand & (1_u64 << (shift - 1)) != 0;
+    let sticky = significand & ((1_u64 << (shift - 1)) - 1) != 0;
+    Ok(retained + u64::from(round_bit && (sticky || retained & 1 != 0)))
 }
 
 /// Integer plane rotations for an N-dimensional orthonormal frame.
@@ -405,9 +470,21 @@ impl<const N: usize> Basis<N> {
 mod tests {
     use super::{
         CameraError, Exponent, MAX_EXPONENT_QUANTA, MIN_EXPONENT_QUANTA, Orientation, Screen, Turn,
-        View,
+        View, unit_turn_fraction,
     };
     use crate::Fixed;
+
+    #[test]
+    fn unit_turn_fraction_is_euclidean_with_core_arithmetic() {
+        for (turns, expected) in [
+            (2.25_f64, 0.25_f64),
+            (-2.25_f64, 0.75_f64),
+            (3.0_f64, 0.0_f64),
+            (-3.0_f64, 0.0_f64),
+        ] {
+            assert_eq!(unit_turn_fraction(turns).to_bits(), expected.to_bits());
+        }
+    }
 
     #[test]
     fn exponent_range_and_encoding_are_exact() -> Result<(), CameraError> {
