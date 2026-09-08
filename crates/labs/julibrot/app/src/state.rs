@@ -2107,7 +2107,7 @@ mod tests {
         {
             assert!(
                 (configured_component - expected_component).abs() <= ROUND_TRIP_ANCHOR_TOLERANCE_PX,
-                "sampled reference shift was not consumed"
+                "sampled reference coordinate frame does not match its expected displacement"
             );
         }
         assert!(acceptance.accepted.main.generation_applied > acceptance.generation_before);
@@ -2196,8 +2196,9 @@ mod tests {
 
     /// Pins the current zoom-54 residual without assigning it to centre narrowing.
     ///
-    /// This controller starts with a 1,024-bit centre and navigation only widens it. The trip now
-    /// accepts a sampled reference and proves its shift is consumed, but does not isolate the
+    /// This controller starts with a 1,024-bit centre and navigation only widens it. The trip
+    /// accepts a sampled reference, verifies its coordinate frame, and publishes its nonzero shift;
+    /// the presenter regression separately proves consumption. The trip does not isolate the
     /// residual's cause. The current edit path still projects through F32 plane and scale values;
     /// `ember-camera` must replace this ceiling with the sub-pixel tolerance.
     #[test]

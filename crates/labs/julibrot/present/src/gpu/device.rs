@@ -453,11 +453,8 @@ impl Presenter {
         self.main = Some(main);
     }
 
-    /// Returns retained then pending pose and centre-revision snapshots without changing state.
-    ///
-    /// This diagnostic boundary lets an app verify that an accepted reference re-expressed both
-    /// scene classes under the same generation and draft revision. Absence means that class has no
-    /// scene rather than a zero-valued pose.
+    /// Test-support snapshot; not a stable presentation contract.
+    #[doc(hidden)]
     #[must_use]
     pub fn reference_pose_snapshots(&self) -> [Option<(Pose, u32)>; 2] {
         [

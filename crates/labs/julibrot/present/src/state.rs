@@ -253,6 +253,8 @@ impl SceneLedger {
         matches
     }
 
+    /// Test-support snapshot; not a stable presentation contract.
+    #[doc(hidden)]
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
