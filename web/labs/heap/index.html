@@ -94,13 +94,8 @@
       start_heap_lattice,
       take_heap_lattice_panic,
       heap_package_version,
-    } from "./pkg/ember_lab_heap.js?v=9";
+    } from "./pkg/ember_lab_heap.js?v=10";
 
-    const PACKAGE_VERSION = heap_package_version();
-    const VERSION_LABEL = `Version ${PACKAGE_VERSION.split(".")[0]}`;
-    document.querySelector("#release-version").textContent = VERSION_LABEL;
-    document.querySelector("#release-version").title = `Full version ${PACKAGE_VERSION}`;
-    document.title = `GPU heap lattice · ${VERSION_LABEL}`;
     const LAB_SCHEMA = "heap-lattice-v9";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
@@ -418,12 +413,17 @@
     });
 
     try {
-      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=9" });
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=10" });
+      const packageVersion = heap_package_version();
+      const versionLabel = `Version ${packageVersion.split(".")[0]}`;
+      document.querySelector("#release-version").textContent = versionLabel;
+      document.querySelector("#release-version").title = `Full version ${packageVersion}`;
+      document.title = `GPU heap lattice · ${versionLabel}`;
       const timer = timerProbe();
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));
       selection = initialized.initial;
-      facts.textContent = JSON.stringify({ version: PACKAGE_VERSION, schema: LAB_SCHEMA, timer, ...initialized }, null, 2);
+      facts.textContent = JSON.stringify({ version: packageVersion, schema: LAB_SCHEMA, timer, ...initialized }, null, 2);
       displaySelection();
       status.textContent = "Mode A step 1 rendered immediately · running equal-work gate before warm-up timing…";
       await runConformance(pageGeneration);
