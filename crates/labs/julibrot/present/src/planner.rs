@@ -1,13 +1,14 @@
 use ember_julibrot_math::{
-    Homography, Plane, Pose, PoseMap, ProjectedSample, RetainedValueSample, ViewControls,
-    pixel_scale, plane_chart_relation, warp_matrix,
+    EscapeGridRecord, Homography, Plane, Pose, PoseMap, ProjectedSample, ReprojectionError,
+    RetainedValueSample, SourceDepthRecord, ViewControls, pixel_scale, plane_chart_relation,
+    warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
 use crate::{
-    LatticePair, MeshError, PaletteRecord, SceneFrame, TilePoseHeader, TileRenderKey, WarpKind,
-    WarpPlan, WarpRefusalReason, apply_homography, compose_homography, height_for_record,
-    identity_warp_rows, pack_homography_rows,
+    DescriptorSamplePair, LatticePair, MeshError, PaletteRecord, SceneFrame, TilePoseHeader,
+    TileRenderKey, WarpKind, WarpPlan, WarpRefusalReason, apply_homography, compose_homography,
+    height_for_record, identity_warp_rows, pack_homography_rows,
 };
 
 /// The escape record status the kernel writes for a pixel with no plane point.
@@ -73,6 +74,27 @@ impl Warp {
     #[must_use]
     pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
         crate::tile::unpack_descriptor_header(header)
+    }
+
+    /// Packs one value and reconstruction record into the exact `S0/S1` lane declaration.
+    #[must_use]
+    pub fn pack_descriptor_sample(
+        value: EscapeGridRecord,
+        depth: SourceDepthRecord,
+    ) -> Option<DescriptorSamplePair> {
+        crate::tile::pack_descriptor_sample(value, depth)
+    }
+
+    /// Unpacks one `S0/S1` pair and derives its palette-independent height.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for invalid lanes or an invalid iteration cap.
+    pub fn unpack_descriptor_sample(
+        pair: &DescriptorSamplePair,
+        iteration_cap: u32,
+    ) -> Result<(RetainedValueSample, SourceDepthRecord), ReprojectionError> {
+        crate::tile::unpack_descriptor_sample(pair, iteration_cap)
     }
 }
 

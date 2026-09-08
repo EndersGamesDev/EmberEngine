@@ -1,6 +1,9 @@
 //! Compatibility re-exports for the kernels-owned rendered-tile record vocabulary.
 
-use ember_julibrot_math::{Homography, ObjectAngles, Pose, PoseMap, ViewControls, construct_plane};
+use ember_julibrot_math::{
+    EscapeGridRecord, Homography, ObjectAngles, Pose, PoseMap, ReprojectionError,
+    RetainedValueSample, SourceDepthRecord, ViewControls, construct_plane, retained_value_sample,
+};
 
 pub use ember_julibrot_kernels::{
     CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
@@ -133,6 +136,75 @@ pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
         centre_from_reference_px: [0.0; 2],
     };
     (pose.view.is_valid() && chart_scale.is_finite() && chart_scale > 0.0).then_some(pose)
+}
+
+/// Packs one existing value record and its source reconstruction receipt without changing S0.
+pub fn pack_descriptor_sample(
+    value: EscapeGridRecord,
+    depth: SourceDepthRecord,
+) -> Option<DescriptorSamplePair> {
+    let value_lanes = [
+        value.smooth_iter,
+        value.escaped,
+        value.rebase_count,
+        value.status,
+    ];
+    if !value_lanes.into_iter().all(f32::is_finite)
+        || ![depth.a_f, depth.b_f, depth.zeta_f]
+            .into_iter()
+            .all(f64::is_finite)
+        || (depth.valid && depth.zeta_f <= 0.0)
+    {
+        return None;
+    }
+    Some(DescriptorSamplePair::new(
+        value_lanes,
+        [
+            pack_finite(depth.a_f)?,
+            pack_finite(depth.b_f)?,
+            pack_finite(depth.zeta_f)?,
+            f32::from(u8::from(depth.valid)),
+        ],
+    ))
+}
+
+/// Unpacks one paired descriptor sample using the supplied delivered iteration cap.
+///
+/// # Errors
+///
+/// Returns a typed refusal for a non-finite lane, non-binary validity, or invalid value record.
+pub fn unpack_descriptor_sample(
+    pair: &DescriptorSamplePair,
+    iteration_cap: u32,
+) -> Result<(RetainedValueSample, SourceDepthRecord), ReprojectionError> {
+    let value = retained_value_sample(
+        EscapeGridRecord {
+            smooth_iter: pair.s0.lanes[0],
+            escaped: pair.s0.lanes[1],
+            rebase_count: pair.s0.lanes[2],
+            status: pair.s0.lanes[3],
+        },
+        iteration_cap,
+    )?;
+    let valid = match pair.s1.lanes[3].to_bits() {
+        bits if bits == 0.0_f32.to_bits() => false,
+        bits if bits == 1.0_f32.to_bits() => true,
+        _ => return Err(ReprojectionError::InvalidSource),
+    };
+    let depth = SourceDepthRecord {
+        a_f: f64::from(pair.s1.lanes[0]),
+        b_f: f64::from(pair.s1.lanes[1]),
+        zeta_f: f64::from(pair.s1.lanes[2]),
+        valid,
+    };
+    if ![depth.a_f, depth.b_f, depth.zeta_f]
+        .into_iter()
+        .all(f64::is_finite)
+        || (valid && depth.zeta_f <= 0.0)
+    {
+        return Err(ReprojectionError::InvalidSource);
+    }
+    Ok((value, depth))
 }
 
 fn pack_extent_rect_and_map(
@@ -337,7 +409,7 @@ fn unpack_translation(header: &TilePoseHeader) -> [f64; 5] {
 
 #[cfg(test)]
 mod tests {
-    use bytemuck::Zeroable;
+    use bytemuck::{Zeroable, bytes_of};
     use ember_julibrot_kernels::SourceIdentity;
     use ember_julibrot_math::{
         ObjectAngles, Pose, PoseMap, ViewControls, construct_plane, screen_to_plane,
@@ -463,5 +535,44 @@ mod tests {
         invalid_factor.texels[TilePoseHeader::H02_OBJECT_12_13].lanes[..2]
             .copy_from_slice(&[0.0; 2]);
         assert!(unpack_descriptor_header(&invalid_factor).is_none());
+    }
+
+    #[test]
+    fn descriptor_sample_pack_unpack_preserves_s0_bytes_and_exact_lanes() {
+        let record = EscapeGridRecord {
+            smooth_iter: 128.0,
+            escaped: 1.0,
+            rebase_count: 3.0,
+            status: 0.0,
+        };
+        let depth = SourceDepthRecord {
+            a_f: 0.125,
+            b_f: -0.25,
+            zeta_f: 8.0,
+            valid: true,
+        };
+        let pair = pack_descriptor_sample(record, depth).expect("finite sample pair packs");
+        let expected_s0 = DescriptorTexel {
+            lanes: [128.0, 1.0, 3.0, 0.0],
+        };
+        assert_eq!(bytes_of(&pair.s0), bytes_of(&expected_s0));
+        assert_eq!(pair.s1.lanes, [0.125, -0.25, 8.0, 1.0]);
+
+        let (value, unpacked_depth) = unpack_descriptor_sample(&pair, 512)
+            .expect("exact-in-f32 sample lanes unpack");
+        assert_eq!(value.record_height, -1.0);
+        assert_eq!(unpacked_depth, depth);
+
+        let mut non_binary = pair;
+        non_binary.s1.lanes[3] = 0.5;
+        assert_eq!(
+            unpack_descriptor_sample(&non_binary, 512),
+            Err(ReprojectionError::InvalidSource)
+        );
+        let zero_depth = SourceDepthRecord {
+            zeta_f: 0.0,
+            ..depth
+        };
+        assert!(pack_descriptor_sample(record, zero_depth).is_none());
     }
 }
