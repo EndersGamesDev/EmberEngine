@@ -19,20 +19,26 @@ class ReleaseAssembly(unittest.TestCase):
             for name in publish.FILES + ['pkg/end_game.js', 'pkg/end_game_bg.wasm']:
                 (assets / name).write_bytes(name.encode())
             old = {'games': [{'id': 'league', 'versions': [{'v': 'future', 'live': True}], 'unknown': 'preserve'}]}
-            game = {'id': 'end-game', 'versions': [{'version': '3.0.0', 'path': 'games/end-game/v3/'}]}
+            game = {'id': 'end-game', 'versions': [
+                {'version': f'{version}.0.0', 'path': f'games/end-game/v{version}/', 'live': version == 4}
+                for version in [4, 3, 2, 1]
+            ]}
             (source / 'web/games.json').write_text(json.dumps({'games': [game]}))
             (dest / 'games.json').write_text(json.dumps(old))
             (dest / 'index.html').write_text('<style>existing</style><main>keep live content</main>')
             (dest / 'server.json').write_bytes(b'keep host book')
-            frozen = dest / 'games/end-game/v1/pkg/end_game_bg.wasm'
-            frozen.parent.mkdir(parents=True, exist_ok=True)
-            frozen.write_bytes(b'original published v1')
-            frozen_v2 = dest / 'games/end-game/v2/pkg/end_game_bg.wasm'
-            frozen_v2.parent.mkdir(parents=True, exist_ok=True)
-            frozen_v2.write_bytes(b'original published v2')
+            frozen = {}
+            for version in [1, 2, 3]:
+                for name in publish.FILES + ['pkg/end_game.js', 'pkg/end_game_bg.wasm', 'version.json']:
+                    relative = Path(f'games/end-game/v{version}') / name
+                    payload = f'original published v{version}: {name}'.encode()
+                    path = dest / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+                    frozen[relative] = payload
             publish.assemble(source, dest, 'source-sha')
-            self.assertEqual(frozen.read_bytes(), b'original published v1')
-            self.assertEqual(frozen_v2.read_bytes(), b'original published v2')
+            for relative, payload in frozen.items():
+                self.assertEqual((dest / relative).read_bytes(), payload, str(relative))
             catalog = json.loads((dest / 'games.json').read_text())
             self.assertEqual(catalog['games'][0], old['games'][0])
             self.assertEqual(catalog['games'][1], game)
@@ -40,9 +46,12 @@ class ReleaseAssembly(unittest.TestCase):
             self.assertIn('keep live content', (dest / 'index.html').read_text())
             stamp = json.loads((dest / publish.SLOT / 'version.json').read_text())
             self.assertEqual(stamp['source'], 'source-sha')
+            self.assertEqual(stamp['version'], '4.0.0')
             self.assertEqual(len(stamp['files']), 9)
             publish.assemble(source, dest, 'source-sha')
             self.assertEqual((dest / 'index.html').read_text().count(publish.ACCENT), 1)
+            for relative, payload in frozen.items():
+                self.assertEqual((dest / relative).read_bytes(), payload, str(relative))
 
 
 if __name__ == '__main__':

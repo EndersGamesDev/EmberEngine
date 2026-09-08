@@ -1,6 +1,8 @@
 //! End Game's local, fixed-step dungeon simulation. All lengths are metres.
 use glam::{Vec2, Vec3};
+pub mod combat;
 pub mod interaction;
+pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use interaction::{Interaction, InteractionKind};
 
 pub const STEP: f32 = 1.0 / 60.0;
@@ -175,6 +177,8 @@ pub struct Dungeon {
     pub interaction: Option<Interaction>,
     pub werewolf: bool,
     pub transformation: f32,
+    pub combat: Combat,
+    /// Compatibility timer: active sword duration remaining, or unarmed cooldown.
     pub attack_time: f32,
     pub crouched: bool,
     pub alert: f32,
@@ -205,6 +209,7 @@ impl Default for Dungeon {
             interaction: None,
             werewolf: false,
             transformation: 0.0,
+            combat: Combat::default(),
             attack_time: 0.0,
             crouched: false,
             alert: 0.0,
@@ -229,6 +234,10 @@ impl Default for Dungeon {
 }
 
 impl Dungeon {
+    /// The final impact and sword recovery remain visible before completion UI.
+    pub fn finished(&self) -> bool {
+        self.stage == 5 && self.combat.finished()
+    }
     pub fn forward(&self) -> Vec3 {
         Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos())
     }
@@ -303,6 +312,7 @@ impl Dungeon {
         // A dodge started on an earlier tick must not add motion to that path.
         self.dodge_time = 0.0;
         self.attack_time = 0.0;
+        self.combat.cancel();
         self.interaction = Some(Interaction {
             kind,
             elapsed: 0.0,
@@ -330,6 +340,44 @@ impl Dungeon {
                 self.transformation = 0.0;
                 self.say("The blade remembers. The wolf awakens.");
             }
+        }
+    }
+    fn strike_contact(&mut self, kind: StrikeKind) {
+        let forward = self.forward();
+        let chain_distance = self.distance(0.0, -6.5);
+        let chain_in_reach = chain_distance < 2.0 && forward.z < -0.25;
+        let to_warden = Vec3::new(
+            self.warden.x - self.position.x,
+            0.0,
+            self.warden.y - self.position.z,
+        );
+        let warden_distance = to_warden.length();
+        // One contact sample hits the nearest eligible target, never both.
+        if self.warden_health > 0.0
+            && warden_distance < 2.7
+            && forward.dot(to_warden.normalize_or_zero()) > 0.15
+            && (!chain_in_reach || warden_distance < chain_distance)
+        {
+            self.warden_health = (self.warden_health
+                - kind.damage() * if self.werewolf { 1.25 } else { 1.0 })
+            .max(0.0);
+            self.alert = 1.0;
+            self.combat.impact(
+                kind,
+                ImpactKind::Warden,
+                Vec3::new(self.warden.x, 1.1, self.warden.y),
+            );
+            self.say(if self.warden_health == 0.0 {
+                "The warden falls."
+            } else {
+                "Iron meets iron."
+            });
+        } else if chain_in_reach {
+            self.stage = 5;
+            self.combat
+                .impact(kind, ImpactKind::Chain, Vec3::new(0.0, 1.05, -6.88));
+            self.combat.clear_queue();
+            self.say("Beyond the iron, the hunt begins.");
         }
     }
     fn can_stand(&self, x: f32, z: f32) -> bool {
@@ -360,10 +408,17 @@ impl Dungeon {
         true
     }
     pub fn tick(&mut self, mut input: Controls) {
-        if self.stage == 5 {
+        if self.finished() {
             return;
         }
-        self.time += STEP;
+        if self.stage == 5 {
+            let progress = self.combat.tick(false, &mut self.stamina);
+            self.attack_time = self.combat.remaining();
+            if !progress.frozen {
+                self.time += STEP;
+            }
+            return;
+        }
         if input.interact && self.interaction.is_none() {
             self.interact();
         }
@@ -389,6 +444,29 @@ impl Dungeon {
             };
             input = Controls::default();
         }
+        let old_swing = self.combat.swing_event;
+        let progress = self.combat.tick(
+            self.stage == 4 && !was_interacting && input.attack,
+            &mut self.stamina,
+        );
+        if self.combat.swing_event != old_swing {
+            self.event += 1;
+        }
+        self.attack_time = if self.stage >= 4 {
+            self.combat.remaining()
+        } else {
+            (self.attack_time - STEP).max(0.0)
+        };
+        if progress.frozen {
+            return;
+        }
+        if let Some(kind) = progress.contact {
+            self.strike_contact(kind);
+            if self.combat.hitstop_left > 0.0 {
+                return;
+            }
+        }
+        self.time += STEP;
         self.gate_open = (self.gate_open
             + if self.stage >= 3 {
                 STEP / 0.85
@@ -408,7 +486,6 @@ impl Dungeon {
         if !was_interacting {
             self.crouched = input.crouch;
         }
-        self.attack_time = (self.attack_time - STEP).max(0.0);
         self.transformation = (self.transformation - STEP).max(0.0);
         self.dodge_time = (self.dodge_time - STEP).max(0.0);
         self.hit_cooldown = (self.hit_cooldown - STEP).max(0.0);
@@ -494,33 +571,11 @@ impl Dungeon {
             self.body.impulse(direction * 22.0);
         }
         self.body.step();
-        if input.attack && self.attack_time == 0.0 && self.stamina >= 20.0 {
+        if self.stage < 4 && input.attack && self.attack_time == 0.0 && self.stamina >= 20.0 {
             self.attack_time = 0.7;
             self.stamina -= 20.0;
             self.event += 1;
-            if self.stage >= 4 {
-                if self.distance(0.0, -6.5) < 2.0 && forward.z < -0.25 {
-                    self.stage = 5;
-                    self.say("Beyond the iron, the hunt begins.");
-                }
-                let to_warden = Vec3::new(
-                    self.warden.x - self.position.x,
-                    0.0,
-                    self.warden.y - self.position.z,
-                );
-                if to_warden.length() < 2.7 && forward.dot(to_warden.normalize_or_zero()) > 0.15 {
-                    self.warden_health =
-                        (self.warden_health - if self.werewolf { 60.0 } else { 35.0 }).max(0.0);
-                    self.alert = 1.0;
-                    self.say(if self.warden_health == 0.0 {
-                        "The warden falls."
-                    } else {
-                        "Iron meets iron."
-                    });
-                }
-            } else {
-                self.say("Your blade is somewhere beyond these bars.");
-            }
+            self.say("Your blade is somewhere beyond these bars.");
         }
         if self.stage >= 3 && self.warden_health > 0.0 {
             let dist = self.distance(self.warden.x, self.warden.y);
@@ -580,6 +635,17 @@ mod tests {
         finish_interaction(s);
     }
 
+    fn finish_attack(s: &mut Dungeon) {
+        assert!(s.combat.active.is_some());
+        for _ in 0..300 {
+            s.tick(Controls::default());
+            if s.combat.finished() {
+                return;
+            }
+        }
+        panic!("combat did not recover: {:?}", s.combat);
+    }
+
     #[test]
     fn locked_bars_and_cot_are_solid() {
         let mut s = Dungeon::default();
@@ -619,7 +685,10 @@ mod tests {
             attack: true,
             ..Controls::default()
         });
+        assert_eq!(s.stage, 4, "chain broke on the click instead of contact");
+        finish_attack(&mut s);
         assert_eq!(s.stage, 5);
+        assert!(s.finished());
     }
 
     #[test]
@@ -727,6 +796,8 @@ mod tests {
             assert_eq!(s.velocity_y, 0.0);
             assert_eq!(s.stamina, 100.0);
             assert_eq!(s.attack_time, 0.0);
+            assert!(s.combat.active.is_none());
+            assert_eq!(s.combat.queued_count(), 0);
             assert_eq!(s.dodge_time, 0.0);
             assert_eq!(s.transformation, 0.0);
             assert_eq!(s.footsteps, 0);
@@ -1025,6 +1096,7 @@ mod tests {
             attack: true,
             ..Controls::default()
         });
+        finish_attack(&mut s);
         assert_eq!(s.stage, 5);
         assert_eq!(s.health, 100.0);
     }
@@ -1038,7 +1110,226 @@ mod tests {
             attack: true,
             ..Controls::default()
         });
+        assert_eq!(s.warden_health, 100.0);
+        assert_eq!(s.combat.impact_event, 0);
+        for _ in 0..60 {
+            s.tick(Controls::default());
+            if s.combat.impact_event > 0 {
+                break;
+            }
+        }
         assert_eq!(s.alert, 1.0);
-        assert!(s.warden_health < 100.0);
+        assert_eq!(s.warden_health, 72.0);
+    }
+
+    #[test]
+    fn each_strike_damages_once_at_contact_with_the_current_form_multiplier() {
+        for kind in [
+            StrikeKind::Cut,
+            StrikeKind::Backhand,
+            StrikeKind::Finisher,
+            StrikeKind::Overhead,
+            StrikeKind::Rising,
+        ] {
+            for werewolf in [false, true] {
+                let mut s = Dungeon {
+                    stage: 4,
+                    position: Vec3::new(-2.9, 0.0, -1.5),
+                    werewolf,
+                    ..Dungeon::default()
+                };
+                s.combat.active = Some(Strike::new(kind));
+                for tick in 1..=180 {
+                    s.tick(Controls::default());
+                    if tick as f32 * STEP + 0.00001 < kind.contact_time() {
+                        assert_eq!(s.warden_health, 100.0);
+                        assert_eq!(s.combat.impact_event, 0);
+                    }
+                }
+                assert_eq!(
+                    s.warden_health,
+                    100.0 - kind.damage() * if werewolf { 1.25 } else { 1.0 }
+                );
+                assert_eq!(s.combat.impact_event, 1);
+                assert_eq!(s.combat.impact_kind, Some(ImpactKind::Warden));
+                assert_eq!(s.combat.impact_strike, Some(kind));
+            }
+        }
+    }
+
+    #[test]
+    fn a_miss_has_no_hitstop_or_impact_and_does_not_hit_late() {
+        let mut s = Dungeon {
+            stage: 4,
+            position: Vec3::new(0.0, 0.0, -3.0),
+            warden: Vec2::new(0.0, -1.0),
+            ..Dungeon::default()
+        };
+        s.tick(Controls {
+            attack: true,
+            ..Controls::default()
+        });
+        for _ in 0..25 {
+            s.tick(Controls::default());
+        }
+        assert!(s.combat.active.unwrap().contact_done);
+        assert_eq!(s.combat.hitstop_left, 0.0);
+        assert_eq!(s.combat.impact_event, 0);
+        // Moving into the arc during recovery cannot turn an earlier miss into a hit.
+        s.warden = Vec2::new(0.0, -4.8);
+        finish_attack(&mut s);
+        assert_eq!(s.warden_health, 100.0);
+        assert_eq!(s.combat.impact_event, 0);
+    }
+
+    #[test]
+    fn contact_uses_target_position_at_impact_not_at_the_click() {
+        let mut s = Dungeon {
+            stage: 4,
+            position: Vec3::new(0.0, 0.0, -3.0),
+            warden: Vec2::new(3.0, -3.0),
+            ..Dungeon::default()
+        };
+        s.tick(Controls {
+            attack: true,
+            ..Controls::default()
+        });
+        for _ in 0..8 {
+            s.tick(Controls::default());
+        }
+        assert_eq!(s.warden_health, 100.0);
+        s.warden = Vec2::new(0.0, -4.8);
+        for _ in 0..20 {
+            s.tick(Controls::default());
+            if s.combat.impact_event > 0 {
+                break;
+            }
+        }
+        assert_eq!(s.warden_health, 72.0);
+        assert_eq!(s.combat.impact_point, Vec3::new(0.0, 1.1, -4.8));
+    }
+
+    #[test]
+    fn real_hitstop_freezes_world_motion_while_buffering_the_next_strike() {
+        let mut s = Dungeon {
+            stage: 4,
+            position: Vec3::new(-2.9, 0.0, -1.5),
+            velocity_y: 0.4,
+            ..Dungeon::default()
+        };
+        s.tick(Controls {
+            attack: true,
+            ..Controls::default()
+        });
+        for _ in 0..30 {
+            s.tick(Controls::default());
+            if s.combat.impact_event > 0 {
+                break;
+            }
+        }
+        assert_eq!(s.combat.impact_event, 1);
+        let frozen = s.clone();
+        let mut frozen_ticks = 0;
+        while s.combat.hitstop_left > 0.0 {
+            s.tick(Controls {
+                attack: frozen_ticks == 0,
+                movement: Vec2::X,
+                sprint: true,
+                jump: true,
+                dodge: true,
+                ..Controls::default()
+            });
+            frozen_ticks += 1;
+            assert_eq!(s.position, frozen.position);
+            assert_eq!(s.velocity_y, frozen.velocity_y);
+            assert_eq!(s.warden, frozen.warden);
+            assert_eq!(s.body.position, frozen.body.position);
+            assert_eq!(s.body.velocity, frozen.body.velocity);
+            assert_eq!(s.combat.active, frozen.combat.active);
+            assert_eq!(s.stamina, frozen.stamina);
+            assert_eq!(s.time, frozen.time);
+            assert_eq!(s.health, frozen.health);
+        }
+        assert_eq!(frozen_ticks, 4);
+        assert_eq!(s.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        s.tick(Controls {
+            movement: Vec2::X,
+            ..Controls::default()
+        });
+        assert!(s.position.x > frozen.position.x);
+        assert!(s.combat.active.unwrap().elapsed > frozen.combat.active.unwrap().elapsed);
+    }
+
+    #[test]
+    fn gate_impact_clears_buffer_and_recovers_before_completion() {
+        let mut s = Dungeon {
+            stage: 4,
+            position: Vec3::new(0.0, 0.0, -5.4),
+            ..Dungeon::default()
+        };
+        for _ in 0..3 {
+            s.tick(Controls {
+                attack: true,
+                ..Controls::default()
+            });
+        }
+        assert_eq!(s.combat.queued_count(), 2);
+        assert_eq!(s.stage, 4);
+        for _ in 0..30 {
+            s.tick(Controls::default());
+            if s.stage == 5 {
+                break;
+            }
+        }
+        assert_eq!(s.stage, 5);
+        assert!(!s.finished());
+        assert_eq!(s.combat.queued_count(), 0);
+        assert_eq!(s.combat.impact_kind, Some(ImpactKind::Chain));
+        assert_eq!(s.combat.hitstop_left, 0.10);
+        let mut stopped = 0;
+        while s.combat.hitstop_left > 0.0 {
+            s.tick(Controls {
+                attack: true,
+                ..Controls::default()
+            });
+            stopped += 1;
+            assert!(!s.finished());
+        }
+        assert_eq!(stopped, 6);
+        finish_attack(&mut s);
+        assert!(s.finished());
+        assert_eq!(s.combat.swing_event, 1);
+        assert_eq!(s.combat.impact_event, 1);
+        let event = s.event;
+        s.tick(Controls {
+            attack: true,
+            ..Controls::default()
+        });
+        assert_eq!(s.event, event);
+    }
+
+    #[test]
+    fn pickup_cancels_stale_combat_and_cannot_queue_a_sword_strike() {
+        let mut s = Dungeon {
+            position: InteractionKind::Board.approach(),
+            ..Dungeon::default()
+        };
+        for _ in 0..3 {
+            s.combat.tick(true, &mut s.stamina);
+        }
+        s.combat
+            .impact(StrikeKind::Cut, ImpactKind::Warden, Vec3::X);
+        s.interact();
+        assert!(s.combat.finished());
+        let event = s.combat.swing_event;
+        for _ in 0..80 {
+            s.tick(Controls {
+                attack: true,
+                ..Controls::default()
+            });
+            assert!(s.combat.active.is_none());
+            assert_eq!(s.combat.queued_count(), 0);
+            assert_eq!(s.combat.swing_event, event);
+        }
     }
 }

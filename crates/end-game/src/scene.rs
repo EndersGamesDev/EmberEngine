@@ -246,7 +246,9 @@ impl Scene {
         let view = presentation.forward;
         let motion = self.hands.motion(game, &presentation);
         let transform_view = game.transformation > 0.0;
-        let see_hero = (third_person || transform_view) && game.interaction.is_none();
+        let see_hero = (third_person || transform_view)
+            && game.interaction.is_none()
+            && game.combat.active.is_none();
         let camera = if see_hero {
             let offset = if transform_view {
                 fwd * 2.2 + right * 1.1
@@ -350,10 +352,17 @@ impl Scene {
             false,
         );
         let breath = (t * 1.6).sin() * 0.014;
+        let flinch = if game.combat.impact_kind == Some(end_game_core::combat::ImpactKind::Warden) {
+            (game.combat.impact_left / game.combat.impact_duration()).clamp(0.0, 1.0)
+                * 0.16
+                * game.combat.impact_strength
+        } else {
+            0.0
+        };
         let warden_rot = if game.warden_health == 0.0 {
             Quat::from_rotation_z(-1.4)
         } else {
-            Quat::from_rotation_y(-0.5) * Quat::from_rotation_x(breath)
+            Quat::from_rotation_y(-0.5) * Quat::from_rotation_x(breath - flinch)
         };
         draw_model(
             out,
@@ -511,6 +520,51 @@ impl Scene {
                     Material::Iron,
                     true,
                 );
+            }
+        }
+        if game.combat.impact_left > 0.0 {
+            let age = game.combat.impact_duration() - game.combat.impact_left;
+            for i in 0..22u32 {
+                let direction = Vec3::new(
+                    hash(i * 17) * 2.0 - 1.0,
+                    hash(i * 97) * 1.3 + 0.25,
+                    hash(i * 71) * 2.0 - 1.0,
+                )
+                .normalize();
+                frame.particles.push(Particle {
+                    position: game.combat.impact_point
+                        + direction * age * (1.1 + hash(i * 39) * 2.2)
+                        - Vec3::Y * 4.905 * age * age,
+                    color: Vec3::new(0.95, 0.66 + hash(i) * 0.2, 0.32),
+                    size: Vec2::splat(0.009 + hash(i * 11) * 0.016),
+                    opacity: (game.combat.impact_left / game.combat.impact_duration())
+                        .clamp(0.0, 1.0)
+                        * 0.88,
+                });
+            }
+        }
+        // A sparse, short-lived steel-colored trail makes the fast cut readable.
+        if !see_hero {
+            if let Some(strike) = game.combat.active {
+                if strike.elapsed >= strike.kind.windup_time()
+                    && strike.elapsed < strike.kind.follow_end() + 0.045
+                {
+                    for age in [0.02, 0.04, 0.06] {
+                        let pose = super::sword_motion::sample(
+                            strike.kind,
+                            (strike.elapsed - age).max(0.0),
+                        );
+                        for i in 1..=7 {
+                            let point = pose.point(Vec3::X * (i as f32 * 0.24));
+                            frame.particles.push(Particle {
+                                position: head + presentation.rot * point,
+                                color: Vec3::new(0.49, 0.55, 0.60),
+                                size: Vec2::splat(0.028),
+                                opacity: (1.0 - age / 0.08) * 0.12,
+                            });
+                        }
+                    }
+                }
             }
         }
         for i in 0..54u32 {

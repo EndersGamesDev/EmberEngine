@@ -426,6 +426,12 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
+### v4 — In preparation
+
+no proto · stamp — · source not recorded · no tag
+
+Weight of the Blade adds five directional greatsword arcs, single strikes and three buffered rhythm combos, with contact-timed damage, impact pauses, sparks, sound and controller feedback. Both articulated gauntlets stay attached to the shared hilt; V1, V2 and V3 retain their published pages and bundles.
+
 ### v3 — 2026-09-08
 
 no proto · stamp — · source `91e5f93a7d28fa0e25e19ab30a56161034e45816` (not on main) · no tag · published `bd21d0f45100d1f33195c9ebead0c41843270477` (release stamp)

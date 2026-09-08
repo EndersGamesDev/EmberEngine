@@ -18,13 +18,13 @@ pub struct Placement {
     pub r: Quat,
 }
 impl Placement {
-    fn mix(self, to: Self, t: f32) -> Self {
+    pub(crate) fn mix(self, to: Self, t: f32) -> Self {
         Self {
             p: self.p.lerp(to.p, t),
             r: self.r.slerp(to.r, t),
         }
     }
-    fn point(self, local: Vec3) -> Vec3 {
+    pub(crate) fn point(self, local: Vec3) -> Vec3 {
         self.p + self.r * local
     }
 }
@@ -133,6 +133,65 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn every_combo_arc_keeps_grips_reachable_and_the_sword_out_of_the_camera() {
+        use end_game_core::combat::{Strike, StrikeKind};
+        let hands = Hands::load(&mut Vec::new());
+        let sword = load_glb(include_bytes!(
+            "../../../assets/end-game/v3/wolf-greatsword.glb"
+        ))
+        .unwrap();
+        for kind in [
+            StrikeKind::Cut,
+            StrikeKind::Backhand,
+            StrikeKind::Finisher,
+            StrikeKind::Overhead,
+            StrikeKind::Rising,
+        ] {
+            for tick in 0..=(kind.duration() * 120.0).ceil() as u32 {
+                let elapsed = tick as f32 / 120.0;
+                for pitch in [-1.2, 0.0, 1.15] {
+                    let mut game = Dungeon::default();
+                    game.stage = 4;
+                    game.pitch = pitch;
+                    game.combat.active = Some(Strike {
+                        kind,
+                        elapsed,
+                        contact_done: elapsed >= kind.contact_time(),
+                    });
+                    let v = view(&game, 0.0);
+                    let m = hands.motion(&game, &v);
+                    let (_, arms) = hands.skeleton_pose(&v, &m);
+                    let item = m.sword.unwrap();
+                    for side in 0..2 {
+                        assert!(
+                            arms[side].reached,
+                            "{kind:?} t={elapsed} pitch={pitch} side={side}: {:?}",
+                            arms[side]
+                        );
+                        assert!(
+                            item.point(Vec3::new(if side == 0 { -0.13 } else { -0.25 }, 0.0, 0.0))
+                                .distance(m.poses[side].wrist.point(hands.power[side]))
+                                < 0.0001
+                        );
+                    }
+                    if pitch == 0.0 {
+                        for part in &sword {
+                            for vertex in &part.mesh.vertices {
+                                let p = v.rot.inverse()
+                                    * (item.point(Vec3::from_array(vertex.pos)) - v.head);
+                                assert!(
+                                    p.z <= -0.10,
+                                    "{kind:?} t={elapsed}: near-plane clip {p:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 pub struct View {
     pub head: Vec3,
@@ -176,7 +235,13 @@ pub fn view(game: &Dungeon, wake: f32) -> View {
         let aim = delta.y.atan2(Vec3::new(delta.x, 0.0, delta.z).length());
         game.pitch + (aim - game.pitch) * focus
     });
-    let rot = Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch);
+    let impact = (game.combat.impact_left / game.combat.impact_duration()).clamp(0.0, 1.0)
+        * game.combat.impact_strength;
+    let kick = (game.combat.impact_left * 95.0).sin() * impact * 0.018;
+    let head = head - Vec3::Y * impact * 0.012;
+    let rot = Quat::from_rotation_y(-yaw)
+        * Quat::from_rotation_x(pitch + impact * 0.026)
+        * Quat::from_rotation_z(kick);
     View {
         head,
         forward: rot * -Vec3::Z,
@@ -325,17 +390,7 @@ impl Hands {
             key: None,
             sword: None,
         };
-        let swing = if game.attack_time > 0.0 {
-            (game.attack_time / 0.7 * std::f32::consts::PI).sin()
-        } else {
-            0.0
-        };
-        let ready = Placement {
-            p: v.head + v.forward * 0.30 + v.right * (0.12 - swing * 0.20) - v.up * 0.29,
-            r: v.rot
-                * Quat::from_rotation_y(1.0 - swing * 0.4)
-                * Quat::from_rotation_z(0.9 - swing * 1.0),
-        };
+        let ready = super::sword_motion::weapon(game.combat.active, v.head, v.rot);
         if game.stage >= 4 {
             m.sword = Some(ready);
             self.sword_hands(&mut m, ready, 1.0);

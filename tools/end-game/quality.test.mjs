@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Quality } from '../../web/games/end-game/v3/quality.js';
+import { Quality } from '../../web/games/end-game/v4/quality.js';
 
 test('5K and hardware dimension budgets are respected on dense ultrawide displays', () => {
   for (const maxDimension of [2048, 4096, 8192]) {

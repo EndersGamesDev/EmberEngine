@@ -1,7 +1,8 @@
-//! End Game v3: a single-player Ember dungeon, native and WASM.
+//! End Game v4: a single-player Ember dungeon, native and WASM.
 mod cell;
 mod hands;
 mod scene;
+mod sword_motion;
 
 use ember_engine::{
     EmberGame, EngineConfig, Feedback, Frame, InputState, KeyCode, MouseButton, PadButton,
@@ -16,6 +17,7 @@ struct Ui {
     look: Vec2,
     held: u32,
     actions: u32,
+    attacks: u8,
     paused: bool,
     third_person: bool,
 }
@@ -37,6 +39,7 @@ pub struct Game {
 mod tests {
     use super::*;
     use ember_engine::PadState;
+    use end_game_core::StrikeKind;
 
     fn game() -> Game {
         UI.with(|u| *u.borrow_mut() = Ui::default());
@@ -50,6 +53,28 @@ mod tests {
             feedback: Feedback::default(),
             wake: 0.0,
         }
+    }
+
+    fn combat_game() -> Game {
+        let mut g = game();
+        g.sim.stage = 4;
+        g.sim.warden_health = 0.0;
+        g
+    }
+
+    fn observe_strikes(g: &mut Game, input: &InputState, frames: usize) -> Vec<StrikeKind> {
+        let mut strikes: Vec<_> = g.sim.combat.active.iter().map(|s| s.kind).collect();
+        for _ in 0..frames {
+            let previous = g.sim.combat.swing_event;
+            // Six fixed ticks per frame keeps asset-backed tests bounded. Even
+            // the shortest strike lasts longer, so no start can be skipped.
+            g.update(input, STEP * 6.0);
+            if g.sim.combat.swing_event != previous {
+                assert_eq!(g.sim.combat.swing_event, previous + 1);
+                strikes.push(g.sim.combat.active.unwrap().kind);
+            }
+        }
+        strikes
     }
 
     #[test]
@@ -134,6 +159,216 @@ mod tests {
         assert_eq!(g.sim.stage, 2);
         assert!(g.sim.interaction.is_none());
     }
+
+    #[test]
+    fn combat_input_counted_api_taps_before_a_tick_produce_the_exact_quick_chain() {
+        let mut g = combat_game();
+        // The WASM action API counts each canvas/touch press in this field.
+        UI.with(|u| u.borrow_mut().attacks = 3);
+        g.update(&InputState::default(), STEP * 0.25);
+        assert!(g.sim.combat.active.is_none());
+        assert_eq!(UI.with(|u| u.borrow().attacks), 3);
+
+        g.update(&InputState::default(), STEP);
+        assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Cut);
+        assert_eq!(g.sim.combat.queued_count(), 0);
+        assert_eq!(UI.with(|u| u.borrow().attacks), 2);
+        g.update(&InputState::default(), STEP);
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        assert_eq!(UI.with(|u| u.borrow().attacks), 1);
+        g.update(&InputState::default(), STEP);
+        assert_eq!(
+            g.sim.combat.queued(),
+            [Some(StrikeKind::Backhand), Some(StrikeKind::Finisher)]
+        );
+        assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+
+        assert_eq!(
+            observe_strikes(&mut g, &InputState::default(), 36),
+            [StrikeKind::Cut, StrikeKind::Backhand, StrikeKind::Finisher]
+        );
+        assert!(g.sim.combat.finished());
+        assert_eq!(g.sim.combat.swing_event, 3);
+    }
+
+    #[test]
+    fn combat_input_held_mouse_and_gamepad_attack_once_until_released() {
+        for held in [
+            InputState::from_parts(&[], &[MouseButton::Left], (0.0, 0.0), None),
+            InputState::from_parts(
+                &[],
+                &[],
+                (0.0, 0.0),
+                Some(PadState {
+                    buttons: PadButton::RT.mask(),
+                    ..PadState::default()
+                }),
+            ),
+            InputState::from_parts(
+                &[],
+                &[],
+                (0.0, 0.0),
+                Some(PadState {
+                    buttons: PadButton::RB.mask(),
+                    ..PadState::default()
+                }),
+            ),
+        ] {
+            let mut g = combat_game();
+            g.update(&held, STEP * 0.25);
+            assert!(g.sim.combat.active.is_none());
+            assert_eq!(observe_strikes(&mut g, &held, 24), [StrikeKind::Cut]);
+            assert!(g.sim.combat.finished());
+            assert_eq!(g.sim.combat.swing_event, 1);
+            assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+
+            g.update(&InputState::default(), STEP);
+            g.update(&held, STEP);
+            assert_eq!(g.sim.combat.swing_event, 2);
+            assert_eq!(g.sim.combat.active.unwrap().kind, StrikeKind::Cut);
+        }
+    }
+
+    #[test]
+    fn combat_input_high_refresh_mouse_taps_survive_release_before_the_tick() {
+        let mut g = combat_game();
+        let pressed = InputState::from_parts(&[], &[MouseButton::Left], (0.0, 0.0), None);
+        for count in 1..=3 {
+            g.update(&pressed, STEP * 0.1);
+            g.update(&InputState::default(), STEP * 0.1);
+            assert!(g.sim.combat.active.is_none());
+            assert_eq!(UI.with(|u| u.borrow().attacks), count);
+        }
+        g.update(&InputState::default(), STEP * 3.0);
+        assert_eq!(g.sim.combat.swing_event, 1);
+        assert_eq!(g.sim.combat.queued_count(), 2);
+        assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+        assert_eq!(
+            observe_strikes(&mut g, &InputState::default(), 36),
+            [StrikeKind::Cut, StrikeKind::Backhand, StrikeKind::Finisher]
+        );
+        assert!(g.sim.combat.finished());
+        assert_eq!(g.sim.combat.swing_event, 3);
+    }
+
+    #[test]
+    fn combat_input_pause_freezes_hitstop_discards_new_taps_and_resumes_existing_queue() {
+        let mut g = combat_game();
+        g.sim.position = glam::Vec3::new(-2.9, 0.0, -1.5);
+        g.sim.warden_health = 100.0;
+        UI.with(|u| u.borrow_mut().attacks = 2);
+        g.update(&InputState::default(), STEP * 2.0);
+        for _ in 0..30 {
+            g.update(&InputState::default(), STEP);
+            if g.sim.combat.impact_event > 0 {
+                break;
+            }
+        }
+        assert_eq!(g.sim.combat.impact_event, 1);
+        assert!(g.sim.combat.hitstop_left > 0.0);
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        let frozen = g.sim.clone();
+        let held = InputState::from_parts(&[], &[MouseButton::Left], (0.0, 0.0), None);
+        for _ in 0..16 {
+            UI.with(|u| {
+                let mut u = u.borrow_mut();
+                u.paused = true;
+                u.attacks = 3;
+                u.actions = 4 | 8 | 16 | 32;
+                u.movement = Vec2::ONE;
+                u.look = Vec2::new(90.0, 90.0);
+            });
+            g.update(&held, STEP * 6.0);
+            assert_eq!(g.sim.combat, frozen.combat);
+            assert_eq!(g.sim.position, frozen.position);
+            assert_eq!(g.sim.velocity_y, frozen.velocity_y);
+            assert_eq!(g.sim.warden, frozen.warden);
+            assert_eq!(g.sim.body.position, frozen.body.position);
+            assert_eq!(g.sim.body.velocity, frozen.body.velocity);
+            assert_eq!((g.sim.yaw, g.sim.pitch), (frozen.yaw, frozen.pitch));
+            assert_eq!(
+                (g.sim.stamina, g.sim.health),
+                (frozen.stamina, frozen.health)
+            );
+            assert_eq!(g.sim.time, frozen.time);
+            assert_eq!(g.accumulated, 0.0);
+            assert!(!g.third_person);
+            assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+            assert_eq!(UI.with(|u| u.borrow().actions), 0);
+        }
+
+        // Unpausing clears touch state; the mouse remains held, so it cannot
+        // create a fresh edge or replay any presses discarded during pause.
+        UI.with(|u| *u.borrow_mut() = Ui::default());
+        g.update(&held, STEP);
+        assert_eq!(g.sim.combat.active, frozen.combat.active);
+        assert!(g.sim.combat.hitstop_left < frozen.combat.hitstop_left);
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        assert_eq!(
+            observe_strikes(&mut g, &held, 36),
+            [StrikeKind::Cut, StrikeKind::Backhand]
+        );
+        assert!(g.sim.combat.finished());
+        assert_eq!(g.sim.combat.swing_event, 2);
+        assert_eq!(g.sim.combat.impact_event, 2);
+    }
+
+    #[test]
+    fn combat_input_hitstop_freezes_look_without_discarding_buffered_edges() {
+        let mut g = combat_game();
+        g.sim.position = glam::Vec3::new(-2.9, 0.0, -1.5);
+        g.sim.warden_health = 100.0;
+        UI.with(|u| u.borrow_mut().attacks = 1);
+        for _ in 0..30 {
+            g.update(&InputState::default(), STEP);
+            if g.sim.combat.impact_event > 0 {
+                break;
+            }
+        }
+        assert_eq!(g.sim.combat.impact_event, 1);
+        assert!(g.sim.combat.hitstop_left > 0.0);
+        let angles = (g.sim.yaw, g.sim.pitch);
+        let strike = g.sim.combat.active;
+        let look_and_attack = InputState::from_parts(
+            &[],
+            &[],
+            (180.0, -90.0),
+            Some(PadState {
+                right: [0.8, 0.6],
+                buttons: PadButton::RT.mask(),
+                ..PadState::default()
+            }),
+        );
+        UI.with(|u| {
+            let mut u = u.borrow_mut();
+            u.look = Vec2::new(110.0, -90.0);
+            u.attacks = 1;
+        });
+        // The touch edge and new trigger edge arrive together. One enters the
+        // core this tick; the other must survive until the next frozen tick.
+        g.update(&look_and_attack, STEP);
+        assert_eq!((g.sim.yaw, g.sim.pitch), angles);
+        assert_eq!(g.sim.combat.active, strike);
+        assert_eq!(g.sim.combat.queued(), [Some(StrikeKind::Backhand), None]);
+        assert_eq!(UI.with(|u| u.borrow().attacks), 1);
+        g.update(&look_and_attack, STEP);
+        assert_eq!((g.sim.yaw, g.sim.pitch), angles);
+        assert_eq!(g.sim.combat.active, strike);
+        assert_eq!(
+            g.sim.combat.queued(),
+            [Some(StrikeKind::Backhand), Some(StrikeKind::Finisher)]
+        );
+        assert_eq!(UI.with(|u| u.borrow().attacks), 0);
+        while g.sim.combat.hitstop_left > 0.0 {
+            g.update(&look_and_attack, STEP);
+            assert_eq!((g.sim.yaw, g.sim.pitch), angles);
+            assert_eq!(g.sim.combat.active, strike);
+        }
+        g.update(&look_and_attack, STEP);
+        assert_ne!((g.sim.yaw, g.sim.pitch), angles);
+        assert!(g.sim.combat.active.unwrap().elapsed > strike.unwrap().elapsed);
+        assert_eq!(g.sim.combat.queued_count(), 2);
+    }
 }
 
 pub fn run() {
@@ -155,6 +390,34 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok("combat") => {
+                use end_game_core::combat::{ImpactKind, Strike, StrikeKind};
+                let kind = match std::env::var("END_GAME_STRIKE").as_deref() {
+                    Ok("backhand") => StrikeKind::Backhand,
+                    Ok("finisher") => StrikeKind::Finisher,
+                    Ok("overhead") => StrikeKind::Overhead,
+                    Ok("rising") => StrikeKind::Rising,
+                    _ => StrikeKind::Cut,
+                };
+                let elapsed = std::env::var("END_GAME_ACTION_TIME")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(kind.contact_time())
+                    .clamp(0.0, kind.duration());
+                game.sim.stage = 4;
+                game.sim.position = glam::Vec3::new(-2.9, 0.0, -1.4);
+                let mut strike = Strike::new(kind);
+                strike.elapsed = elapsed;
+                strike.contact_done = elapsed >= kind.contact_time();
+                game.sim.combat.active = Some(strike);
+                if std::env::var("END_GAME_IMPACT").as_deref() == Ok("1") {
+                    game.sim.combat.impact_left = if kind.heavy() { 0.32 } else { 0.22 };
+                    game.sim.combat.impact_strength = if kind.heavy() { 0.85 } else { 0.45 };
+                    game.sim.combat.impact_kind = Some(ImpactKind::Warden);
+                    game.sim.combat.impact_strike = Some(kind);
+                    game.sim.combat.impact_point = glam::Vec3::new(-2.9, 1.1, -3.7);
+                }
+            }
             Ok(name @ ("lift-board" | "pickup-key" | "unlock" | "draw-sword")) => {
                 use end_game_core::{Interaction, InteractionKind};
                 let (kind, stage) = match name {
@@ -235,6 +498,7 @@ impl EmberGame for Game {
             let result = *value;
             value.look = Vec2::ZERO;
             value.actions = 0;
+            value.attacks = 0;
             result
         });
         let dt = if dt.is_finite() {
@@ -245,7 +509,7 @@ impl EmberGame for Game {
         let pad = input.pad().unwrap_or_default();
         let bits = u32::from(input.down(KeyCode::KeyE) || pad.down(PadButton::West))
             | (u32::from(
-                input.mouse_down(MouseButton::Left)
+                (cfg!(not(target_arch = "wasm32")) && input.mouse_down(MouseButton::Left))
                     || pad.down(PadButton::RT)
                     || pad.down(PadButton::RB),
             ) << 1)
@@ -254,6 +518,8 @@ impl EmberGame for Game {
             | (u32::from(input.down(KeyCode::KeyQ) || pad.down(PadButton::North)) << 4)
             | (u32::from(input.down(KeyCode::KeyV) || pad.down(PadButton::R3)) << 5);
         let mut pressed = (bits & !self.previous) | ui.actions;
+        let mut attack_presses = ui.attacks.saturating_add(u8::from(pressed & 2 != 0)).min(3);
+        pressed &= !2;
         self.previous = bits;
         if !ui.paused {
             if pressed & 32 != 0 || ui.third_person {
@@ -262,17 +528,19 @@ impl EmberGame for Game {
             }
             pressed &= !32;
             let (dx, dy) = input.mouse_delta();
-            if self.sim.interaction.is_none() {
+            if self.sim.interaction.is_none() && self.sim.combat.hitstop_left == 0.0 {
                 self.sim.yaw += dx * 0.0021 + pad.right[0] * dt * 2.25 + ui.look.x * 0.003;
                 self.sim.pitch = (self.sim.pitch - dy * 0.0021 + pad.right[1] * dt * 1.65
                     - ui.look.y * 0.003)
                     .clamp(-1.2, 1.15);
-            } else {
+            } else if self.sim.interaction.is_some() {
                 pressed = 0;
+                attack_presses = 0;
             }
             self.wake = (self.wake - dt * 0.35).max(0.0);
             self.accumulated += dt;
             let old_event = self.sim.event;
+            let old_impact = self.sim.combat.impact_event;
             while self.accumulated >= STEP {
                 self.sim.tick(Controls {
                     movement: Vec2::new(
@@ -286,22 +554,29 @@ impl EmberGame for Game {
                         || pad.down(PadButton::LB)
                         || ui.held & 2 != 0,
                     interact: pressed & 1 != 0,
-                    attack: pressed & 2 != 0,
+                    attack: attack_presses > 0,
                     jump: pressed & 4 != 0,
                     dodge: pressed & 8 != 0,
                     transform: pressed & 16 != 0,
                 });
                 pressed = 0;
+                attack_presses = attack_presses.saturating_sub(1);
                 self.accumulated -= STEP;
             }
             // Preserve a tap when a high-refresh frame has not reached the next sim tick.
             if pressed != 0 {
                 UI.with(|u| u.borrow_mut().actions |= pressed);
             }
-            if self.sim.event != old_event {
+            if attack_presses > 0 {
+                UI.with(|u| u.borrow_mut().attacks = attack_presses);
+            }
+            if self.sim.combat.impact_event != old_impact {
+                self.feedback
+                    .rumble(self.sim.combat.impact_strength.min(1.0), 0.42, 190);
+            } else if self.sim.event != old_event {
                 self.feedback.rumble(
                     if self.sim.attack_time > 0.0 {
-                        0.7
+                        0.16
                     } else {
                         0.32
                     },
@@ -320,6 +595,14 @@ impl EmberGame for Game {
             "crouched": self.sim.crouched, "pad": input.pad().is_some(), "transformation": self.sim.transformation,
             "position": self.sim.position.to_array(), "time": self.sim.time,
             "interacting": self.sim.interaction.is_some(),
+            "finished": self.sim.finished(),
+            "combat": {
+                "label": self.sim.combat.label(), "queued": self.sim.combat.queued_count(),
+                "rhythmLeft": self.sim.combat.rhythm_left(), "quickLeft": self.sim.combat.quick_left(),
+                "swingEvent": self.sim.combat.swing_event,"impactEvent":self.sim.combat.impact_event,
+                "impactStrength":self.sim.combat.impact_strength,
+                "active":self.sim.combat.active.map(|s|serde_json::json!({"kind":s.kind.label(),"elapsed":s.elapsed,"windup":s.kind.windup_time(),"duration":s.kind.duration()}))
+            },
             "physics": { "gravity": end_game_core::GRAVITY, "crateMass": self.sim.body.mass(), "crateWear": self.sim.body.wear }
         });
         HUD.with(|hud| *hud.borrow_mut() = state.to_string());
@@ -353,7 +636,13 @@ mod wasm {
     }
     #[wasm_bindgen]
     pub fn action(mask: u32) {
-        UI.with(|u| u.borrow_mut().actions |= mask & 63);
+        UI.with(|u| {
+            let mut u = u.borrow_mut();
+            u.actions |= mask & (63 ^ 2);
+            if mask & 2 != 0 {
+                u.attacks = u.attacks.saturating_add(1).min(3);
+            }
+        });
     }
     #[wasm_bindgen]
     pub fn pause(paused: bool) {
@@ -363,6 +652,7 @@ mod wasm {
             u.movement = Vec2::ZERO;
             u.look = Vec2::ZERO;
             u.actions = 0;
+            u.attacks = 0;
             u.held = 0;
         });
     }
