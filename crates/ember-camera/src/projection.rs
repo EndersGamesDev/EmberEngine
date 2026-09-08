@@ -165,6 +165,7 @@ mod tests {
         View, click, pan, scale_for,
     };
 
+    /// Projection noise budget, below one thousandth of a render pixel.
     const PIXEL_ROUND_TRIP_TOLERANCE: f64 = 3.0e-7;
 
     /// Converts the one-ulp binary64 pixel budget to plane units at the current scale.
@@ -258,6 +259,21 @@ mod tests {
         let displacement = reference_displacement(&view, &reference, screen)?;
         assert!((displacement[0] + 13.0).abs() <= PIXEL_ROUND_TRIP_TOLERANCE);
         assert!((displacement[1] - 9.0).abs() <= PIXEL_ROUND_TRIP_TOLERANCE);
+        Ok(())
+    }
+
+    #[test]
+    fn projection_refuses_points_outside_the_named_screen_range() -> Result<(), CameraError> {
+        let screen = Screen::new(4, 4)?;
+        let view = View::new([Fixed::<8>::ZERO; 5], Exponent::ZERO, Orientation::IDENTITY);
+        let point = [
+            Fixed::from_i64(i64::MAX)?,
+            Fixed::ZERO,
+            Fixed::ZERO,
+            Fixed::ZERO,
+            Fixed::ZERO,
+        ];
+        assert_eq!(project(&view, screen, &point)?, None);
         Ok(())
     }
 

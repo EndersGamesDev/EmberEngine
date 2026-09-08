@@ -10,6 +10,12 @@ use crate::{
 /// sign bit for exact differences and midpoints.
 pub const MAX_SCREEN_COORDINATE_PIXELS: i64 = 2_147_483_647;
 
+/// Maximum relative box-edge slack introduced by one exponent quantum.
+///
+/// This is `2^(1/1024) - 1`: selecting the deepest containing exponent can leave an edge at most
+/// this fraction inward from the continuous, unquantised fit.
+pub const EXPONENT_QUANTUM_EDGE_TOLERANCE: f64 = 0.000_677_130_693_066_407_8;
+
 /// Converts one centred render-grid pixel into its exact N-dimensional plane point.
 ///
 /// Pixel origin is the canvas centre, x points right, and y points up. Binary64 inputs are decoded
@@ -283,6 +289,7 @@ mod tests {
         MIN_EXPONENT_QUANTA, Orientation, Screen, Turn, View, project,
     };
 
+    /// Projection noise budget, below one thousandth of a render pixel.
     const PIXEL_TOLERANCE: f64 = 3.0e-7;
 
     fn view() -> View<5, 8> {
@@ -352,6 +359,23 @@ mod tests {
     }
 
     #[test]
+    fn refused_exponent_edit_leaves_the_view_unchanged() -> Result<(), CameraError> {
+        let screen = Screen::new(960, 540)?;
+        let mut camera = View::new(
+            [Fixed::<8>::ZERO; 5],
+            Exponent::new(MAX_EXPONENT_QUANTA)?,
+            Orientation::IDENTITY,
+        );
+        let original = camera;
+        assert_eq!(
+            zoom_about(&mut camera, screen, [17.0, -9.0], 1),
+            Err(CameraError::ExponentOutOfRange)
+        );
+        assert_eq!(camera, original);
+        Ok(())
+    }
+
+    #[test]
     fn frame_points_is_reproducible() -> Result<(), CameraError> {
         let screen = Screen::new(960, 540)?;
         let point_one = [
@@ -380,12 +404,20 @@ mod tests {
     fn select_box_centres_and_contains_every_edge() -> Result<(), CameraError> {
         let screen = Screen::new(1_000, 500)?;
         let mut camera = view();
+        let selected_left = click(&camera, screen, [-250.0, -100.0])?;
+        let selected_right = click(&camera, screen, [250.0, 100.0])?;
         select_box(&mut camera, [-250.0, -100.0], [250.0, 100.0], screen)?;
         assert_eq!(camera.centre, [Fixed::ZERO; 5]);
-        let left = click(&camera, screen, [-500.0, 0.0])?;
-        let right = click(&camera, screen, [500.0, 0.0])?;
-        assert!(left[0] <= Fixed::from_i64(-1)?);
-        assert!(right[0] >= Fixed::from_i64(1)?);
+        let projected_left = project(&camera, screen, &selected_left)?
+            .ok_or(CameraError::ScreenCoordinateOutOfRange)?;
+        let projected_right = project(&camera, screen, &selected_right)?
+            .ok_or(CameraError::ScreenCoordinateOutOfRange)?;
+        let half_width = f64::from(screen.width()) / 2.0;
+        let edge_tolerance = half_width * super::EXPONENT_QUANTUM_EDGE_TOLERANCE + PIXEL_TOLERANCE;
+        assert!(projected_left[0] >= -half_width - PIXEL_TOLERANCE);
+        assert!(projected_right[0] <= half_width + PIXEL_TOLERANCE);
+        assert!((projected_left[0].abs() - half_width).abs() <= edge_tolerance);
+        assert!((projected_right[0].abs() - half_width).abs() <= edge_tolerance);
         Ok(())
     }
 }

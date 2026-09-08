@@ -855,6 +855,21 @@ mod tests {
     }
 
     #[test]
+    fn midpoint_drops_low_bit_toward_negative_infinity() -> Result<(), CameraError> {
+        let lowest_bit = raw(1, 0);
+        let negative_lowest_bit = raw(u64::MAX, u64::MAX);
+        assert_eq!(
+            TestFixed::ZERO.midpoint_floor(&lowest_bit)?,
+            TestFixed::ZERO
+        );
+        assert_eq!(
+            TestFixed::ZERO.midpoint_floor(&negative_lowest_bit)?,
+            negative_lowest_bit
+        );
+        Ok(())
+    }
+
+    #[test]
     fn zero_limb_operations_are_typed_refusals() {
         assert_eq!(Fixed::<0>::from_i64(0), Err(CameraError::InvalidWidth));
         assert_eq!(Fixed::<0>::ZERO.to_f64(), Err(CameraError::InvalidWidth));

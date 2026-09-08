@@ -229,6 +229,7 @@ mod tests {
     use super::orientation_for_segment;
     use crate::{CameraError, Exponent, Fixed, Orientation, View, rebuild_basis};
 
+    /// Two Turn quanta plus deterministic polynomial and decomposition error.
     const ALIGNMENT_TOLERANCE: f64 = 2.0e-8;
 
     #[test]
