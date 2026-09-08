@@ -63,7 +63,6 @@ async function main() {
   // branch's older Fire implementation or freshly built unrelated bundles.
   const oldCatalog = JSON.parse(git('show', `${preserved}:games.json`));
   assert.deepEqual(catalog, scope.catalog(oldCatalog, JSON.parse(released('games.json'))), 'Public catalog differs from scoped release');
-  assert.deepEqual(catalog.games.filter(game => game.id !== 'arena'), oldCatalog.games.filter(game => game.id !== 'arena'));
   const roots = new Set(['games/arena/v30/', 'games/arena/v29/']);
   for (const game of oldCatalog.games.filter(game => game.id !== 'arena')) {
     for (const version of game.versions.filter(version => version.live)) roots.add(version.path);
@@ -72,7 +71,7 @@ async function main() {
   for (const remote of inheritedFiles) await checkFile(remote, git('show', `${preserved}:${remote}`), true);
   const oldIndex = String(git('show', `${preserved}:index.html`));
   assert.equal(String(await get('index.html')), scope.launcher(oldIndex),
-    'Root launcher must only change its Arena fallback');
+    'Root launcher must contain only the scoped Arena and version-presentation changes');
   const { host, welcome } = await readyHost(book, { fullCommit: publication.sourceCommit, version: version.version });
   assert.equal(host.ws, book.ws, 'Current discovered host and published Arena fallback differ');
   const result = { passed: true, preservedPages: preserved, version, welcome, files,
