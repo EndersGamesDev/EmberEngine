@@ -4,7 +4,7 @@
 
 It describes host-shareable Rust types and, as the migration advances, renders embedded Minijinja templates with Rust-owned types, enum values, bindings, and layout constants before validating the result with naga.
 
-The context owner retains each rendered shader beside the pipeline that consumes it and keys that narrow cache with the shader's stable content hash. The crate has no global cache or mutable static state, so a changed context produces and retains a new rendering.
+The pipeline owner retains the exact rendered source and its stable hash beside the pipeline. The crate has no global cache or mutable static state, so a changed context produces and retains a new rendering.
 
 This implementation remains owned by Julibrot. After its design is complete, a later lane will re-implement the proven mechanism as a separate shared facility for the engine, other labs, and games; those consumers will not depend on this crate.
 
