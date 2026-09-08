@@ -91,86 +91,10 @@ mod production_validation {
 }
 
 #[cfg(test)]
-const LEGACY_SHADE_SOURCE: &str = r"
-struct PaletteUniform { map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-@group(0) @binding(0) var presentation_values: texture_2d<f32>;
-@group(0) @binding(1) var nearest_value: sampler;
-@group(1) @binding(0) var<uniform> palette: PaletteUniform;
-struct ShadeVertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32>, }
-@vertex fn shade_vertex(@builtin(vertex_index) vertex: u32) -> ShadeVertex {
-    var points = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
-    var output: ShadeVertex;
-    output.position = vec4<f32>(points[vertex], 0.0, 1.0);
-    output.uv = vec2<f32>(0.5 * points[vertex].x + 0.5, 0.5 - 0.5 * points[vertex].y);
-    return output;
-}
-fn finite(value: f32) -> bool { return abs(value) <= 3.402823e38; }
-fn binary(value: f32) -> bool { return value == 0.0 || value == 1.0; }
-fn hue_component(hue: f32, offset: f32) -> f32 {
-    return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-}
-fn exterior_zero() -> vec4<f32> {
-    let hue = fract(palette.map.y);
-    let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
-    return vec4<f32>(palette.map.w * mix(vec3<f32>(1.0), phase_rgb, palette.map.z), 1.0);
-}
-fn colour(value: vec4<f32>) -> vec4<f32> {
-    let status = value.z;
-    if (status == 7.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (status == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
-    if (status == 4.0 || status == 5.0) { return palette.clear_rgba; }
-    if (status == 2.0 || status == 6.0) { return exterior_zero(); }
-    if (status != 0.0 && status != 3.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (!binary(value.y)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    var base = vec4<f32>(0.0);
-    if (value.y == 0.0) {
-        if (value.x != -1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-        base = palette.interior_rgba;
-    } else {
-        if (!finite(value.x) || !finite(palette.map.x) || palette.map.x <= 0.0) {
-            return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-        }
-        let hue = fract(max(value.x, 0.0) / palette.map.x + palette.map.y);
-        let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
-        let rgb = palette.map.w * mix(vec3<f32>(1.0), phase_rgb, palette.map.z);
-        base = vec4<f32>(rgb, 1.0);
-    }
-    if (!finite(value.w) || value.w < 0.58 || value.w > 0.82) {
-        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
-    }
-    return vec4<f32>(base.rgb * value.w, base.a);
-}
-@fragment fn shade_fragment(input: ShadeVertex) -> @location(0) vec4<f32> {
-    return colour(textureSample(presentation_values, nearest_value, input.uv));
-}
-";
-
-#[cfg(test)]
 mod tests {
     use ember_julibrot_shader::{WgslEnum as _, WgslEnumDiscriminant, WgslType as _};
 
     use super::*;
-
-    const RENDERED_SHADE_HASH: u64 = 0x855d_a4bc_80e3_906e;
-
-    fn normalize_rendered_constants(source: &str) -> String {
-        source
-            .split_inclusive('\n')
-            .filter(|line| !line.starts_with("const "))
-            .collect::<String>()
-            .replace("REGULAR_STATUS", "0.0")
-            .replace("GLITCH_STATUS", "1.0")
-            .replace("HORIZON_STATUS", "2.0")
-            .replace("MAP_UNCERTAIN_STATUS", "3.0")
-            .replace("CLEAR_STATUS", "4.0")
-            .replace("EXPOSED_STATUS", "5.0")
-            .replace("SKY_STATUS", "6.0")
-            .replace("MALFORMED_STATUS", "7.0")
-            .replace("MIN_SCENE_LIGHT", "0.58")
-            .replace("MAX_SCENE_LIGHT", "0.82")
-            .replace("DEBUG_TINT", "vec4<f32>(1.0, 0.0, 1.0, 1.0)")
-            .replace("GLITCH_DIAGNOSTIC", "vec4<f32>(1.0, 0.375, 0.0, 1.0)")
-    }
 
     fn assert_palette_layout(module: &naga::Module) {
         let description = PaletteUniform::DESCRIPTION;
@@ -210,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn shade_source_matches_the_legacy_fixture() {
+    fn shade_source_uses_the_registered_palette_metadata() {
         for record in [
             crate::CLASSIC_PALETTE,
             crate::EMBER_PALETTE,
@@ -220,14 +144,6 @@ mod tests {
             assert_eq!(bytemuck::bytes_of(&uniform), bytemuck::bytes_of(&record));
         }
         let shader = shade_shader().expect("shade template renders");
-        let legacy_source = normalize_rendered_constants(shader.source());
-        assert_eq!(legacy_source, LEGACY_SHADE_SOURCE);
-        assert_eq!(
-            shader.hash(),
-            RENDERED_SHADE_HASH,
-            "actual rendered shade hash: {:#018x}",
-            shader.hash()
-        );
         let module = naga::front::wgsl::parse_str(shader.source()).expect("shade WGSL parses");
         assert_palette_layout(&module);
         assert_palette_discriminants(shader.source());

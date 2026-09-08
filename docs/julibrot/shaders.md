@@ -28,7 +28,7 @@ Every template in the production registry must have exactly one `production_temp
 
 Every native render runs the anti-drift oracle against that render's complete `ShaderContext`. For every registered struct it compares Naga's member names, types, byte offsets, alignment and struct span with Rust metadata derived from the same fields, `offset_of!`, `align_of` and `size_of`; the generic test context includes explicit padding after a `vec3`. It compares every rendered signed and unsigned enum constant with the Rust discriminant, checks every binding and named constant, requires each CPU-visible declaration to come from its traced filter, and proves that an unregistered type fails with that type's name.
 
-The first production proof applies that oracle to `PaletteUniform`, the aligned GPU wire type constructed byte-for-byte from the real `PaletteRecord`, and to the real `PaletteId` used by `ember-julibrot-present`. `present-shade.wgsl.jinja` takes their declarations, status sentinels, diagnostic colours, light limits and all three bind slots from CPU-side items. The presenter renders once while creating GPU state and retains the `RenderedShader` beside the shade pipeline. Its complete rendered FNV-1a hash is `855da4bc80e3906e`; a test proves the wire conversion preserves every palette byte, removes the context-rendered declarations, substitutes their symbolic uses with the former literals, and compares the result byte for byte, including the final newline, with an exact fixture of the former inline source.
+The first production proof applies that oracle to `PaletteUniform`, the aligned GPU wire type constructed byte-for-byte from the real `PaletteRecord`, and to the real `PaletteId` used by `ember-julibrot-present`. `present-shade.wgsl.jinja` takes their declarations, status sentinels, diagnostic colours, light limits and all three bind slots from CPU-side items. The presenter renders once while creating GPU state and retains the `RenderedShader` beside the shade pipeline. Tests prove the wire conversion preserves every palette byte and pin every status colour, palette mapping and sole-reader boundary.
 
 ## Measured bundle cost
 
@@ -51,9 +51,11 @@ The allowlist used by `deploy/tests/test-shaders.sh` cites these row IDs and may
 
 R3-04 landed three records on main at `7d8b1cb4` between this lane's base and merge: one production source, `RECONSTRUCTION_BODY`, plus the paired-output test fixture and its lowering. The production migration ceiling therefore grows by exactly one source; the two test-only records remain explicit because test fixtures do not bypass the boundary.
 
+A migration does not preserve or pin the old WGSL text. The rendered picture is the compatibility bar: focused behavioral tests pin the shader's CPU-visible cases, and the merge candidate must pass the served whole-grid comparison. Moving declarations and values under their Rust owners may deliberately improve the rendered source without weakening that evidence.
+
 | Row | Source | Crate | State and owner |
 |---|---|---|---|
-| `JB-PRESENT-SHADE` | `shader/templates/present-shade.wgsl.jinja` replacing `present/src/shade_shader.rs` inline source | `ember-julibrot-shader`, consumed by `ember-julibrot-present` | Complete; rendered hash `855da4bc80e3906e`, normalized source equals the legacy fixture |
+| `JB-PRESENT-SHADE` | `shader/templates/present-shade.wgsl.jinja` replacing `present/src/shade_shader.rs` inline source | `ember-julibrot-shader`, consumed by `ember-julibrot-present` | Complete; Rust-owned metadata and behavioral shade pins cover the proof |
 | `JB-PRESENT-SCENE` | `present/src/shader.rs` scene and glitch-count inline sources | `ember-julibrot-present` | Next Julibrot presentation-template lane |
 | `JB-PRESENT-WARP` | `present/src/warp_shader.rs` | `ember-julibrot-present` | Next Julibrot presentation-template lane |
 | `JB-PRESENT-NATIVE-TEST` | `present/src/gpu/device/tests.rs` split-value shader fixture | `ember-julibrot-present` | Migrates with the remaining presentation templates |

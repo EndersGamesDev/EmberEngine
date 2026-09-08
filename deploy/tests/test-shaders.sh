@@ -10,8 +10,6 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 ALLOWLIST="$HERE/julibrot-shader-allowlist.txt"
 VALIDATIONS="$HERE/julibrot-shader-validation-tests.txt"
 POLICY="$ROOT/docs/julibrot/shaders.md"
-LEGACY_FIXTURE_PATH="crates/labs/julibrot/present/src/shade_shader.rs"
-LEGACY_FIXTURE_SYMBOL="LEGACY_SHADE_SOURCE"
 
 declare -A ALLOWED=()
 declare -A DETECTED=()
@@ -22,7 +20,6 @@ allowlist_count=0
 template_count=0
 production_template_count=0
 validation_count=0
-test_fixture_count=0
 rendered_shader_lowering_count=0
 failures=0
 
@@ -196,25 +193,6 @@ record_detected() {
     DETECTED["$key"]=1
 }
 
-record_pinned_test_fixture() {
-    local repo="$1"
-    local path="$2"
-    local symbol="$3"
-    local line="$4"
-    local previous_line
-
-    if [ "$path" != "$LEGACY_FIXTURE_PATH" ] || [ "$symbol" != "$LEGACY_FIXTURE_SYMBOL" ]; then
-        return 1
-    fi
-    previous_line="$(sed -n "$((line - 1))p" "$repo/$path")"
-    if [ "$previous_line" != '#[cfg(test)]' ]; then
-        report_failure "pinned legacy shader fixture must carry #[cfg(test)]: $path:$line"
-        return 0
-    fi
-    test_fixture_count=$((test_fixture_count + 1))
-    return 0
-}
-
 scan_shader_files() {
     local repo="$1"
     local path
@@ -290,8 +268,7 @@ scan_inline_raw_strings() {
     while IFS=: read -r path line source; do
         if [[ "$source" =~ (const|static|let)[[:space:]]+([A-Za-z_][A-Za-z0-9_]*) ]]; then
             symbol="${BASH_REMATCH[2]}"
-            record_pinned_test_fixture "$repo" "$path" "$symbol" "$line" \
-                || record_detected "inline" "$path" "$symbol"
+            record_detected "inline" "$path" "$symbol"
         else
             report_failure "could not identify inline shader symbol at $path:$line"
         fi
@@ -390,7 +367,6 @@ check_repo() {
     template_count=0
     production_template_count=0
     validation_count=0
-    test_fixture_count=0
     rendered_shader_lowering_count=0
     failures=0
     load_allowlist "$allowlist" "$policy"
@@ -399,9 +375,6 @@ check_repo() {
     load_validation_pairs "$repo" "$validations"
     scan_inline_raw_strings "$repo"
     scan_inline_quoted_wgsl "$repo"
-    if [ "$test_fixture_count" -ne 1 ]; then
-        report_failure "expected one cfg(test) legacy shade fixture; found $test_fixture_count"
-    fi
     if [ "$rendered_shader_lowering_count" -ne 1 ]; then
         report_failure "expected one typed RenderedShader lowering; found $rendered_shader_lowering_count"
     fi
@@ -434,10 +407,6 @@ write_migrated_shade_fixture() {
 
     printf '%s\n' \
         'fn shade_shader() { render_template(); }' \
-        '#[cfg(test)]' \
-        'const LEGACY_SHADE_SOURCE: &str = r"' \
-        '@fragment fn legacy_shade() {}' \
-        '";' \
         'mod production_validation {' \
         '    ember_julibrot_shader::production_template_test!(PRESENT_SHADE_TEMPLATE, shade_shader);' \
         '}' > "$path"
@@ -448,10 +417,6 @@ write_spoofed_validation_fixture() {
 
     printf '%s\n' \
         'fn shade_shader() { render_template(); }' \
-        '#[cfg(test)]' \
-        'const LEGACY_SHADE_SOURCE: &str = r"' \
-        '@fragment fn legacy_shade() {}' \
-        '";' \
         '#[test]' \
         'fn shade_source_parses_and_validates() {}' \
         'fn unrelated_text() {' \
@@ -571,11 +536,12 @@ self_test() {
 
     printf '%s\n' \
         'fn shade_shader() { render_template(); }' \
-        'const LEGACY_SHADE_SOURCE: &str = r"' \
-        '@fragment fn legacy_shade() {}' \
+        '#[cfg(test)]' \
+        'const TEST_SHADE_SOURCE: &str = r"' \
+        '@fragment fn test_shade() {}' \
         '";' > "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
-    expect_rejection "an unguarded legacy fixture" "must carry #[cfg(test)]" "$repo" "$allowlist" "$policy" "$validations" || return 1
+    expect_rejection "a cfg(test) inline shader fixture" "unlisted Julibrot shader source" "$repo" "$allowlist" "$policy" "$validations" || return 1
     write_migrated_shade_fixture "$repo/crates/labs/julibrot/present/src/shade_shader.rs"
     git -C "$repo" add crates/labs/julibrot/present/src/shade_shader.rs
 
@@ -588,7 +554,7 @@ self_test() {
     git -C "$repo" add crates/labs/julibrot/present/src/new_shader.rs
     expect_rejection "an expanded allowlist" "shader allowlist may only shrink" "$repo" "$allowlist" "$policy" "$validations" || return 1
 
-    printf 'SELF-TEST PASS: production validation pairs, templates, pinned test fixture, closed debt, files, inline and direct sources, stale records and shrink-only ceiling, %ss\n' "$(( $(date +%s) - started ))"
+    printf 'SELF-TEST PASS: production validation pairs, templates, closed debt, files, test fixtures, inline and direct sources, stale records and shrink-only ceiling, %ss\n' "$(( $(date +%s) - started ))"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -600,7 +566,7 @@ fi
 
 started="$(date +%s)"
 if check_repo "$ROOT" "$ALLOWLIST" "$POLICY" "$VALIDATIONS"; then
-    printf 'SHADER CHECK PASS: %s/%s production templates have native validation pairs, %s production/test templates, %s pinned legacy test fixture, %s reviewed migration exceptions, %ss\n' "$validation_count" "$production_template_count" "$template_count" "$test_fixture_count" "$allowlist_count" "$(( $(date +%s) - started ))"
+    printf 'SHADER CHECK PASS: %s/%s production templates have native validation pairs, %s production/test templates, %s reviewed migration exceptions, %ss\n' "$validation_count" "$production_template_count" "$template_count" "$allowlist_count" "$(( $(date +%s) - started ))"
 else
     status=$?
     printf 'SHADER CHECK FAIL: unrendered Julibrot shader source, %ss\n' "$(( $(date +%s) - started ))" >&2
