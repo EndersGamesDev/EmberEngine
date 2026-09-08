@@ -130,7 +130,8 @@
     .utility-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
     .foot { width: min(1180px, 92vw); }
     @media (max-width: 720px) { .intro, .utility-grid { grid-template-columns: 1fr; } .headright { gap: 5px; } #build { display: none; } .card { min-height: 320px; } }
-  </style>
+  .card[data-game="end-game"]::before { height: 190px; opacity: .78; background: linear-gradient(0deg, #0b1426, transparent), url("games/end-game/v1/cover.png") center / cover; }
+</style>
 </head>
 <body>
   <header>
