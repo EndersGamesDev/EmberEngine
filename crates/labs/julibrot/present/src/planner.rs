@@ -1928,7 +1928,11 @@ mod tests {
                 {
                     continue;
                 }
-                assert!(result.is_ok(), "{} {role} target did not project", case.name);
+                assert!(
+                    result.is_ok(),
+                    "{} {role} target did not project",
+                    case.name
+                );
                 if target.plane == canonical_julia_plane {
                     canonical_count += 1;
                 } else {

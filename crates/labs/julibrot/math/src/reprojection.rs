@@ -304,8 +304,7 @@ fn project_reconstructed_sample_from_anchor(
                 .chain(expected_plane.basis_v.iter()),
         )
         .all(|(actual, expected)| {
-            actual.is_finite()
-                && (*actual - *expected).abs() <= TARGET_PLANE_COMPONENT_TOLERANCE
+            actual.is_finite() && (*actual - *expected).abs() <= TARGET_PLANE_COMPONENT_TOLERANCE
         });
     if !plane_matches {
         return Err(ReprojectionError::InvalidTarget);
