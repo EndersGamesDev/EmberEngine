@@ -1,3 +1,5 @@
+This file is named `CONTENTS.md` because GitHub would render `.github/README.md` in place of the root `README.md`.
+
 # GitHub configuration
 
 This directory holds GitHub-facing issue forms and Actions workflows for repository intake, continuous integration and the marketing heartbeat.
