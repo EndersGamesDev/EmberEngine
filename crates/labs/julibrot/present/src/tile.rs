@@ -1,9 +1,9 @@
 //! Compatibility re-exports for the kernels-owned rendered-tile record vocabulary.
 
 use ember_julibrot_math::{
-    EscapeGridRecord, Homography, ObjectAngles, Pose, PoseMap, ProjectedSample,
+    EscapeGridRecord, Homography, ObjectAngles, Plane, Pose, PoseMap, ProjectedSample,
     ReconstructedSample, ReprojectionError, SourceDepthRecord, ViewControls, construct_plane,
-    project_reconstructed_sample, retained_value_sample,
+    plane_chart_relation, project_reconstructed_sample, retained_value_sample,
 };
 
 pub use ember_julibrot_kernels::{
@@ -19,6 +19,75 @@ use crate::planner::invert_3x3;
 const EXACT_INTEGER_LIMIT: f32 = 16_777_216.0;
 /// Four f32 ulps admit a sine/cosine pair after independent lane rounding.
 const FACTOR_NORM_TOLERANCE: f64 = 4.768_371_582_031_25e-7;
+const SLICE_DETERMINANT_EPSILON: f64 = 1.0e-12;
+
+/// Certified affine chart transform between two parameterizations of one sampled slice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(C)]
+pub struct SliceChartTransform {
+    /// Row-major two-dimensional map from source to canonical coordinates.
+    pub chart_map: [f64; 4],
+    /// Source-origin offset expressed in canonical chart coordinates.
+    pub origin_offset: [f64; 2],
+    /// Source-origin distance outside the canonical plane.
+    pub out_of_plane_error: f64,
+    /// Half-source-pixel ceiling applied to the out-of-plane error.
+    pub maximum_error: f64,
+}
+
+impl SliceChartTransform {
+    /// Slice-transform schema version.
+    pub const VERSION: u32 = 1;
+    /// Exact encoded byte size.
+    pub const BYTE_SIZE: usize = 64;
+
+    /// Maps one source chart coordinate into the certified canonical chart.
+    #[must_use]
+    pub const fn map_source_coordinate(&self, source: [f64; 2]) -> [f64; 2] {
+        [
+            self.chart_map[0].mul_add(
+                source[0],
+                self.chart_map[1].mul_add(source[1], self.origin_offset[0]),
+            ),
+            self.chart_map[2].mul_add(
+                source[0],
+                self.chart_map[3].mul_add(source[1], self.origin_offset[1]),
+            ),
+        ]
+    }
+}
+
+/// Certifies that source and canonical identities name the same sampled affine slice.
+///
+/// The bases must pass the shared once-rounded plane relation. The source-origin residual outside
+/// the canonical plane must be no greater than half one source chart sample.
+#[must_use]
+pub fn certify_same_slice(
+    source: SliceIdentity,
+    canonical: SliceIdentity,
+    source_chart_scale: f64,
+) -> Option<SliceChartTransform> {
+    if !source_chart_scale.is_finite() || source_chart_scale <= 0.0 {
+        return None;
+    }
+    let (source_plane, source_origin) = unpack_slice_identity(source)?;
+    let (canonical_plane, canonical_origin) = unpack_slice_identity(canonical)?;
+    let relation = plane_chart_relation(source_plane, canonical_plane)?;
+    let origin_delta =
+        core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
+    let (origin_offset, out_of_plane_error) =
+        project_vector_to_plane(canonical_plane, origin_delta)?;
+    let maximum_error = 0.5 * source_chart_scale;
+    if out_of_plane_error > maximum_error {
+        return None;
+    }
+    Some(SliceChartTransform {
+        chart_map: relation.chart_map,
+        origin_offset,
+        out_of_plane_error,
+        maximum_error,
+    })
+}
 
 /// Packs the source-pose lanes while preserving supplied policy and lifetime lanes.
 pub fn pack_descriptor_header(
@@ -278,6 +347,61 @@ pub fn project_descriptor_sample(
     )
 }
 
+fn unpack_slice_identity(slice: SliceIdentity) -> Option<(Plane, [f64; 4])> {
+    let plane = Plane {
+        basis_u: slice.basis_u.map(ExactF32::get),
+        basis_v: slice.basis_v.map(ExactF32::get),
+    };
+    let origin = slice.origin.map(ExactF64::get);
+    plane
+        .basis_u
+        .into_iter()
+        .chain(plane.basis_v)
+        .map(f64::from)
+        .chain(origin)
+        .all(f64::is_finite)
+        .then_some((plane, origin))
+}
+
+fn project_vector_to_plane(plane: Plane, vector: [f64; 4]) -> Option<([f64; 2], f64)> {
+    if !vector.into_iter().all(f64::is_finite) {
+        return None;
+    }
+    let basis_u = plane.basis_u.map(f64::from);
+    let basis_v = plane.basis_v.map(f64::from);
+    let primary_gram = dot_four(basis_u, basis_u);
+    let mixed_gram = dot_four(basis_u, basis_v);
+    let secondary_gram = dot_four(basis_v, basis_v);
+    let determinant = primary_gram.mul_add(secondary_gram, -mixed_gram * mixed_gram);
+    if !determinant.is_finite() || determinant.abs() <= SLICE_DETERMINANT_EPSILON {
+        return None;
+    }
+    let dot_u = dot_four(vector, basis_u);
+    let dot_v = dot_four(vector, basis_v);
+    let coordinate = [
+        dot_u.mul_add(secondary_gram, -dot_v * mixed_gram) / determinant,
+        dot_v.mul_add(primary_gram, -dot_u * mixed_gram) / determinant,
+    ];
+    let projected = plane.local_point(coordinate);
+    let residual = vector
+        .into_iter()
+        .zip(projected)
+        .map(|(value, projected)| (value - projected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    coordinate
+        .into_iter()
+        .chain([residual])
+        .all(f64::is_finite)
+        .then_some((coordinate, residual))
+}
+
+fn dot_four(left: [f64; 4], right: [f64; 4]) -> f64 {
+    left.into_iter()
+        .zip(right)
+        .fold(0.0, |sum, (left, right)| left.mul_add(right, sum))
+}
+
 fn pack_extent_rect_and_map(
     render: &TileRenderKey,
     source_map: [ExactF64; 20],
@@ -493,6 +617,8 @@ fn unpack_translation(header: &TilePoseHeader) -> [f64; 5] {
 
 #[cfg(test)]
 mod tests {
+    use core::mem::size_of;
+
     use bytemuck::{Zeroable, bytes_of};
     use ember_julibrot_kernels::SourceIdentity;
     use ember_julibrot_math::{
@@ -665,6 +791,68 @@ mod tests {
         expected.texels[TilePoseHeader::H25_PROVENANCE].lanes = [17.0, 23.0, 1.0, 5.0];
         expected.texels[TilePoseHeader::H26_OWNERSHIP].lanes = [6.0, 2.0, 31.0, 32.0];
         expected
+    }
+
+    #[test]
+    fn slice_chart_transform_has_pinned_version_and_size() {
+        assert_eq!(SliceChartTransform::VERSION, 1);
+        assert_eq!(SliceChartTransform::BYTE_SIZE, 64);
+        assert_eq!(size_of::<SliceChartTransform>(), 64);
+    }
+
+    #[test]
+    fn same_slice_certification_maps_in_plane_origins_and_refuses_tilts() {
+        let source_plane = Plane::CANONICAL_JULIA_PLANE;
+        let canonical_plane = Plane {
+            basis_u: [0.0, 1.0, 0.0, 0.0],
+            basis_v: [-1.0, 0.0, 0.0, 0.0],
+        };
+        let source_origin = [3.0, -2.0, 0.0, 0.0];
+        let canonical_origin = [1.0, 4.0, 0.0, 0.0];
+        let source = SliceIdentity::new(source_plane, source_origin);
+        let canonical = SliceIdentity::new(canonical_plane, canonical_origin);
+        let transform = certify_same_slice(source, canonical, 0.01)
+            .expect("rotated basis and in-plane origin remain the same slice");
+        for (actual, expected) in transform.chart_map.into_iter().zip([0.0, 1.0, -1.0, 0.0]) {
+            assert!((actual - expected).abs() <= f64::EPSILON);
+        }
+        assert_eq!(transform.origin_offset, [-6.0, -2.0]);
+        assert_eq!(transform.out_of_plane_error, 0.0);
+        assert_eq!(transform.maximum_error, 0.005);
+
+        let source_coordinate = [0.25, -0.75];
+        let source_local = source_plane.local_point(source_coordinate);
+        let ambient: [f64; 4] =
+            core::array::from_fn(|axis| source_origin[axis] + source_local[axis]);
+        let relative: [f64; 4] =
+            core::array::from_fn(|axis| ambient[axis] - canonical_origin[axis]);
+        let (direct, residual) = project_vector_to_plane(canonical_plane, relative)
+            .expect("same-slice ambient point has canonical coordinates");
+        assert_eq!(residual, 0.0);
+        for (actual, expected) in transform
+            .map_source_coordinate(source_coordinate)
+            .into_iter()
+            .zip(direct)
+        {
+            assert!((actual - expected).abs() <= 4.0 * f64::EPSILON);
+        }
+
+        let boundary = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5, 0.0]);
+        let boundary_transform = certify_same_slice(source, boundary, 1.0)
+            .expect("half-source-sample origin residual is admitted");
+        assert_eq!(boundary_transform.out_of_plane_error, 0.5);
+        assert_eq!(boundary_transform.maximum_error, 0.5);
+        let beyond = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5_f64.next_up(), 0.0]);
+        assert!(certify_same_slice(source, beyond, 1.0).is_none());
+
+        let tilted = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 0.0, 1.0, 0.0],
+        };
+        let tilted = SliceIdentity::new(tilted, canonical_origin);
+        assert!(certify_same_slice(source, tilted, 0.01).is_none());
+        assert!(certify_same_slice(source, canonical, 0.0).is_none());
+        assert!(certify_same_slice(source, canonical, f64::NAN).is_none());
     }
 
     #[test]

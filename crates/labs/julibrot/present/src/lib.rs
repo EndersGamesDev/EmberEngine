@@ -53,10 +53,10 @@ pub use shade_shader::shade_shader;
 pub use shader::{glitch_count_shader, scene_shader};
 pub use tile::{
     CanonicalChartCellKey, DescriptorAbiError, DescriptorCostLedger, DescriptorSamplePair,
-    DescriptorTexel, ExactF32, ExactF64, PoseMapKey, RenderControlChange, SliceIdentity,
-    SourcePixelRect, TileContentKey, TileInvalidation, TilePoseHeader, TileQuality, TileRenderKey,
-    TileResidency, TileRung, TransitionPresentation, select_same_surface_owner, tile_invalidation,
-    transition_presentation, validate_pose_header,
+    DescriptorTexel, ExactF32, ExactF64, PoseMapKey, RenderControlChange, SliceChartTransform,
+    SliceIdentity, SourcePixelRect, TileContentKey, TileInvalidation, TilePoseHeader, TileQuality,
+    TileRenderKey, TileResidency, TileRung, TransitionPresentation, certify_same_slice,
+    select_same_surface_owner, tile_invalidation, transition_presentation, validate_pose_header,
 };
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SCENE_PAYLOAD_BYTES,
