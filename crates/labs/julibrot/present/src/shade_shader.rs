@@ -1,5 +1,6 @@
+use bytemuck::{Pod, Zeroable};
 use ember_julibrot_shader::{
-    PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderContext, render,
+    F32Vec4, PRESENT_SHADE_TEMPLATE, RenderError, RenderedShader, ShaderContext, render,
 };
 
 use crate::{PaletteId, PaletteRecord};
@@ -10,9 +11,31 @@ pub const NEAREST_VALUE_BINDING: u32 = 1;
 pub const SHADE_PALETTE_GROUP: u32 = 1;
 pub const PALETTE_UNIFORM_BINDING: u32 = 0;
 
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[repr(C)]
+pub struct PaletteUniform {
+    map: F32Vec4,
+    interior_rgba: F32Vec4,
+    clear_rgba: F32Vec4,
+}
+
+ember_julibrot_shader::impl_wgsl_struct!(PaletteUniform, "PaletteUniform", {
+    map: F32Vec4,
+    interior_rgba: F32Vec4,
+    clear_rgba: F32Vec4,
+});
+
 pub fn palette_uniform_bytes() -> u64 {
-    u64::try_from(core::mem::size_of::<PaletteRecord>())
+    u64::try_from(core::mem::size_of::<PaletteUniform>())
         .expect("palette uniform size fits wgpu's address space")
+}
+
+pub const fn palette_uniform(record: PaletteRecord) -> PaletteUniform {
+    PaletteUniform {
+        map: F32Vec4::new(record.map),
+        interior_rgba: F32Vec4::new(record.interior_rgba),
+        clear_rgba: F32Vec4::new(record.clear_rgba),
+    }
 }
 
 /// Returns the sole value-to-colour presentation shader.
@@ -23,7 +46,7 @@ pub fn palette_uniform_bytes() -> u64 {
 /// the source.
 pub fn shade_shader() -> Result<RenderedShader, RenderError> {
     let mut context = ShaderContext::new();
-    context.register_type::<PaletteRecord>()?;
+    context.register_type::<PaletteUniform>()?;
     context.register_enum::<PaletteId>()?;
     context.register_binding(
         "presentation_values",
@@ -99,7 +122,7 @@ mod tests {
     const RENDERED_SHADE_HASH: u64 = 0x57fe_070b_02fa_9c44;
 
     fn assert_palette_layout(module: &naga::Module) {
-        let description = PaletteRecord::DESCRIPTION;
+        let description = PaletteUniform::DESCRIPTION;
         let shader_type = module
             .types
             .iter()
@@ -137,6 +160,14 @@ mod tests {
 
     #[test]
     fn shade_source_parses_and_validates() {
+        for record in [
+            crate::CLASSIC_PALETTE,
+            crate::EMBER_PALETTE,
+            crate::ICE_PALETTE,
+        ] {
+            let uniform = palette_uniform(record);
+            assert_eq!(bytemuck::bytes_of(&uniform), bytemuck::bytes_of(&record));
+        }
         let shader = shade_shader().expect("shade template renders");
         let legacy_source: String = shader
             .source()

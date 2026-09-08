@@ -1,6 +1,7 @@
 use crate::PaletteRecord;
 use crate::shade_shader::{
     NEAREST_VALUE_BINDING, PRESENTATION_VALUES_BINDING, SHADE_PALETTE_GROUP, SHADE_VALUES_GROUP,
+    palette_uniform,
 };
 
 use super::{GpuState, SCENE_FORMAT, SceneTexture, extent_3d};
@@ -136,5 +137,6 @@ pub(super) fn encode_shade(
 }
 
 pub(super) fn write_palette(queue: &wgpu::Queue, gpu: &GpuState, selected: PaletteRecord) {
-    queue.write_buffer(&gpu.palette_buffer, 0, bytemuck::bytes_of(&selected));
+    let uniform = palette_uniform(selected);
+    queue.write_buffer(&gpu.palette_buffer, 0, bytemuck::bytes_of(&uniform));
 }

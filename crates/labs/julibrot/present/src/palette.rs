@@ -41,12 +41,6 @@ pub struct PaletteRecord {
     pub clear_rgba: [f32; 4],
 }
 
-ember_julibrot_shader::impl_wgsl_struct!(PaletteRecord, "PaletteUniform", {
-    map: [f32; 4],
-    interior_rgba: [f32; 4],
-    clear_rgba: [f32; 4],
-});
-
 /// The version-one Classic palette.
 pub const CLASSIC_PALETTE: PaletteRecord = PaletteRecord {
     map: [64.0, 0.0, 0.78, 1.0],

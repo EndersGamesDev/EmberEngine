@@ -126,6 +126,16 @@ pub enum RenderError {
         /// Naga's source diagnostic.
         diagnostic: String,
     },
+    /// Parsed WGSL disagrees with a Rust-owned context registration.
+    #[cfg(not(target_arch = "wasm32"))]
+    ContextAudit {
+        /// Embedded template name.
+        template: String,
+        /// Registered declaration that disagreed with the module.
+        declaration: String,
+        /// Exact disagreement.
+        diagnostic: String,
+    },
 }
 
 impl fmt::Display for RenderError {
@@ -150,6 +160,15 @@ impl fmt::Display for RenderError {
                 line,
                 diagnostic,
             } => write_naga_error(formatter, "WGSL validation", template, *line, diagnostic),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::ContextAudit {
+                template,
+                declaration,
+                diagnostic,
+            } => write!(
+                formatter,
+                "WGSL declaration `{declaration}` disagrees with its Rust registration in template `{template}`: {diagnostic}"
+            ),
         }
     }
 }
@@ -160,7 +179,9 @@ impl Error for RenderError {
             Self::Template(error) => Some(error),
             Self::ConflictingRegistration { .. } | Self::NonFiniteConstant { .. } => None,
             #[cfg(not(target_arch = "wasm32"))]
-            Self::WgslParse { .. } | Self::WgslValidation { .. } => None,
+            Self::WgslParse { .. } | Self::WgslValidation { .. } | Self::ContextAudit { .. } => {
+                None
+            }
         }
     }
 }
@@ -256,16 +277,6 @@ impl ShaderContext {
         register_once(&mut self.constant_values, name, value, "constant")
     }
 
-    #[cfg(test)]
-    pub(super) fn registered_types(&self) -> impl Iterator<Item = &WgslTypeDescription> {
-        self.structures.values()
-    }
-
-    #[cfg(test)]
-    pub(super) fn registered_enums(&self) -> impl Iterator<Item = &WgslEnumDescription> {
-        self.enumerations.values()
-    }
-
     fn expand(&self, template_name: &str) -> Result<String, RenderError> {
         let environment = environment(self)?;
         Ok(environment.get_template(template_name)?.render(())?)
@@ -285,7 +296,7 @@ impl ShaderContext {
 pub fn render(template_name: &str, context: &ShaderContext) -> Result<RenderedShader, RenderError> {
     let source = context.expand(template_name)?;
     #[cfg(not(target_arch = "wasm32"))]
-    validate_wgsl(template_name, &source)?;
+    validate_wgsl(template_name, &source, context)?;
     Ok(RenderedShader {
         hash: stable_hash(&source),
         source,
@@ -313,7 +324,11 @@ fn write_naga_error(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn validate_wgsl(template_name: &str, source: &str) -> Result<(), RenderError> {
+fn validate_wgsl(
+    template_name: &str,
+    source: &str,
+    context: &ShaderContext,
+) -> Result<(), RenderError> {
     let module = naga::front::wgsl::parse_str(source).map_err(|error| RenderError::WgslParse {
         template: template_name.to_owned(),
         line: error.location(source).map(|location| location.line_number),
@@ -329,7 +344,342 @@ fn validate_wgsl(template_name: &str, source: &str) -> Result<(), RenderError> {
         line: error.location(source).map(|location| location.line_number),
         diagnostic: error.emit_to_string(source),
     })?;
+    audit_context(template_name, &module, context)?;
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_context(
+    template_name: &str,
+    module: &naga::Module,
+    context: &ShaderContext,
+) -> Result<(), RenderError> {
+    let mut layouter = naga::proc::Layouter::default();
+    layouter.update(module.to_ctx()).map_err(|error| {
+        context_audit_error(
+            template_name,
+            "module layout",
+            format!("naga could not compute layouts: {error}"),
+        )
+    })?;
+
+    for description in context.structures.values() {
+        audit_structure(template_name, module, &layouter, description)?;
+    }
+    for description in context.enumerations.values() {
+        audit_enumeration(template_name, module, description)?;
+    }
+    for (&name, expected) in &context.binding_slots {
+        audit_binding(template_name, module, name, *expected)?;
+    }
+    for (&name, expected) in &context.constant_values {
+        audit_constant(template_name, module, name, *expected)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_structure(
+    template_name: &str,
+    module: &naga::Module,
+    layouter: &naga::proc::Layouter,
+    description: &WgslTypeDescription,
+) -> Result<(), RenderError> {
+    let Some((handle, shader_type)) = module
+        .types
+        .iter()
+        .find(|(_, shader_type)| shader_type.name.as_deref() == Some(description.name))
+    else {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            "registered structure is missing from the parsed module",
+        ));
+    };
+    let naga::TypeInner::Struct { members, .. } = &shader_type.inner else {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            "registered type is not a WGSL structure",
+        ));
+    };
+    if members.len() != description.fields.len() {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            format!(
+                "WGSL has {} fields but Rust registered {}",
+                members.len(),
+                description.fields.len()
+            ),
+        ));
+    }
+
+    for (shader_field, rust_field) in members.iter().zip(description.fields) {
+        if shader_field.name.as_deref() != Some(rust_field.name) {
+            return Err(context_audit_error(
+                template_name,
+                description.name,
+                format!(
+                    "WGSL field {:?} does not match Rust field `{}`",
+                    shader_field.name, rust_field.name
+                ),
+            ));
+        }
+        let expected_offset = u32::try_from(rust_field.offset).map_err(|_| {
+            context_audit_error(
+                template_name,
+                description.name,
+                format!(
+                    "Rust offset for `{}` exceeds WGSL's address space",
+                    rust_field.name
+                ),
+            )
+        })?;
+        if shader_field.offset != expected_offset {
+            return Err(context_audit_error(
+                template_name,
+                description.name,
+                format!(
+                    "WGSL field `{}` starts at byte {} but Rust starts it at byte {expected_offset}",
+                    rust_field.name, shader_field.offset
+                ),
+            ));
+        }
+        let actual_type = shader_type_name(module, shader_field.ty);
+        if actual_type.as_deref() != Some(rust_field.wgsl_type) {
+            return Err(context_audit_error(
+                template_name,
+                description.name,
+                format!(
+                    "WGSL field `{}` has type {} but Rust registered `{}`",
+                    rust_field.name,
+                    actual_type.as_deref().unwrap_or("an unsupported WGSL type"),
+                    rust_field.wgsl_type
+                ),
+            ));
+        }
+    }
+
+    audit_structure_layout(template_name, layouter, handle, description)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_structure_layout(
+    template_name: &str,
+    layouter: &naga::proc::Layouter,
+    handle: naga::Handle<naga::Type>,
+    description: &WgslTypeDescription,
+) -> Result<(), RenderError> {
+    let layout = &layouter[handle];
+    let expected_size = u32::try_from(description.size).map_err(|_| {
+        context_audit_error(
+            template_name,
+            description.name,
+            "Rust size exceeds WGSL's address space",
+        )
+    })?;
+    if layout.size != expected_size {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            format!(
+                "WGSL size is {} bytes but Rust size is {expected_size} bytes",
+                layout.size
+            ),
+        ));
+    }
+    let expected_alignment = u32::try_from(description.alignment)
+        .ok()
+        .and_then(naga::proc::Alignment::new)
+        .ok_or_else(|| {
+            context_audit_error(
+                template_name,
+                description.name,
+                "Rust alignment is not representable as a WGSL alignment",
+            )
+        })?;
+    if layout.alignment != expected_alignment {
+        return Err(context_audit_error(
+            template_name,
+            description.name,
+            format!(
+                "WGSL alignment is {} but Rust alignment is {}",
+                layout.alignment, description.alignment
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn shader_type_name(module: &naga::Module, handle: naga::Handle<naga::Type>) -> Option<String> {
+    let shader_type = &module.types[handle];
+    match &shader_type.inner {
+        naga::TypeInner::Scalar(scalar) => scalar_name(*scalar).map(str::to_owned),
+        naga::TypeInner::Vector { size, scalar } => {
+            let scalar = scalar_name(*scalar)?;
+            Some(format!("vec{}<{scalar}>", vector_width(*size)))
+        }
+        naga::TypeInner::Struct { .. } => shader_type.name.clone(),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn scalar_name(scalar: naga::Scalar) -> Option<&'static str> {
+    match (scalar.kind, scalar.width) {
+        (naga::ScalarKind::Float, 4) => Some("f32"),
+        (naga::ScalarKind::Sint, 4) => Some("i32"),
+        (naga::ScalarKind::Uint, 4) => Some("u32"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn vector_width(size: naga::VectorSize) -> u8 {
+    match size {
+        naga::VectorSize::Bi => 2,
+        naga::VectorSize::Tri => 3,
+        naga::VectorSize::Quad => 4,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_enumeration(
+    template_name: &str,
+    module: &naga::Module,
+    description: &WgslEnumDescription,
+) -> Result<(), RenderError> {
+    for variant in description.variants {
+        let name = format!("{}_{}", description.name, variant.name);
+        let Some((_, constant)) = module
+            .constants
+            .iter()
+            .find(|(_, constant)| constant.name.as_deref() == Some(name.as_str()))
+        else {
+            return Err(context_audit_error(
+                template_name,
+                name,
+                "registered enum value is missing from the parsed module",
+            ));
+        };
+        let expression = &module.global_expressions[constant.init];
+        let matches = match (variant.discriminant, expression) {
+            (
+                WgslEnumDiscriminant::Signed(expected),
+                naga::Expression::Literal(naga::Literal::I32(actual)),
+            ) => expected == *actual,
+            (
+                WgslEnumDiscriminant::Unsigned(expected),
+                naga::Expression::Literal(naga::Literal::U32(actual)),
+            ) => expected == *actual,
+            _ => false,
+        };
+        if !matches {
+            return Err(context_audit_error(
+                template_name,
+                name,
+                "parsed WGSL value does not equal the Rust discriminant",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_binding(
+    template_name: &str,
+    module: &naga::Module,
+    name: &str,
+    expected: WgslBinding,
+) -> Result<(), RenderError> {
+    let Some((_, variable)) = module
+        .global_variables
+        .iter()
+        .find(|(_, variable)| variable.name.as_deref() == Some(name))
+    else {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            "registered binding is missing from the parsed module",
+        ));
+    };
+    let Some(actual) = variable.binding.as_ref() else {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            "registered binding has no WGSL resource binding",
+        ));
+    };
+    if actual.group != expected.group || actual.binding != expected.binding {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            format!(
+                "WGSL uses @group({}) @binding({}) but Rust registered @group({}) @binding({})",
+                actual.group, actual.binding, expected.group, expected.binding
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audit_constant(
+    template_name: &str,
+    module: &naga::Module,
+    name: &str,
+    expected: ShaderConstant,
+) -> Result<(), RenderError> {
+    let Some((_, constant)) = module
+        .constants
+        .iter()
+        .find(|(_, constant)| constant.name.as_deref() == Some(name))
+    else {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            "registered constant is missing from the parsed module",
+        ));
+    };
+    let expression = &module.global_expressions[constant.init];
+    let matches = match (expected, expression) {
+        (
+            ShaderConstant::Signed(expected),
+            naga::Expression::Literal(naga::Literal::I32(actual)),
+        ) => expected == *actual,
+        (
+            ShaderConstant::Unsigned(expected),
+            naga::Expression::Literal(naga::Literal::U32(actual)),
+        ) => expected == *actual,
+        (
+            ShaderConstant::Float(expected),
+            naga::Expression::Literal(naga::Literal::F32(actual)),
+        ) => expected.to_bits() == actual.to_bits(),
+        _ => false,
+    };
+    if !matches {
+        return Err(context_audit_error(
+            template_name,
+            name,
+            "parsed WGSL value does not equal the Rust constant",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn context_audit_error(
+    template_name: &str,
+    declaration: impl Into<String>,
+    diagnostic: impl Into<String>,
+) -> RenderError {
+    RenderError::ContextAudit {
+        template: template_name.to_owned(),
+        declaration: declaration.into(),
+        diagnostic: diagnostic.into(),
+    }
 }
 
 fn stable_hash(source: &str) -> u64 {
@@ -436,6 +786,9 @@ fn render_type(description: &WgslTypeDescription) -> String {
     declaration.push_str(" {");
     for field in description.fields {
         declaration.push(' ');
+        if let Some(size) = field.member_size {
+            write!(declaration, "@size({size}) ").expect("String writes are infallible");
+        }
         declaration.push_str(field.name);
         declaration.push_str(": ");
         declaration.push_str(field.wgsl_type);
@@ -476,6 +829,8 @@ fn render_constant(name: &str, value: ShaderConstant) -> String {
 mod tests {
     use bytemuck::{Pod, Zeroable};
 
+    use crate::{F32Vec4, U32Vec4};
+
     use super::{
         INTERFACE_TEST_NAME, INVALID_TEST_NAME, INVALID_VALIDATION_TEST_NAME, RenderError,
         ShaderConstant, ShaderContext, render, stable_hash,
@@ -484,13 +839,13 @@ mod tests {
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C, align(16))]
     struct TestUniform {
-        colour: [f32; 4],
-        transform: [[f32; 4]; 4],
+        colour: F32Vec4,
+        flags: U32Vec4,
     }
 
     crate::impl_wgsl_struct!(TestUniform, "TestUniform", {
-        colour: [f32; 4],
-        transform: [[f32; 4]; 4],
+        colour: F32Vec4,
+        flags: U32Vec4,
     });
 
     #[derive(Clone, Copy)]
@@ -524,9 +879,7 @@ mod tests {
         let shader = render(INTERFACE_TEST_NAME, &test_context())
             .expect("embedded interface template renders");
         let source = shader.source();
-        assert!(
-            source.contains("struct TestUniform { colour: vec4<f32>, transform: mat4x4<f32>, }")
-        );
+        assert!(source.contains("struct TestUniform { colour: vec4<f32>, flags: vec4<u32>, }"));
         assert!(source.contains("const TestMode_Preview: u32 = 2u;"));
         assert!(source.contains("const TestMode_Final: u32 = 9u;"));
         assert!(source.contains("@group(0) @binding(3) var values: texture_2d<f32>;"));
@@ -539,6 +892,20 @@ mod tests {
         let first = render(INTERFACE_TEST_NAME, &test_context()).expect("first render validates");
         let second = render(INTERFACE_TEST_NAME, &test_context()).expect("second render validates");
         assert_eq!(first.hash(), second.hash());
+    }
+
+    #[test]
+    fn every_native_render_audits_the_registered_rust_layout() {
+        let mut context = test_context();
+        context
+            .structures
+            .get_mut("TestUniform")
+            .expect("test uniform is registered")
+            .size = 16;
+
+        let error = render(INTERFACE_TEST_NAME, &context)
+            .expect_err("a parsed layout that disagrees with Rust must fail");
+        assert!(matches!(error, RenderError::ContextAudit { .. }));
     }
 
     #[test]
