@@ -65,3 +65,5 @@ In the table, `N` is ambient dimension, `S ≤ 10` is the number of selected fra
 |9|`reference_displacement`|view, exact reference centre, screen|`N` fixed differences are truncated to screen-scale binary64, then two displacement dots, three basis Gram dots, and a fixed two-by-two solve.|`N A` plus scale rebuild.|3,580 ns.|
 
 The release timing contract measures rows 4 and 5 together at `N = 5`, `LIMBS = 8`, with a fractional exponent selecting every table factor and all ten orientation planes active, then measures row 9 separately. The first server release sample measured 21,340 ns for the edit and 3,580 ns for reference displacement, 24,920 ns combined, or about 25 microseconds. A second run on a loaded core measured 55,210 ns and 7,960 ns respectively, 63,170 ns combined; this records the observed load spread, and both samples remain far below the one-millisecond bound. Debug tests report the same quantities without enforcing the performance ceiling.
+
+The gate evidence is 31 unit tests plus the release timing test; no doctests.
