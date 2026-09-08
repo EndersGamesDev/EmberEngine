@@ -22,6 +22,13 @@ thread_local! {
     static GENERATION: Cell<u64> = const { Cell::new(0) };
 }
 
+/// Returns the full release version carried by this wasm package.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn layer_package_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Runs deterministic object invariants during debug wasm initialization.
 ///
 /// # Panics

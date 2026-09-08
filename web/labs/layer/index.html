@@ -41,7 +41,7 @@
 <body>
   <main>
     <header>
-      <h1>ember <span>fragment-compute lattice</span></h1>
+      <h1>ember <span>fragment-compute lattice</span> <small id="release-version" title="full version unavailable">Version …</small></h1>
       <div id="telemetry">
         <span>requested <strong id="requested">0</strong></span>
         <span>delivered <strong id="delivered">0</strong></span>
@@ -75,7 +75,7 @@
     <footer>The fixed 1,200-vertex/3,000-edge prism and edge topology stay GPU-resident. A layer-generated fragment wrapper mixed-radix decodes each copy's centered 5D lattice coordinate, rotates base+center in SO(5), projects 5D→4D→3D with d₅=d₄=8, and emits two texture slots. Hue is only post-rotation x₅ over the displayed symmetric lattice range. Per shown frame uploads 48 kernel-uniform bytes plus 16 camera bytes.</footer>
   </main>
   <script type="module">
-    import init, { probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=4';
+    import init, { layer_package_version, probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=5';
 
     const status = document.querySelector('#status');
     const facts = document.querySelector('#facts');
@@ -331,9 +331,14 @@
     });
 
     try {
-      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=4' });
+      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=5' });
+      const packageVersion = layer_package_version();
+      const versionLabel = `Version ${packageVersion.split('.')[0]}`;
+      document.querySelector('#release-version').textContent = versionLabel;
+      document.querySelector('#release-version').title = `Full version ${packageVersion}`;
+      document.title = `ember fragment-compute lattice · ${versionLabel}`;
       deviceFacts = JSON.parse(await start_layer(canvas));
-      facts.textContent = JSON.stringify(deviceFacts, null, 2);
+      facts.textContent = JSON.stringify({ version: packageVersion, ...deviceFacts }, null, 2);
       const lastDeliverable = deviceFacts.steps.filter(step => step.arithmetically_deliverable).at(-1);
       const firstRefused = deviceFacts.steps.find(step => !step.arithmetically_deliverable);
       const hard = firstRefused

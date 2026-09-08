@@ -239,6 +239,9 @@ pub struct FrameCaptureFacts<'a> {
 /// Version shared by the loader, wasm module, worker entry, and wire protocol.
 pub const JULIBROT_ABI_VERSION: u32 = ember_julibrot_worker::JULIBROT_ABI_VERSION;
 
+/// Full release version carried by the Julibrot application package.
+pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// How long an in-flight frame copy may stay unmapped before it is abandoned.
 ///
 /// A map that never completes is not a slow copy, it is a copy that is never coming: it holds a
@@ -420,6 +423,12 @@ mod wasm_entry {
     #[wasm_bindgen]
     pub fn julibrot_abi_version() -> u32 {
         JULIBROT_ABI_VERSION
+    }
+
+    /// Returns the full release version carried by this wasm package.
+    #[wasm_bindgen]
+    pub fn julibrot_package_version() -> String {
+        crate::PACKAGE_VERSION.to_string()
     }
 
     /// Starts the GL-only main-thread runtime and stores its single surface owner.
@@ -992,5 +1001,6 @@ pub use wasm_entry::{
     app_set_distances, app_set_height, app_set_iteration_cap, app_set_object_angles,
     app_set_palette, app_set_plane_angles, app_set_plane_origin, app_set_precision_mode,
     app_set_scale, app_set_scene_mode, app_set_target, app_set_view_angles, app_take_frame_rgba,
-    app_update_scene, app_zoom_box, julibrot_abi_version, start_julibrot, start_julibrot_on_canvas,
+    app_update_scene, app_zoom_box, julibrot_abi_version, julibrot_package_version, start_julibrot,
+    start_julibrot_on_canvas,
 };

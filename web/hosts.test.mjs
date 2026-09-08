@@ -709,6 +709,31 @@ test('games.json: exactly one live version per game', () => {
   }
 });
 
+test('games.json: every launcher entry has a three-grade semantic version', () => {
+  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  for (const g of catalog.games) {
+    for (const entry of g.versions) {
+      assert.match(entry.version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} ${entry.v} has no three-grade version`);
+    }
+  }
+  const liveVersions = Object.fromEntries(catalog.games.map((g) => [g.id, g.versions.find((entry) => entry.live).version]));
+  assert.deepEqual(liveVersions, {
+    arena: '31.0.0',
+    league: '2.0.0',
+    fire: '1.0.0',
+    kings: '1.0.0',
+    'what-is-this': '1.0.0',
+    julibrot: '1.0.0',
+  });
+});
+
+test('launcher labels use semantic versions rather than directory slots', () => {
+  const launcher = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  assert.match(launcher, /const versionLabel = \(entry\) => `Version /);
+  assert.doesNotMatch(launcher, /latest update · \$\{live\.v\}/);
+  assert.doesNotMatch(launcher, /Play \$\{live \? live\.v/);
+});
+
 test('games.json: a handover target declares the protocol it is a target for', () => {
   const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
   for (const lab of catalog.games.filter((entry) => entry.kind === 'lab')) {

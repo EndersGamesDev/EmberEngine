@@ -36,6 +36,9 @@ async function main() {
   assert.equal(sha(wasm), option('wasm-sha256'), 'Tested WASM bytes changed');
   const arenaJs = read('web/pkg/arena.js');
   assert(WebAssembly.validate(wasm), 'Arena WASM is invalid');
+  const packageVersions = [...String(read('crates/arena/Cargo.toml')).matchAll(/^version\s*=\s*"([^"]+)"\s*$/gm)]
+    .map(match => match[1]);
+  assert.deepEqual(packageVersions, [scope.VERSION], 'Arena package must carry the release version');
   assert(/PROTO_VERSION: u16 = 24\b/.test(String(read('crates/arena-core/src/proto.rs'))), 'Source protocol must be24');
   git(root, 'fetch', 'origin', 'main', 'gh-pages');
   assert.equal(text(root, 'rev-parse', 'origin/main'), commit, 'HEAD must be the current published main revision');
@@ -95,7 +98,8 @@ async function main() {
   assert.equal(rechecked.host.ws, selected.host.ws, 'Host tunnel rotated; rerun preparation');
   const remote = text(root, 'ls-remote', 'origin', 'refs/heads/gh-pages').split(/\s+/)[0];
   assert.equal(remote, base, 'Another worker updated Pages; rerun preparation against their new tree');
-  const report = { prepared: true, pushed: false, sourceCommit: commit, base, tree, worktree, version,
+  const report = { prepared: true, pushed: false, sourceCommit: commit, base, tree, worktree,
+    releaseVersion: scope.VERSION, version,
     wasmSha256: sha(wasm), settingsSha256: settingsHash, liveWelcome: live, selectedHost: selected.host.name, changes,
     frozen, buildAttestation: 'Operator-supplied clean-build revision and tested WASM hash; no compiler is run by this publisher.' };
   if (push) {

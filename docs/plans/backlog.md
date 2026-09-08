@@ -46,6 +46,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## platform-web-deploy
 
+- After `deploy/retag.sh` succeeds on every authoritative remote, remove the legacy-tag fallback from `deploy/tests/test-changelog.sh`.
 - Four lab pages import bundles nothing builds, ships or links: `web/labs/heap/index.html:96`, `web/labs/heap/bench.html:90`, `web/labs/heap/spike.html:41` and `web/labs/layer/index.html:78` load cdylib bundles `deploy/deploy-pages.sh` never builds, `web/games.json` never lists and no page links, so nobody can reach them. Ship them or delete the pages.
 - `copy_pkg` carries only the `.js` and `_bg.wasm` artefacts (`deploy/deploy-pages.sh:181`), so a wasm-bindgen `inline_js` snippet never ships; the consequence is recorded at `crates/ember-engine/Cargo.toml:44` and worked around at `crates/ember-engine/src/app.rs:922`.
 - A name-bound mirror can be chosen on every page by self-reporting an absurd version: `web/hosts.js:308` lets the live value win, the returned view carries no source tag, and the ranking sorts on it at `:371`. The fix carries a source tag from the book merge through the view into the sort.
@@ -323,3 +324,4 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - League scene: the camera follows the own champion only; edge-pan and a space-to-recentre toggle are the MOBA norm and both need `world.cam` (client) rather than `scene.rs`.
 - League review harness: `tools/league/review.ps1` photographs the SCREEN like the arena harness, so a window dragged over the client lands in the picture; an off-screen capture written by the client itself would need no screen space.
 - League review harness: the human seat idles at its fountain in a practice run because the harness sends no input by rule; a `LEAGUE_BOT_ME=1` that hands the own seat to the bot brain would put the review camera in a real 3v3 instead of a 3v2 plus a bystander.
+- `deploy/tests/test-changelog.sh`: a release line naming `tag X` must fail when no such tag exists; the League v4 row claimed `league-v4` with no such tag on any remote and the suite passed. Add the existence check and pin it with a fixture.

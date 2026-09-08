@@ -13,9 +13,9 @@ DEPLOY="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
 
 # Exercise the production live slot without freezing a second release number
-# into the fixture. The independent catalog check below still catches a
-# disagreement between deploy-pages.sh and games.json.
-ARENA_LIVE="$(sed -n 's/^ARENA_LIVE="\([^"]*\)"$/\1/p' "$DEPLOY/deploy-pages.sh" | tr -d '\r')"
+# into the fixture. The deploy derives Arena's directory from the full catalog
+# version, so the fixture reads the same public data and checks the safe shape.
+ARENA_LIVE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(next(v["path"].rstrip("/") for g in d["games"] if g["id"] == "arena" for v in g["versions"] if v.get("live") is True))' "$DEPLOY/../web/games.json" | tr -d '\r')"
 if [[ ! "$ARENA_LIVE" =~ ^games/arena/v[0-9]+$ ]]; then
     echo "pages fixture: cannot determine deploy-pages.sh's live arena path" >&2
     exit 1
@@ -51,7 +51,13 @@ mkdir -p "$REPO/web/$LEAGUE_LIVE/art/nested" "$REPO/web/$LEAGUE_LIVE/pkg"
 mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
 mkdir -p "$REPO/crates/league-core/src"
+mkdir -p "$REPO/crates/arena" "$REPO/crates/fire" "$REPO/crates/kings" "$REPO/crates/league"
+mkdir -p "$REPO/crates/what-is-this" "$REPO/crates/labs/julibrot/app"
 cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
+for manifest in arena fire kings league what-is-this; do
+    cp "$DEPLOY/../crates/$manifest/Cargo.toml" "$REPO/crates/$manifest/"
+done
+cp "$DEPLOY/../crates/labs/julibrot/app/Cargo.toml" "$REPO/crates/labs/julibrot/app/"
 # Give recompute a deterministic stamp distinct from deploy-pages.sh's first
 # stamp, so the test proves loaders read server.json only after recompute.
 "$PY" - "$REPO/deploy/publish-host.sh" <<'PY'
@@ -291,8 +297,39 @@ PY
     else
         ok "the $fixture League destination was refused"
     fi
-    contains "$(cat "$TMP/league-$fixture.log")" "exactly one safe live version path" "the $fixture League failure identifies the catalog contract"
+    if [ "$fixture" = duplicate ]; then
+        contains "$(cat "$TMP/league-$fixture.log")" "exactly one live release" "the $fixture League failure identifies the catalog contract"
+    else
+        contains "$(cat "$TMP/league-$fixture.log")" "exactly one safe live version path" "the $fixture League failure identifies the catalog contract"
+    fi
     if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "$fixture League destination reached Pages assembly"; else ok "$fixture League destination stopped before Pages assembly"; fi
+done
+cp "$TMP/catalog.saved" "$REPO/web/games.json"
+
+echo "== catalog release versions are three-grade and match live packages =="
+for fixture in missing malformed mismatch; do
+    "$PY" - "$TMP/catalog.saved" "$REPO/web/games.json" "$fixture" <<'PY'
+import json, sys
+catalog = json.load(open(sys.argv[1], encoding="utf-8"))
+arena = next(game for game in catalog["games"] if game["id"] == "arena")
+live = next(release for release in arena["versions"] if release.get("live") is True)
+if sys.argv[3] == "missing":
+    del arena["versions"][-1]["version"]
+elif sys.argv[3] == "malformed":
+    arena["versions"][-1]["version"] = "v1"
+else:
+    live["version"] = "31.0.1"
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(catalog, fh)
+PY
+    : > "$SHIM_LOG"
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/version-$fixture.log" 2>&1; then
+        bad "the $fixture catalog release version was accepted"
+    else
+        ok "the $fixture catalog release version was refused"
+    fi
+    contains "$(cat "$TMP/version-$fixture.log")" "version" "the $fixture release-version failure identifies the contract"
+    if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "$fixture release version reached Pages assembly"; else ok "$fixture release version stopped before Pages assembly"; fi
 done
 cp "$TMP/catalog.saved" "$REPO/web/games.json"
 
@@ -386,7 +423,7 @@ import json, sys
 p = sys.argv[1]
 with open(p, encoding="utf-8") as fh:
     d = json.load(fh)
-d["games"].append({"id": "not-assembled", "versions": [{"path": "games/not-assembled/v1/", "live": True}]})
+d["games"].append({"id": "not-assembled", "versions": [{"version": "1.0.0", "path": "games/not-assembled/v1/", "live": True}]})
 with open(p, "w", encoding="utf-8") as fh:
     json.dump(d, fh)
 PY

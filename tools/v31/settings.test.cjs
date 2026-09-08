@@ -170,7 +170,8 @@ check(() => {
   assert(settingsScript && settingsScript.index < html.indexOf('<script type="module">'));
 });
 check(() => assert(!/3 HP|[♥❤]/.test(html)));
-check(() => assert.match(html, /<title>Killshot · v31 · Ember<\/title>/));
+check(() => assert.match(html, /<title>Killshot · Ember<\/title>/));
+check(() => assert.match(html, /id="release-version"[^>]*>Version …<\/small>/));
 check(() => assert.match(html, /#killshot-hud \{[^}]*pointer-events: none/));
 check(() => assert.match(html, /id="killshot-hud" hidden/));
 check(() => assert.match(html, /prefers-reduced-motion:reduce/));

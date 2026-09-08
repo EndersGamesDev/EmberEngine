@@ -808,7 +808,14 @@ fn handle_event(
                         id,
                         &S2C::Welcome {
                             proto: PROTO_VERSION,
-                            motd: "Killshot v31 — Breach-12 — powered by Ember".into(),
+                            motd: format!(
+                                "Killshot — Version {} ({}) — Breach-12 — powered by Ember",
+                                env!("CARGO_PKG_VERSION")
+                                    .split('.')
+                                    .next()
+                                    .unwrap_or(env!("CARGO_PKG_VERSION")),
+                                env!("CARGO_PKG_VERSION")
+                            ),
                             host: cfg.host_name.clone(),
                             version: version.to_owned(),
                             commit: commit.to_owned(),

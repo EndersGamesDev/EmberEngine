@@ -27,6 +27,9 @@ mod lattice_gpu;
 mod wasm;
 
 #[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
 pub use browser_error::{install_logging_handler, publish_browser_error};
 pub use completion::{MAX_COMPLETION_POLLS, PollCounter};
 pub use dialect::{
@@ -60,3 +63,10 @@ pub use span::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use spike::{cancel_heap_spike, run_heap_spike_json};
+
+/// Returns the full release version carried by this wasm package.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn heap_package_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}

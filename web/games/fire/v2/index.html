@@ -115,7 +115,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire racer</span> <small style="opacity:.5">v2</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire racer</span> <small id="release-version" style="opacity:.5" title="full version unavailable">Version …</small></h1>
     <div id="host-chip" title="the host this page will race on">server …</div>
   </header>
   <div class="controls">
@@ -197,6 +197,11 @@
 
     const wasm = await import(`./pkg/fire.js?v=${V}`);
     await wasm.default({ module_or_path: `./pkg/fire_bg.wasm?v=${V}` });
+    const FULL_VERSION = wasm.package_version();
+    const VERSION_LABEL = `Version ${FULL_VERSION.split('.')[0]}`;
+    document.querySelector('#release-version').textContent = VERSION_LABEL;
+    document.querySelector('#release-version').title = `Full version ${FULL_VERSION}`;
+    document.title = `Fire Racer · ${VERSION_LABEL} · Ember`;
     const PROTO = wasm.proto_version();
 
     // ---- host discovery ----------------------------------------------------

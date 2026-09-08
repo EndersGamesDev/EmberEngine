@@ -8,7 +8,7 @@ Every version the launcher (`web/games.json`) lists, in one place: what a player
 
 **Which stamp.** The hub stamp is one file at the root, so a publication that touches only one game leaves it reading the previous game's release. Two things outrank it, and an entry says which it used. A release that writes its own `version.json` inside its page tree is strongest: it names the full source sha and can carry the hash of the bundle beside it, which makes the claim checkable against the published bytes. Next is a targeted publication whose own commit message names the source it shipped. The root stamp is the fallback, and the rule above says which publication's root stamp counts.
 
-**Tags.** The first game owns the bare names (`docs/hosts.md` §3): arena releases are `vNN`, every other game is `<id>-vNN`. New tags created for this ledger are annotated and signed. The pre-existing lightweight tags `v20` and `v22` were left unchanged. An existing tag is never moved — where a tag sits somewhere other than the entry's source commit, the entry records both. Two releases have no tag, each for a stated reason.
+**Tags.** Every release tag is annotated and signed and names its series and full three-grade version: `<series>-MAJOR.MINOR.PATCH`, with `ember` as the engine and workspace series. Historical `vN` and `<id>-vN` tags are re-issued at the same commits as `<series>-N.0.0` by `deploy/retag.sh`; during that migration the verifier accepts either name, and the old names are then removed. An existing tag is never moved — where a tag sits somewhere other than the entry's source commit, the entry records both. Releases without a tag state that directly.
 
 The full evidence for every row, including the freeze commits and every publication considered, is the release ledger this file was built from.
 
@@ -126,7 +126,7 @@ The public-presence pass established the developer landing page, contribution an
 
 ### v31 — 2026-09-06
 
-proto 24 · stamp r1511 · source `05aeea2b` · tag `v31` · published `0b33872b` (message)
+proto 24 · stamp r1511 · source `05aeea2b` · tag `arena-31.0.0` · published `0b33872b` (message)
 
 Breach-12 shotgun: eight pellets per shell, a six-shell magazine, pump action and its own reload; slot 8 pickups and a custom starting loadout, with the existing Killshot HUD and controls preserved.
 
@@ -138,7 +138,7 @@ Verified at the source: 434 native tests across core, server and client; strict 
 
 ### v30 — 2026-09-06
 
-proto 23 · stamp r1500 · source `374a8548` · tag `v30` · published `1a1347d9` (message)
+proto 23 · stamp r1500 · source `374a8548` · tag `arena-30.0.0` · published `1a1347d9` (message)
 
 Killshot: a LIFE and ammunition HUD, health and ammo boxes, per-weapon reload animations with a circular timer, weapon slots 1–9 retained until death, and a Classic or custom starting loadout.
 
@@ -150,7 +150,7 @@ Verified: 415 native tests, strict Clippy, 100 browser checks including all seve
 
 ### v29 — 2026-09-06
 
-proto 22 · stamp r1490 · source `129bcac4` · tag `v29` · published `28d1b074` (message)
+proto 22 · stamp r1490 · source `129bcac4` · tag `arena-29.0.0` · published `28d1b074` (message)
 
 Vertical Breakwater Harbor: enterable port buildings, rooftop routes and wall-jump lanes, with sprint-crouch sliding, momentum-preserving slide jumps and chained wall kicks.
 
@@ -160,7 +160,7 @@ The page was frozen at `67869ea5`; the published bytes are `129bcac4`, which mad
 
 ### v28 — 2026-09-06
 
-proto 21 · stamp r1469 · source `e0c1dab0` · tag `v28` · published `0803a462` (message)
+proto 21 · stamp r1469 · source `e0c1dab0` · tag `arena-28.0.0` · published `0803a462` (message)
 
 Personal controls: saved key bindings and mouse sensitivity, five HP with no floating health bars, head-sized headshot detection, and a three-second shield with a firing recovery and a reuse cooldown.
 
@@ -170,7 +170,7 @@ Published twice. The hub deploy that first carried the page was stamped r1469 `f
 
 ### v27 — 2026-09-05
 
-proto 20 · stamp r1405 · source `256b40f8` · tag `v27` · published `e8a9e179`
+proto 20 · stamp r1405 · source `256b40f8` · tag `arena-27.0.0` · published `e8a9e179`
 
 Grounded environments: local contact shading at cover bases, warehouse corners and raised roof junctions across all three maps, with the existing sun, weather and gameplay preserved.
 
@@ -180,7 +180,7 @@ Verified: 717 native tests, 11 GPU regressions, strict Clippy, five wasm bundles
 
 ### v26 — 2026-09-05
 
-proto 20 · stamp r1401 · source `dae87d12` · tag `v26` · published `8f9f507a`
+proto 20 · stamp r1401 · source `dae87d12` · tag `arena-26.0.0` · published `8f9f507a`
 
 First material polish: view-dependent metal and paint highlights, matte concrete, a dry-weather sky reflection on harbor water, consistent crane paint and linear-light texture filtering.
 
@@ -190,7 +190,7 @@ Verified: 704 native tests, five GPU pixel tests, strict Clippy, all five wasm b
 
 ### v25 — 2026-09-05
 
-proto 20 · stamp r1397 · source `00982ed6` · tag `v25` · published `db30ce5e`
+proto 20 · stamp r1397 · source `00982ed6` · tag `arena-25.0.0` · published `db30ce5e`
 
 Breakwater Harbor: a hand-authored 96 × 96 m tactical port for eight players, with a moored ship, cranes, container routes, collision that holds at that size, and 4 m/s walking.
 
@@ -200,7 +200,7 @@ Verified: 695 integrated native tests, strict Clippy, two GPU suites, an eight-s
 
 ### v24 — 2026-09-05
 
-proto 19 · stamp r1393 · source `1e2ec48d` · tag `v24` · published `f26bceb9`
+proto 19 · stamp r1393 · source `1e2ec48d` · tag `arena-24.0.0` · published `f26bceb9`
 
 Aim, settle, fire: individual weapon zoom and sight animations, aim-down-sights plus crouch accuracy, movement penalties, recovering spread, a weaker starter sidearm and slower ground movement with the jumps preserved.
 
@@ -210,7 +210,7 @@ Verified: 508 native tests, strict Clippy, release wasm and native builds, 35 re
 
 ### v23 — 2026-09-05
 
-proto 17 · stamp r1293 · source `d045403d` · tag `v23` · published `4fba0df3`
+proto 17 · stamp r1293 · source `d045403d` · tag `arena-23.0.0` · published `4fba0df3`
 
 Hands on the weapon: per-gun posed gloves and fingers, textured sleeves, and arm IK that keeps other players holding their weapons while aiming and crouching.
 
@@ -218,7 +218,7 @@ Presentation only — protocol 17 is unchanged, so the existing host stayed comp
 
 ### v22 — 2026-09-04
 
-proto 17 · stamp r1270 · source `1c755fda` · tag `v22` (points at `d85a40fc`) · published `b52f81fb`
+proto 17 · stamp r1270 · source `1c755fda` · tag `arena-22.0.0` (points at `d85a40fc`) · published `b52f81fb`
 
 Skies and weather: a directional sun, cast shadows, drifting clouds, sheltered rain, fading smoke and wet-surface sky reflections.
 
@@ -230,7 +230,7 @@ Verified at `d85a40fc`: 91 of 91 deploy syntax checks, 41 of 41 Pages fixtures, 
 
 ### v21 — 2026-09-04
 
-proto 17 · stamp r1251+dirty · source `b595d60c` · tag `v21` · published `bc2ebdc3`
+proto 17 · stamp r1251+dirty · source `b595d60c` · tag `arena-21.0.0` · published `bc2ebdc3`
 
 Boots: a footstep on every plant of the walk animation, a heavier and louder one at a sprint, silence while crouched at any speed, all panned and delayed by distance like the guns.
 
@@ -240,7 +240,7 @@ This release's stamp reads `+dirty`: the published bytes do not correspond to an
 
 ### v20 — 2026-09-04
 
-proto 17 · stamp r1249 · source `46ed42bb` · tag `v20` · published `0c651391`
+proto 17 · stamp r1249 · source `46ed42bb` · tag `arena-20.0.0` · published `0c651391`
 
 The realism pass: rounds at real muzzle velocity stopped by the first thing on their path, tracers and impacts by material driven from shot events, layered gunshots panned and delayed by distance, and the supersonic crack of a near miss.
 
@@ -250,7 +250,7 @@ Published five times while it was live, from r590 `5563d80a`, the commit that st
 
 ### v19 — 2026-09-04
 
-proto 16 · stamp r585 · source `f23ebc4e` · tag `v19` · published `59fccd8d`
+proto 16 · stamp r585 · source `f23ebc4e` · tag `arena-19.0.0` · published `59fccd8d`
 
 Modes: free for all to 20 frags, team deathmatch to 30 with blue and red, king of the hill to 60 on the dock and the plinth; rounds end and restart after a ten-second pause.
 
@@ -260,7 +260,7 @@ Published twice on the same day, first under r587 `b4df161f` and then under r585
 
 ### v18 — 2026-09-03
 
-proto 15 · stamp r581 · source `d3e85297` · tag `v18` · published `9b38eb66`
+proto 15 · stamp r581 · source `d3e85297` · tag `arena-18.0.0` · published `9b38eb66`
 
 Freight Yard: seven guns looted by bonking `?` blocks from below on both maps (Trench City's pads are gone), finite ammunition, a map per lobby, gamepads and rumble.
 
@@ -270,7 +270,7 @@ This row is why the newest-on-main-publication rule is stated at the top. v18 wa
 
 ### v17 — 2026-09-02
 
-proto 13 · stamp r563 · source `9fc13db5` · tag `v17` · published `6735807f`
+proto 13 · stamp r563 · source `9fc13db5` · tag `arena-17.0.0` · published `6735807f`
 
 The scutum on Q, first person and on every player who raises one; the Murasama on E, a real cut.
 
@@ -278,7 +278,7 @@ Q raises a Roman scutum in place of the box plate, visible on every remote playe
 
 ### v16 — 2026-09-02
 
-proto 13 · stamp r561 · source `50c7c44c` · tag `v16` · published `5dc7e303`
+proto 13 · stamp r561 · source `50c7c44c` · tag `arena-16.0.0` · published `5dc7e303`
 
 One operator: the rifle the character carries, in its own gloved hands; E strikes with the butt.
 
@@ -286,7 +286,7 @@ Before this the player's revolver in bare hands did not match the character, who
 
 ### v15 — 2026-09-02
 
-proto 13 · stamp r559 · source `4efe9571` · tag `v15` · published `599e345d`
+proto 13 · stamp r559 · source `4efe9571` · tag `arena-15.0.0` · published `599e345d`
 
 The heavy revolver and real hands: the cylinder, hammer and trigger move.
 
@@ -294,7 +294,7 @@ The cylinder advances one chamber per confirmed round, the hammer cocks and fall
 
 ### v14 — 2026-09-02
 
-proto 13 · stamp r556 · source `bb09f793` · tag `v14` · published `c03022a2`
+proto 13 · stamp r556 · source `bb09f793` · tag `arena-14.0.0` · published `c03022a2`
 
 Fullscreen: F11 on the native client, F or the button on the page.
 
@@ -304,7 +304,7 @@ The page was frozen at `5e56d155`; the deploy ran from `bb09f793`, which made th
 
 ### v13 — 2026-09-02
 
-proto 13 · stamp r450 · source `a39481f7` · tag `v13` · published `f382a83a`
+proto 13 · stamp r450 · source `a39481f7` · tag `arena-13.0.0` · published `f382a83a`
 
 Trench City map and graphics update.
 
@@ -314,7 +314,7 @@ The page was frozen at `2d521397`; the deploy ran from `a39481f7`, which brought
 
 ### v12 — 2026-09-02
 
-proto 12 · stamp r439 · source `12193548` · tag `v12` · published `c79e1fc3`
+proto 12 · stamp r439 · source `12193548` · tag `arena-12.0.0` · published `c79e1fc3`
 
 E melee through shields, and headshots.
 
@@ -322,7 +322,7 @@ E melee through shields, and headshots.
 
 ### v11 — 2026-08-30
 
-proto 11 · stamp r121 · source `671d187c` · tag `v11` · published `15b066e9`
+proto 11 · stamp r121 · source `671d187c` · tag `arena-11.0.0` · published `15b066e9`
 
 Q shield: blocks and reflects.
 
@@ -330,7 +330,7 @@ Q shield: blocks and reflects.
 
 ### v10 — 2026-08-29
 
-no proto · stamp — · source `2afec7a7` · tag `v10`
+no proto · stamp — · source `2afec7a7` · tag `arena-10.0.0`
 
 The SWAT operator and jumping.
 
@@ -338,7 +338,7 @@ Published before the build ticker existed, so no publication of this version nam
 
 ### v9 — 2026-08-29
 
-no proto · stamp — · source `3481a0fe` · tag `v9`
+no proto · stamp — · source `3481a0fe` · tag `arena-9.0.0`
 
 AI-built articulated characters.
 
@@ -346,7 +346,7 @@ Source is the freeze commit, "arena v9: articulated AI characters in the web bui
 
 ### v8 — 2026-08-29
 
-no proto · stamp — · source `7867cabc` · tag `v8`
+no proto · stamp — · source `7867cabc` · tag `arena-8.0.0`
 
 Textured graphics update.
 
@@ -354,7 +354,7 @@ Source is the freeze commit, "arena v8: textured graphics update for the web bui
 
 ### v7 — 2026-08-29
 
-no proto · stamp — · source `b4ccb6ac` · tag `v7`
+no proto · stamp — · source `b4ccb6ac` · tag `arena-7.0.0`
 
 Live server.
 
@@ -362,7 +362,7 @@ The commit that froze the page is "Arena v7: Blender asset pipeline, hands, ADS 
 
 ### v6 — 2026-08-28
 
-no proto · stamp — · source `6c95cee4` · tag `v6`
+no proto · stamp — · source `6c95cee4` · tag `arena-6.0.0`
 
 Live server.
 
@@ -370,7 +370,7 @@ Live server.
 
 ### v5 — 2026-08-28
 
-no proto · stamp — · source `06201db3` · tag `v5`
+no proto · stamp — · source `06201db3` · tag `arena-5.0.0`
 
 No lag compensation, silent — archived.
 
@@ -378,7 +378,7 @@ No lag compensation, silent — archived.
 
 ### v4 — 2026-08-28
 
-no proto · stamp — · source `9798cc58` · tag `v4`
+no proto · stamp — · source `9798cc58` · tag `arena-4.0.0`
 
 No prediction — archived.
 
@@ -386,7 +386,7 @@ No prediction — archived.
 
 ### v3 — 2026-08-28
 
-no proto · stamp — · source `b4a9ad1e` · tag `v3`
+no proto · stamp — · source `b4a9ad1e` · tag `arena-3.0.0`
 
 Top-down — archived.
 
@@ -402,7 +402,7 @@ The launcher points this entry at `games/pong/v1/`, a directory that exists only
 
 ### v0 — 2026-09-06
 
-no proto · stamp r1469 · source `f28a145f` · tag `v0` · published `92320cb1`
+no proto · stamp r1469 · source `f28a145f` · tag `arena-0.0.0` · published `92320cb1`
 
 The original local game — the pong classic. Two players, one keyboard, first to 7; the paddle simulation runs entirely in the client and there is no online pong.
 
@@ -412,7 +412,7 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ### v4 — 2026-09-07
 
-proto 2 · stamp r1799 · source `bc7baa80` · tag `league-v4` · published `68b6eea8` (release stamp)
+proto 2 · stamp r1799 · source `bc7baa80` · no tag · published `68b6eea8` (release stamp)
 
 Crystalforge readability pass for lane and goal silhouettes, V4 feedback overlay and authoring polish built from existing gameplay.
 
@@ -430,7 +430,7 @@ The repository records the V3 page tree at `1c8dde39`, its authoritative attack-
 
 ### v2 — 2026-09-06
 
-proto 1 · stamp r1592 · source `2bc7dc98` · tag `league-v2` · published `b01bd38d` (release stamp)
+proto 1 · stamp r1592 · source `2bc7dc98` · tag `league-2.0.0` · published `b01bd38d` (release stamp)
 
 Crystalforge: five fleet-created champions, a textured garden arena, distinct combat animations, a redesigned HUD and saved keybindings.
 
@@ -444,7 +444,7 @@ Verified at the source: 54 core presentation tests and core Clippy; 31 integrate
 
 ### v1 — 2026-09-06
 
-proto 1 · stamp r1554 · source `4e069d5a` · tag `league-v1` · published `468eb61d` (release stamp)
+proto 1 · stamp r1554 · source `4e069d5a` · tag `league-1.0.0` · published `468eb61d` (release stamp)
 
 First build: one lane, five champions, a draft with rune pages and summoner spells, courts, cores, a shop, and bots. 1v1 and 3v3, online or against bots.
 
@@ -472,7 +472,7 @@ That is the release the published branch serves, and the note its own published 
 
 ### v1 — 2026-08-30
 
-no proto · stamp r109+dirty · source `ebe380e0` · tag `fire-v1` · published `ca84aa83`
+no proto · stamp r109+dirty · source `ebe380e0` · tag `fire-1.0.0` · published `ca84aa83`
 
 Archived — the first build, before the castle circuit.
 
@@ -482,7 +482,7 @@ The page was frozen at `5e240574`, "Add fire racer game — 8-player car racing"
 
 ### v1 — 2026-09-02
 
-proto 1 · stamp r1469 · source `f28a145f` · tag `kings-v1` · published `92320cb1`
+proto 1 · stamp r1469 · source `f28a145f` · tag `kings-1.0.0` · published `92320cb1`
 
 First build: within-class card swap, 15-second turns.
 
@@ -494,7 +494,7 @@ The page was frozen at `1c07df06` and first published at `fef6d6ff` from r383 `2
 
 ### v1 — 2026-09-04
 
-no proto · stamp r1469 · source `f28a145f` · tag `what-is-this-v1` · published `92320cb1`
+no proto · stamp r1469 · source `f28a145f` · tag `what-is-this-1.0.0` · published `92320cb1`
 
 Nine-stage diagnostic suite, now with a Julibrot fast-slide test; report submission remains optional.
 
@@ -506,7 +506,7 @@ The first publication, `070e4cd9`, was stamped r583 `b9ae7bb1` — a commit that
 
 ### v1 — 2026-09-04
 
-no proto · stamp r1469 · source `f28a145f` · tag `julibrot-v1` · published `92320cb1`
+no proto · stamp r1469 · source `f28a145f` · tag `julibrot-1.0.0` · published `92320cb1`
 
 Updated slice viewer: saved-view application, retained frames across partition changes, and visible limits and measurements. A four-dimensional slice viewer that leaves every delivered limit and measurement on screen; WebGL2 with `EXT_color_buffer_float` is required.
 

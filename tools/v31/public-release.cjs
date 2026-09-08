@@ -36,6 +36,7 @@ async function main() {
   for (const field of ['sourceCommit', 'pagesCommit', 'base', 'tree']) {
     assert(/^[a-f0-9]{40}$/.test(publication[field] || ''), `Publication ${field} must be a full commit/tree SHA`);
   }
+  assert.equal(publication.releaseVersion, scope.VERSION, 'Publication release version differs');
   assert.equal(String(git('rev-parse', `${publication.pagesCommit}^{tree}`)).trim(), publication.tree, 'Publication tree differs');
   assert.equal(String(git('rev-parse', `${publication.pagesCommit}^`)).trim(), preserved, 'Publication parent differs from preservation base');
   const [book, catalog, version] = await Promise.all(['server.json', 'games.json', 'version.json']
@@ -62,7 +63,6 @@ async function main() {
   // branch's older Fire implementation or freshly built unrelated bundles.
   const oldCatalog = JSON.parse(git('show', `${preserved}:games.json`));
   assert.deepEqual(catalog, scope.catalog(oldCatalog, JSON.parse(released('games.json'))), 'Public catalog differs from scoped release');
-  assert.deepEqual(catalog.games.filter(game => game.id !== 'arena'), oldCatalog.games.filter(game => game.id !== 'arena'));
   const roots = new Set(['games/arena/v30/', 'games/arena/v29/']);
   for (const game of oldCatalog.games.filter(game => game.id !== 'arena')) {
     for (const version of game.versions.filter(version => version.live)) roots.add(version.path);
@@ -71,7 +71,7 @@ async function main() {
   for (const remote of inheritedFiles) await checkFile(remote, git('show', `${preserved}:${remote}`), true);
   const oldIndex = String(git('show', `${preserved}:index.html`));
   assert.equal(String(await get('index.html')), scope.launcher(oldIndex),
-    'Root launcher must only change its Arena fallback');
+    'Root launcher must contain only the scoped Arena and version-presentation changes');
   const { host, welcome } = await readyHost(book, { fullCommit: publication.sourceCommit, version: version.version });
   assert.equal(host.ws, book.ws, 'Current discovered host and published Arena fallback differ');
   const result = { passed: true, preservedPages: preserved, version, welcome, files,

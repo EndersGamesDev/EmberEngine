@@ -47,13 +47,20 @@ pub mod hud {
 
 use ember_engine::EngineConfig;
 
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn versioned_title(name: &str) -> String {
+    let major = PACKAGE_VERSION.split('.').next().unwrap_or(PACKAGE_VERSION);
+    format!("{name} — Version {major} · {PACKAGE_VERSION}")
+}
+
 /// Start the practice match against bots: no server, same sim.
 pub fn run_local(mode: u8) {
     let meshes = scene::build_meshes();
     let game = game::LocalGame::new(mode, "you", 0x1ea9_e67b);
     ember_engine::run(
         EngineConfig {
-            title: "ember — ultimate league (practice)".to_string(),
+            title: versioned_title("ember — ultimate league (practice)"),
             capture_mouse: false,
             activate: cfg!(target_arch = "wasm32"),
             meshes,
@@ -72,7 +79,7 @@ pub fn run_online(cfg: &online_game::Config) -> Result<(), String> {
     let game = online_game::OnlineGame::connect(cfg.clone())?;
     ember_engine::run(
         EngineConfig {
-            title: "ember — ultimate league (online)".to_string(),
+            title: versioned_title("ember — ultimate league (online)"),
             capture_mouse: false,
             activate: cfg!(target_arch = "wasm32"),
             meshes,
@@ -112,6 +119,12 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn proto_version() -> u16 {
         league_core::proto::PROTO_VERSION
+    }
+
+    /// The full release version carried by this wasm package.
+    #[wasm_bindgen]
+    pub fn package_version() -> String {
+        super::PACKAGE_VERSION.to_string()
     }
 
     /// The world, as the page draws it: draft state, HUD, feed, minimap.

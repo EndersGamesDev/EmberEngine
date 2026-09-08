@@ -40,4 +40,4 @@ Put `Merge branch` details in the body when they are useful for tracing integrat
 
 ## Why this is enforced
 
-Machine-readable history feeds the changelog's pending section and the version-bump rule: every merge advances the patch grade. See `docs/versioning.md` for the complete version and release policy.
+Machine-readable history feeds the changelog's pending section. After the one-time migration baseline, each merge advances the patch grade of every game, lab, or Ember workspace series it changes. See `docs/versioning.md` for the complete version and release policy.

@@ -8,6 +8,7 @@
       "versions": [
         {
           "v": "v31",
+          "version": "31.0.0",
           "path": "games/arena/v31/",
           "live": true,
           "proto": 24,
@@ -16,6 +17,7 @@
         },
         {
           "v": "v30",
+          "version": "30.0.0",
           "path": "games/arena/v30/",
           "live": false,
           "proto": 23,
@@ -24,6 +26,7 @@
         },
         {
           "v": "v29",
+          "version": "29.0.0",
           "path": "games/arena/v29/",
           "live": false,
           "proto": 22,
@@ -32,6 +35,7 @@
         },
         {
           "v": "v28",
+          "version": "28.0.0",
           "path": "games/arena/v28/",
           "live": false,
           "proto": 21,
@@ -40,6 +44,7 @@
         },
         {
           "v": "v27",
+          "version": "27.0.0",
           "path": "games/arena/v27/",
           "live": false,
           "proto": 20,
@@ -48,6 +53,7 @@
         },
         {
           "v": "v26",
+          "version": "26.0.0",
           "path": "games/arena/v26/",
           "live": false,
           "proto": 20,
@@ -56,6 +62,7 @@
         },
         {
           "v": "v25",
+          "version": "25.0.0",
           "path": "games/arena/v25/",
           "live": false,
           "proto": 20,
@@ -64,6 +71,7 @@
         },
         {
           "v": "v24",
+          "version": "24.0.0",
           "path": "games/arena/v24/",
           "live": false,
           "proto": 19,
@@ -72,6 +80,7 @@
         },
         {
           "v": "v23",
+          "version": "23.0.0",
           "path": "games/arena/v23/",
           "live": false,
           "proto": 17,
@@ -80,6 +89,7 @@
         },
         {
           "v": "v22",
+          "version": "22.0.0",
           "path": "games/arena/v22/",
           "live": false,
           "proto": 17,
@@ -88,6 +98,7 @@
         },
         {
           "v": "v21",
+          "version": "21.0.0",
           "path": "games/arena/v21/",
           "live": false,
           "proto": 17,
@@ -96,6 +107,7 @@
         },
         {
           "v": "v20",
+          "version": "20.0.0",
           "path": "games/arena/v20/",
           "live": false,
           "proto": 17,
@@ -104,6 +116,7 @@
         },
         {
           "v": "v19",
+          "version": "19.0.0",
           "path": "games/arena/v19/",
           "live": false,
           "proto": 16,
@@ -112,6 +125,7 @@
         },
         {
           "v": "v18",
+          "version": "18.0.0",
           "path": "games/arena/v18/",
           "live": false,
           "proto": 15,
@@ -120,6 +134,7 @@
         },
         {
           "v": "v17",
+          "version": "17.0.0",
           "path": "games/arena/v17/",
           "live": false,
           "proto": 13,
@@ -128,6 +143,7 @@
         },
         {
           "v": "v16",
+          "version": "16.0.0",
           "path": "games/arena/v16/",
           "live": false,
           "proto": 13,
@@ -136,6 +152,7 @@
         },
         {
           "v": "v15",
+          "version": "15.0.0",
           "path": "games/arena/v15/",
           "live": false,
           "proto": 13,
@@ -144,6 +161,7 @@
         },
         {
           "v": "v14",
+          "version": "14.0.0",
           "path": "games/arena/v14/",
           "live": false,
           "proto": 13,
@@ -152,6 +170,7 @@
         },
         {
           "v": "v13",
+          "version": "13.0.0",
           "path": "games/arena/v13/",
           "live": false,
           "proto": 13,
@@ -160,6 +179,7 @@
         },
         {
           "v": "v12",
+          "version": "12.0.0",
           "path": "games/arena/v12/",
           "live": false,
           "proto": 12,
@@ -168,6 +188,7 @@
         },
         {
           "v": "v11",
+          "version": "11.0.0",
           "path": "games/arena/v11/",
           "live": false,
           "proto": 11,
@@ -175,60 +196,70 @@
         },
         {
           "v": "v10",
+          "version": "10.0.0",
           "path": "games/arena/v10/",
           "live": false,
           "note": "SWAT operator + jumping"
         },
         {
           "v": "v9",
+          "version": "9.0.0",
           "path": "games/arena/v9/",
           "live": false,
           "note": "AI-built articulated characters"
         },
         {
           "v": "v8",
+          "version": "8.0.0",
           "path": "games/arena/v8/",
           "live": false,
           "note": "textured graphics update"
         },
         {
           "v": "v7",
+          "version": "7.0.0",
           "path": "games/arena/v7/",
           "live": false,
           "note": "live server"
         },
         {
           "v": "v6",
+          "version": "6.0.0",
           "path": "games/arena/v6/",
           "live": false,
           "note": "live server"
         },
         {
           "v": "v5",
+          "version": "5.0.0",
           "path": "games/arena/v5/",
           "live": false,
           "note": "no lag comp / silent (archived)"
         },
         {
           "v": "v4",
+          "version": "4.0.0",
           "path": "games/arena/v4/",
           "live": false,
           "note": "no prediction (archived)"
         },
         {
           "v": "v3",
+          "version": "3.0.0",
           "path": "games/arena/v3/",
           "live": false,
           "note": "top-down (archived)"
         },
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "games/pong/v1/",
           "live": false,
           "note": "first web build, archived under its original path"
         },
         {
           "v": "v0",
+          "version": "0.0.0",
           "path": "games/arena/v0/",
           "live": false,
           "note": "the original local game — the pong classic"
@@ -243,6 +274,7 @@
       "versions": [
         {
           "v": "v4",
+          "version": "2.0.0",
           "path": "games/league/v4/",
           "live": true,
           "proto": 2,
@@ -250,6 +282,7 @@
         },
         {
           "v": "v3",
+          "version": "2.0.0",
           "path": "games/league/v3/",
           "live": false,
           "proto": 2,
@@ -258,6 +291,7 @@
         },
         {
           "v": "v2",
+          "version": "2.0.0",
           "path": "games/league/v2/",
           "live": false,
           "proto": 1,
@@ -266,6 +300,7 @@
         },
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "games/league/v1/",
           "live": false,
           "proto": 1,
@@ -283,6 +318,7 @@
       "versions": [
         {
           "v": "v2",
+          "version": "1.0.0",
           "path": "games/fire/v2/",
           "live": true,
           "proto": 1,
@@ -291,6 +327,7 @@
         },
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "games/fire/v1/",
           "live": false,
           "note": "archived — the first build, before the castle circuit"
@@ -305,6 +342,7 @@
       "versions": [
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "games/kings/v1/",
           "live": true,
           "proto": 1,
@@ -320,6 +358,7 @@
       "versions": [
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "games/what-is-this/v1/",
           "live": true,
           "note": "nine-stage diagnostic suite, now with a Julibrot fast-slide test; report submission remains optional"
@@ -335,6 +374,7 @@
       "versions": [
         {
           "v": "v1",
+          "version": "1.0.0",
           "path": "labs/julibrot/",
           "live": true,
           "note": "updated slice viewer: saved-view application, retained frames across partition changes, and visible limits and measurements"

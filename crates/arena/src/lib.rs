@@ -40,6 +40,12 @@ pub use online::OnlineConfig;
 const P1_COLOR: Vec3 = Vec3::new(0.25, 0.55, 0.95);
 const P2_COLOR: Vec3 = Vec3::new(0.92, 0.32, 0.28);
 const BALL_COLOR: Vec3 = Vec3::new(0.95, 0.93, 0.80);
+const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn versioned_title(name: &str) -> String {
+    let major = PACKAGE_VERSION.split('.').next().unwrap_or(PACKAGE_VERSION);
+    format!("{name} — Version {major} · {PACKAGE_VERSION}")
+}
 
 /// Everything the scene builder needs, mode-agnostic.
 struct SceneParams {
@@ -233,7 +239,7 @@ impl EmberGame for LocalGame {
 pub fn run_local() {
     ember_engine::run(
         EngineConfig {
-            title: "ember arena — v0, the pong classic — P1: A/D, P2: ←/→".to_string(),
+            title: versioned_title("ember arena — the pong classic — P1: A/D, P2: ←/→"),
             ..Default::default()
         },
         LocalGame::new(),
@@ -297,7 +303,7 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     game.set_harbor(harbor_base);
     ember_engine::run(
         EngineConfig {
-            title: format!("Killshot v31 — {}", cfg.lobby),
+            title: versioned_title(&format!("Killshot — {}", cfg.lobby)),
             // A scripted client (`EMBER_SCRIPT`) never grabs the cursor: the
             // operator keeps their pointer while a capture runs, and since
             // the grab is refused here, once, it cannot come back when the
@@ -335,6 +341,12 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn proto_version() -> u16 {
         arena_core::proto::PROTO_VERSION
+    }
+
+    /// The full release version carried by this wasm package.
+    #[wasm_bindgen]
+    pub fn package_version() -> String {
+        super::PACKAGE_VERSION.to_string()
     }
 
     #[wasm_bindgen]
