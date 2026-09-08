@@ -46,6 +46,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## platform-web-deploy
 
+- `web/games/arena/` (the Killshot landing page and its `media/`) reaches nobody: `deploy/deploy-pages.sh` copies exactly `index.html` and `settings.js` out of the live version directory for this game, and only league gets a recursive tree copy. Either generalize that copy to any game whose `games.json` entry has a `landing` key, or give arena the equivalent of `tools/league/publish-landing.cjs`; the hub's `game-landing-link:v1` block already reads the key, so the page is the only missing half.
 - Four lab pages import bundles nothing builds, ships or links: `web/labs/heap/index.html:96`, `web/labs/heap/bench.html:90`, `web/labs/heap/spike.html:41` and `web/labs/layer/index.html:78` load cdylib bundles `deploy/deploy-pages.sh` never builds, `web/games.json` never lists and no page links, so nobody can reach them. Ship them or delete the pages.
 - `copy_pkg` carries only the `.js` and `_bg.wasm` artefacts (`deploy/deploy-pages.sh:181`), so a wasm-bindgen `inline_js` snippet never ships; the consequence is recorded at `crates/ember-engine/Cargo.toml:44` and worked around at `crates/ember-engine/src/app.rs:922`.
 - A name-bound mirror can be chosen on every page by self-reporting an absurd version: `web/hosts.js:308` lets the live value win, the returned view carries no source tag, and the ranking sorts on it at `:371`. The fix carries a source tag from the book merge through the view into the sort.
