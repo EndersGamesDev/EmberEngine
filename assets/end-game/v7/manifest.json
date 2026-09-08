@@ -1,0 +1,604 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "method": "SDXL concept -> TRELLIS.2 generated textured sculpt -> cleaned, split, retargeted and rebaked",
+    "image_job": "4fc99fa8-71cc-470e-9835-2380dce3f4ef",
+    "mesh_job": "20260908-153917-a6b547",
+    "seed": 709081,
+    "image_model": "SDXL 1.0 base, Specht ComfyUI",
+    "mesh_model": "TRELLIS.2 4B, Adler GPU0, 1024_cascade",
+    "source_bytes": 21569692,
+    "generators": [
+      "tools/end-game/v7_generate_asset.py",
+      "tools/end-game/v7_preview_source.py",
+      "tools/end-game/v7_convert_warden.py",
+      "tools/end-game/v7_verify_warden.py",
+      "tools/end-game/v7_restore_trousers.py",
+      "tools/end-game/v7_finalize_warden.py",
+      "tools/end-game/v7_preview_warden.py"
+    ],
+    "retained": "V5 chair and knife, unchanged bind geometry/material",
+    "units": "meters",
+    "facing": "-Z",
+    "up": "+Y",
+    "source_sha256": "bbbb21903c349bb3ecc21d67dacc2373c3183837269d1e7ef306cac9e51e24f2",
+    "concept_sha256": "366522f3b857143e64c7969ace683d7e89ea40c40ec5e5482fb8f6f8d01bb28a",
+    "cutout_sha256": "8ecfc199f9bc96506ef555449f7b5978c71fd5919c4fec8c3bdfba6af48d3779"
+  },
+  "file": "warden.glb",
+  "bytes": 4138652,
+  "sha256": "c4e4feb82628223bc3203bd275902522ac4dabd441821182223853a1d59cc446",
+  "nodes": 20,
+  "primitives": 20,
+  "triangles": 20780,
+  "textures": [
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 57800
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 58623
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 14330
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 78074
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 79804
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 76619
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 68201
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 236500
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 235716
+    },
+    {
+      "size": [
+        1024,
+        1024
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 778910
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 72537
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 193348
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 84901
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 85778
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 45785
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 51910
+    },
+    {
+      "size": [
+        1024,
+        1024
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 723434
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 82520
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "mode": "RGB",
+      "bit_depth": 8,
+      "embedded_bytes": 81401
+    }
+  ],
+  "cloned_texture_gpu_bytes_with_mips": 20097700,
+  "body_bounds_min": [
+    -0.34857648611068726,
+    0.0,
+    -0.27008721232414246
+  ],
+  "body_bounds_max": [
+    0.32064685225486755,
+    1.8693208694458008,
+    0.20774124562740326
+  ],
+  "sidecar": "warden-rig.json",
+  "parts": [
+    {
+      "name": "warden_boot_l",
+      "triangles": 645,
+      "image_index": 0,
+      "bounds_min": [
+        -0.24978996813297272,
+        0.0,
+        -0.23331640660762787
+      ],
+      "bounds_max": [
+        -0.0290069542825222,
+        0.2626149356365204,
+        0.08708399534225464
+      ],
+      "welded_topology": {
+        "boundary_edges": 10,
+        "nonmanifold_edges": 5
+      }
+    },
+    {
+      "name": "warden_boot_r",
+      "triangles": 647,
+      "image_index": 1,
+      "bounds_min": [
+        0.028467770665884018,
+        0.0,
+        -0.27008721232414246
+      ],
+      "bounds_max": [
+        0.2192651480436325,
+        0.2710007131099701,
+        0.07304325699806213
+      ],
+      "welded_topology": {
+        "boundary_edges": 6,
+        "nonmanifold_edges": 3
+      }
+    },
+    {
+      "name": "warden_chair",
+      "triangles": 1080,
+      "image_index": 2,
+      "bounds_min": [
+        -0.29649999737739563,
+        0.0,
+        0.07750000059604645
+      ],
+      "bounds_max": [
+        0.29649999737739563,
+        1.371216893196106,
+        0.7122499942779541
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_coat_l",
+      "triangles": 1996,
+      "image_index": 3,
+      "bounds_min": [
+        -0.34857648611068726,
+        0.3998800814151764,
+        -0.26217490434646606
+      ],
+      "bounds_max": [
+        0.005438697058707476,
+        0.9713442921638489,
+        0.19747838377952576
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_coat_r",
+      "triangles": 1998,
+      "image_index": 4,
+      "bounds_min": [
+        -0.005397890228778124,
+        0.45087912678718567,
+        -0.2568728029727936
+      ],
+      "bounds_max": [
+        0.32064685225486755,
+        0.9743326902389526,
+        0.20053480565547943
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_forearm_l",
+      "triangles": 781,
+      "image_index": 5,
+      "bounds_min": [
+        -0.3285953402519226,
+        0.8556345701217651,
+        -0.07718828320503235
+      ],
+      "bounds_max": [
+        -0.1747720092535019,
+        1.1840507984161377,
+        0.1019902154803276
+      ],
+      "welded_topology": {
+        "boundary_edges": 192,
+        "nonmanifold_edges": 19
+      }
+    },
+    {
+      "name": "warden_forearm_r",
+      "triangles": 787,
+      "image_index": 6,
+      "bounds_min": [
+        0.17924626171588898,
+        0.8555959463119507,
+        -0.08715435117483139
+      ],
+      "bounds_max": [
+        0.3140714764595032,
+        1.1825275421142578,
+        0.11047997325658798
+      ],
+      "welded_topology": {
+        "boundary_edges": 206,
+        "nonmanifold_edges": 13
+      }
+    },
+    {
+      "name": "warden_hand_l",
+      "triangles": 644,
+      "image_index": 7,
+      "bounds_min": [
+        -0.2963309586048126,
+        0.7097392678260803,
+        -0.0778874009847641
+      ],
+      "bounds_max": [
+        -0.16645780205726624,
+        0.8750658631324768,
+        0.05431395396590233
+      ],
+      "welded_topology": {
+        "boundary_edges": 51,
+        "nonmanifold_edges": 5
+      }
+    },
+    {
+      "name": "warden_hand_r",
+      "triangles": 644,
+      "image_index": 8,
+      "bounds_min": [
+        0.19479145109653473,
+        0.7550190687179565,
+        -0.06962285935878754
+      ],
+      "bounds_max": [
+        0.31700465083122253,
+        0.8776077628135681,
+        0.06599868834018707
+      ],
+      "welded_topology": {
+        "boundary_edges": 12,
+        "nonmanifold_edges": 6
+      }
+    },
+    {
+      "name": "warden_head",
+      "triangles": 2775,
+      "image_index": 9,
+      "bounds_min": [
+        -0.129190593957901,
+        1.6136971712112427,
+        -0.20089533925056458
+      ],
+      "bounds_max": [
+        0.12845295667648315,
+        1.8693208694458008,
+        0.13748878240585327
+      ],
+      "welded_topology": {
+        "boundary_edges": 48,
+        "nonmanifold_edges": 23
+      }
+    },
+    {
+      "name": "warden_knife",
+      "triangles": 378,
+      "image_index": 2,
+      "bounds_min": [
+        0.20999999344348907,
+        0.7609999775886536,
+        -0.03449999913573265
+      ],
+      "bounds_max": [
+        0.6349999904632568,
+        0.8029999732971191,
+        0.02199999988079071
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_neck",
+      "triangles": 309,
+      "image_index": 10,
+      "bounds_min": [
+        -0.16683031618595123,
+        1.526090383529663,
+        -0.16347983479499817
+      ],
+      "bounds_max": [
+        0.16441892087459564,
+        1.6644197702407837,
+        0.16161763668060303
+      ],
+      "welded_topology": {
+        "boundary_edges": 46,
+        "nonmanifold_edges": 23
+      }
+    },
+    {
+      "name": "warden_pelvis",
+      "triangles": 957,
+      "image_index": 11,
+      "bounds_min": [
+        -0.3007221519947052,
+        0.9676278233528137,
+        -0.24929584562778473
+      ],
+      "bounds_max": [
+        0.2602442800998688,
+        1.0842019319534302,
+        0.18886983394622803
+      ],
+      "welded_topology": {
+        "boundary_edges": 357,
+        "nonmanifold_edges": 178
+      }
+    },
+    {
+      "name": "warden_shin_l",
+      "triangles": 438,
+      "image_index": 12,
+      "bounds_min": [
+        -0.2044595330953598,
+        0.09151730686426163,
+        -0.19742028415203094
+      ],
+      "bounds_max": [
+        0.009316574782133102,
+        0.558393657207489,
+        0.16478689014911652
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_shin_r",
+      "triangles": 442,
+      "image_index": 13,
+      "bounds_min": [
+        0.0011647599749267101,
+        0.09164930135011673,
+        -0.1996220350265503
+      ],
+      "bounds_max": [
+        0.22849345207214355,
+        0.5584231019020081,
+        0.08794230222702026
+      ],
+      "welded_topology": {
+        "boundary_edges": 0,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_thigh_l",
+      "triangles": 507,
+      "image_index": 14,
+      "bounds_min": [
+        -0.19335785508155823,
+        0.5049999952316284,
+        -0.19886988401412964
+      ],
+      "bounds_max": [
+        0.030364785343408585,
+        1.0049999952316284,
+        0.09332956373691559
+      ],
+      "welded_topology": {
+        "boundary_edges": 200,
+        "nonmanifold_edges": 43
+      }
+    },
+    {
+      "name": "warden_thigh_r",
+      "triangles": 508,
+      "image_index": 15,
+      "bounds_min": [
+        0.002303029876202345,
+        0.5049999952316284,
+        -0.19931955635547638
+      ],
+      "bounds_max": [
+        0.22749477624893188,
+        1.0049999952316284,
+        0.09237328916788101
+      ],
+      "welded_topology": {
+        "boundary_edges": 247,
+        "nonmanifold_edges": 41
+      }
+    },
+    {
+      "name": "warden_torso",
+      "triangles": 3490,
+      "image_index": 16,
+      "bounds_min": [
+        -0.2919817566871643,
+        1.071662187576294,
+        -0.24895019829273224
+      ],
+      "bounds_max": [
+        0.28681498765945435,
+        1.6469173431396484,
+        0.20774124562740326
+      ],
+      "welded_topology": {
+        "boundary_edges": 363,
+        "nonmanifold_edges": 55
+      }
+    },
+    {
+      "name": "warden_upperarm_l",
+      "triangles": 900,
+      "image_index": 17,
+      "bounds_min": [
+        -0.32333165407180786,
+        1.115735411643982,
+        -0.14730708301067352
+      ],
+      "bounds_max": [
+        -0.14596742391586304,
+        1.6259593963623047,
+        0.11907479912042618
+      ],
+      "welded_topology": {
+        "boundary_edges": 272,
+        "nonmanifold_edges": 0
+      }
+    },
+    {
+      "name": "warden_upperarm_r",
+      "triangles": 854,
+      "image_index": 18,
+      "bounds_min": [
+        0.1385933756828308,
+        1.095122218132019,
+        -0.08620903640985489
+      ],
+      "bounds_max": [
+        0.3108198046684265,
+        1.6201145648956299,
+        0.145420104265213
+      ],
+      "welded_topology": {
+        "boundary_edges": 92,
+        "nonmanifold_edges": 46
+      }
+    }
+  ],
+  "verification": "Exported GLB names/identity transforms, finite positions/UVs, normalized normals, winding agreement, zero degenerate triangles, RGB8 images, opaque white materials, hierarchy and payload budgets. Native motion/rendering verification is separate. Both repaired shin meshes have zero welded boundary and nonmanifold edges. Both thighs retain full hip-to-knee inner trouser coverage.",
+  "verification_seconds": 0.048,
+  "sidecar_sha256": "179567e829d84de822b539aafe81ff5e42235fedcccd5bb6718e0a1d2cb4b7cb"
+}

@@ -1,0 +1,7 @@
+# End Game 7.0.0 — The Dread Warden
+
+The warden uses a generated, textured jailer with a scarred face, high collar, worn coat, straps and boots. The generated sculpt is converted into articulated parts for Ember. Grounded foot plants, a forward weight shift before standing, hip/torso counter-motion and braced knife attacks accompany the new silhouette. The existing knife contact timing, dodge checks, hit interruption and death behavior remain tied to the fixed-step simulation.
+
+V6’s four prerecorded voice reactions and subtitles remain: audible cell footsteps, unlocking the gate, claiming the sword and death. Movement barks have a twelve-second cooldown; crouching is quiet. One voice plays at a time, the pause menu preserves the clip offset, and respawning clears old dialogue. Missing or blocked audio still displays subtitles. The V3 pickup hands and V4 sword rhythms remain available through mouse, standard gamepad and touch input.
+
+Build with `tools/end-game/build.ps1`, serve `web/`, and open this directory. The scoped publisher writes V7 and preserves the complete V1–V6 releases, including V6 voice clips. Generated source, conversion and material provenance are recorded under `assets/end-game/v7/`; the retained speech assets are under `assets/end-game/v6/`. Native renderer captures inspect the actual game model without workstation input. Browser gameplay, physical devices and measured 5K frame pacing require separate validation.

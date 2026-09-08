@@ -108,12 +108,34 @@ fn read_vec(value: &Value) -> Vec3 {
     )
 }
 
+/// The core advances one gait cycle per 1.2 metres. During stance, local Z
+/// moves backwards by exactly the body's forward travel, planting the sole in
+/// world space. The returning foot lifts with zero vertical speed at contact.
+fn gait_foot(phase: f32) -> (f32, f32) {
+    const STRIDE: f32 = 1.2;
+    const STANCE: f32 = 0.55;
+    let cycle = phase.rem_euclid(std::f32::consts::TAU) / std::f32::consts::TAU;
+    let reach = STRIDE * STANCE * 0.5;
+    if cycle <= STANCE {
+        (-reach + STRIDE * cycle, 0.0)
+    } else {
+        let t = (cycle - STANCE) / (1.0 - STANCE);
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let tangent = STRIDE * (1.0 - STANCE);
+        let z = (2.0 * t3 - 3.0 * t2 + 1.0) * reach + (t3 - 2.0 * t2 + t) * tangent
+            - (-2.0 * t3 + 3.0 * t2) * reach
+            + (t3 - t2) * tangent;
+        (z, (std::f32::consts::PI * t).sin().powi(2) * 0.075)
+    }
+}
+
 impl WardenRig {
     pub fn load(meshes: &mut Vec<MeshData>) -> Self {
         let rig: Value =
-            serde_json::from_str(include_str!("../../../assets/end-game/v5/warden-rig.json"))
+            serde_json::from_str(include_str!("../../../assets/end-game/v7/warden-rig.json"))
                 .expect("warden rig sidecar");
-        let mut loaded = load_glb(include_bytes!("../../../assets/end-game/v5/warden.glb"))
+        let mut loaded = load_glb(include_bytes!("../../../assets/end-game/v7/warden.glb"))
             .expect("articulated warden GLB");
         let rows = rig["parts"].as_array().unwrap();
         let parts = NAMES
@@ -153,51 +175,66 @@ impl WardenRig {
         let walking = ai.walk_blend * (1.0 - dead);
         let walk = ai.walk_phase;
         let flinch = ai.flinch_amount();
-        let sleeping = ai.phase == WardenPhase::Sleeping;
+        let doze = 1.0 - stand;
+        let breath = (game.time * 1.35).sin();
+        let (anticipation, contact, recovery, attack_weight) =
+            ai.attack_pose()
+                .map_or((0.0, 0.0, 0.0, 0.0), |(t, weight)| {
+                    (
+                        ease(0.0, KNIFE_WINDUP, t),
+                        ease(KNIFE_WINDUP, KNIFE_CONTACT, t),
+                        ease(KNIFE_FOLLOW, KNIFE_DURATION, t),
+                        weight,
+                    )
+                });
+        let loaded = anticipation * (1.0 - recovery) * attack_weight;
+        let driven = contact * (1.0 - recovery) * attack_weight;
         let mut joints = [Joint::IDENTITY; 20];
-        let mut pelvis = Vec3::new(0.0, 0.67 + 0.31 * stand, 0.40 * (1.0 - stand));
-        pelvis.y += walking * (walk * 2.0).cos() * 0.005;
+        // Bring weight over the planted boots before lifting clear of the chair.
+        let mut pelvis = Vec3::new(
+            0.012 * stand,
+            0.67 + 0.31 * ease(0.10, 1.0, stand),
+            0.40 * (1.0 - ease(0.0, 0.85, stand)),
+        );
+        pelvis.x += walking * walk.sin() * 0.022 + loaded * 0.018 - driven * 0.025;
+        pelvis.y += breath * 0.002 * stand
+            - walking * (0.060 + 0.005 * (1.0 + (walk * 2.0).cos()))
+            - loaded * 0.015;
+        pelvis.z += loaded * 0.018 - driven * 0.040;
         pelvis = pelvis.lerp(Vec3::new(0.0, 0.30, -0.18), dead);
         joints[0] = Joint {
             p: pelvis,
-            r: Quat::from_rotation_z(walking * walk.sin() * 0.015 - dead * 0.07),
+            r: Quat::from_rotation_y(-walking * walk.sin() * 0.025)
+                * Quat::from_rotation_z(-walking * walk.sin() * 0.020 - dead * 0.07),
         };
-        let mut lean = -0.22 * (1.0 - stand) - 0.05 * stand;
-        if sleeping {
-            lean += (ai.elapsed * 1.45).sin() * 0.008;
-        }
+        let mut lean = -0.22 * doze - 0.09 * stand - walking * 0.025;
+        lean += breath * (0.007 + doze * 0.004);
         // The stand value is retained at fatal contact, so a half-risen death
         // keeps its forward weight shift instead of snapping to the idle torso.
-        lean -= (stand * std::f32::consts::PI).sin() * 0.24;
-        let mut twist = walking * walk.sin() * 0.035;
-        if let Some((t, weight)) = ai.attack_pose() {
-            let anticipation = ease(0.0, KNIFE_WINDUP, t);
-            let contact = ease(KNIFE_WINDUP, KNIFE_CONTACT, t);
-            let recovery = ease(KNIFE_FOLLOW, KNIFE_DURATION, t);
-            lean += (-0.07 * anticipation - 0.13 * contact) * (1.0 - recovery) * weight;
-            twist += (0.20 * anticipation - 0.38 * contact) * (1.0 - recovery) * weight;
-        }
+        lean -= (stand * std::f32::consts::PI).sin() * 0.28;
+        let mut twist = walking * walk.sin() * 0.060;
+        lean += loaded * 0.045 - driven * 0.17;
+        twist += -loaded * 0.14 + driven * 0.36;
         lean += flinch * 0.16;
         lean = lean * (1.0 - dead) - 1.22 * dead;
         twist *= 1.0 - dead;
         joints[1] = joints[0].child(
             self.parts[1].pivot - self.parts[0].pivot,
-            Quat::from_rotation_x(lean) * Quat::from_rotation_y(twist),
+            Quat::from_rotation_x(lean)
+                * Quat::from_rotation_y(twist)
+                * Quat::from_rotation_z(walking * walk.sin() * 0.015),
         );
         joints[2] = joints[1].child(
             self.parts[2].pivot - self.parts[1].pivot,
-            Quat::from_rotation_x(-0.10 * (1.0 - stand) - dead * 0.25),
+            Quat::from_rotation_y(-twist * 0.55)
+                * Quat::from_rotation_x(-0.10 * doze + 0.035 * stand - dead * 0.285),
         );
         joints[3] = joints[2].child(
             self.parts[3].pivot - self.parts[2].pivot,
             Quat::from_rotation_x(
-                -0.32 * (1.0 - stand) + flinch * 0.15 - dead * 0.20
-                    + if sleeping {
-                        (ai.elapsed * 1.10).sin() * 0.012
-                    } else {
-                        0.0
-                    },
-            ) * Quat::from_rotation_z(if sleeping { 0.12 } else { 0.12 * (1.0 - stand) }),
+                -0.32 * doze - stand * 0.035 + flinch * 0.15 - dead * 0.165
+                    + (game.time * 0.78).sin() * 0.026 * doze * (1.0 - dead),
+            ) * Quat::from_rotation_z(0.12 * doze * (1.0 - dead)),
         );
 
         // Boots remain planted throughout the rise. Only a walking swing foot lifts.
@@ -211,10 +248,11 @@ impl WardenRig {
         for (side, thigh, shin, boot, coat) in [(0, 7, 8, 9, 10), (1, 14, 15, 16, 17)] {
             let sign = if side == 0 { 1.0 } else { -1.0 };
             let phase = walk + if side == 0 { 0.0 } else { std::f32::consts::PI };
+            let (step_z, step_lift) = gait_foot(phase);
             let ankle = Vec3::new(
-                sign * 0.105,
-                0.11 + walking * phase.sin().max(0.0) * 0.055,
-                -walking * phase.cos() * 0.14,
+                self.parts[boot].pivot.x + sign * 0.020,
+                self.parts[boot].pivot.y + walking * step_lift,
+                walking * step_z,
             );
             let hip = joints[0].point(self.parts[thigh].pivot - self.parts[0].pivot);
             let chain = two_bone(hip, ankle, 0.43, 0.43, -Vec3::Z);
@@ -241,15 +279,20 @@ impl WardenRig {
             r: sheath.r,
         };
         let mut right_ready = Joint {
-            p: Vec3::new(0.34, 1.14, -0.25),
+            p: Vec3::new(0.32, 1.18, -0.28),
             r: Quat::from_rotation_z(-0.12)
                 * Quat::from_rotation_y(0.65)
                 * Quat::from_rotation_x(1.0),
         };
-        right_ready.p.y += walking * walk.sin() * 0.022;
+        right_ready.p.y += walking * walk.sin() * 0.015;
+        right_ready.p.z += walking * walk.cos() * 0.045;
         let left_ready = Joint {
-            p: Vec3::new(-0.32, 1.08 + walking * (-walk).sin() * 0.035, -0.16),
-            r: Quat::from_rotation_x(0.22),
+            p: Vec3::new(
+                -0.34,
+                1.17 - walking * walk.sin() * 0.025,
+                -0.20 - walking * walk.cos() * 0.065,
+            ),
+            r: Quat::from_rotation_x(0.35) * Quat::from_rotation_z(-0.10),
         };
         let mut targets = [right_ready, left_ready];
         if stand < 1.0 || draw < 1.0 {
@@ -281,13 +324,13 @@ impl WardenRig {
                     * Quat::from_rotation_x(0.90),
             };
             let contact = Joint {
-                p: Vec3::new(0.02, 1.27, -0.47),
+                p: Vec3::new(0.02, 1.27, -0.50),
                 r: Quat::from_rotation_z(-0.15)
                     * Quat::from_rotation_y(1.35)
                     * Quat::from_rotation_x(0.80),
             };
             let follow = Joint {
-                p: Vec3::new(-0.14, 1.13, -0.21),
+                p: Vec3::new(-0.17, 1.12, -0.24),
                 r: Quat::from_rotation_z(0.75)
                     * Quat::from_rotation_y(2.35)
                     * Quat::from_rotation_x(0.80),
@@ -323,11 +366,11 @@ impl WardenRig {
                 dead,
             );
             let shoulder = joints[1].point(self.parts[upper].pivot - self.parts[1].pivot);
-            // As a raised hand falls past its shoulder, a fixed rearward pole
-            // can align with the arm and flip the elbow. Bring the bend plane
-            // forward smoothly before the wrist crosses shoulder height.
-            let pole = Vec3::new(sign, -0.20, 0.25)
-                .lerp(Vec3::new(sign, 0.0, -1.5), ease(0.0, 0.30, dead));
+            // Transport an outward bend from a downward reference arm. Unlike
+            // a fixed world pole, it cannot become parallel to the arm while a
+            // raised knife hand falls past its shoulder during an interruption.
+            let direction = (targets[side].p - shoulder).normalize_or_zero();
+            let pole = Quat::from_rotation_arc(-Vec3::Y, direction) * Vec3::new(sign, 0.0, 0.22);
             let chain = two_bone(shoulder, targets[side].p, 0.32, 0.29, pole);
             joints[upper] = bone(shoulder, chain.middle, targets[side].r);
             joints[forearm] = bone(chain.middle, chain.end, targets[side].r);
@@ -367,8 +410,14 @@ impl WardenRig {
                     .with_mesh(part.mesh)
                     .with_rot(joint.r)
                     .with_surface(
-                        if index == KNIFE { 0.48 } else { 0.82 },
-                        if index == KNIFE { 0.50 } else { 0.06 },
+                        match index {
+                            KNIFE => 0.46,
+                            2 | 3 => 0.92,           // skin
+                            6 | 9 | 13 | 16 => 0.87, // gloves and boots
+                            CHAIR => 0.90,
+                            _ => 0.96, // worn coat and trousers
+                        },
+                        if index == KNIFE { 0.60 } else { 0.0 },
                     ),
             );
         }
@@ -395,6 +444,175 @@ mod tests {
                 a.r,
                 b.r
             );
+        }
+    }
+
+    #[test]
+    fn stance_feet_cancel_the_body_travel_and_swing_contact_is_continuous() {
+        let rig = WardenRig::load(&mut Vec::new());
+        for (boot, start) in [(9, 0.0), (16, 0.6)] {
+            let mut anchor = None;
+            for step in 0..=30 {
+                let distance = start + step as f32 * 0.02;
+                let mut game = Dungeon::default();
+                game.warden_ai.phase = WardenPhase::Hunting;
+                game.warden_ai.yaw = 0.0;
+                game.warden_ai.walk_blend = 1.0;
+                game.warden_ai.walk_phase = distance / 1.2 * std::f32::consts::TAU;
+                game.warden = glam::Vec2::new(0.0, -distance);
+                let (joints, chains) = rig.pose(&game);
+                assert!(chains[if boot == 9 { 2 } else { 3 }].reached);
+                let world = Vec3::new(game.warden.x, 0.0, game.warden.y) + joints[boot].p;
+                let planted = *anchor.get_or_insert(world);
+                assert!(
+                    world.abs_diff_eq(planted, 0.00001),
+                    "stance sole slides: {planted:?} -> {world:?}"
+                );
+            }
+        }
+        for phase in [0.0, 0.55 * std::f32::consts::TAU, std::f32::consts::TAU] {
+            let a = gait_foot(phase - 0.00001);
+            let b = gait_foot(phase + 0.00001);
+            assert!((a.0 - b.0).abs() < 0.00001);
+            assert!((a.1 - b.1).abs() < 0.00001);
+        }
+    }
+
+    #[test]
+    fn rise_transfers_weight_before_lifting_and_keeps_both_soles_planted() {
+        let rig = WardenRig::load(&mut Vec::new());
+        let mut game = Dungeon::default();
+        let (mut previous, _) = rig.pose(&game);
+        let planted = [previous[9].p, previous[16].p];
+        let initial_hip = previous[0].p;
+        game.warden_ai.phase = WardenPhase::Waking;
+        for tick in 0..=99 {
+            game.time = tick as f32 * end_game_core::STEP;
+            game.warden_ai.elapsed = game.time;
+            let (joints, chains) = rig.pose(&game);
+            for chain in chains {
+                assert!(chain.reached, "unreachable rise at tick {tick}");
+            }
+            assert!(joints[9].p.abs_diff_eq(planted[0], 0.00001));
+            assert!(joints[16].p.abs_diff_eq(planted[1], 0.00001));
+            for (index, (a, b)) in previous.iter().zip(joints).enumerate() {
+                assert!(
+                    a.p.distance(b.p) < 0.08,
+                    "{} jumps while rising at tick {tick}",
+                    NAMES[index]
+                );
+            }
+            if tick == 24 {
+                assert!(initial_hip.z - joints[0].p.z > 3.0 * (joints[0].p.y - initial_hip.y));
+            }
+            previous = joints;
+        }
+        game.warden_ai.phase = WardenPhase::Hunting;
+        game.warden_ai.elapsed = 0.0;
+        assert_same_pose(&previous, &rig.pose(&game).0);
+    }
+
+    #[test]
+    fn authored_contact_is_the_single_forward_knife_commit_and_returns_to_guard() {
+        let rig = WardenRig::load(&mut Vec::new());
+        let mut game = Dungeon::default();
+        game.warden_ai.phase = WardenPhase::Hunting;
+        let idle = rig.pose(&game).0;
+        game.warden_ai.phase = WardenPhase::Attacking;
+        assert_same_pose(&idle, &rig.pose(&game).0);
+        game.warden_ai.elapsed = KNIFE_CONTACT;
+        let contact = rig.pose(&game).0;
+        assert!(contact[6]
+            .p
+            .abs_diff_eq(Vec3::new(0.02, 1.27, -0.50), 0.0001));
+        for tick in 0..=86 {
+            game.warden_ai.elapsed = tick as f32 * end_game_core::STEP;
+            let (joints, chains) = rig.pose(&game);
+            assert!(chains[0].reached && chains[1].reached);
+            assert!(
+                joints[6].p.z >= contact[6].p.z - 0.0001,
+                "an extra forward strike after/before authored contact"
+            );
+        }
+        game.warden_ai.elapsed = KNIFE_DURATION;
+        assert_same_pose(&idle, &rig.pose(&game).0);
+    }
+
+    #[test]
+    fn walking_boot_geometry_never_enters_the_floor_and_stops_at_the_same_phase() {
+        let mut meshes = Vec::new();
+        let rig = WardenRig::load(&mut meshes);
+        for tick in 0..=60 {
+            let mut game = Dungeon::default();
+            game.warden_ai.phase = WardenPhase::Hunting;
+            game.warden_ai.walk_phase = tick as f32 / 60.0 * std::f32::consts::TAU;
+            game.warden_ai.walk_blend = 1.0;
+            let (joints, chains) = rig.pose(&game);
+            for chain in chains {
+                assert!(chain.reached);
+            }
+            for boot in [9, 16] {
+                let mesh = &meshes[rig.parts[boot].mesh as usize - 1];
+                for vertex in &mesh.vertices {
+                    let p =
+                        joints[boot].point(Vec3::from_array(vertex.pos) - rig.parts[boot].pivot);
+                    assert!(
+                        p.y >= -0.001,
+                        "boot crosses floor at gait tick {tick}: {p:?}"
+                    );
+                }
+            }
+            let phase = game.warden_ai.walk_phase;
+            let mut previous = joints;
+            for stop in 1..=12 {
+                game.warden_ai.walk_blend = (1.0 - stop as f32 / 12.0).max(0.0);
+                let current = rig.pose(&game).0;
+                for boot in [9, 16] {
+                    assert!(previous[boot].p.distance(current[boot].p) < 0.035);
+                }
+                assert_eq!(game.warden_ai.walk_phase, phase);
+                previous = current;
+            }
+            assert_eq!(previous[9].p.z, 0.0);
+            assert_eq!(previous[16].p.z, 0.0);
+        }
+    }
+
+    #[test]
+    fn death_from_a_weighted_stride_preserves_the_pose_and_plants_the_lifted_foot() {
+        let mut meshes = Vec::new();
+        let rig = WardenRig::load(&mut meshes);
+        let knife = &meshes[rig.parts[KNIFE].mesh as usize - 1];
+        for phase in [0.0, 0.25, 0.5, 0.75] {
+            let mut game = Dungeon::default();
+            game.time = 3.1;
+            game.warden_ai.phase = WardenPhase::Hunting;
+            game.warden_ai.walk_phase = phase * std::f32::consts::TAU;
+            game.warden_ai.walk_blend = 1.0;
+            let before = rig.pose(&game).0;
+            game.warden_ai.die();
+            assert_same_pose(&before, &rig.pose(&game).0);
+            for tick in 1..=64 {
+                let elapsed = tick as f32 * end_game_core::STEP;
+                game.time = 3.1 + elapsed;
+                game.warden_ai.elapsed = elapsed;
+                game.warden_ai.walk_blend = (1.0 - elapsed * 5.0).max(0.0);
+                let (joints, chains) = rig.pose(&game);
+                for chain in chains {
+                    assert!(chain.reached, "stride death {phase}, tick {tick}");
+                }
+                for boot in [9, 16] {
+                    assert!(joints[boot].p.y >= rig.parts[boot].pivot.y - 0.0001);
+                }
+                for vertex in &knife.vertices {
+                    let point =
+                        joints[KNIFE].point(Vec3::from_array(vertex.pos) - rig.parts[KNIFE].pivot);
+                    assert!(
+                        point.y >= -0.001,
+                        "stride-death knife below floor: {point:?}"
+                    );
+                }
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-//! End Game v6: a single-player Ember dungeon, native and WASM.
+//! End Game v7: a single-player Ember dungeon, native and WASM.
 mod cell;
 mod hands;
 mod scene;
@@ -470,6 +470,26 @@ pub fn run() {
                         game.sim.position.z = game.sim.warden.y + distance.clamp(1.0, 3.0);
                     }
                 }
+                let distance = game.sim.position.z - game.sim.warden.y;
+                match std::env::var("END_GAME_WARDEN_VIEW").as_deref() {
+                    Ok("side") => {
+                        game.sim.position.x = game.sim.warden.x + distance;
+                        game.sim.position.z = game.sim.warden.y;
+                        game.sim.yaw = -std::f32::consts::FRAC_PI_2;
+                    }
+                    Ok("back") => {
+                        game.sim.position.z = game.sim.warden.y - distance;
+                        game.sim.yaw = std::f32::consts::PI;
+                    }
+                    _ => {}
+                }
+                if let Some(pitch) = std::env::var("END_GAME_WARDEN_PITCH")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|pitch| pitch.is_finite())
+                {
+                    game.sim.pitch = pitch.clamp(-0.6, 0.1);
+                }
                 game.sim.warden_ai.phase = match std::env::var("END_GAME_WARDEN_PHASE").as_deref() {
                     Ok("waking") => WardenPhase::Waking,
                     Ok("hunting") => WardenPhase::Hunting,
@@ -488,6 +508,13 @@ pub fn run() {
                     .unwrap_or(0.0);
                 if game.sim.warden_ai.phase == WardenPhase::Hunting {
                     game.sim.warden_ai.walk_blend = 1.0;
+                }
+                if let Some(blend) = std::env::var("END_GAME_WALK_BLEND")
+                    .ok()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .filter(|blend| blend.is_finite())
+                {
+                    game.sim.warden_ai.walk_blend = blend.clamp(0.0, 1.0);
                 }
                 let interrupted_attack = std::env::var("END_GAME_WARDEN_INTERRUPT_TIME")
                     .ok()

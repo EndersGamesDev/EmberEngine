@@ -20,16 +20,17 @@ class ReleaseAssembly(unittest.TestCase):
                 (assets / name).write_bytes(name.encode())
             old = {'games': [{'id': 'league', 'versions': [{'v': 'future', 'live': True}], 'unknown': 'preserve'}]}
             game = {'id': 'end-game', 'versions': [
-                {'version': f'{version}.0.0', 'path': f'games/end-game/v{version}/', 'live': version == 6}
-                for version in [6, 5, 4, 3, 2, 1]
+                {'version': f'{version}.0.0', 'path': f'games/end-game/v{version}/', 'live': version == 7}
+                for version in [7, 6, 5, 4, 3, 2, 1]
             ]}
             (source / 'web/games.json').write_text(json.dumps({'games': [game]}))
             (dest / 'games.json').write_text(json.dumps(old))
             (dest / 'index.html').write_text('<style>existing</style><main>keep live content</main>')
             (dest / 'server.json').write_bytes(b'keep host book')
             frozen = {}
-            for version in [1, 2, 3, 4, 5]:
-                for name in ['index.html', 'main.js', 'quality.js', 'style.css', 'cover.png', 'prologue.mp4', 'ambience.wav', 'pkg/end_game.js', 'pkg/end_game_bg.wasm', 'version.json']:
+            for version in [1, 2, 3, 4, 5, 6]:
+                names = (publish.FILES if version >= 6 else ['index.html', 'main.js', 'quality.js', 'style.css', 'cover.png', 'prologue.mp4', 'ambience.wav']) + ['pkg/end_game.js', 'pkg/end_game_bg.wasm', 'version.json']
+                for name in names:
                     relative = Path(f'games/end-game/v{version}') / name
                     payload = f'original published v{version}: {name}'.encode()
                     path = dest / relative
@@ -46,7 +47,7 @@ class ReleaseAssembly(unittest.TestCase):
             self.assertIn('keep live content', (dest / 'index.html').read_text())
             stamp = json.loads((dest / publish.SLOT / 'version.json').read_text())
             self.assertEqual(stamp['source'], 'source-sha')
-            self.assertEqual(stamp['version'], '6.0.0')
+            self.assertEqual(stamp['version'], '7.0.0')
             self.assertEqual(len(stamp['files']), 14)
             publish.assemble(source, dest, 'source-sha')
             self.assertEqual((dest / 'index.html').read_text().count(publish.ACCENT), 1)

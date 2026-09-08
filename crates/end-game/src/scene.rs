@@ -635,7 +635,7 @@ mod tests {
             })
             .sum();
         eprintln!(
-            "V5 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            "V7 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
             textures * 4 / 3
         );
         assert!(triangles < 220_000);
