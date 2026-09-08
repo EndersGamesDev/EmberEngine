@@ -25,7 +25,7 @@ thread_local! {
 /// Returns the full release version carried by this wasm package.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn package_version() -> String {
+pub fn layer_package_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 

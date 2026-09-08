@@ -615,7 +615,7 @@ async function boot() {
     const lab = await openLab({ canvas: CANVAS, statusId: "status" });
     LAB = lab;
     const api = lab.api;
-    const fullVersion = api.package_version();
+    const fullVersion = api.julibrot_package_version();
     const versionLabel = `Version ${fullVersion.split(".")[0]}`;
     document.getElementById("release-version").textContent = versionLabel;
     document.getElementById("release-version").title = `Full version ${fullVersion}`;

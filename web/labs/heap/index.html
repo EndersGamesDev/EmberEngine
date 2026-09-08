@@ -93,10 +93,10 @@
       select_heap_lattice_json,
       start_heap_lattice,
       take_heap_lattice_panic,
-      package_version,
+      heap_package_version,
     } from "./pkg/ember_lab_heap.js?v=9";
 
-    const PACKAGE_VERSION = package_version();
+    const PACKAGE_VERSION = heap_package_version();
     const VERSION_LABEL = `Version ${PACKAGE_VERSION.split(".")[0]}`;
     document.querySelector("#release-version").textContent = VERSION_LABEL;
     document.querySelector("#release-version").title = `Full version ${PACKAGE_VERSION}`;
