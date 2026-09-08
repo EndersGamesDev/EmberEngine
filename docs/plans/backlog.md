@@ -315,6 +315,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - `docs/julibrot/app.md` should carry the recorded property that the frame-loop fallback is a floor and not a rate, so a backgrounded tab completes at roughly 1 Hz; it is a documented trade with no code change asked for and does not belong in this file.
 - `docs/weapon-handling.md` should carry the recorded property that the footstep cue cadence is floored per gait against a 6 rad/m leg cycle (`crates/arena/src/feel.rs:1556`, `:1564`, selected at `:1570`), so cues plant about eight a second walking and twelve sprinting; a slower leg cycle is a separate animation change.
 - needs: a build server to run a Windows-target workspace check with all targets and enumerate the residual errors under the denied-warnings law; the commit that closed the underlying breakage records the same debt in its own message.
+- The former root roadmap left four untriaged directions: a Rapier-backed fixed-timestep physics layer, an offline glTF-to-baked-blob compiler, GPU-driven culling and indirect draws, and game-specific systems; reconcile each with the current architecture before treating it as planned work.
 
 ## UltimateLegue
 

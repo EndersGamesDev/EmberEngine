@@ -1,0 +1,1 @@
+Generated veteran component GLBs live here as the second image-to-mesh operator set; rebuild them from `assets/concepts/veteran-v2/` through Path A of [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) rather than editing binaries.

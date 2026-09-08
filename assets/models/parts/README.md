@@ -1,0 +1,1 @@
+Generated five-part operator GLBs live here and are embedded by the Arena client; their source views are in `assets/concepts/parts/`, and Path A of [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) governs rebuilding them.

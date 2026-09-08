@@ -1,0 +1,1 @@
+This directory holds the archived first Fire Racer page from before the castle circuit; [`web/games.json`](../../../games.json) retains the launcher choice, [`deploy/deploy-pages.sh`](../../../../deploy/deploy-pages.sh) deliberately leaves its published bytes untouched, and repairs follow [`docs/versioning.md`](../../../../docs/versioning.md).

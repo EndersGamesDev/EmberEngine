@@ -1,0 +1,1 @@
+This directory holds the archived UltimateLegue v2 Crystalforge page, UI and generated art for five champions, the garden arena, redesigned HUD and saved bindings; [`web/games.json`](../../../games.json) preserves its protocol entry, Pages leaves the published release frozen, and repairs follow [`docs/versioning.md`](../../../../docs/versioning.md).

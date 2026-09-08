@@ -1,0 +1,1 @@
+This directory holds the current page source for Arena v0, the local two-player Pong classic; [`web/games.json`](../../../games.json) exposes it as an archived choice, [`deploy/deploy-pages.sh`](../../../../deploy/deploy-pages.sh) republishes it with the Arena bundle, and [`docs/versioning.md`](../../../../docs/versioning.md) governs compatibility.

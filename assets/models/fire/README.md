@@ -1,0 +1,1 @@
+Generated POSITION-only Fire Racer car and castle-prop GLBs live here and are embedded by `crates/fire`; regenerate them through the Fire Racer Path A workflow in [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) rather than hand editing the binaries.

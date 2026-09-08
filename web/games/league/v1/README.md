@@ -1,0 +1,1 @@
+This directory holds the archived first UltimateLegue page for its one-lane, five-champion draft, courts, cores, shop and bots; [`web/games.json`](../../../games.json) preserves the launcher entry, Pages leaves the published release frozen, and repairs follow [`docs/versioning.md`](../../../../docs/versioning.md).
