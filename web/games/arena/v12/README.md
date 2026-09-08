@@ -1,0 +1,1 @@
+This directory holds the archived Killshot v12 melee-through-shields and headshots page source; [`web/games.json`](../../../games.json) preserves its protocol entry, published bytes stay frozen under [`deploy/deploy-pages.sh`](../../../../deploy/deploy-pages.sh), and historical repair follows [`docs/versioning.md`](../../../../docs/versioning.md).
