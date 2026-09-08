@@ -22,6 +22,7 @@ The test for `CLAUDE.md` is narrow: it is loaded into **every** session in this 
 
 - Work lands on a branch, never directly on `main`.
 - One topic per commit. Three independent changes are three commits, not one.
+- Commit messages follow `docs/commit-messages.md`: each body explains why the change is shaped that way and states explicitly what was and was not verified.
 - The branch is pushed early, before it is finished, so other workers can see it exists.
 - The PR is the coordination surface: questions, findings, and hand-offs are comments on it.
 
