@@ -1,15 +1,25 @@
+//! Replay, policy, and device oracles for the frame-loop owners.
+//!
+//! R3-04 proves the paired kernel path on a native device. A served/browser paired-mode capture
+//! requires the capability switch owned by R3-08; this lane keeps that switch off by default.
+//! The mapped-S1 cross-crate oracle lives here because present consumes kernels; placing its
+//! `Warp` call in the kernels crate would introduce a dependency cycle.
+
 use std::{
     fmt::Write as _,
+    future::Future,
     num::NonZeroU32,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use bytemuck::Zeroable as _;
 use ember_julibrot_kernels::{
-    DescriptorSamplePair, DispatchFacts, EscapeGrid, GridExtent, KernelError, KernelMode,
-    PairedOutputAllocation, PairedTileSpanIdentities, PerturbUniform, RefinementPlan, SampleStatus,
-    SourceReconstructionUniform, SourceScreenRect, TileOutput, TileOutputCompletion,
-    TilePoseHeader, TileRenderKey, TileSpanIdentity, perturb_scaled_pixel, plan_refinement,
+    DescriptorSamplePair, DescriptorTexel, DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels,
+    KernelError, KernelMode, PairedOutputAllocation, PairedTileSpanIdentities, PerturbUniform,
+    RefinementPlan, SampleStatus, SourceReconstructionUniform, SourceScreenRect, TileOutput,
+    TileOutputCompletion, TilePoseHeader, TileRenderKey, TileSpanIdentity, perturb_scaled_pixel,
+    plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
@@ -57,7 +67,7 @@ use ember_julibrot_worker::{
     EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest, ReferenceVerification,
     SubmitOutcome, WorkerFacts, WorkerMode,
 };
-use ember_lab_heap::SpanArena;
+use ember_lab_heap::{GpuKernelExecutor, GpuKernelExecutorConfig, HeapPresentResources, SpanArena};
 
 /// Poll budget and wall the version-three present configuration refuses at.
 const SCENE_POLLS: u32 = 4_096;
@@ -3341,6 +3351,652 @@ fn cpu_packed_s1_round_trips_through_descriptor_path() {
             <= f64::from(S1_READBACK_DEPTH_TOLERANCE)
     );
     assert_eq!(reconstructed.value, value);
+}
+
+static PAIRED_GPU_TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+fn wait_for_gpu_future<F: Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    loop {
+        if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut context) {
+            return output;
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn paired_gpu_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter,
+    };
+    let adapter = wait_for_gpu_future(instance.request_adapter(&request(true)))
+        .or_else(|| wait_for_gpu_future(instance.request_adapter(&request(false))))
+        .expect("a native GPU or software adapter is available for the paired kernel test");
+    let required = wgpu::TextureUsages::TEXTURE_BINDING
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC;
+    assert!(
+        adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba32Float)
+            .allowed_usages
+            .contains(required),
+        "the adapter supports the paired RGBA32F output and readback contract"
+    );
+    let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+    let (device, queue) = wait_for_gpu_future(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: Some("Julibrot paired kernel native test device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: limits,
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+        },
+        None,
+    ))
+    .expect("the paired kernel native test device is created");
+    (Arc::from(device), Arc::from(queue))
+}
+
+fn paired_gpu_readback_source(directory_indices: [u32; 3]) -> String {
+    const TEMPLATE: &str = r"
+struct HeapDescriptors { entries: array<vec4<u32>, 8>, }
+struct HeapDirectory {
+    spans: array<vec4<u32>, 8>,
+    handles: array<vec4<u32>, 4>,
+}
+@group(0) @binding(0) var heap_data: texture_2d_array<f32>;
+@group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
+@group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
+
+fn heap_handle(slot: u32) -> u32 {
+    return heap_directory.handles[slot / 4u][slot % 4u];
+}
+
+fn load_record(directory_index: u32, index: u32) -> vec4<f32> {
+    let span = heap_directory.spans[directory_index];
+    let page = index / span.x;
+    let local = index % span.x;
+    let heap_id = heap_handle(span.z + page);
+    let descriptor = heap_descriptors.entries[heap_id & 1048575u];
+    let width = descriptor.y >> 16u;
+    let origin = vec2<u32>(descriptor.x >> 16u, descriptor.y & 65535u);
+    let coordinate = origin + vec2<u32>(local % width, local / width);
+    return textureLoad(
+        heap_data,
+        vec2<i32>(coordinate),
+        i32(descriptor.x & 65535u),
+        0,
+    );
+}
+
+struct ReadbackVertex { @builtin(position) position: vec4<f32>, }
+@vertex fn readback_vertex(@builtin(vertex_index) vertex: u32) -> ReadbackVertex {
+    var points = array<vec2<f32>, 3>(
+        vec2(-1.0, -1.0),
+        vec2(3.0, -1.0),
+        vec2(-1.0, 3.0),
+    );
+    var output: ReadbackVertex;
+    output.position = vec4(points[vertex], 0.0, 1.0);
+    return output;
+}
+
+struct ValueReadbackFragment {
+    @location(0) legacy: vec4<f32>,
+    @location(1) value: vec4<f32>,
+}
+@fragment fn readback_value_fragment(
+    @builtin(position) position: vec4<f32>,
+) -> ValueReadbackFragment {
+    let index = u32(position.y) * 64u + u32(position.x);
+    var output: ValueReadbackFragment;
+    output.legacy = load_record(__LEGACY__, index);
+    output.value = load_record(__VALUE__, index);
+    return output;
+}
+
+struct ReconstructionReadbackFragment {
+    @location(0) reconstruction: vec4<f32>,
+}
+@fragment fn readback_reconstruction_fragment(
+    @builtin(position) position: vec4<f32>,
+) -> ReconstructionReadbackFragment {
+    let index = u32(position.y) * 64u + u32(position.x);
+    var output: ReconstructionReadbackFragment;
+    output.reconstruction = load_record(__RECONSTRUCTION__, index);
+    return output;
+}
+";
+    let directory_names = directory_indices.map(|directory_index| {
+        let mut name = String::new();
+        let _written = write!(name, "{directory_index}u");
+        name
+    });
+    TEMPLATE
+        .replace("__LEGACY__", &directory_names[0])
+        .replace("__VALUE__", &directory_names[1])
+        .replace("__RECONSTRUCTION__", &directory_names[2])
+}
+
+fn paired_gpu_heap_binding(
+    device: &wgpu::Device,
+    heap: &HeapPresentResources,
+) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
+    let uniform_entry = |binding, bytes| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(bytes),
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Julibrot paired readback heap layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            uniform_entry(1, u64::from(heap.descriptor_capacity) * 16),
+            uniform_entry(
+                2,
+                u64::from(heap.span_capacity + heap.handle_capacity.div_ceil(4)) * 16,
+            ),
+        ],
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Julibrot paired readback heap group"),
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&heap.data_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: heap.descriptor_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: heap.span_directory_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    (layout, group)
+}
+
+fn create_paired_gpu_readback_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    pipeline_layout: &wgpu::PipelineLayout,
+    label: &str,
+    fragment_entry: &str,
+    output_count: usize,
+) -> wgpu::RenderPipeline {
+    let targets = vec![
+        Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba32Float,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        });
+        output_count
+    ];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("readback_vertex"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(fragment_entry),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &targets,
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn paired_gpu_readback_pipelines(
+    device: &wgpu::Device,
+    heap_layout: &wgpu::BindGroupLayout,
+    directory_indices: [u32; 3],
+) -> [wgpu::RenderPipeline; 2] {
+    let source = paired_gpu_readback_source(directory_indices);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Julibrot paired readback shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Julibrot paired readback pipeline layout"),
+        bind_group_layouts: &[heap_layout],
+        push_constant_ranges: &[],
+    });
+    [
+        create_paired_gpu_readback_pipeline(
+            device,
+            &module,
+            &pipeline_layout,
+            "Julibrot paired value readback pipeline",
+            "readback_value_fragment",
+            2,
+        ),
+        create_paired_gpu_readback_pipeline(
+            device,
+            &module,
+            &pipeline_layout,
+            "Julibrot paired reconstruction readback pipeline",
+            "readback_reconstruction_fragment",
+            1,
+        ),
+    ]
+}
+
+fn map_paired_gpu_buffer(device: &wgpu::Device, readback: &wgpu::Buffer) -> Vec<u8> {
+    let mapped_result = Arc::new(Mutex::new(None));
+    let callback_result = Arc::clone(&mapped_result);
+    let readback_slice = readback.slice(..);
+    readback_slice.map_async(wgpu::MapMode::Read, move |result| {
+        *callback_result
+            .lock()
+            .expect("paired map callback lock is available") = Some(result);
+    });
+    let _poll = device.poll(wgpu::Maintain::Wait);
+    mapped_result
+        .lock()
+        .expect("paired map result lock is available")
+        .take()
+        .expect("paired record mapping completed")
+        .expect("paired record mapping succeeded");
+    let mapped = readback_slice.get_mapped_range();
+    let bytes = mapped.to_vec();
+    drop(mapped);
+    readback.unmap();
+    bytes
+}
+
+fn paired_gpu_readback_target(device: &wgpu::Device, extent: wgpu::Extent3d) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot paired mapped record target"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+fn read_paired_gpu_records(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    heap: &HeapPresentResources,
+    mut encoder: wgpu::CommandEncoder,
+    directory_indices: [u32; 3],
+) -> Vec<u8> {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+    const RECORD_BYTES: u32 = 16;
+    const OUTPUT_COUNT: u64 = 3;
+
+    let (heap_layout, heap_group) = paired_gpu_heap_binding(device, heap);
+    let [value_pipeline, reconstruction_pipeline] =
+        paired_gpu_readback_pipelines(device, &heap_layout, directory_indices);
+    let target_extent = wgpu::Extent3d {
+        width: WIDTH,
+        height: HEIGHT,
+        depth_or_array_layers: 1,
+    };
+    let targets: [wgpu::Texture; 3] =
+        std::array::from_fn(|_| paired_gpu_readback_target(device, target_extent));
+    let views = targets
+        .each_ref()
+        .map(|target| target.create_view(&wgpu::TextureViewDescriptor::default()));
+    let color_attachments = views.each_ref().map(|view| {
+        Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot paired mapped value record pass"),
+            color_attachments: &color_attachments[..2],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&value_pipeline);
+        pass.set_bind_group(0, &heap_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Julibrot paired mapped reconstruction record pass"),
+            color_attachments: &color_attachments[2..],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&reconstruction_pipeline);
+        pass.set_bind_group(0, &heap_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+    let row_bytes = WIDTH * RECORD_BYTES;
+    let output_bytes = u64::from(row_bytes) * u64::from(HEIGHT);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Julibrot paired mapped record buffer"),
+        size: output_bytes * OUTPUT_COUNT,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    for (output_index, target) in targets.iter().enumerate() {
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: u64::try_from(output_index).expect("output index fits") * output_bytes,
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(HEIGHT),
+                },
+            },
+            target_extent,
+        );
+    }
+    queue.submit([encoder.finish()]);
+    map_paired_gpu_buffer(device, &readback)
+}
+
+fn dispatch_paired_gpu_corpus(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    source: &Pose,
+    source_uniform: &SourceReconstructionUniform,
+) -> Vec<u8> {
+    let config = GpuKernelExecutorConfig {
+        heap_side: 256,
+        heap_layers: 4,
+        descriptor_capacity: 8,
+        span_capacity: 8,
+        directory_binding_bytes: 8 * 16 + 16 * 4,
+        scratch_layers: 2,
+        max_header_pages: 1,
+        max_header_sets: 9,
+        kernel_uniform_bytes: 288,
+    };
+    let mut executor = GpuKernelExecutor::new(Arc::clone(device), Arc::clone(queue), config)
+        .expect("the paired GPU test executor is created");
+    let mut kernels = JulibrotKernels::new(&mut executor).expect("value kernels register");
+    kernels
+        .enable_paired_outputs(&mut executor)
+        .expect("paired kernels register");
+    let extent = GridExtent {
+        width: 64,
+        height: 32,
+    };
+    let params = EscapeParams::new(64);
+    let plan = JulibrotKernels::plan_grid_pair(&executor, extent, params)
+        .expect("the frozen paired GPU job plans");
+    assert_eq!(plan.delivered_extent, extent);
+    let mut legacy = kernels
+        .allocate_grid(&mut executor, &plan)
+        .expect("the legacy output span allocates");
+    let (mut paired, allocation) = kernels
+        .allocate_output_pair(&mut executor, &plan, 7)
+        .expect("the paired output spans allocate");
+    let directory_indices = [
+        legacy.span.directory_index,
+        paired[0].span.directory_index,
+        paired[1].span.directory_index,
+    ];
+    let centre = CentreSplit {
+        hi: [0.25, -0.5, 0.0, 1.0],
+        lo: [0.0; 4],
+    };
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Julibrot paired GPU oracle transaction"),
+    });
+    kernels
+        .encode_shallow(
+            &executor,
+            &mut encoder,
+            &mut legacy,
+            41,
+            PrecisionMode::PictureFast,
+            RefinementLevel::Final,
+            &source.plane,
+            &Homography::IDENTITY,
+            &centre,
+            0.125,
+            params,
+        )
+        .expect("the legacy job encodes");
+    kernels
+        .encode_shallow_pair(
+            &executor,
+            &mut encoder,
+            device.limits().max_color_attachment_bytes_per_sample,
+            (&mut paired, allocation),
+            (42, PrecisionMode::PictureFast, RefinementLevel::Final),
+            (
+                &source.plane,
+                &Homography::IDENTITY,
+                &centre,
+                0.125,
+                params,
+                source_uniform,
+            ),
+        )
+        .expect("the paired job encodes both spans");
+    let heap = executor.present_resources();
+    read_paired_gpu_records(device, queue, &heap, encoder, directory_indices)
+}
+
+fn paired_gpu_source_pose() -> Pose {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    let mut source = fake_scene_frame(
+        PendingFakeScene {
+            id: 1,
+            generation: 7,
+            level: RefinementLevel::Final,
+        },
+        1,
+    )
+    .pose;
+    // R3-02 admits the exact-zero canonical Julia basis with the matching Julia object angles.
+    source.object = ObjectAngles::JULIA;
+    source.plane = Plane::CANONICAL_JULIA_PLANE;
+    source.grid_width = WIDTH;
+    source.grid_height = HEIGHT;
+    source
+}
+
+fn paired_gpu_source_pixel(record_index: u32) -> [f64; 2] {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    [
+        (-0.5_f64).mul_add(f64::from(WIDTH), f64::from(record_index % WIDTH) + 0.5),
+        (-0.5_f64).mul_add(f64::from(HEIGHT), f64::from(record_index / WIDTH) + 0.5),
+    ]
+}
+
+fn cpu_packed_gpu_s1(source: &Pose, value_record: &[u8; 16], record_index: u32) -> [u8; 16] {
+    const ITERATION_CAP: u32 = 64;
+
+    let value_texel = bytemuck::pod_read_unaligned::<DescriptorTexel>(value_record);
+    let [smooth_iter, escaped, rebase_count, status] = value_texel.lanes;
+    let record = EscapeGridRecord {
+        smooth_iter,
+        escaped,
+        rebase_count,
+        status,
+    };
+    let value = retained_value_sample(record, ITERATION_CAP)
+        .expect("mapped S0 record has a finite retained value");
+    let depth = source_depth_record(source, paired_gpu_source_pixel(record_index), value)
+        .expect("mapped S0 record has a CPU source-depth receipt");
+    let pair =
+        Warp::pack_descriptor_sample(record, depth).expect("CPU source-depth receipt packs as S1");
+    let mut packed = [0_u8; 16];
+    packed.copy_from_slice(bytemuck::bytes_of(&pair.s1));
+    packed
+}
+
+fn first_differing_s1_lane(expected: &[u8; 16], actual: &[u8; 16]) -> Option<usize> {
+    let (expected_lanes, expected_remainder) = expected.as_chunks::<4>();
+    let (actual_lanes, actual_remainder) = actual.as_chunks::<4>();
+    debug_assert_eq!(expected_remainder.len(), 0);
+    debug_assert_eq!(actual_remainder.len(), 0);
+    expected_lanes
+        .iter()
+        .zip(actual_lanes)
+        .position(|(expected_lane, actual_lane)| expected_lane != actual_lane)
+}
+
+fn paired_gpu_s1_diagnostics(
+    source: &Pose,
+    value_records: &[[u8; 16]],
+    reconstruction_records: &[[u8; 16]],
+) -> String {
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+
+    let interior_index = (HEIGHT / 2) * WIDTH + WIDTH / 2;
+    let mut output = String::new();
+    for diagnostic_index in [0, interior_index] {
+        let offset = usize::try_from(diagnostic_index).expect("diagnostic index fits usize");
+        let expected = cpu_packed_gpu_s1(source, &value_records[offset], diagnostic_index);
+        let actual = reconstruction_records[offset];
+        let first_differing_lane = first_differing_s1_lane(&expected, &actual);
+        let _written = write!(
+            output,
+            "texel={diagnostic_index} cpu={expected:02x?} gpu={actual:02x?} \
+             first_differing_lane={first_differing_lane:?}; "
+        );
+    }
+    output
+}
+
+#[test]
+fn paired_gpu_dispatch_matches_legacy_s0_and_mapped_s1_reconstructs() {
+    /// Mapped binary32 reconstruction must reproduce the source within a quarter pixel.
+    const GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX: f32 = 0.25;
+    /// Mapped binary32 depth must reproduce the source receipt within one hundredth.
+    const GPU_RECONSTRUCTION_DEPTH_TOLERANCE: f32 = 0.01;
+    const WIDTH: u32 = 64;
+    const HEIGHT: u32 = 32;
+    const RECORD_BYTES: usize = 16;
+
+    let _guard = PAIRED_GPU_TEST_MUTEX
+        .lock()
+        .expect("the paired GPU test mutex is available");
+    let (device, queue) = paired_gpu_test_device();
+    let source = paired_gpu_source_pose();
+    let render =
+        TileRenderKey::from_pose(&source, SourceScreenRect::from_extent(0, 0, WIDTH, HEIGHT));
+    let mut policy = TilePoseHeader::zeroed();
+    policy.texels[TilePoseHeader::H21_BOUNDS].lanes = [
+        0.0,
+        16.0,
+        GPU_RECONSTRUCTION_DEPTH_TOLERANCE,
+        GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX,
+    ];
+    policy.texels[TilePoseHeader::H22_QUALITY].lanes[2] = 64.0;
+    let header = Warp::pack_descriptor_header(&render, &policy)
+        .expect("the mapped GPU reconstruction header packs");
+    let source_uniform = SourceReconstructionUniform::from_header(&header)
+        .expect("the paired GPU source uniform derives from the reconstruction header");
+    let mapped = dispatch_paired_gpu_corpus(&device, &queue, &source, &source_uniform);
+    let plane_bytes = usize::try_from(WIDTH * HEIGHT).expect("record count fits") * RECORD_BYTES;
+    let legacy_bytes = &mapped[..plane_bytes];
+    let paired_value_bytes = &mapped[plane_bytes..plane_bytes * 2];
+    let reconstruction_bytes = &mapped[plane_bytes * 2..];
+    assert_eq!(paired_value_bytes, legacy_bytes);
+    let (legacy_records, legacy_remainder) = legacy_bytes.as_chunks::<RECORD_BYTES>();
+    let (paired_value_records, value_remainder) = paired_value_bytes.as_chunks::<RECORD_BYTES>();
+    let (reconstruction_records, reconstruction_remainder) =
+        reconstruction_bytes.as_chunks::<RECORD_BYTES>();
+    assert_eq!(legacy_remainder.len(), 0);
+    assert_eq!(value_remainder.len(), 0);
+    assert_eq!(reconstruction_remainder.len(), 0);
+
+    let diagnostics =
+        paired_gpu_s1_diagnostics(&source, paired_value_records, reconstruction_records);
+    for (record_offset, ((legacy_record, value_record), reconstruction_record)) in legacy_records
+        .iter()
+        .zip(paired_value_records)
+        .zip(reconstruction_records)
+        .enumerate()
+    {
+        assert_eq!(value_record, legacy_record, "S0 record {record_offset}");
+        let pair = DescriptorSamplePair {
+            s0: bytemuck::pod_read_unaligned::<DescriptorTexel>(value_record),
+            s1: bytemuck::pod_read_unaligned::<DescriptorTexel>(reconstruction_record),
+        };
+        let record_index = u32::try_from(record_offset).expect("record index fits u32");
+        let expected_s1 = cpu_packed_gpu_s1(&source, value_record, record_index);
+        assert_eq!(
+            reconstruction_record,
+            &expected_s1,
+            "mapped S1 record {record_index} differs from CPU packing at lane {:?}; \
+             {diagnostics}",
+            first_differing_s1_lane(&expected_s1, reconstruction_record)
+        );
+        let source_pixel = paired_gpu_source_pixel(record_index);
+        let (_, receipt) = Warp::reconstruct_descriptor_sample(&header, &pair, source_pixel)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "mapped S1 record {record_index} failed reconstruction: {error}; \
+                     {diagnostics}"
+                )
+            });
+        let pixel_error =
+            (receipt.screen[0] - source_pixel[0]).hypot(receipt.screen[1] - source_pixel[1]);
+        assert!(
+            pixel_error <= f64::from(GPU_RECONSTRUCTION_PIXEL_TOLERANCE_PX),
+            "mapped S1 record {record_index} has {pixel_error} px error"
+        );
+        assert!(
+            (receipt.linear_depth - f64::from(pair.s1.lanes[2])).abs()
+                <= f64::from(GPU_RECONSTRUCTION_DEPTH_TOLERANCE),
+            "mapped S1 record {record_index} changes its depth receipt"
+        );
+    }
 }
 
 const WORKER_SERVICE_REPLAY_FIXTURE: &str = "\
