@@ -1,0 +1,1 @@
+Generated and baked 8-bit Trench City material tiles live here and are embedded by Arena's props renderer; regenerate them with `tools/v13/` under Path E of [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md), not by hand.

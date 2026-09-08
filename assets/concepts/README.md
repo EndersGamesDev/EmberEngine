@@ -1,0 +1,1 @@
+Generated and curated character concept references live here as inputs to the image-to-mesh paths in [`docs/asset-pipeline.md`](../../docs/asset-pipeline.md); runtime code does not load them, and regeneration belongs to the documented source workflow rather than hand edits.

@@ -1,0 +1,1 @@
+Generated 8-bit loot-block texture output lives here and is embedded by Arena; `tools/v18/loot_texture.py` is its source, and [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) governs the shipped format.

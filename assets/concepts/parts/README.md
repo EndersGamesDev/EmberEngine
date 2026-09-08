@@ -1,0 +1,1 @@
+Generated operator part reference images live here for the first image-to-mesh character pass that produced `assets/models/parts/`; runtime code consumes the GLBs instead, and [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) governs regeneration.

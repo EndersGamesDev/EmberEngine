@@ -1,0 +1,1 @@
+Generated UltimateLegue v2 champion, prop and surface GLBs with transform and provenance manifests live here for the League client; update them through `tools/league/` under [`docs/asset-pipeline.md`](../../../../docs/asset-pipeline.md), not by editing outputs.

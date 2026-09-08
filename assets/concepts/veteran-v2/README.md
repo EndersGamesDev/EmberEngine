@@ -1,0 +1,1 @@
+Generated orthographic veteran component views live here as the source set for `assets/models/parts2/`; regenerate them through Path A in [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) rather than editing the rendered PNGs.

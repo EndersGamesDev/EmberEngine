@@ -1,0 +1,1 @@
+Generated Trench City decor GLBs live here and are embedded by Arena's props renderer; `tools/v13/` and Path E of [`docs/asset-pipeline.md`](../../../docs/asset-pipeline.md) are the source and regeneration contract.

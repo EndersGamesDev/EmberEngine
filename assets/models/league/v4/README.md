@@ -1,0 +1,1 @@
+Generated UltimateLegue v4 court, garden and lane surface GLBs plus their manifest live here for the League environment pass; regenerate them with `tools/league/art/` under [`docs/asset-pipeline.md`](../../../../docs/asset-pipeline.md), not by hand.
