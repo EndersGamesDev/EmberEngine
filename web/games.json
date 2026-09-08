@@ -4,6 +4,11 @@
       "id": "arena",
       "title": "Killshot",
       "landing": "games/arena/",
+      "trailer": {
+        "src": "games/arena/media/trailer.mp4",
+        "poster": "games/arena/media/trailer-poster.jpg",
+        "captions": "games/arena/media/trailer.vtt"
+      },
       "tag": "online multiplayer · first person · up to 8",
       "desc": "Killshot is Ember's online first-person shooter for up to eight players. The new Breach-12 shotgun joins eight weapons with individual sights, zoom, accuracy and reload animations. Read LIFE and ammunition at a glance, collect health and ammo boxes, and keep collected weapons in rebindable slots 1–9 until death. A circular countdown shows reload progress. Classic starts with a sidearm; Custom loadout lets the host choose a shared starting weapon independently of free for all, 4v4 team deathmatch or king of the hill. Slide, slide-jump and chain wall kicks through three hand-authored maps, including the vertical 96 × 96 m Breakwater Harbor with enterable port buildings and rooftop routes. Five HP, head-sized headshots and a timed shield. Sunlight, shadows, clouds, weather, spatial sound and gamepad support. Settings includes sensitivity, key bindings and fullscreen.",
       "versions": [
