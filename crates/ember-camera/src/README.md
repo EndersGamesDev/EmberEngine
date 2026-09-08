@@ -1,6 +1,6 @@
 # Exact camera source
 
-`lib.rs` exposes the camera contract, while `fixed.rs` implements the dependency-free signed fixed-point arithmetic used by exact view edits.
+`lib.rs` exposes the camera contract. `fixed.rs` implements checked signed fixed-point arithmetic, `types.rs` owns the exact records, `scale.rs` derives pixel scale from integer exponents, and `basis.rs` rebuilds the floating-point frame from integer turns.
 
 The library uses `core` alone. Tests may use `std` for timing, but platform or renderer types do not enter this folder.
 

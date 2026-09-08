@@ -25,6 +25,18 @@ pub enum CameraError {
     Overflow,
     /// A floating-point boundary input is NaN or infinite.
     NonFinite,
+    /// A screen dimension is zero.
+    InvalidScreen,
+    /// An exponent lies outside the camera's named navigation range.
+    ExponentOutOfRange,
+    /// An orientation uses a diagonal or lower-triangle storage slot.
+    InvalidOrientation,
+    /// An image plane requires at least two ambient dimensions.
+    DimensionTooSmall,
+    /// Points cannot define the requested frame.
+    DegenerateFrame,
+    /// Perspective parameters cannot define a forward ray.
+    InvalidPerspective,
 }
 
 impl fmt::Display for CameraError {
@@ -33,6 +45,18 @@ impl fmt::Display for CameraError {
             Self::InvalidWidth => formatter.write_str("fixed-point width must contain a limb"),
             Self::Overflow => formatter.write_str("value is outside the fixed-point range"),
             Self::NonFinite => formatter.write_str("floating-point input is not finite"),
+            Self::InvalidScreen => formatter.write_str("screen dimensions must be nonzero"),
+            Self::ExponentOutOfRange => {
+                formatter.write_str("exponent is outside the navigation range")
+            }
+            Self::InvalidOrientation => formatter.write_str("orientation storage is not canonical"),
+            Self::DimensionTooSmall => {
+                formatter.write_str("an image plane needs at least two dimensions")
+            }
+            Self::DegenerateFrame => formatter.write_str("points do not define a camera frame"),
+            Self::InvalidPerspective => {
+                formatter.write_str("observer perspective does not define a forward ray")
+            }
         }
     }
 }
@@ -114,6 +138,16 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
             magnitude[0] = round_u64_right(significand, shift);
         }
         Self::from_magnitude(magnitude, bits & SIGN_BIT != 0)
+    }
+
+    /// Converts a binary64 bit pattern through the documented lossy ingress boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite pattern, an invalid width, or a value outside the fixed
+    /// range.
+    pub fn from_binary64_bits(bits: u64) -> Result<Self, CameraError> {
+        Self::from_f64(f64::from_bits(bits))
     }
 
     /// Converts this value to binary64, rounding to nearest with ties to even.
@@ -391,6 +425,36 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
         Ok(result)
     }
 
+    /// Divides by a small unsigned integer, rounding to nearest with ties to even.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero divisor, an invalid width, or a rounded quotient outside the
+    /// fixed range.
+    pub fn div_u32_round_even(&self, divisor: u32) -> Result<Self, CameraError> {
+        Self::validate_width()?;
+        if divisor == 0 {
+            return Err(CameraError::InvalidScreen);
+        }
+        let negative = self.is_negative();
+        let magnitude = self.magnitude();
+        let mut quotient = [0; LIMBS];
+        let divisor = u128::from(divisor);
+        let mut remainder = 0_u128;
+        for (output, limb) in quotient.iter_mut().zip(magnitude).rev() {
+            let dividend = (remainder << LIMB_BITS) | u128::from(limb);
+            *output = low_u64(dividend / divisor)?;
+            remainder = dividend % divisor;
+        }
+        let twice_remainder = remainder.checked_mul(2).ok_or(CameraError::Overflow)?;
+        if (twice_remainder > divisor || (twice_remainder == divisor && quotient[0] & 1 != 0))
+            && increment(&mut quotient)
+        {
+            return Err(CameraError::Overflow);
+        }
+        Self::from_magnitude(quotient, negative)
+    }
+
     /// Compares two values numerically.
     #[must_use]
     pub fn compare(&self, other: &Self) -> Ordering {
@@ -471,7 +535,7 @@ impl<const LIMBS: usize> Ord for Fixed<LIMBS> {
                 .iter()
                 .zip(&other.limbs)
                 .rev()
-                .find_map(|(left, right)| (left != right).then(|| left.cmp(right)))
+                .find_map(|(left, right)| (left != right).then_some(left.cmp(right)))
                 .unwrap_or(Ordering::Equal),
         }
     }
