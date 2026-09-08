@@ -36,6 +36,7 @@ async function main() {
   for (const field of ['sourceCommit', 'pagesCommit', 'base', 'tree']) {
     assert(/^[a-f0-9]{40}$/.test(publication[field] || ''), `Publication ${field} must be a full commit/tree SHA`);
   }
+  assert.equal(publication.releaseVersion, scope.VERSION, 'Publication release version differs');
   assert.equal(String(git('rev-parse', `${publication.pagesCommit}^{tree}`)).trim(), publication.tree, 'Publication tree differs');
   assert.equal(String(git('rev-parse', `${publication.pagesCommit}^`)).trim(), preserved, 'Publication parent differs from preservation base');
   const [book, catalog, version] = await Promise.all(['server.json', 'games.json', 'version.json']

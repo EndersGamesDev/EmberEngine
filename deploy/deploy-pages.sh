@@ -51,18 +51,61 @@ cd "$REPO_DIR"
 # gh-pages commit holding the original first web build (auto-run pong).
 V1_COMMIT="e7b85e8"
 
-# League's catalog selects the version we replace. Validate before using it
-# in a filesystem path; all its other version directories remain frozen.
-LEAGUE_LIVE="$("$PY" - web/games.json <<'PY'
-import json, re, sys
-catalog = json.load(open(sys.argv[1], encoding="utf-8"))
-live = [v for g in catalog["games"] if g.get("id") == "league"
-        for v in g["versions"] if v.get("live") is True]
-if len(live) != 1 or not re.fullmatch(r"games/league/v[1-9][0-9]*/", live[0].get("path", "")):
+# Release versions come from the packages being shipped. Validate every
+# catalog entry before a build or publish, then use Arena's release major to
+# select its stable vN directory. Other legacy slots remain explicit locators.
+IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE < <("$PY" - web/games.json <<'PY'
+import json, pathlib, re, sys
+
+catalog_path = pathlib.Path(sys.argv[1])
+catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+semantic = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+manifests = {
+    "arena": "crates/arena/Cargo.toml",
+    "fire": "crates/fire/Cargo.toml",
+    "kings": "crates/kings/Cargo.toml",
+    "league": "crates/league/Cargo.toml",
+    "what-is-this": "crates/what-is-this/Cargo.toml",
+    "julibrot": "crates/labs/julibrot/app/Cargo.toml",
+}
+
+
+def package_version(manifest):
+    text = pathlib.Path(manifest).read_text(encoding="utf-8")
+    found = re.findall(r'^version\s*=\s*"([^"]+)"\s*$', text, re.MULTILINE)
+    if len(found) != 1 or semantic.fullmatch(found[0]) is None:
+        raise SystemExit("FAILED: %s must declare one three-grade package version" % manifest)
+    return found[0]
+
+
+games = {game.get("id"): game for game in catalog.get("games", [])}
+if len(games) != len(catalog.get("games", [])):
+    raise SystemExit("FAILED: catalog game ids must be unique")
+for game in catalog.get("games", []):
+    for release in game.get("versions", []):
+        if semantic.fullmatch(str(release.get("version", ""))) is None:
+            raise SystemExit("FAILED: every catalog entry must carry a three-grade version")
+for game_id, manifest in manifests.items():
+    versions = games.get(game_id, {}).get("versions", [])
+    live = [release for release in versions if release.get("live") is True]
+    if len(live) != 1:
+        raise SystemExit("FAILED: %s must select exactly one live release" % game_id)
+    expected = package_version(manifest)
+    if live[0]["version"] != expected:
+        raise SystemExit("FAILED: %s live version must equal package version %s" % (game_id, expected))
+
+arena = next(release for release in games["arena"]["versions"] if release.get("live") is True)
+arena_major = arena["version"].split(".", 1)[0]
+arena_path = "games/arena/v%s/" % arena_major
+if arena.get("v") != "v%s" % arena_major or arena.get("path") != arena_path:
+    raise SystemExit("FAILED: Arena release major must select its vN slot")
+league = next(release for release in games["league"]["versions"] if release.get("live") is True)
+if re.fullmatch(r"games/league/v[1-9][0-9]*/", league.get("path", "")) is None:
     raise SystemExit("FAILED: League catalog must select exactly one safe live version path")
-print(live[0]["path"].rstrip("/"))
+print(arena_path.rstrip("/") + "\t" + league["path"].rstrip("/"))
 PY
-)"
+)
+ARENA_LIVE="${ARENA_LIVE//$'\r'/}"
 LEAGUE_LIVE="${LEAGUE_LIVE//$'\r'/}"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
@@ -143,7 +186,6 @@ if release.exists():
 PY
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v31"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"

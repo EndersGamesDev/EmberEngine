@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const ENTRY = 'games/arena/v31';
 const PREVIOUS = 'games/arena/v30';
+const VERSION = '31.0.0';
 const PROTO = 24;
 const allowed = Object.freeze(['index.html', 'games.json', 'version.json', 'server.json',
   `${ENTRY}/index.html`, `${ENTRY}/settings.js`, `${ENTRY}/pkg/arena.js`, `${ENTRY}/pkg/arena_bg.wasm`]);
@@ -30,6 +31,7 @@ function assertLive(book, value) {
   const live = arena.versions.filter(version => version.live);
   assert.equal(live.length, 1, 'Public Arena must have exactly one live version');
   assert.equal(live[0].v, ENTRY.split('/').at(-1), 'Public live version differs');
+  assert.equal(live[0].version, VERSION, 'Public live release version differs');
   assert.equal(live[0].path, `${ENTRY}/`, 'Public live path differs');
   assert.equal(live[0].proto, PROTO, 'Public live client protocol differs');
   return live[0];
@@ -41,11 +43,13 @@ function catalog(previous, source) {
   const before = oldArena.versions.filter(version => version.live);
   assert.equal(before.length, 1, 'Published Arena must have one live version');
   assert.equal(before[0].path, `${PREVIOUS}/`, 'Expected v30 currently live');
+  assert.equal(before[0].version, '30.0.0', 'Expected three-grade v30 release version');
   assert.equal(before[0].proto, 23, 'Expected v30 protocol23');
   assert.equal(newArena.title, 'Killshot', 'New display name must be Killshot; internal game identity stays arena');
   const after = newArena.versions.filter(version => version.live);
   assert.equal(after.length, 1, 'Source Arena must have one live version');
   assert.equal(after[0].v, 'v31');
+  assert.equal(after[0].version, VERSION);
   assert.equal(after[0].path, `${ENTRY}/`);
   assert.equal(after[0].proto, PROTO);
   assert(!oldArena.versions.some(version => version.path === `${ENTRY}/`), 'v31 already exists; never overwrite an archived release');
@@ -59,4 +63,4 @@ function catalog(previous, source) {
   return next;
 }
 
-module.exports = { ENTRY, PREVIOUS, PROTO, allowed, launcher, catalog, assertLive };
+module.exports = { ENTRY, PREVIOUS, VERSION, PROTO, allowed, launcher, catalog, assertLive };

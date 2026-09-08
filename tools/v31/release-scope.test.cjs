@@ -6,17 +6,17 @@ const assert = require('node:assert/strict');
 const scope = require('./release-scope.cjs');
 const fixture = () => {
   const previous = { future: 'keep', games: [
-    { id: 'fire', title: 'Peer release', versions: [{ v: 'v2', path: 'games/fire/v2/', live: true, proto: 2 }], extra: { keep: true } },
+    { id: 'fire', title: 'Peer release', versions: [{ v: 'v2', version: '1.0.0', path: 'games/fire/v2/', live: true, proto: 2 }], extra: { keep: true } },
     { id: 'arena', title: 'Arena', versions: [
-      { v: 'v30', path: 'games/arena/v30/', live: true, proto: 23, note: 'preserve this' },
-      { v: 'v28', path: 'games/arena/v28/', live: false, proto: 21 },
+      { v: 'v30', version: '30.0.0', path: 'games/arena/v30/', live: true, proto: 23, note: 'preserve this' },
+      { v: 'v28', version: '28.0.0', path: 'games/arena/v28/', live: false, proto: 21 },
     ] },
   ] };
   const arena = previous.games[1];
   const source = { games: [{ ...arena, title: 'Killshot', versions: [
-    { v: 'v31', path: 'games/arena/v31/', live: true, proto: 24 },
+    { v: 'v31', version: '31.0.0', path: 'games/arena/v31/', live: true, proto: 24 },
     ...arena.versions.map(version => ({ ...version, live: false })),
-  ] }, { id: 'fire', versions: [{ live: true, proto: 1 }] }] };
+  ] }, { id: 'fire', versions: [{ version: '1.0.0', live: true, proto: 1 }] }] };
   return { previous, source };
 };
 test('single fallback changes without replacing peer-authored launcher content', () => {
@@ -39,6 +39,7 @@ test('lost history, changed frozen metadata, wrong protocol, duplicates and unex
     ({ source }) => source.games[0].versions.pop(),
     ({ source }) => { source.games[0].versions[1].note = 'rewritten'; },
     ({ source }) => { source.games[0].versions[0].proto = 23; },
+    ({ source }) => { source.games[0].versions[0].version = '31.0.1'; },
     ({ source }) => { source.games[0].versions[1].live = true; },
     ({ source }) => { source.games[0].id = 'killshot'; },
     ({ source }) => source.games.push(source.games[0]),
@@ -60,6 +61,7 @@ test('only the eight Arena release paths are eligible for publication', () => {
 test('public release accepts v31 protocol24 and rejects protocol23 in either book or client', () => {
   const { source } = fixture();
   assert.equal(scope.PROTO, 24);
+  assert.equal(scope.VERSION, '31.0.0');
   assert.equal(scope.assertLive({ proto: 24 }, source), source.games[0].versions[0]);
   assert.throws(() => scope.assertLive({ proto: 23 }, source), /address book/);
   const oldProtocol = structuredClone(source); oldProtocol.games[0].versions[0].proto = 23;
@@ -72,6 +74,7 @@ test('public release rejects duplicate identities, duplicate live versions and s
     value => value.games[0].versions.push(structuredClone(value.games[0].versions[0])),
     value => { value.games[0].versions[0].path = 'games/arena/v30/'; },
     value => { value.games[0].versions[0].v = 'v30'; },
+    value => { value.games[0].versions[0].version = 'v31'; },
     value => { value.games[0].versions[0].live = false; },
   ]) {
     const { source } = fixture(); mutate(source);
