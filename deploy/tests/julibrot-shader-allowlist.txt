@@ -1,6 +1,6 @@
 # Closed migration debt. Delete records as rows migrate; test-shaders.sh rejects additions.
-# kind|path|Rust symbol or -|docs/julibrot/shaders.md row
-# R3-04 landed after this lane's base: one production source and one test-only fixture.
+# kind|path|Rust symbol, lowering function or -|docs/julibrot/shaders.md row
+# R3-04 landed after this lane's base: one production source and one test-only source/lowering pair.
 inline|crates/labs/julibrot/present/src/shader.rs|HEAP_SCENE_PREFIX|JB-PRESENT-SCENE
 inline|crates/labs/julibrot/present/src/shader.rs|SCENE_BODY|JB-PRESENT-SCENE
 inline|crates/labs/julibrot/present/src/shader.rs|GLITCH_COUNT_BODY|JB-PRESENT-SCENE
@@ -8,5 +8,9 @@ inline|crates/labs/julibrot/present/src/warp_shader.rs|WARP_SHADER|JB-PRESENT-WA
 inline|crates/labs/julibrot/present/src/gpu/device/tests.rs|SOURCE|JB-PRESENT-NATIVE-TEST
 inline|crates/labs/julibrot/app/src/frame/loop/tests.rs|TEMPLATE|JB-APP-PAIRED-TEST
 inline|crates/labs/julibrot/kernels/src/gpu.rs|RECONSTRUCTION_BODY|JB-KERNEL-RECONSTRUCTION
+lowering|crates/labs/julibrot/present/src/gpu/device/scene.rs|create_scene_pipeline|JB-PRESENT-SCENE
+lowering|crates/labs/julibrot/present/src/gpu/device/tests.rs|native_split_value_pipeline|JB-PRESENT-NATIVE-TEST
+lowering|crates/labs/julibrot/present/src/gpu/device/warp.rs|create_warp_pipeline|JB-PRESENT-WARP
+lowering|crates/labs/julibrot/app/src/frame/loop/tests.rs|paired_gpu_readback_pipelines|JB-APP-PAIRED-TEST
 file|crates/labs/julibrot/kernels/src/shallow.wgsl|-|JB-KERNEL-SHALLOW
 file|crates/labs/julibrot/kernels/src/perturb.wgsl|-|JB-KERNEL-PERTURB

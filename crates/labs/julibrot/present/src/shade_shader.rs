@@ -84,6 +84,13 @@ pub fn shade_shader() -> Result<RenderedShader, RenderError> {
 }
 
 #[cfg(test)]
+mod production_validation {
+    use super::{PRESENT_SHADE_TEMPLATE, shade_shader};
+
+    ember_julibrot_shader::production_template_test!(PRESENT_SHADE_TEMPLATE, shade_shader);
+}
+
+#[cfg(test)]
 const LEGACY_SHADE_SOURCE: &str = r"
 struct PaletteUniform { map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
 @group(0) @binding(0) var presentation_values: texture_2d<f32>;
@@ -203,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    fn shade_source_parses_and_validates() {
+    fn shade_source_matches_the_legacy_fixture() {
         for record in [
             crate::CLASSIC_PALETTE,
             crate::EMBER_PALETTE,
@@ -221,14 +228,7 @@ mod tests {
             "actual rendered shade hash: {:#018x}",
             shader.hash()
         );
-
         let module = naga::front::wgsl::parse_str(shader.source()).expect("shade WGSL parses");
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .expect("shade WGSL validates");
         assert_palette_layout(&module);
         assert_palette_discriminants(shader.source());
     }
