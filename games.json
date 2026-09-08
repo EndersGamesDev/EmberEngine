@@ -239,13 +239,20 @@
       "id": "end-game",
       "title": "End Game",
       "tag": "single player · dark fantasy · controller + touch",
-      "desc": "Awaken in a castle prison. Search the wooden cell, slip past a sleeping warden, draw a colossal sword from stone and awaken the werewolf armor. A first-person dark fantasy chapter with PS5-style controller controls, WASD and mouse, touch controls, physical materials and adaptive resolution up to 5K.",
+      "desc": "Awaken in a detailed castle prison. Explore weathered masonry, aged timber and handmade ironwork, slip past the sleeping warden and claim the greatsword. Controller, keyboard/mouse and touch controls with adaptive resolution.",
       "versions": [
+        {
+          "v": "v2",
+          "version": "2.0.0",
+          "path": "games/end-game/v2/",
+          "live": true,
+          "note": "The Living Cell: generated stone and oak surfaces, detailed furnishings, fitted masonry, moving chains, cloth and dripping water"
+        },
         {
           "v": "v1",
           "version": "1.0.0",
           "path": "games/end-game/v1/",
-          "live": true,
+          "live": false,
           "note": "The Awakening: a playable prison escape, wolf and werewolf armor, greatsword, prologue, torch lighting and adaptive resolution"
         }
       ]
