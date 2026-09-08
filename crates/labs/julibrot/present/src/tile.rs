@@ -16,7 +16,8 @@ const EXACT_INTEGER_LIMIT: f32 = 16_777_216.0;
 /// Four f32 ulps admit a sine/cosine pair after independent lane rounding.
 const FACTOR_NORM_TOLERANCE: f64 = 4.768_371_582_031_25e-7;
 
-pub(crate) fn pack_descriptor_header(
+/// Packs the source-pose lanes while preserving supplied policy and lifetime lanes.
+pub fn pack_descriptor_header(
     render: &TileRenderKey,
     header: &TilePoseHeader,
 ) -> Option<TilePoseHeader> {
@@ -71,7 +72,8 @@ pub(crate) fn pack_descriptor_header(
     descriptor_lanes_are_valid(&header).then_some(header)
 }
 
-pub(crate) fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
+/// Unpacks a validated header into the finite pose fields needed by projection.
+pub fn unpack_descriptor_header(header: &TilePoseHeader) -> Option<Pose> {
     if !header.reserved_lanes_are_zero() || !descriptor_lanes_are_valid(header) {
         return None;
     }
@@ -168,7 +170,8 @@ fn pack_angle_factors(values: &[ExactF64], texels: &mut [DescriptorTexel]) -> Op
     if values.len() != texels.len() * 2 {
         return None;
     }
-    for (texel, pair) in texels.iter_mut().zip(values.chunks_exact(2)) {
+    let (pairs, _) = values.as_chunks::<2>();
+    for (texel, pair) in texels.iter_mut().zip(pairs) {
         texel.lanes = [
             pack_finite(pair[0].get().cos())?,
             pack_finite(pair[0].get().sin())?,
@@ -187,7 +190,7 @@ fn unpack_angle_factors<const N: usize>(texels: &[DescriptorTexel]) -> Option<[f
     for (angle, pair) in angles.iter_mut().zip(
         texels
             .iter()
-            .flat_map(|texel| texel.lanes.as_slice().chunks_exact(2)),
+            .flat_map(|texel| texel.lanes.as_chunks::<2>().0),
     ) {
         let norm = f64::from(pair[0]).hypot(f64::from(pair[1]));
         if (norm - 1.0).abs() > FACTOR_NORM_TOLERANCE {
@@ -308,8 +311,9 @@ fn descriptor_lanes_are_valid(header: &TilePoseHeader) -> bool {
 
 fn unpack_source_map(header: &TilePoseHeader) -> Option<[f64; 9]> {
     let mut rows = [0.0; 9];
-    for (row, texel) in rows
-        .chunks_exact_mut(3)
+    let (unpacked, _) = rows.as_chunks_mut::<3>();
+    for (row, texel) in unpacked
+        .iter_mut()
         .zip(&header.texels[TilePoseHeader::H18_SOURCE_MAP_0..=TilePoseHeader::H20_SOURCE_MAP_2])
     {
         for (value, lane) in row.iter_mut().zip(texel.lanes) {

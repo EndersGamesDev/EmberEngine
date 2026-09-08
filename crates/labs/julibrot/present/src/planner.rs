@@ -437,7 +437,8 @@ pub fn source_to_destination_chart(source: &Pose, destination: &Pose) -> Option<
     ])
 }
 
-pub(crate) fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
+/// Inverts one finite nonsingular row-major three-by-three matrix.
+pub fn invert_3x3(matrix: [f64; 9]) -> Option<[f64; 9]> {
     let determinant = matrix[2].mul_add(
         matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
         matrix[0].mul_add(
