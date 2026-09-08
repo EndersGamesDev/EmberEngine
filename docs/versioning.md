@@ -45,6 +45,10 @@ The tag migration is complete, and the changelog check accepts only series-prefi
 
 Release tags are created only from `main`. Branch and merge work prepares versions, catalog data, documentation, and migration tooling but does not create a release tag.
 
+## GitHub releases
+
+Every major and minor tag has a GitHub release generated from its `CHANGELOG.md` entry by `deploy/github-releases.sh`; the orchestrator runs the script from `main` after the tag exists, and reruns edit the existing release in place when that changelog entry changes. The release page is where a player reads the shipped history, so the changelog remains its single source rather than asking an operator to maintain a second history.
+
 ## Display and catalog data
 
 Rust code reads its full version from `env!("CARGO_PKG_VERSION")`. Launcher code reads it from the selected catalog entry's `version` field. Neither source hard-codes the current version in display logic.
