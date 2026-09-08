@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v8
+
+Edge and Guard rotates the cutting edge into each descending, rising and crosswise strike, with accelerating contact and connected recoveries for all three existing input rhythms. Late buffered presses retain their partial chamber pose, both gauntlets remain on the hilt, and a held directional guard receives frontal knife hits on the strong of the sword. Blocking costs 28 stamina; a depleted guard breaks, while hits from behind and unfinished raises remain vulnerable. Mouse, keyboard, gamepad and touch share held guard, release and pause handling, with steel sparks, recoil, sound events and rumble (`9aeca184`).
+
+All 67 core and 35 client tests, 20 JavaScript tests, 126 Pages fixtures, scoped publication preservation, README coverage and done-list checks pass. Forty-eight passive native strike, transition and guard frames were inspected in 41.49 seconds. The Idle browser helper builds the 27,832,573-byte WASM in 3.45 seconds; the native build takes 1.59 seconds. Browser gameplay, physical devices, audible output and 5K frame pacing remain unverified. Contact still uses the game's timed range and facing checks; full swept blade collision remains in the backlog (`9aeca184`).
+
 ### End Game v7
 
 The Dread Warden replaces the primitive jailer with an SDXL/TRELLIS generated scarred character, worn leather coat, straps, pouches and boots. Conversion cleans the sculpt, repairs closed lower legs and hidden thigh coverage, removes detached fragments and fits the existing twenty-part rig. The 4,138,652-byte GLB has 20,780 triangles and 20,097,700 cloned texture bytes including mipmaps; source jobs, hashes and seven reproduction scripts accompany it (`d792d205`).
