@@ -285,8 +285,8 @@ fn deepest_fitting_exponent<const LIMBS: usize>(
 mod tests {
     use super::{click, frame_points, pan, rotate_about, select_box, zoom_about};
     use crate::{
-        CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, MAX_EXPONENT_QUANTA,
-        MIN_EXPONENT_QUANTA, Orientation, Screen, Turn, View, project,
+        CameraError, Exponent, Fixed, MAX_EXPONENT_QUANTA, MIN_EXPONENT_QUANTA, Orientation,
+        Screen, Turn, View, project,
     };
 
     /// Projection noise budget, below one thousandth of a render pixel.
@@ -342,19 +342,40 @@ mod tests {
     }
 
     #[test]
-    fn fractional_round_trip_restores_every_bit() -> Result<(), CameraError> {
+    fn rotated_fractional_round_trip_restores_every_bit() -> Result<(), CameraError> {
         let screen = Screen::new(960, 540)?;
         let anchor = [117.5, -33.25];
-        let fractional = 37 * EXPONENT_QUANTA_PER_OCTAVE + 511;
+        let fractional = MAX_EXPONENT_QUANTA - 513;
+        let mut angles = [[Turn::ZERO; 5]; 5];
+        angles[0][1] = Turn::from_bits(0x1234_5678);
+        angles[0][4] = Turn::from_bits(0x2345_6789);
+        angles[2][3] = Turn::from_bits(0x3456_789a);
+        let rotation = Orientation::new(angles)?;
         let mut direct = view();
         zoom_about(&mut direct, screen, anchor, fractional)?;
         let mut journey = view();
         zoom_about(&mut journey, screen, anchor, fractional)?;
-        zoom_about(&mut journey, screen, anchor, -fractional)?;
-        zoom_about(&mut journey, screen, anchor, fractional)?;
+        rotate_about(&mut journey, screen, anchor, &rotation)?;
+        zoom_about(
+            &mut journey,
+            screen,
+            anchor,
+            MIN_EXPONENT_QUANTA - fractional,
+        )?;
+        rotate_about(&mut journey, screen, anchor, &rotation.inverse())?;
+        zoom_about(
+            &mut journey,
+            screen,
+            anchor,
+            fractional - MIN_EXPONENT_QUANTA,
+        )?;
         assert_eq!(journey.exponent, direct.exponent);
         assert_eq!(journey.orientation, direct.orientation);
         assert_eq!(journey.centre, direct.centre);
+        let projected = project(&journey, screen, &click(&direct, screen, anchor)?)?
+            .ok_or(CameraError::ScreenCoordinateOutOfRange)?;
+        assert!((projected[0] - anchor[0]).abs() <= PIXEL_TOLERANCE);
+        assert!((projected[1] - anchor[1]).abs() <= PIXEL_TOLERANCE);
         Ok(())
     }
 

@@ -193,10 +193,10 @@ mod tests {
         );
 
         let screen = Screen::new(1_024, 512)?;
-        for octave in [-2, 0, 37, 120] {
+        for quanta in crate::MIN_EXPONENT_QUANTA..=crate::MAX_EXPONENT_QUANTA {
             let view = View::new(
                 [Fixed::<8>::ZERO; 5],
-                Exponent::new(octave * EXPONENT_QUANTA_PER_OCTAVE)?,
+                Exponent::new(quanta)?,
                 Orientation::IDENTITY,
             );
             let lattice_pixel = [128.0, -64.0];
