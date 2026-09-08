@@ -2430,13 +2430,12 @@ mod tests {
             return;
         }
         for index in 0..remaining {
-            verify_quality_permutations(
-                candidates,
-                remaining - 1,
-                expected,
-                permutation_count,
-            );
-            let swap_index = if remaining.is_multiple_of(2) { index } else { 0 };
+            verify_quality_permutations(candidates, remaining - 1, expected, permutation_count);
+            let swap_index = if remaining.is_multiple_of(2) {
+                index
+            } else {
+                0
+            };
             candidates.swap(swap_index, remaining - 1);
         }
     }
@@ -2498,12 +2497,7 @@ mod tests {
         ];
         let mut permutation_count = 0;
         let remaining = corpus.len();
-        verify_quality_permutations(
-            &mut corpus,
-            remaining,
-            winner,
-            &mut permutation_count,
-        );
+        verify_quality_permutations(&mut corpus, remaining, winner, &mut permutation_count);
         assert_eq!(permutation_count, 40_320);
     }
 
@@ -2553,117 +2547,114 @@ mod tests {
         );
     }
 
-    const EXPECTED_INVALIDATION_MATRIX: [
+    const EXPECTED_INVALIDATION_MATRIX: [(
+        RenderControlChange,
+        TileInvalidation,
+        TransitionPresentation,
+        &str,
+    ); 17] = [
         (
-            RenderControlChange,
-            TileInvalidation,
-            TransitionPresentation,
-            &str,
-        );
-        17
-    ] = [
-            (
-                RenderControlChange::Camera,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Camera|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::Translation,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Translation|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::Height,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Height|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::DistanceFive,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|DistanceFive|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::DistanceFour,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|DistanceFour|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::Observer,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Observer|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::Zoom,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Zoom|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::Extent,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|Extent|Query footprint; reproject|",
-            ),
-            (
-                RenderControlChange::PlanePreservingObject,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|PlanePreservingObject|Transform chart; reproject|",
-            ),
-            (
-                RenderControlChange::InPlaneOrigin,
-                TileInvalidation::Keep,
-                TransitionPresentation::Reproject,
-                "//! |Keep|InPlaneOrigin|Transform chart; reproject|",
-            ),
-            (
-                RenderControlChange::Display,
-                TileInvalidation::Keep,
-                TransitionPresentation::ShadeCurrent,
-                "//! |Keep|Display|No index action; shade current|",
-            ),
-            (
-                RenderControlChange::SliceTilt,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|SliceTilt|New slice index; hold|",
-            ),
-            (
-                RenderControlChange::OutOfPlaneOrigin,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|OutOfPlaneOrigin|New slice index; hold|",
-            ),
-            (
-                RenderControlChange::IterationCap,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|IterationCap|New MAIN index; hold|",
-            ),
-            (
-                RenderControlChange::Precision,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|Precision|New MAIN index; hold|",
-            ),
-            (
-                RenderControlChange::RecordAbi,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|RecordAbi|New MAIN index; hold|",
-            ),
-            (
-                RenderControlChange::MainGeneration,
-                TileInvalidation::NewPartition,
-                TransitionPresentation::HoldPrevious,
-                "//! |NewPartition|MainGeneration|New MAIN index; hold|",
-            ),
+            RenderControlChange::Camera,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Camera|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Translation,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Translation|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Height,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Height|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::DistanceFive,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|DistanceFive|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::DistanceFour,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|DistanceFour|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Observer,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Observer|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Zoom,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Zoom|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::Extent,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|Extent|Query footprint; reproject|",
+        ),
+        (
+            RenderControlChange::PlanePreservingObject,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|PlanePreservingObject|Transform chart; reproject|",
+        ),
+        (
+            RenderControlChange::InPlaneOrigin,
+            TileInvalidation::Keep,
+            TransitionPresentation::Reproject,
+            "//! |Keep|InPlaneOrigin|Transform chart; reproject|",
+        ),
+        (
+            RenderControlChange::Display,
+            TileInvalidation::Keep,
+            TransitionPresentation::ShadeCurrent,
+            "//! |Keep|Display|No index action; shade current|",
+        ),
+        (
+            RenderControlChange::SliceTilt,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|SliceTilt|New slice index; hold|",
+        ),
+        (
+            RenderControlChange::OutOfPlaneOrigin,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|OutOfPlaneOrigin|New slice index; hold|",
+        ),
+        (
+            RenderControlChange::IterationCap,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|IterationCap|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::Precision,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|Precision|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::RecordAbi,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|RecordAbi|New MAIN index; hold|",
+        ),
+        (
+            RenderControlChange::MainGeneration,
+            TileInvalidation::NewPartition,
+            TransitionPresentation::HoldPrevious,
+            "//! |NewPartition|MainGeneration|New MAIN index; hold|",
+        ),
     ];
 
     #[test]
