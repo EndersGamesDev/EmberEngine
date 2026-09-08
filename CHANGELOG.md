@@ -18,6 +18,8 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 ### Julibrot rounds two and three
 
+Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
+
 Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
 
 Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).

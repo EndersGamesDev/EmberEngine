@@ -1711,21 +1711,39 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fmt::Write as _,
+        time::{Duration, Instant},
+    };
+
     use ember_julibrot_math::{
         ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls, pixel_scale,
+        reference_shift_px,
     };
     use ember_julibrot_present::PaletteId;
-    use ember_julibrot_worker::OrbitReason;
+    use ember_julibrot_worker::{
+        EncodedCentre, HotState, ORBIT_BUDGET_US_PER_SECOND, OrbitDisposition, OrbitHandle,
+        OrbitReason, OrbitRegistry, OrbitRequest, ReferenceOrbitRecord, SubmitOutcome, ViewerState,
+        WorkerChannel, WorkerConfig, WorkerMode,
+    };
 
     use super::{
-        BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2,
-        SEAHORSE_VALLEY_TARGET, ViewerController, anchor_px_up, box_zoom_delta_log2,
-        css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
+        BOX_CLICK_THRESHOLD_PX, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
+        SCALE_RANGE_LOG2, SEAHORSE_VALLEY_TARGET, ViewerController, anchor_px_up,
+        box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
+        preset_row,
     };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
+    /// Covers the measured 1.3e-5-pixel F32 scale residual while remaining imperceptible.
+    const ROUND_TRIP_ANCHOR_TOLERANCE_PX: f64 = 1.0e-3;
+    /// Ceiling over the 1224.859904134-pixel zoom-54 residual measured at `e594c637`.
+    const ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX: f64 = 1_225.0;
+    const ROUND_TRIP_SAMPLE_INDEX: u32 = 405 * REFERENCE_GRID[0] + 720;
+    /// The best of five full-precision edits must beat one millisecond despite transient load.
+    const MAXIMUM_VIEW_EDIT_WALL: Duration = Duration::from_millis(1);
 
     fn set_close_measured_row(viewer: &mut ViewerController) {
         viewer
@@ -1908,6 +1926,323 @@ mod tests {
             .expect("configured navigation")
             .to_f64_mirror();
         assert_eq!(before, after, "a centred zoom does not move the centre");
+    }
+
+    struct RoundTripReferenceAcceptance {
+        accepted: ViewerState,
+        before_hot: HotState,
+        disposition: OrbitDisposition,
+        expected_displacement: [f64; 2],
+        expected_revision: u32,
+        generation: u32,
+        generation_before: u32,
+        handle: OrbitHandle,
+        registry_retained_handle: bool,
+        response_length: u32,
+        response_precision_bits: u32,
+        response_revision: u32,
+        shift: [f64; 2],
+    }
+
+    struct RoundTripReferenceRequest {
+        before_hot: HotState,
+        expected_displacement: [f64; 2],
+        generation_before: u32,
+        plane: ember_julibrot_math::Plane,
+        sampled: super::ReferenceSubmission,
+        shift: [f64; 2],
+    }
+
+    fn prepare_round_trip_sampled_reference(
+        viewer: &mut ViewerController,
+    ) -> RoundTripReferenceRequest {
+        while let Some(pending) = viewer.take_reference_submission() {
+            assert!(viewer.finish_reference_submission(pending.navigation.generation));
+        }
+        let generation = viewer
+            .request_reference_for_pixel(ROUND_TRIP_SAMPLE_INDEX, REFERENCE_GRID)
+            .expect("off-centre round-trip reference request");
+        let sampled = viewer
+            .take_reference_submission()
+            .expect("sampled round-trip reference submission");
+        assert_eq!(sampled.navigation.generation, generation);
+        let plane = viewer
+            .navigation_plane()
+            .expect("round-trip navigation plane");
+        let old_reference = viewer
+            .reference_centre()
+            .expect("round-trip old reference")
+            .with_precision(sampled.reference_centre.precision_bits)
+            .expect("round-trip old reference widens");
+        let before_hot = viewer.published_hot();
+        let shift = reference_shift_px(
+            &old_reference,
+            &sampled.reference_centre,
+            &plane,
+            sampled.navigation.zoom_log2,
+            REFERENCE_GRID[0],
+        )
+        .expect("sampled round-trip shift projects");
+        let scale = pixel_scale(sampled.navigation.zoom_log2, REFERENCE_GRID[0])
+            .expect("sampled round-trip scale");
+        let expected_displacement = sampled
+            .navigation
+            .centre
+            .displacement_px(&sampled.reference_centre, &plane, scale)
+            .expect("sampled round-trip displacement projects");
+        RoundTripReferenceRequest {
+            before_hot,
+            expected_displacement,
+            generation_before: viewer.published_main().generation_applied,
+            plane,
+            sampled,
+            shift,
+        }
+    }
+
+    fn request_round_trip_sampled_reference(
+        viewer: &mut ViewerController,
+    ) -> RoundTripReferenceAcceptance {
+        let RoundTripReferenceRequest {
+            before_hot,
+            expected_displacement,
+            generation_before,
+            plane,
+            sampled,
+            shift,
+        } = prepare_round_trip_sampled_reference(viewer);
+        let generation = sampled.navigation.generation;
+        let expected_revision = sampled.navigation.centre_revision;
+        let centre = EncodedCentre::encode_math(&sampled.reference_centre, expected_revision)
+            .expect("sampled round-trip centre encodes");
+        let request = OrbitRequest::new(
+            generation,
+            centre,
+            1,
+            sampled.reference_centre.precision_bits,
+            INITIAL_ITERATION_CAP,
+            PrecisionMode::PictureFast,
+            sampled.reason,
+        )
+        .expect("sampled round-trip request");
+        let (endpoint, producer) = WorkerChannel::new(
+            WorkerConfig {
+                max_iter: INITIAL_ITERATION_CAP,
+            },
+            WorkerMode::SameThread,
+        )
+        .expect("sampled round-trip channel");
+        assert_eq!(endpoint.submit(request), SubmitOutcome::Transferred);
+        let mut registry = OrbitRegistry::new();
+        let handle = registry
+            .insert(generation, ())
+            .expect("sampled round-trip handle");
+        let lease = producer
+            .next_request()
+            .expect("sampled round-trip request decodes")
+            .expect("sampled round-trip producer receives the request");
+        producer
+            .complete(
+                lease,
+                &[ReferenceOrbitRecord { re: 0.0, im: 0.0 }],
+                sampled.reference_centre.precision_bits,
+                1,
+                ORBIT_BUDGET_US_PER_SECOND,
+            )
+            .expect("sampled round-trip orbit completes");
+        let mut response = endpoint
+            .next_arrival()
+            .expect("sampled round-trip orbit arrives");
+        let response_revision = response.centre_revision();
+        let response_length = response.length();
+        let response_precision_bits = response.precision_bits();
+        let configured = viewer.configure_navigation_context(
+            sampled.navigation.centre,
+            sampled.reference_centre,
+            plane,
+        );
+        let disposition = if configured.is_ok() {
+            viewer.accept_reference_orbit(&response, handle, shift)
+        } else {
+            OrbitDisposition::Stale
+        };
+        let credited = endpoint.return_credit(&mut response, disposition, 0);
+        credited.expect("sampled round-trip orbit credit returns");
+        configured.expect("sampled round-trip navigation context");
+        let accepted = viewer.drain_main().expect("sampled round-trip MAIN");
+        let registry_retained_handle = registry.get(handle).is_ok();
+        RoundTripReferenceAcceptance {
+            accepted,
+            before_hot,
+            disposition,
+            expected_displacement,
+            expected_revision,
+            generation,
+            generation_before,
+            handle,
+            registry_retained_handle,
+            response_length,
+            response_precision_bits,
+            response_revision,
+            shift,
+        }
+    }
+
+    fn assert_round_trip_sampled_reference(acceptance: &RoundTripReferenceAcceptance) {
+        assert_eq!(acceptance.disposition, OrbitDisposition::Applied);
+        assert_ne!(acceptance.shift.map(f64::to_bits), [0_u64; 2]);
+        let configured_hot = acceptance.accepted.hot;
+        assert_ne!(
+            acceptance
+                .before_hot
+                .centre_from_reference_px
+                .map(f64::to_bits),
+            configured_hot.centre_from_reference_px.map(f64::to_bits),
+            "the sampled reference replaces the prior coordinate frame"
+        );
+        for (configured_component, expected_component) in configured_hot
+            .centre_from_reference_px
+            .into_iter()
+            .zip(acceptance.expected_displacement)
+        {
+            assert!(
+                (configured_component - expected_component).abs() <= ROUND_TRIP_ANCHOR_TOLERANCE_PX,
+                "sampled reference coordinate frame does not match its expected displacement"
+            );
+        }
+        assert!(acceptance.accepted.main.generation_applied > acceptance.generation_before);
+        assert_eq!(
+            acceptance.accepted.main.generation_applied,
+            acceptance.generation
+        );
+        assert_eq!(
+            acceptance.accepted.main.centre_revision,
+            acceptance.expected_revision
+        );
+        assert_eq!(
+            acceptance.accepted.main.centre_revision,
+            acceptance.response_revision
+        );
+        assert_eq!(acceptance.accepted.main.orbit_id, acceptance.handle.id);
+        assert_eq!(
+            acceptance.accepted.main.orbit_length,
+            acceptance.response_length
+        );
+        assert_eq!(
+            acceptance.accepted.main.precision_bits,
+            acceptance.response_precision_bits
+        );
+        assert_eq!(
+            acceptance
+                .accepted
+                .main
+                .reference_shift_px
+                .map(f64::to_bits),
+            acceptance.shift.map(f64::to_bits)
+        );
+        assert!(acceptance.registry_retained_handle);
+    }
+
+    fn accept_round_trip_sampled_reference(viewer: &mut ViewerController) {
+        let acceptance = request_round_trip_sampled_reference(viewer);
+        assert_round_trip_sampled_reference(&acceptance);
+    }
+
+    fn deep_zoom_rotation_round_trip_residual(zoom_log2: f64) -> f64 {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let anchor = [240.0, 135.0];
+        viewer.set_crosshair(anchor).expect("off-centre target");
+        viewer.set_zoom_log2(zoom_log2).expect("first deep zoom");
+        let started = viewer
+            .crosshair_plane_px()
+            .expect("the first deep target projects");
+
+        let original = viewer.requested().object_angles;
+        let mut rotated = original;
+        rotated.rho_34 += 0.3;
+        viewer.set_object_angles(rotated).expect("in-plane turn");
+        viewer
+            .set_zoom_log2(SCALE_RANGE_LOG2[0])
+            .expect("extreme zoom out");
+        viewer.set_object_angles(original).expect("inverse turn");
+        viewer.set_zoom_log2(zoom_log2).expect("second deep zoom");
+        accept_round_trip_sampled_reference(&mut viewer);
+
+        let returned = viewer
+            .crosshair_plane_px()
+            .expect("the returned deep target projects");
+        (started[0] - returned[0]).hypot(started[1] - returned[1])
+    }
+
+    fn report_round_trip(zoom_log2: f64, residual_px: f64, limit_px: f64) {
+        let mut report = String::new();
+        let _written = writeln!(
+            report,
+            "ROUND_TRIP zoom_log2={zoom_log2:.1} residual_px={residual_px:.9} limit_px={limit_px:.3}"
+        );
+        std::io::Write::write_all(&mut std::io::stdout().lock(), report.as_bytes())
+            .expect("round-trip measurements write to test output");
+    }
+
+    #[test]
+    fn zoom_fourteen_rotation_round_trip_is_sub_pixel() {
+        let residual = deep_zoom_rotation_round_trip_residual(14.0);
+        report_round_trip(14.0, residual, ROUND_TRIP_ANCHOR_TOLERANCE_PX);
+        assert!(
+            residual <= ROUND_TRIP_ANCHOR_TOLERANCE_PX,
+            "zoom 14 returned {residual:.9} px from its deep anchor"
+        );
+    }
+
+    /// Pins the current zoom-54 residual without assigning it to centre narrowing.
+    ///
+    /// This controller starts with a 1,024-bit centre and navigation only widens it. The trip
+    /// accepts a sampled reference, verifies its coordinate frame, and publishes its nonzero shift;
+    /// the presenter regression separately proves consumption. The trip does not isolate the
+    /// residual's cause. The current edit path still projects through F32 plane and scale values;
+    /// `ember-camera` must replace this ceiling with the sub-pixel tolerance.
+    #[test]
+    fn zoom_fifty_four_rotation_round_trip_pins_the_camera_residual() {
+        let residual = deep_zoom_rotation_round_trip_residual(54.0);
+        report_round_trip(54.0, residual, ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX);
+        assert!(
+            residual <= ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX,
+            "zoom 54 returned {residual:.9} px, above the pinned camera residual"
+        );
+    }
+
+    #[test]
+    fn highest_precision_view_edit_reports_its_wall_time() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .set_zoom_log2(SCALE_RANGE_LOG2[1])
+            .expect("highest supported precision");
+        let mut samples = [Duration::ZERO; 5];
+        for measurement in &mut samples {
+            let started = Instant::now();
+            viewer.pan_px([1.0, -1.0]).expect("full-precision pan");
+            *measurement = started.elapsed();
+        }
+        let walls_us = samples.map(|duration| duration.as_micros());
+        let best = samples
+            .into_iter()
+            .min()
+            .expect("five timing samples have a minimum");
+        let mut report = String::new();
+        let _written = writeln!(
+            report,
+            "TIMING highest-precision-view-edit zoom_log2={:.1} wall_us={walls_us:?} best_us={} release_bound_us={}",
+            SCALE_RANGE_LOG2[1],
+            best.as_micros(),
+            MAXIMUM_VIEW_EDIT_WALL.as_micros()
+        );
+        std::io::Write::write_all(&mut std::io::stdout().lock(), report.as_bytes())
+            .expect("view-edit timing writes to test output");
+        #[cfg(not(debug_assertions))]
+        assert!(
+            best < MAXIMUM_VIEW_EDIT_WALL,
+            "best highest-precision edit took {best:?}, above {MAXIMUM_VIEW_EDIT_WALL:?}"
+        );
     }
 
     /// A translation moves the picture and the crosshair together, because the point does not move.

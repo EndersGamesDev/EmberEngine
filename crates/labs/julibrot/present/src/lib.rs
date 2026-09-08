@@ -51,6 +51,7 @@ pub use planner::{
 };
 pub use shade_shader::shade_shader;
 pub use shader::{glitch_count_shader, scene_shader};
+pub use state::rebase_reference_pose;
 pub use tile::{
     CanonicalChartCellKey, DerivedChartFootprint, DescriptorAbiError, DescriptorCostLedger,
     DescriptorFootprintSample, DescriptorSamplePair, DescriptorTexel, ExactF32, ExactF64,

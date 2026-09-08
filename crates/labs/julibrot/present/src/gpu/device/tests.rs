@@ -276,6 +276,18 @@ fn binding_main_on(extent: [u32; 2]) -> PresentMain {
     }
 }
 
+#[test]
+fn reference_acceptance_identity_is_independent_of_centre_revision() {
+    let accepted = binding_main();
+    let mut edited = binding_main();
+    edited.state.centre_revision = accepted.state.centre_revision + 1;
+    assert!(!accepted_reference_advanced(Some(&accepted), &edited));
+
+    let mut next_acceptance = edited.clone();
+    next_acceptance.state.generation_applied = accepted.state.generation_applied + 1;
+    assert!(accepted_reference_advanced(Some(&edited), &next_acceptance));
+}
+
 fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {

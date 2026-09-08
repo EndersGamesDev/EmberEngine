@@ -413,10 +413,7 @@ impl Presenter {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
                 || previous.state.precision_mode != main.state.precision_mode
         });
-        let revision_advanced = self
-            .main
-            .as_ref()
-            .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
+        let reference_advanced = accepted_reference_advanced(self.main.as_ref(), &main);
         let selection_replaced = self
             .main
             .as_ref()
@@ -430,10 +427,14 @@ impl Presenter {
             main.plane,
             precision_mode_name,
         );
-        if revision_advanced {
+        if reference_advanced {
+            let accepted_pose = self
+                .latest_hot_slot
+                .and_then(|slot| self.hot[slot.index() as usize]);
             self.ledger.apply_reference_shift(
                 main.state.generation_applied,
                 main.state.centre_revision,
+                accepted_pose.as_ref(),
                 main.state.reference_shift_px,
             );
             if let Some(frame) = self.ledger.retained() {
@@ -450,6 +451,20 @@ impl Presenter {
             self.facts.palette = palette_id;
         }
         self.main = Some(main);
+    }
+
+    /// Test-support snapshot; not a stable presentation contract.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn reference_pose_snapshots(&self) -> [Option<(Pose, u32)>; 2] {
+        [
+            self.ledger
+                .retained()
+                .map(|frame| (frame.pose, frame.centre_revision)),
+            self.ledger
+                .pending()
+                .map(|pending| (pending.pose, pending.centre_revision)),
+        ]
     }
 
     /// Forgets a retained scene whose record span has just left the owning heap allocator.
@@ -495,6 +510,11 @@ impl Presenter {
         self.facts.iteration_cap = Some(held.frame.iteration_cap);
         self.active_warp_scene = Some(held.frame.scene_id);
     }
+}
+
+fn accepted_reference_advanced(previous: Option<&PresentMain>, next: &PresentMain) -> bool {
+    previous
+        .is_none_or(|previous| previous.state.generation_applied != next.state.generation_applied)
 }
 
 fn scene_selection_replaced(previous: &PresentMain, current: &PresentMain) -> bool {

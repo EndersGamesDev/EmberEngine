@@ -1,7 +1,7 @@
 [package]
 name = "ember-julibrot-app"
 edition.workspace = true
-version = "1.0.3"
+version = "1.0.4"
 
 [lib]
 name = "ember_lab_julibrot"

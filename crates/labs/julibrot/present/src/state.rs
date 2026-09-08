@@ -183,21 +183,30 @@ impl SceneLedger {
         &mut self,
         new_generation: u32,
         new_revision: u32,
+        accepted_pose: Option<&Pose>,
         shift_px: [f64; 2],
     ) {
         if let Some(frame) = &mut self.retained
-            && frame.centre_revision != new_revision
+            && frame.pose.orbit_generation != new_generation
         {
             let sampled_pose = frame.pose;
-            rebase_pose(&mut frame.pose, &sampled_pose, shift_px);
+            rebase_reference_pose(
+                &mut frame.pose,
+                accepted_pose.unwrap_or(&sampled_pose),
+                shift_px,
+            );
             frame.pose.orbit_generation = new_generation;
             frame.centre_revision = new_revision;
         }
         if let Some(pending) = &mut self.pending
-            && pending.centre_revision != new_revision
+            && pending.pose.orbit_generation != new_generation
         {
             let sampled_pose = pending.pose;
-            rebase_pose(&mut pending.pose, &sampled_pose, shift_px);
+            rebase_reference_pose(
+                &mut pending.pose,
+                accepted_pose.unwrap_or(&sampled_pose),
+                shift_px,
+            );
             pending.pose.orbit_generation = new_generation;
             pending.centre_revision = new_revision;
         }
@@ -244,7 +253,8 @@ impl SceneLedger {
         matches
     }
 
-    #[cfg(test)]
+    /// Test-support snapshot; not a stable presentation contract.
+    #[doc(hidden)]
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
@@ -297,7 +307,12 @@ fn dot_f64(left: [f32; 4], right: [f64; 4]) -> f64 {
         .fold(0.0, |sum, (a, b)| f64::from(a).mul_add(b, sum))
 }
 
-fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
+/// Re-expresses a presented pose after its accepted reference moves.
+///
+/// `shift_px` is measured in `accepted_pose` pixels. The retained pose can have a different grid
+/// width, zoom, or in-plane basis, so the conversion must use both poses rather than treating the
+/// shift as if it were already expressed in retained pixels.
+pub fn rebase_reference_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
     let ratio = (pose.zoom_log2 - accepted_pose.zoom_log2).exp2() * f64::from(pose.grid_width)
         / f64::from(accepted_pose.grid_width);
     let overlap = [
@@ -522,7 +537,7 @@ mod tests {
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
         begin(&mut ledger, 2, 1);
-        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 1, None, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -535,17 +550,22 @@ mod tests {
                 .map(|pending| pending.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
-        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, None, [40.0, -80.0]);
         assert_eq!(
             ledger
                 .retained()
                 .map(|frame| frame.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
+        assert_eq!(
+            ledger.retained().map(|frame| frame.centre_revision),
+            Some(1),
+            "a centre revision without a new accepted reference cannot replay its shift"
+        );
     }
 
     #[test]
-    fn reference_shift_uses_the_retained_sample_pose_not_a_newer_hot_pose() {
+    fn reference_shift_converts_from_the_accepted_hot_pose() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
@@ -556,15 +576,15 @@ mod tests {
         newer_hot.grid_width *= 2;
 
         let mut expected = sampled;
-        rebase_pose(&mut expected, &sampled, [4.0, -8.0]);
+        rebase_reference_pose(&mut expected, &newer_hot, [4.0, -8.0]);
         let mut wrong = sampled;
-        rebase_pose(&mut wrong, &newer_hot, [4.0, -8.0]);
+        rebase_reference_pose(&mut wrong, &sampled, [4.0, -8.0]);
         assert_ne!(
             expected.centre_from_reference_px,
             wrong.centre_from_reference_px
         );
 
-        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, Some(&newer_hot), [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -577,7 +597,7 @@ mod tests {
     fn generation_alone_rebases_while_incompatible_main_holds_until_replacement() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
-        ledger.apply_reference_shift(2, 2, [0.0; 2]);
+        ledger.apply_reference_shift(2, 2, None, [0.0; 2]);
         assert!(matches!(
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
