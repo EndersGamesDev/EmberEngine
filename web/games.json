@@ -267,6 +267,21 @@
       ]
     },
     {
+      "id": "end-game",
+      "title": "End Game",
+      "tag": "single player · dark fantasy · controller + touch",
+      "desc": "Awaken in a castle prison. Search the wooden cell, slip past a sleeping warden, draw a colossal sword from stone and awaken the werewolf armor. A first-person dark fantasy chapter with PS5-style controller controls, WASD and mouse, touch controls, physical materials and adaptive resolution up to 5K.",
+      "versions": [
+        {
+          "v": "v1",
+          "version": "1.0.0",
+          "path": "games/end-game/v1/",
+          "live": true,
+          "note": "The Awakening: a playable prison escape, wolf and werewolf armor, greatsword, prologue, torch lighting and adaptive resolution"
+        }
+      ]
+    },
+    {
       "id": "league",
       "title": "UltimateLegue",
       "tag": "1v1 + 3v3 · one lane · five champions",

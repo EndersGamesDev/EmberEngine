@@ -12,6 +12,7 @@ Each independently released game or lab owns a series. Its application, core, se
 | `fire` | `fire`, `fire-core`, `fire-server` | `1.0.0` |
 | `kings` | `kings`, `kings-core`, `kings-server` | `1.0.0` |
 | `league` | `league`, `league-core`, `league-server` | `2.0.0` |
+| `end-game` | `end-game`, `end-game-core` | `1.0.0` |
 | `what-is-this` | `what-is-this` | `1.0.0` |
 | `julibrot` | `ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-worker` | `1.0.0` |
 | `heap` | `ember-lab-heap` | `0.1.0` |

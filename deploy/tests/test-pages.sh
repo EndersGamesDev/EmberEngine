@@ -52,9 +52,10 @@ mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
 mkdir -p "$REPO/crates/league-core/src"
 mkdir -p "$REPO/crates/arena" "$REPO/crates/fire" "$REPO/crates/kings" "$REPO/crates/league"
+mkdir -p "$REPO/crates/end-game" "$REPO/web/games/end-game/v1"
 mkdir -p "$REPO/crates/what-is-this" "$REPO/crates/labs/julibrot/app"
 cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
-for manifest in arena fire kings league what-is-this; do
+for manifest in arena fire kings league what-is-this end-game; do
     cp "$DEPLOY/../crates/$manifest/Cargo.toml" "$REPO/crates/$manifest/"
 done
 cp "$DEPLOY/../crates/labs/julibrot/app/Cargo.toml" "$REPO/crates/labs/julibrot/app/"
@@ -85,6 +86,9 @@ printf '{"source":"fleet"}\n' > "$REPO/web/$LEAGUE_LIVE/art/nested/manifest.json
 printf 'stale source bundle\n' > "$REPO/web/$LEAGUE_LIVE/pkg/arena.js"
 printf 'stale source stamp\n' > "$REPO/web/$LEAGUE_LIVE/version.json"
 printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
+for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
+    printf "End Game fixture %s\n" "$name" > "$REPO/web/games/end-game/v1/$name"
+done
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
 # fixture has to carry the same import for the assembly check to mean anything.
@@ -134,6 +138,10 @@ contains "$ARGV" "release/league.wasm" "League is passed to wasm-bindgen"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [ember-julibrot-app] [--lib]" "Julibrot is built as a wasm library"
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
+for f in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav pkg/end_game.js pkg/end_game_bg.wasm; do
+    if [ -f "$SHIM_PUBLISHED/games/end-game/v1/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
+done
+contains "$ARGV" "[-p] [end-game] [--lib]" "End Game is built as an Ember wasm library"
 for f in index.html pkg/what_is_this.js pkg/what_is_this_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/games/what-is-this/v1/$f" ]; then
         ok "assembled what-is-this $f"

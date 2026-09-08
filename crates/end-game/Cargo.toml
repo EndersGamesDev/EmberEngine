@@ -1,0 +1,20 @@
+[package]
+name = "end-game"
+version = "1.0.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "end-game-app"
+path = "src/main.rs"
+
+[dependencies]
+ember-engine = { path = "../ember-engine" }
+end-game-core = { path = "../end-game-core" }
+glam.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

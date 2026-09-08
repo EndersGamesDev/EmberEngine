@@ -14,6 +14,8 @@ struct SceneUniform {
     camera_up: vec4<f32>,
     occlusion_min_strength: vec4<f32>,
     occlusion_cell: vec4<f32>,
+    light_positions: array<vec4<f32>, 4>,
+    light_colors: array<vec4<f32>, 4>,
 };
 @group(0) @binding(0) var<uniform> scene: SceneUniform;
 @group(1) @binding(0) var mesh_tex: texture_2d<f32>;
@@ -277,6 +279,21 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let specular_half = safe_normalize(sun_dir + view);
         radiance += sun_col * sun_intensity * wetness * visibility
             * pow(max(dot(wet_normal, specular_half), 0.0), 96.0) * 0.65;
+    }
+    // Four opt-in local lights. The cutoff is smooth and finite at the source.
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        let source = scene.light_positions[i];
+        if source.w > 0.0 {
+            let offset = source.xyz - in.world;
+            let distance2 = dot(offset, offset);
+            let cutoff = max(0.0, 1.0 - distance2 / (source.w * source.w));
+            let attenuation = cutoff * cutoff / max(distance2, 0.3);
+            let light = safe_normalize(offset);
+            let view = safe_normalize(scene.eye.xyz - in.world);
+            let response = surface_sun(clamp(albedo, vec3<f32>(0.0), vec3<f32>(1.0)), n,
+                view, light, max(in.material.z, 0.45), max(in.material.w, 0.0));
+            radiance += response * scene.light_colors[i].rgb * scene.light_colors[i].w * attenuation;
+        }
     }
     let lit = aces(radiance);
     let fog = clamp(1.0 - exp(-in.view_depth * scene.fog.w), 0.0, 1.0);

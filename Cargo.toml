@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/end-game",
+    "crates/end-game-core",
     "crates/ember-client-net",
     "crates/ember-editor",
     "crates/ember-engine",

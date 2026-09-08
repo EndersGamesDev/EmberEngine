@@ -1305,6 +1305,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "end-game"
+version = "1.0.0"
+dependencies = [
+ "ember-engine",
+ "end-game-core",
+ "glam",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "end-game-core"
+version = "1.0.0"
+dependencies = [
+ "glam",
+]
+
+[[package]]
 name = "enum-as-inner"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
