@@ -646,12 +646,9 @@ impl DirectedInterval {
     fn hypot(self, other: Self) -> Option<Self> {
         let left = self.absolute();
         let right = other.absolute();
-        outward_interval([left.lower.hypot(right.lower), left.upper.hypot(right.upper)]).map(
-            |interval| Self {
-                lower: interval.lower.max(0.0),
-                upper: interval.upper,
-            },
-        )
+        left.multiply(left)?
+            .add(right.multiply(right)?)?
+            .square_root()
     }
 
     fn square_root(self) -> Option<Self> {
@@ -1570,6 +1567,25 @@ mod tests {
         assert!(footprint.density_maximum >= EXACT_MAXIMUM_CEILING);
         assert!(footprint.density_minimum > 65.24);
         assert!(footprint.density_maximum < 66.31);
+    }
+
+    #[test]
+    fn directed_interval_hypot_encloses_exact_value_when_scalar_forms_differ() {
+        const EXACT_VALUE_FLOOR: f64 = f64::from_bits(0x3fc2_1a18_51ff_630a);
+        const EXACT_VALUE_CEILING: f64 = f64::from_bits(0x3fc2_1a18_51ff_630b);
+
+        let input = 0.1_f64;
+        let platform_value = input.hypot(input);
+        let squared = input * input;
+        let square_sum_value = (squared + squared).sqrt();
+        assert_eq!(platform_value.to_bits(), EXACT_VALUE_FLOOR.to_bits());
+        assert_eq!(square_sum_value.to_bits(), EXACT_VALUE_CEILING.to_bits());
+        assert_ne!(platform_value.to_bits(), square_sum_value.to_bits());
+
+        let point = DirectedInterval::point(input).expect("finite interval point");
+        let enclosure = point.hypot(point).expect("finite composed hypot interval");
+        assert!(enclosure.lower <= EXACT_VALUE_FLOOR);
+        assert!(enclosure.upper >= EXACT_VALUE_CEILING);
     }
 
     #[test]
