@@ -125,8 +125,7 @@ pub fn certify_same_slice(
     let (source_plane, source_origin) = unpack_slice_identity(source)?;
     let (canonical_plane, canonical_origin) = unpack_slice_identity(canonical)?;
     let relation = plane_chart_relation(source_plane, canonical_plane)?;
-    let origin_delta =
-        core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
+    let origin_delta = core::array::from_fn(|axis| source_origin[axis] - canonical_origin[axis]);
     let (origin_offset, out_of_plane_error) =
         project_vector_to_plane(canonical_plane, origin_delta)?;
     let maximum_error = 0.5 * source_chart_scale;
@@ -421,8 +420,7 @@ pub fn derive_chart_footprint(
     let source_slice = SliceIdentity::new(source.plane, source.plane_origin);
     let transform = certify_same_slice(source_slice, content.slice, source_chart_scale)
         .ok_or(ReprojectionError::InvalidTarget)?;
-    let source_coordinate_error =
-        f64::from(header.texels[TilePoseHeader::H21_BOUNDS].lanes[2]);
+    let source_coordinate_error = f64::from(header.texels[TilePoseHeader::H21_BOUNDS].lanes[2]);
     let coordinate_error = canonical_coordinate_error(transform, source_coordinate_error)
         .ok_or(ReprojectionError::InvalidSource)?;
 
@@ -472,10 +470,7 @@ impl ChartFootprintAccumulator {
         coordinate: [f64; 2],
         density: [f64; 2],
     ) -> Result<(), ReprojectionError> {
-        if !coordinate
-            .into_iter()
-            .chain(density)
-            .all(f64::is_finite)
+        if !coordinate.into_iter().chain(density).all(f64::is_finite)
             || density[0] <= 0.0
             || density[1] < density[0]
         {
@@ -558,14 +553,10 @@ fn source_density_interval(source: &Pose, pixel: [f64; 2]) -> Option<[f64; 2]> {
     let numerator_y = map.rows[3].mul_add(x, map.rows[4].mul_add(y, map.rows[5]));
     let denominator_squared = denominator * denominator;
     let jacobian = [
-        scale * map.rows[0].mul_add(denominator, -numerator_x * map.rows[6])
-            / denominator_squared,
-        scale * map.rows[1].mul_add(denominator, -numerator_x * map.rows[7])
-            / denominator_squared,
-        scale * map.rows[3].mul_add(denominator, -numerator_y * map.rows[6])
-            / denominator_squared,
-        scale * map.rows[4].mul_add(denominator, -numerator_y * map.rows[7])
-            / denominator_squared,
+        scale * map.rows[0].mul_add(denominator, -numerator_x * map.rows[6]) / denominator_squared,
+        scale * map.rows[1].mul_add(denominator, -numerator_x * map.rows[7]) / denominator_squared,
+        scale * map.rows[3].mul_add(denominator, -numerator_y * map.rows[6]) / denominator_squared,
+        scale * map.rows[4].mul_add(denominator, -numerator_y * map.rows[7]) / denominator_squared,
     ];
     let horizontal_metric = jacobian[0].mul_add(jacobian[0], jacobian[2] * jacobian[2]);
     let mixed_metric = jacobian[0].mul_add(jacobian[1], jacobian[2] * jacobian[3]);
@@ -583,10 +574,7 @@ fn source_density_interval(source: &Pose, pixel: [f64; 2]) -> Option<[f64; 2]> {
         .then_some(density)
 }
 
-fn canonical_coordinate_error(
-    transform: SliceChartTransform,
-    source_error: f64,
-) -> Option<f64> {
+fn canonical_coordinate_error(transform: SliceChartTransform, source_error: f64) -> Option<f64> {
     if !source_error.is_finite() || source_error < 0.0 {
         return None;
     }
@@ -620,10 +608,7 @@ fn unpack_slice_identity(slice: SliceIdentity) -> Option<(Plane, [f64; 4])> {
         .then_some((plane, origin))
 }
 
-fn project_ambient_to_slice(
-    slice: SliceIdentity,
-    ambient: [f64; 4],
-) -> Option<([f64; 2], f64)> {
+fn project_ambient_to_slice(slice: SliceIdentity, ambient: [f64; 4]) -> Option<([f64; 2], f64)> {
     let (plane, origin) = unpack_slice_identity(slice)?;
     let relative = core::array::from_fn(|axis| ambient[axis] - origin[axis]);
     project_vector_to_plane(plane, relative)
@@ -1016,12 +1001,7 @@ mod tests {
     }
 
     fn footprint_header(source: &Pose) -> TilePoseHeader {
-        let rect = SourcePixelRect::from_extent(
-            0,
-            0,
-            source.grid_width,
-            source.grid_height,
-        );
+        let rect = SourcePixelRect::from_extent(0, 0, source.grid_width, source.grid_height);
         let render = TileRenderKey::from_pose(source, rect);
         pack_descriptor_header(&render, &policy_header())
             .expect("frozen footprint source header packs")
@@ -1169,14 +1149,12 @@ mod tests {
         assert!(footprint.density_maximum - 64.0 <= 64.0 * f64::EPSILON);
 
         for sample in samples {
-            let (reconstructed, _) = reconstruct_descriptor_sample(
-                &header,
-                &sample.descriptor,
-                sample.source_pixel,
-            )
-            .expect("frozen corpus sample reconstructs");
-            let (coordinate, residual) = project_ambient_to_slice(slice, reconstructed.ambient_four)
-                .expect("reconstructed sample maps into the canonical chart");
+            let (reconstructed, _) =
+                reconstruct_descriptor_sample(&header, &sample.descriptor, sample.source_pixel)
+                    .expect("frozen corpus sample reconstructs");
+            let (coordinate, residual) =
+                project_ambient_to_slice(slice, reconstructed.ambient_four)
+                    .expect("reconstructed sample maps into the canonical chart");
             assert!(residual <= footprint.coordinate_error);
             assert!(footprint.contains(coordinate));
             for ((minimum, maximum), value) in footprint
