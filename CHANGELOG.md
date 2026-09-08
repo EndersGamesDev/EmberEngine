@@ -460,9 +460,9 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v8 — In preparation
+### v8 — 2026-09-08
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `47c944f9773a7a30cd0525db0d9eb87c0d8f1f1a` (not on main) · no tag · published `0d37d956a9913735fd14a3b4a7bcdf1d245a76da` (release stamp)
 
 Edge and Guard aligns sword cuts with the sharp edge, connects combo transitions and adds directional blocking. The generated V7 warden and V6 voices remain.
 
