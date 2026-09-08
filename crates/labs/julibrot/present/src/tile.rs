@@ -968,9 +968,8 @@ mod tests {
         let anchor_chart = anchor_delta_px.map(|value| chart_scale * value);
         let source_coordinate = anchor_chart.map(|value| -value / scale_ratio);
         let source_local_four = target.plane.local_point(source_coordinate);
-        let ambient_four = core::array::from_fn(|axis| {
-            source.plane_origin[axis] + source_local_four[axis]
-        });
+        let ambient_four =
+            core::array::from_fn(|axis| source.plane_origin[axis] + source_local_four[axis]);
         let value = retained_value_sample(
             EscapeGridRecord {
                 smooth_iter: 0.0,

@@ -297,8 +297,7 @@ fn project_reconstructed_sample_from_anchor(
     let expected_plane =
         construct_plane(target.object).map_err(|_| ReprojectionError::InvalidTarget)?;
     let plane_matches = target.plane == expected_plane
-        || (target.object == ObjectAngles::JULIA
-            && target.plane == Plane::CANONICAL_JULIA_PLANE);
+        || (target.object == ObjectAngles::JULIA && target.plane == Plane::CANONICAL_JULIA_PLANE);
     if !plane_matches {
         return Err(ReprojectionError::InvalidTarget);
     }
