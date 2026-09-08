@@ -1001,6 +1001,6 @@ pub use wasm_entry::{
     app_set_distances, app_set_height, app_set_iteration_cap, app_set_object_angles,
     app_set_palette, app_set_plane_angles, app_set_plane_origin, app_set_precision_mode,
     app_set_scale, app_set_scene_mode, app_set_target, app_set_view_angles, app_take_frame_rgba,
-    app_update_scene, app_zoom_box, julibrot_abi_version, julibrot_package_version,
-    start_julibrot, start_julibrot_on_canvas,
+    app_update_scene, app_zoom_box, julibrot_abi_version, julibrot_package_version, start_julibrot,
+    start_julibrot_on_canvas,
 };
