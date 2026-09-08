@@ -337,6 +337,8 @@
       }
     }
 
+    const versionLabel = (entry) => `Version ${entry.version.split('.')[0]}`;
+
     const launch = (path, pending) => {
       getAccount(true); // clicking a game auto-creates the account
       renderAccount();
@@ -362,7 +364,7 @@
       const update = document.createElement('div');
       update.className = 'update';
       const updateLabel = document.createElement('b');
-      updateLabel.textContent = live ? `latest update · ${live.v}` : 'latest update';
+      updateLabel.textContent = live ? `latest update · ${versionLabel(live)} · ${live.version}` : 'latest update';
       update.append(updateLabel, live && live.note ? live.note : 'Current playable build.');
       const row = document.createElement('div');
       row.className = 'playrow';
@@ -376,15 +378,19 @@
       for (const v of g.versions) {
         const opt = document.createElement('option');
         opt.value = v.path;
-        opt.textContent = v.live ? `${v.v} — live` : `${v.v} — ${v.note || 'archived'}`;
+        opt.textContent = v.live
+          ? `${versionLabel(v)} (${v.version}) — live`
+          : `${versionLabel(v)} (${v.version}) — ${v.note || 'archived'}`;
         if (v.live && !livePath) livePath = v.path;
         sel.append(opt);
       }
       if (livePath) sel.value = livePath;
       const btn = document.createElement('button');
       const isLab = g.kind === 'lab';
-      btn.textContent = isLab ? 'Open lab' : `Play ${live ? live.v : ''}`.trim();
-      btn.title = isLab ? `Open ${g.title}` : `Play the latest ${g.title} build`;
+      btn.textContent = isLab ? 'Open lab' : `Play ${live ? versionLabel(live) : ''}`.trim();
+      btn.title = live
+        ? `${isLab ? 'Open' : 'Play'} ${g.title} ${live.version}`
+        : `${isLab ? 'Open' : 'Play'} ${g.title}`;
       btn.addEventListener('click', () => {
         if (isLab) location.href = sel.value;
         else launch(sel.value);
