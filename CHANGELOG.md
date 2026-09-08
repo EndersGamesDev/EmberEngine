@@ -16,6 +16,12 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### End Game v2
+
+The Living Cell replaces the first chapter's blockout architecture with smaller beveled and chipped masonry, generated limestone and oak surfaces, recessed mortar and barred window, fitted roof timbers, layered cage ironwork, and a fully lined barrel vault. The gate and loose floorboard animate; the gate's physical aperture follows its opening. The launcher and both publishers select v2 while retaining the original v1 page and bundle (`1ca5514a`).
+
+Seven generated furnishings add a stitched straw cot, iron-hooped bucket, shackles, torn cloth, drain, candle stool and scattered straw in a 2.22 MB / 26,308-triangle kit. Cloth, chains, flame and gravity-timed drips animate around the same traversable escape route. Six simulation tests, five client/geometry/asset-budget tests, three resolution tests, native visual captures, scoped publication preservation and all 126 deployment fixtures pass; the final 24,818,334-byte WASM builds in 6.2 seconds through the Idle-priority helper. Browser gameplay, physical controllers/mobile devices and 5K frame rates remain unverified, and cloth/chain motion remains authored animation (`cc11b1af`).
+
 ### End Game v1
 
 The first End Game chapter runs on Ember: awaken in a wooden-floored dungeon cell, recover a key, evade or fight the sleeping warden, claim the greatsword and break the exit chain. Wolf and werewolf armor forms, a prerecorded prologue, material densities and gravity, individually varied surfaces, local torch lighting and adaptive resolution up to a 5120-pixel width accompany keyboard/mouse, standard gamepad and touch controls. The launcher entry and scoped publisher preserve the other live games; each targeted release records its source and file hashes in the game's own `version.json` (`9e664ac0`).
