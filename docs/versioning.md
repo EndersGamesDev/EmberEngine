@@ -41,7 +41,7 @@ Historical tags are re-issued at the same commits: `vN` becomes `arena-N.0.0`, a
 
 The orchestrator owns the one-time migration and runs `bash deploy/retag.sh --apply origin sokol osprey` from a clean `main` checkout after the versioning merge.
 
-Until `deploy/retag.sh --apply` has completed from `main`, the changelog check accepts either the old tag or its replacement for a pre-migration release. Follow-up after migration: remove the legacy-tag allowance from `deploy/tests/test-changelog.sh` in the first commit after the re-tagging has succeeded on every authoritative remote.
+The tag migration is complete, and the changelog check accepts only series-prefixed tag names. A series prefix makes every release tag self-identifying in the shared repository.
 
 Release tags are created only from `main`. Branch and merge work prepares versions, catalog data, documentation, and migration tooling but does not create a release tag.
 
