@@ -4,7 +4,6 @@ use thiserror::Error;
 
 use crate::{EscapeGridRecord, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls};
 
-const POLE_EPSILON: f64 = 1.0e-4;
 const SOURCE_ROUND_TRIP_EPSILON: f64 = 1.0e-9;
 
 /// Palette-independent value information needed to rebuild one retained sample's lift.
@@ -45,6 +44,30 @@ pub struct ProjectedSample {
     pub linear_depth: f64,
     /// Target `Depth24Plus` value before attachment quantization.
     pub raster_depth: f64,
+}
+
+impl ProjectedSample {
+    /// Smallest admitted positive denominator or observer distance in the shared projection.
+    pub const POLE_EPSILON: f64 = 1.0e-4;
+
+    /// Projects one point already expressed relative to the requested plane origin.
+    ///
+    /// This is the shared ordered five-dimensional chain used by retained-sample projection and
+    /// the whole-grid planner. Keeping plane-point construction outside this entry preserves the
+    /// planner's existing binary64 basis algebra while giving both paths one camera, translation,
+    /// perspective, observer, depth, and viewport implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid pose, an edge-on map, a non-finite input, or a
+    /// perspective pole.
+    pub fn from_local_point(
+        pose: &Pose,
+        local_four: [f64; 4],
+        value: RetainedValueSample,
+    ) -> Result<Self, ReprojectionError> {
+        project_local_point(pose, local_four, value)
+    }
 }
 
 /// Typed refusal from source reconstruction or target projection.
@@ -192,17 +215,28 @@ fn project_ambient_point(
     ambient_four: [f64; 4],
     value: RetainedValueSample,
 ) -> Result<ProjectedSample, ReprojectionError> {
+    if !ambient_four.into_iter().all(f64::is_finite) {
+        return Err(ReprojectionError::ProjectionPole);
+    }
+    let local_four: [f64; 4] =
+        core::array::from_fn(|axis| ambient_four[axis] - pose.plane_origin[axis]);
+    project_local_point(pose, local_four, value)
+}
+
+fn project_local_point(
+    pose: &Pose,
+    local_four: [f64; 4],
+    value: RetainedValueSample,
+) -> Result<ProjectedSample, ReprojectionError> {
     if pose.grid_width == 0
         || pose.grid_height == 0
         || !pose.view.is_valid()
-        || !ambient_four.into_iter().all(f64::is_finite)
+        || !local_four.into_iter().all(f64::is_finite)
         || !value.record_height.is_finite()
         || matches!(pose.map, PoseMap::EdgeOn)
     {
         return Err(ReprojectionError::ProjectionPole);
     }
-    let local_four: [f64; 4] =
-        core::array::from_fn(|axis| ambient_four[axis] - pose.plane_origin[axis]);
     let height = pose.view.height_scale * (value.record_height + 2.0) * 0.5;
     let mut ambient = [
         local_four[0],
@@ -220,7 +254,9 @@ fn project_ambient_point(
     let distance_four = pose.view.distance_four;
     let unclamped_five = distance_five - ambient[4];
     let denominator_five = unclamped_five.max(RELIEF_NEAR_FRACTION * distance_five);
-    if denominator_five <= POLE_EPSILON || unclamped_five < RELIEF_NEAR_FRACTION * distance_five {
+    if denominator_five <= ProjectedSample::POLE_EPSILON
+        || unclamped_five < RELIEF_NEAR_FRACTION * distance_five
+    {
         return Err(ReprojectionError::ProjectionPole);
     }
     let scale_five = distance_five / denominator_five;
@@ -231,7 +267,7 @@ fn project_ambient_point(
         ambient[3] * scale_five,
     ];
     let denominator_four = distance_four - projected_four[3];
-    if denominator_four <= POLE_EPSILON {
+    if denominator_four <= ProjectedSample::POLE_EPSILON {
         return Err(ReprojectionError::ProjectionPole);
     }
     let scale_four = distance_four / denominator_four;
@@ -253,7 +289,7 @@ fn project_ambient_point(
         pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - distance_four,
     ];
     let linear_depth = -view[2];
-    if !linear_depth.is_finite() || linear_depth <= POLE_EPSILON {
+    if !linear_depth.is_finite() || linear_depth <= ProjectedSample::POLE_EPSILON {
         return Err(ReprojectionError::ProjectionPole);
     }
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);

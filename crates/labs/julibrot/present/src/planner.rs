@@ -1,6 +1,6 @@
 use ember_julibrot_math::{
-    Homography, Plane, Pose, PoseMap, RELIEF_NEAR_FRACTION, ViewControls, pixel_scale,
-    plane_chart_relation, warp_matrix,
+    Homography, Plane, Pose, PoseMap, ProjectedSample, RetainedValueSample, ViewControls,
+    pixel_scale, plane_chart_relation, warp_matrix,
 };
 
 use crate::homography::solve_homogeneous;
@@ -15,7 +15,6 @@ const HORIZON_STATUS: f32 = 2.0;
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
 const ERROR_SAMPLE_CAPACITY: usize = 405;
-const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 const REDRAW_NEUTRAL_EPSILON: f64 = 1.0e-12;
 const RELIEF_EXPOSURE_STEPS: u32 = 65;
@@ -781,6 +780,7 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .fold(0.0, f64::max)
 }
 
+#[cfg(test)]
 fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewControls) -> [f64; 5] {
     let chart = plane_point(plane, coordinate);
     let mut point = [chart[0], chart[1], chart[2], chart[3], height];
@@ -904,10 +904,6 @@ fn project_scene_point_with_shortcut(
         .map(|projected| projected.0)
 }
 
-#[allow(
-    clippy::float_cmp,
-    reason = "a zero lift selects the exact identity the screen-to-plane map already defines"
-)]
 fn project_scene_vertex_with_shortcut(
     pose: &Pose,
     screen: [f64; 2],
@@ -931,77 +927,31 @@ fn project_scene_vertex_with_shortcut(
     let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
     let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
     let chart_coordinate = [chart_scale * mapped[0], chart_scale * mapped[1]];
-    let rotated = ambient_point(pose.plane, chart_coordinate, height, &pose.view);
-    let distance_five = pose.view.distance_five;
-    let distance_four = pose.view.distance_four;
-    let denominator_five = distance_five - rotated[4];
-    if denominator_five < RELIEF_NEAR_FRACTION * distance_five || denominator_five <= POLE_EPSILON {
-        return None;
-    }
-    let scale_five = distance_five / denominator_five;
-    let projected_four = [
-        rotated[0] * scale_five,
-        rotated[1] * scale_five,
-        rotated[2] * scale_five,
-        rotated[3] * scale_five,
-    ];
-    let denominator_four = distance_four - projected_four[3];
-    if denominator_four <= POLE_EPSILON {
-        return None;
-    }
-    let scale_four = distance_four / denominator_four;
-    let world = [
-        projected_four[0] * scale_four,
-        projected_four[1] * scale_four,
-        projected_four[2] * scale_four,
-    ];
-    let (yaw_sine, yaw_cosine) = pose.view.camera_yaw.sin_cos();
-    let (pitch_sine, pitch_cosine) = pose.view.camera_pitch.sin_cos();
-    let yawed = [
-        yaw_cosine.mul_add(world[0], yaw_sine * world[2]),
-        world[1],
-        (-yaw_sine).mul_add(world[0], yaw_cosine * world[2]),
-    ];
-    let view = [
-        yawed[0],
-        pitch_cosine.mul_add(yawed[1], -pitch_sine * yawed[2]),
-        pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - distance_four,
-    ];
-    let clip_w = -view[2];
-    if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
-        return None;
-    }
-    let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
-    let perspective_scale = aspect * distance_four * 0.5;
-    let ndc = [
-        perspective_scale * view[0] / aspect / clip_w,
-        perspective_scale * view[1] / clip_w,
-    ];
-    let projected = [
-        ndc[0] * f64::from(pose.grid_width) * 0.5,
-        ndc[1] * f64::from(pose.grid_height) * 0.5,
-    ];
-    if !projected.iter().all(|value| value.is_finite()) {
-        return None;
-    }
+    let local_four = plane_point(pose.plane, chart_coordinate);
+    let projected =
+        ProjectedSample::from_local_point(pose, local_four, RetainedValueSample { record_height })
+            .ok()?;
     // A sample with no lift stays in the plane, where the forward projection is the screen-to-plane
     // map's own inverse, so the screen point it came from is its exact answer and the chain's is
     // that answer with drift in it. The shortcut is taken only once the chain has placed the
     // vertex: the identity is an algebraic fact about the projective map, not a claim that the
     // point is in front of all three limits, and at this pose family the later limits do refuse
     // points the map itself still maps.
-    if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
+    if flat_shortcut
+        && height.abs().to_bits() == 0.0_f64.to_bits()
+        && map.apron_scale.to_bits() == 1.0_f64.to_bits()
+    {
         return Some((screen, 1.0));
     }
-    Some((projected, clip_w))
+    Some((projected.screen, projected.linear_depth))
 }
 
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{
-        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, ViewControls,
-        construct_plane, screen_to_plane,
+        Homography, ObjectAngles, Plane, PlaneAngles, PoseMap, PrecisionMode, RELIEF_NEAR_FRACTION,
+        ViewControls, construct_plane, screen_to_plane,
     };
 
     use super::*;
@@ -1201,11 +1151,11 @@ mod tests {
         );
         let denominator_five = pose.view.distance_five - rotated[4];
         let near_five = RELIEF_NEAR_FRACTION * pose.view.distance_five;
-        if denominator_five < near_five || denominator_five <= POLE_EPSILON {
+        if denominator_five < near_five || denominator_five <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "fifth-dimensional near limit",
                 value: denominator_five,
-                limit: near_five.max(POLE_EPSILON),
+                limit: near_five.max(ProjectedSample::POLE_EPSILON),
             };
         }
         let scale_five = pose.view.distance_five / denominator_five;
@@ -1216,11 +1166,11 @@ mod tests {
             rotated[3] * scale_five,
         ];
         let denominator_four = pose.view.distance_four - projected_four[3];
-        if denominator_four <= POLE_EPSILON {
+        if denominator_four <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "four-dimensional pole",
                 value: denominator_four,
-                limit: POLE_EPSILON,
+                limit: ProjectedSample::POLE_EPSILON,
             };
         }
         let scale_four = pose.view.distance_four / denominator_four;
@@ -1239,11 +1189,11 @@ mod tests {
         let view_z =
             pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - pose.view.distance_four;
         let clip_w = -view_z;
-        if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
+        if !clip_w.is_finite() || clip_w <= ProjectedSample::POLE_EPSILON {
             return ProjectionRefusalProbe {
                 stage: "observer pole",
                 value: clip_w,
-                limit: POLE_EPSILON,
+                limit: ProjectedSample::POLE_EPSILON,
             };
         }
         ProjectionRefusalProbe {
