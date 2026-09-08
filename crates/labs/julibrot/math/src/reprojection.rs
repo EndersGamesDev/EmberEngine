@@ -731,6 +731,31 @@ mod tests {
     }
 
     #[test]
+    fn exact_four_dimensional_pole_boundary_is_refused() {
+        let source = pose(ViewControls::NEUTRAL);
+        let value = RetainedValueSample {
+            record_height: -2.0,
+        };
+        let sample = ReconstructedSample {
+            ambient_four: source.plane_origin,
+            source_local_four: [0.0; 4],
+            source_zoom_log2: source.zoom_log2,
+            value,
+        };
+        let mut boundary = source;
+        boundary.view.distance_four = ProjectedSample::POLE_EPSILON;
+        assert_eq!(
+            project_reconstructed_sample(&boundary, sample),
+            Err(ReprojectionError::ProjectionPole)
+        );
+
+        let mut above = boundary;
+        above.view.distance_four =
+            f64::from_bits(ProjectedSample::POLE_EPSILON.to_bits() + 1);
+        assert!(project_reconstructed_sample(&above, sample).is_ok());
+    }
+
+    #[test]
     fn one_pixel_tile_interpolation_stays_inside_the_admission_bound() {
         let source = pose(ViewControls::NEUTRAL);
         let mut target_view = ViewControls::NEUTRAL;
