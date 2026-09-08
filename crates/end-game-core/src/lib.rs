@@ -2,10 +2,13 @@
 use glam::{Vec2, Vec3};
 pub mod combat;
 pub mod dialogue;
+#[cfg(test)]
+mod exploration_tests;
 pub mod guard;
 #[cfg(test)]
 mod guard_tests;
 pub mod interaction;
+pub mod layout;
 pub mod warden;
 pub use combat::{Combat, ImpactKind, Strike, StrikeKind};
 pub use dialogue::{Dialogue, VoiceEvent, VoiceKind};
@@ -15,6 +18,9 @@ pub use warden::{Warden, WardenPhase};
 
 pub const STEP: f32 = 1.0 / 60.0;
 pub const GRAVITY: f32 = 9.81;
+pub const TOTAL_EXPLORE_COUNT: u32 = 7;
+pub const EXIT_GATE_LIFT: f32 = 3.10;
+pub const EXIT_OPEN_TIME: f32 = 1.20;
 
 const COT_MIN: Vec2 = Vec2::new(-2.9, 2.35);
 const COT_MAX: Vec2 = Vec2::new(-1.6, 4.75);
@@ -264,6 +270,10 @@ pub struct Dungeon {
     pub health: f32,
     pub stage: u8,
     pub gate_open: f32,
+    /// Physical far-gate lift, separate from the sliding cell gate.
+    pub exit_open: f32,
+    pub grounded: bool,
+    explored: u32,
     pub board_open: f32,
     pub interaction: Option<Interaction>,
     pub werewolf: bool,
@@ -299,6 +309,9 @@ impl Default for Dungeon {
             health: 100.0,
             stage: 0,
             gate_open: 0.0,
+            exit_open: 0.0,
+            grounded: true,
+            explored: 0,
             board_open: 0.0,
             interaction: None,
             werewolf: false,
@@ -331,9 +344,40 @@ impl Default for Dungeon {
 }
 
 impl Dungeon {
-    /// The final impact and sword recovery remain visible before completion UI.
+    /// V9 remains playable after escaping; exploration has no end overlay.
     pub fn finished(&self) -> bool {
-        self.stage == 5 && self.combat.finished()
+        false
+    }
+    pub fn escaped(&self) -> bool {
+        self.stage >= 5
+    }
+    pub fn location(&self) -> &'static str {
+        if self.position.z >= -7. {
+            "Basement"
+        } else {
+            layout::region_at(self.position.to_array()).label()
+        }
+    }
+    pub fn explored_count(&self) -> u32 {
+        self.explored.count_ones()
+    }
+    pub fn total_explore_count(&self) -> u32 {
+        TOTAL_EXPLORE_COUNT
+    }
+    pub fn exit_gate_bounds(&self) -> layout::Aabb {
+        let bottom = self.exit_open.clamp(0.0, 1.0) * EXIT_GATE_LIFT;
+        layout::Aabb::new([-0.9, bottom, -7.15], [0.9, bottom + 2.7, -6.85])
+    }
+    fn on_surface(&self) -> bool {
+        self.velocity_y <= 0.0
+            && layout::castle()
+                .support_below(
+                    self.position.x,
+                    self.position.z,
+                    self.position.y + 0.001,
+                    layout::PLAYER_RADIUS,
+                )
+                .is_some_and(|height| (height - self.position.y).abs() < 0.001)
     }
     pub fn forward(&self) -> Vec3 {
         Vec3::new(self.yaw.sin(), 0.0, -self.yaw.cos())
@@ -344,8 +388,12 @@ impl Dungeon {
             1 => "Take the key beneath the loose board",
             2 => "Unlock the cell door",
             3 => "Pass the warden. Find the greatsword",
+            4 if self.warden_health > 0.0 => "Defeat the warden, then break the far gate's chain",
             4 => "Break the chain on the far gate",
-            _ => "The dungeon is behind you",
+            _ if self.explored_count() < TOTAL_EXPLORE_COUNT => {
+                "Explore the castle, garden and tower summit"
+            }
+            _ => "The castle is yours to explore",
         }
     }
     pub fn distance(&self, x: f32, z: f32) -> f32 {
@@ -373,7 +421,7 @@ impl Dungeon {
     pub fn interact(&mut self) {
         // Approaches are authored on the floor. Let an airborne player finish
         // their jump instead of interpolating them down through the furniture.
-        if self.position.y != 0.0 || self.velocity_y != 0.0 || self.prompt().is_empty() {
+        if !self.on_surface() || self.velocity_y != 0.0 || self.prompt().is_empty() {
             return;
         }
         let kind = match self.stage {
@@ -448,7 +496,7 @@ impl Dungeon {
     fn strike_contact(&mut self, kind: StrikeKind) {
         let forward = self.forward();
         let chain_distance = self.distance(0.0, -6.5);
-        let chain_in_reach = chain_distance < 2.0 && forward.z < -0.25;
+        let chain_in_reach = self.stage == 4 && chain_distance < 2.0 && forward.z < -0.25;
         let to_warden = Vec3::new(
             self.warden.x - self.position.x,
             0.0,
@@ -481,11 +529,15 @@ impl Dungeon {
                 "Iron meets iron."
             });
         } else if chain_in_reach {
-            self.stage = 5;
             self.combat
                 .impact(kind, ImpactKind::Chain, Vec3::new(0.0, 1.05, -6.88));
-            self.combat.clear_queue();
-            self.say("Beyond the iron, the hunt begins.");
+            if self.warden_health <= 0.0 {
+                self.stage = 5;
+                self.combat.clear_queue();
+                self.say("The chain breaks. The far gate rises.");
+            } else {
+                self.say("The warden still holds this dungeon. Defeat him first.");
+            }
         }
     }
     fn can_stand(&self, x: f32, z: f32) -> bool {
@@ -582,7 +634,7 @@ impl Dungeon {
             );
             let incoming =
                 (Vec3::new(self.warden.x, 1.25, self.warden.y) - eye).normalize_or_zero();
-            let result = if look.dot(incoming) >= 0.5 && self.position.y <= 0.001 {
+            let result = if look.dot(incoming) >= 0.5 && self.grounded {
                 self.guard
                     .receive(&mut self.stamina, eye + look * 0.65 - Vec3::Y * 0.22)
             } else {
@@ -634,18 +686,7 @@ impl Dungeon {
     }
 
     pub fn tick(&mut self, mut input: Controls) {
-        if self.finished() {
-            return;
-        }
-        if self.stage == 5 {
-            let progress = self.combat.tick(false, &mut self.stamina);
-            self.attack_time = self.combat.remaining();
-            if !progress.frozen {
-                self.time += STEP;
-                self.dialogue.advance();
-            }
-            return;
-        }
+        self.grounded = self.on_surface();
         if input.interact && self.interaction.is_none() {
             self.interact();
         }
@@ -673,7 +714,7 @@ impl Dungeon {
         }
         let old_swing = self.combat.swing_event;
         let progress = self.combat.tick(
-            self.stage == 4 && !was_interacting && input.attack && !input.block,
+            self.stage >= 4 && !was_interacting && input.attack && !input.block,
             &mut self.stamina,
         );
         if self.combat.swing_event != old_swing {
@@ -695,11 +736,14 @@ impl Dungeon {
         }
         self.time += STEP;
         self.dialogue.advance();
+        if self.stage >= 5 && self.warden_health <= 0.0 {
+            self.exit_open = (self.exit_open + STEP / EXIT_OPEN_TIME).min(1.0);
+        }
         self.guard.tick(
             input.block,
-            self.stage == 4
+            self.stage >= 4
                 && !was_interacting
-                && self.position.y <= 0.001
+                && self.grounded
                 && !input.jump
                 && !input.dodge
                 && self.dodge_time == 0.0
@@ -721,7 +765,16 @@ impl Dungeon {
                 })
             .clamp(0.0, 1.0);
         }
-        if !was_interacting {
+        if !was_interacting
+            && (input.crouch
+                || !layout::occupied_with(
+                    layout::castle(),
+                    &[self.exit_gate_bounds()],
+                    self.position.to_array(),
+                    layout::PLAYER_HEIGHT,
+                    layout::PLAYER_RADIUS,
+                ))
+        {
             self.crouched = input.crouch;
         }
         self.transformation = (self.transformation - STEP).max(0.0);
@@ -763,7 +816,7 @@ impl Dungeon {
         } else {
             2.1
         };
-        let delta = if self.dodge_time > 0.0 {
+        let mut delta = if self.dodge_time > 0.0 {
             if direction.length() > 0.1 {
                 direction.normalize()
             } else {
@@ -774,21 +827,22 @@ impl Dungeon {
         } * if self.dodge_time > 0.0 { 6.5 } else { speed }
             * STEP;
         let old = self.position;
-        if self.can_stand(self.position.x + delta.x, self.position.z)
-            && !segment_hits_plinth(
+        if (self.position.z > -6.4 && !self.can_stand(self.position.x + delta.x, self.position.z))
+            || segment_hits_plinth(
                 Vec2::new(self.position.x, self.position.z),
                 Vec2::new(self.position.x + delta.x, self.position.z),
             )
         {
-            self.position.x += delta.x;
+            delta.x = 0.0;
         }
-        if self.can_stand(self.position.x, self.position.z + delta.z)
-            && !segment_hits_plinth(
-                Vec2::new(self.position.x, self.position.z),
-                Vec2::new(self.position.x, self.position.z + delta.z),
+        if (self.position.z + delta.z > -6.4
+            && !self.can_stand(self.position.x + delta.x, self.position.z + delta.z))
+            || segment_hits_plinth(
+                Vec2::new(self.position.x + delta.x, self.position.z),
+                Vec2::new(self.position.x + delta.x, self.position.z + delta.z),
             )
         {
-            self.position.z += delta.z;
+            delta.z = 0.0;
         }
         self.stamina = (self.stamina
             + if running {
@@ -799,18 +853,38 @@ impl Dungeon {
                 16.0
             } * STEP)
             .clamp(0.0, 100.0);
-        if input.jump && self.position.y == 0.0 && self.stamina > 12.0 {
+        if input.jump && self.grounded && self.stamina > 12.0 {
             self.velocity_y = 4.1;
+            self.grounded = false;
             self.stamina -= 12.0;
         }
-        self.velocity_y -= GRAVITY * STEP;
-        self.position.y = (self.position.y + self.velocity_y * STEP).max(0.0);
-        if self.position.y == 0.0 {
-            self.velocity_y = 0.0;
+        let mut player = layout::Body {
+            position: self.position.to_array(),
+            velocity_y: self.velocity_y,
+            grounded: self.grounded,
+            radius: layout::PLAYER_RADIUS,
+            height: if self.crouched {
+                1.2
+            } else {
+                layout::PLAYER_HEIGHT
+            },
+        };
+        layout::advance_body_with(
+            layout::castle(),
+            &[self.exit_gate_bounds()],
+            &mut player,
+            [delta.x, delta.z],
+            STEP,
+        );
+        self.position = Vec3::from_array(player.position);
+        self.velocity_y = player.velocity_y;
+        self.grounded = player.grounded;
+        if self.stage >= 5 && self.position.z < -7.0 {
+            self.explored |= layout::region_at(self.position.to_array()).bit();
         }
         let walked = Vec2::new(self.position.x - old.x, self.position.z - old.z).length();
         self.step_distance += walked;
-        if self.step_distance > 0.65 && self.position.y == 0.0 {
+        if self.step_distance > 0.65 && self.grounded {
             self.step_distance = 0.0;
             self.footsteps += 1;
             if walked > 0.0
@@ -838,6 +912,11 @@ impl Dungeon {
             self.say("Your blade is somewhere beyond these bars.");
         }
         self.tick_warden(running);
+        // A missed exterior collision must still finish a fall rather than
+        // leaving the player dropping forever; reuse the existing death path.
+        if self.position.y < -8.0 {
+            self.health = 0.0;
+        }
         if self.health <= 0.0 {
             let next_life = self.dialogue.life.wrapping_add(1);
             *self = Self::default();
@@ -921,6 +1000,9 @@ mod tests {
         s.position = Vec3::new(2.6, 0.0, -4.0);
         perform_interaction(&mut s, InteractionKind::Sword);
         assert!(s.werewolf);
+        // V9 adds defeating the warden as an explicit exit prerequisite.
+        s.warden_health = 0.0;
+        s.warden_ai.die();
         s.position = Vec3::new(0.0, 0.0, -5.4);
         s.tick(Controls {
             attack: true,
@@ -929,7 +1011,8 @@ mod tests {
         assert_eq!(s.stage, 4, "chain broke on the click instead of contact");
         finish_attack(&mut s);
         assert_eq!(s.stage, 5);
-        assert!(s.finished());
+        assert!(s.escaped());
+        assert!(!s.finished());
     }
 
     #[test]
@@ -1332,6 +1415,10 @@ mod tests {
         walk(&mut s, 2.6, -3.5);
         perform_interaction(&mut s, InteractionKind::Sword);
         assert_eq!(s.stage, 4);
+        // This fixture verifies the navigation route; combat/death gating is
+        // exercised separately by the exit prerequisite regression.
+        s.warden_health = 0.0;
+        s.warden_ai.die();
         walk(&mut s, 0.0, -5.5);
         s.yaw = 0.0;
         s.tick(Controls {
@@ -1507,10 +1594,11 @@ mod tests {
     }
 
     #[test]
-    fn gate_impact_clears_buffer_and_recovers_before_completion() {
+    fn gate_impact_clears_buffer_and_recovers_into_free_exploration() {
         let mut s = Dungeon {
             stage: 4,
             position: Vec3::new(0.0, 0.0, -5.4),
+            warden_health: 0.0,
             ..Dungeon::default()
         };
         for _ in 0..3 {
@@ -1534,16 +1622,15 @@ mod tests {
         assert_eq!(s.combat.hitstop_left, 0.10);
         let mut stopped = 0;
         while s.combat.hitstop_left > 0.0 {
-            s.tick(Controls {
-                attack: true,
-                ..Controls::default()
-            });
+            s.tick(Controls::default());
             stopped += 1;
             assert!(!s.finished());
         }
         assert_eq!(stopped, 6);
         finish_attack(&mut s);
-        assert!(s.finished());
+        assert!(!s.finished());
+        assert!(s.escaped());
+        assert!(s.exit_open > 0.0);
         assert_eq!(s.combat.swing_event, 1);
         assert_eq!(s.combat.impact_event, 1);
         let event = s.event;
@@ -1551,7 +1638,7 @@ mod tests {
             attack: true,
             ..Controls::default()
         });
-        assert_eq!(s.event, event);
+        assert!(s.event > event, "exploration still accepts a fresh strike");
     }
 
     #[test]

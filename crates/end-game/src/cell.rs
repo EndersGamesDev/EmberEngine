@@ -2,8 +2,15 @@
 use ember_engine::{Instance, MeshData, MeshVertex, TextureData};
 use glam::{Quat, Vec2, Vec3};
 
+// A single allocation per embedded source image keeps reused surface kits from
+// duplicating the original PNG bytes in the WASM payload.
+pub(crate) static LIMESTONE_PNG: &[u8] =
+    include_bytes!("../../../assets/end-game/v2/limestone.png");
+pub(crate) static OAK_PNG: &[u8] = include_bytes!("../../../assets/end-game/v2/oak.png");
+
 pub struct Cell {
     pub world: Vec<Instance>,
+    pub distant: Vec<Instance>,
     pub gate: u32,
     pub link: u32,
     pub cloth: Vec<u32>,
@@ -587,10 +594,18 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
             713,
         );
     }
-    // Backing behind the arched exit also seals the space between its leaves.
+    // Keep the same 1.8 m opening as the shared exit collision slab.
+    for x in [-3.075, 3.075] {
+        mortar.block(
+            Vec3::new(x, 2.2, -7.45),
+            Vec3::new(4.35, 4.5, 0.22),
+            identity,
+            0.0,
+        );
+    }
     mortar.block(
-        Vec3::new(0.0, 2.2, -7.45),
-        Vec3::new(10.5, 4.5, 0.22),
+        Vec3::new(0.0, 3.65, -7.45),
+        Vec3::new(1.8, 1.6, 0.22),
         identity,
         0.0,
     );
@@ -602,7 +617,7 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
         1.35,
         false,
     );
-    // Exit's carved surround and aged planked leaves.
+    // Exit's carved surround; the barred gate is animated by Scene.
     arch(
         &mut stone[1],
         Vec3::new(0.0, 2.3, -7.06),
@@ -621,14 +636,6 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
                 0.016,
             );
         }
-    }
-    for x in 0..7 {
-        oak.block(
-            Vec3::new(-0.78 + x as f32 * 0.26, 1.29, -7.18),
-            Vec3::new(0.25, 2.58, 0.16),
-            identity,
-            0.01,
-        );
     }
     // Corner fragments and scattered straw remain below the player's foot clearance.
     for i in 0..110u32 {
@@ -668,11 +675,8 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
         0.09,
     );
     // Root keeps materials shared by batch; texture allocation never grows per stone.
-    let stone_texture =
-        TextureData::from_png_bytes(include_bytes!("../../../assets/end-game/v2/limestone.png"))
-            .unwrap();
-    let oak_texture =
-        TextureData::from_png_bytes(include_bytes!("../../../assets/end-game/v2/oak.png")).unwrap();
+    let stone_texture = TextureData::from_png_bytes(LIMESTONE_PNG).unwrap();
+    let oak_texture = TextureData::from_png_bytes(OAK_PNG).unwrap();
     let iron_texture = meshes[1].texture.clone();
     let mut world = Vec::new();
     for (i, kit) in stone.into_iter().enumerate() {
@@ -787,8 +791,27 @@ pub fn build(meshes: &mut Vec<MeshData>) -> Cell {
     }
     let water = MeshData::textured_plane(1.0, None);
     meshes.push(water);
+    // A tiny closed shell preserves distant silhouettes and shadows after the
+    // detailed basement leaves the submitted frame. It keeps the exit open.
+    let distant = [
+        (Vec3::new(0.0, -0.12, -1.0), Vec3::new(10.0, 0.24, 12.0)),
+        (Vec3::new(0.0, 4.35, -3.5), Vec3::new(10.4, 0.25, 7.0)),
+        (Vec3::new(-5.1, 2.1, -3.5), Vec3::new(0.2, 4.2, 7.0)),
+        (Vec3::new(5.1, 2.1, -3.5), Vec3::new(0.2, 4.2, 7.0)),
+        (Vec3::new(-3.1, 1.8, 2.5), Vec3::new(0.2, 3.6, 5.0)),
+        (Vec3::new(3.1, 1.8, 2.5), Vec3::new(0.2, 3.6, 5.0)),
+        (Vec3::new(0.0, 1.8, 5.1), Vec3::new(6.4, 3.6, 0.2)),
+        (Vec3::new(0.0, 3.7, 2.5), Vec3::new(6.4, 0.2, 5.0)),
+        (Vec3::new(-3.075, 2.2, -7.45), Vec3::new(4.35, 4.5, 0.22)),
+        (Vec3::new(3.075, 2.2, -7.45), Vec3::new(4.35, 4.5, 0.22)),
+        (Vec3::new(0.0, 3.65, -7.45), Vec3::new(1.8, 1.6, 0.22)),
+    ]
+    .into_iter()
+    .map(|(p, s)| Instance::new(p, s, Vec3::new(0.17, 0.17, 0.15)).with_surface(0.97, 0.0))
+    .collect();
     Cell {
         world,
+        distant,
         gate,
         link,
         cloth,
@@ -857,6 +880,63 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_exit_has_no_static_wall_or_plank_across_the_passage() {
+        let mut meshes = vec![
+            MeshData::textured_box(1., None),
+            MeshData::textured_box(1., None),
+        ];
+        let cell = build(&mut meshes);
+        for x in [-0.65, 0., 0.65] {
+            for y in [0.15, 0.8, 1.7] {
+                let origin = Vec3::new(x, y, -6.7);
+                let direction = -Vec3::Z;
+                for instance in &cell.world {
+                    for tri in meshes[instance.mesh as usize - 1].vertices.chunks_exact(3) {
+                        let a = Vec3::from_array(tri[0].pos);
+                        let b = Vec3::from_array(tri[1].pos);
+                        let c = Vec3::from_array(tri[2].pos);
+                        let edge = b - a;
+                        let other = c - a;
+                        let cross = direction.cross(other);
+                        let det = edge.dot(cross);
+                        if det.abs() < 0.000001 {
+                            continue;
+                        }
+                        let offset = origin - a;
+                        let u = offset.dot(cross) / det;
+                        if !(0.0..=1.0).contains(&u) {
+                            continue;
+                        }
+                        let q = offset.cross(edge);
+                        let v = direction.dot(q) / det;
+                        if v < 0. || u + v > 1. {
+                            continue;
+                        }
+                        let distance = other.dot(q) / det;
+                        assert!(
+                            !(0.0..1.2).contains(&distance),
+                            "static mesh {} closes exit at {x},{y} distance {distance}",
+                            instance.mesh
+                        );
+                    }
+                }
+                for instance in &cell.distant {
+                    let min = instance.position - instance.scale * 0.5;
+                    let max = instance.position + instance.scale * 0.5;
+                    assert!(
+                        !(x > min.x
+                            && x < max.x
+                            && y > min.y
+                            && y < max.y
+                            && min.z < -6.7
+                            && max.z > -7.9)
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn bevels_are_closed_finite_and_keep_the_authored_bounds() {
         let mut mesh = Kit::default();

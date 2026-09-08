@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 // Execute the actual shell with passive DOM/API doubles. No browser, display,
 // workstation input or audio playback is driven by these input regressions.
-const source=readFileSync(new URL('../../web/games/end-game/v8/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+const source=readFileSync(new URL('../../web/games/end-game/v9/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
 function fixture() {
   const nodes=new Map(), calls=[];
   class Element {
@@ -92,4 +92,17 @@ test('block and break events are consumed every frame before the HUD throttle',(
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal').map(c=>c[1]),[false]);
   f.run('api.state_json=()=>JSON.stringify({time:1,guard:{amount:0,ready:false,impactLeft:0,brokenLeft:.9,blockEvent:1,breakEvent:1}});loop(112);loop(113);');
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal').map(c=>c[1]),[false,true]);
+});
+
+test('castle exploration keeps controls active and shows location after escape',()=>{
+  const f=fixture();
+  f.get('complete').hidden=true;
+  f.run(`api.state_json=()=>JSON.stringify({version:'9.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Explore the garden',location:'Backyard garden',exploration:{visited:4,total:7},prompt:'',event:0,footsteps:0});loop(100);`);
+  assert.equal(f.get('location').textContent,'Backyard garden');
+  assert.equal(f.get('exploration').textContent,'4 / 7 places discovered');
+  assert.equal(f.get('hint').hidden,true);
+  assert.equal(f.get('complete').hidden,true);
+  assert.equal(f.run('paused || ended'),false);
+  f.strike.emit('pointerdown');
+  assert.equal(f.calls.at(-1)[0],'action');
 });

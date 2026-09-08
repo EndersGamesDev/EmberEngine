@@ -1,0 +1,77 @@
+{
+  "prop": "tower-doorway",
+  "source": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\mesh\\20260908-163122-804e4d.glb",
+  "source_sha256": "c227bbe9a3164f0e31a8cde5cf9100309e2493a3893b21bc41482873a247019b",
+  "output": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\converted\\tower-doorway.glb",
+  "bytes": 1604948,
+  "sha256": "b06d1eb0b256542ead525337d3033519230a92c167080f76346b5e2816f0b42f",
+  "source_triangles": 473865,
+  "triangles": 11477,
+  "height_m": 6.0,
+  "engine_bounds_min": [
+    -1.7280404567718506,
+    -0.0056387269869446754,
+    -1.347278356552124
+  ],
+  "engine_bounds_max": [
+    1.725459337234497,
+    6.002374172210693,
+    1.3482134342193604
+  ],
+  "base_anchor": "center of ground contact",
+  "axes": "engine +Y up; concept front faces -Z",
+  "albedo_pixels": [
+    768,
+    768
+  ],
+  "scalar_surface": {
+    "roughness": 0.9,
+    "metallic": 0
+  },
+  "wall_seconds": 6.033,
+  "primitive_count": 1,
+  "texture_pixels": [
+    768,
+    768
+  ],
+  "texture_mode": "RGB",
+  "texture_bit_depth": 8,
+  "cloned_texture_bytes_with_mips": 3145720,
+  "provenance": {
+    "method": "SDXL concept -> rembg cutout -> TRELLIS.2 textured GLB -> local Blender decimation and RGB8 atlas reduction",
+    "image_model": "SDXL 1.0 base on Specht",
+    "image_prompt_ids": [
+      "b07b218e-7f5e-4a1e-a738-18b63588a4f0"
+    ],
+    "mesh_model": "TRELLIS.2 4B, 1024_cascade, Adler RTX 4090",
+    "mesh_job": "20260908-163122-804e4d",
+    "seed": 909083,
+    "concept": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\image\\20260908_00025_.png",
+      "bytes": 2268202,
+      "sha256": "d1ca8f06c42affd2293962e47397f72dec3a54c1415972d408487749db6ea6a7"
+    },
+    "cutout": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\cutout\\20260908_00025_-rgba.png",
+      "bytes": 2305355,
+      "sha256": "518eaa6c77d8f55a84dfe1205ad3600f8b545c255ad141633125a64026d57bf4"
+    },
+    "raw_mesh": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\mesh\\20260908-163122-804e4d.glb",
+      "bytes": 17392024,
+      "sha256": "c227bbe9a3164f0e31a8cde5cf9100309e2493a3893b21bc41482873a247019b"
+    },
+    "wall_seconds": {
+      "image": 16.436,
+      "cutout": 4.106,
+      "mesh": 56.826
+    },
+    "source_inputs": {
+      "image": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\image-arguments.json",
+      "cutout": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\cutout-arguments.json",
+      "mesh": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\tower-doorway\\mesh-arguments.json"
+    }
+  },
+  "verified": "Exported RGB8 atlas, one primitive, finite positions/normals/UVs, index bounds, nondegenerate triangles, budgets, passive Blender front/back previews.",
+  "not_verified": "Ember runtime rendering, gameplay collision, browser/device performance; integration awaits root authorization."
+}

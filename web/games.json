@@ -270,13 +270,20 @@
       "id": "end-game",
       "title": "End Game",
       "tag": "single player · dark fantasy · controller + touch",
-      "desc": "Awaken in a detailed castle prison. Explore weathered masonry, aged timber and handmade ironwork, slip past the sleeping warden and claim the greatsword. Controller, keyboard/mouse and touch controls with adaptive resolution.",
+      "desc": "Awaken in a castle dungeon, recover a key, claim the wolf greatsword and defeat the warden. Fight with heavy sword combos and directional blocking, then explore the basement passage, monumental great hall, garden, battlements and tower. Generated 3D assets, adaptive resolution, controller, keyboard and mouse, and touch controls.",
       "versions": [
+        {
+          "v": "v9",
+          "version": "9.0.0",
+          "path": "games/end-game/v9/",
+          "live": true,
+          "note": "Beyond the Dungeon: explore the great hall, garden, castle walls and climb the tower"
+        },
         {
           "v": "v8",
           "version": "8.0.0",
           "path": "games/end-game/v8/",
-          "live": true,
+          "live": false,
           "note": "Edge and Guard: edge-leading sword cuts, connected combos and directional blocking"
         },
         {

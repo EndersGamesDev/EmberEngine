@@ -1,4 +1,6 @@
-//! End Game v8: a single-player Ember dungeon, native and WASM.
+//! End Game v9: a single-player Ember dungeon, native and WASM.
+mod camera;
+mod castle;
 mod cell;
 mod hands;
 mod scene;
@@ -36,6 +38,7 @@ pub struct Game {
     third_person: bool,
     feedback: Feedback,
     wake: f32,
+    stair_eye: camera::StairEye,
 }
 
 #[cfg(test)]
@@ -56,7 +59,36 @@ mod tests {
             third_person: false,
             feedback: Feedback::default(),
             wake: 0.0,
+            stair_eye: camera::StairEye::default(),
         }
+    }
+
+    #[test]
+    fn castle_movement_guard_and_hud_continue_after_the_basement_escape() {
+        let mut g = game();
+        g.sim.stage = 5;
+        g.sim.exit_open = 1.0;
+        g.sim.warden_health = 0.0;
+        g.sim.position = glam::Vec3::new(0.0, 6.0, -70.0);
+        let from = g.sim.position;
+        let walking = InputState::from_parts(&[KeyCode::KeyW], &[], (0.0, 0.0), None);
+        g.update(&walking, STEP * 6.0);
+        assert!(g.sim.position.z < from.z);
+        assert!((g.sim.position.y - 6.0).abs() < 0.001);
+        assert!(g.sim.grounded);
+        let guarding = InputState::from_parts(&[KeyCode::KeyF], &[], (0.0, 0.0), None);
+        for _ in 0..3 {
+            g.update(&guarding, STEP * 6.0);
+        }
+        assert!(g.sim.guard.ready());
+        let state: serde_json::Value = HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(state["finished"], false);
+        assert_eq!(state["location"], "Backyard garden");
+        assert_eq!(state["exploration"]["total"], 7);
+        UI.with(|u| u.borrow_mut().paused = true);
+        let paused_position = g.sim.position;
+        g.update(&walking, STEP * 6.0);
+        assert_eq!(g.sim.position, paused_position);
     }
 
     fn combat_game() -> Game {
@@ -582,6 +614,7 @@ pub fn run() {
         third_person: false,
         feedback: Feedback::default(),
         wake: 1.0,
+        stair_eye: camera::StairEye::default(),
     };
     #[allow(unused_mut)]
     let mut passive = false;
@@ -590,6 +623,28 @@ pub fn run() {
         passive = true;
         game.wake = 0.0;
         match std::env::var("END_GAME_SCENE").as_deref() {
+            Ok("castle") => {
+                let value = |key: &str, fallback: f32| {
+                    std::env::var(key)
+                        .ok()
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(fallback)
+                };
+                game.sim.stage = 5;
+                game.sim.exit_open = value("END_GAME_EXIT_OPEN", 1.0).clamp(0.0, 1.0);
+                game.sim.warden_health = 0.0;
+                game.sim.warden_ai.die();
+                game.sim.warden_ai.elapsed = 2.0;
+                game.sim.position = glam::Vec3::new(
+                    value("END_GAME_X", 0.0),
+                    value("END_GAME_Y", 0.0),
+                    value("END_GAME_Z", -24.0),
+                );
+                game.sim.yaw = value("END_GAME_YAW", 0.0);
+                game.sim.pitch = value("END_GAME_PITCH", 0.1).clamp(-1.2, 1.15);
+                game.third_person = std::env::var("END_GAME_THIRD_PERSON").as_deref() == Ok("1");
+            }
             Ok("guard") => {
                 use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
                 game.sim.stage = 4;
@@ -969,6 +1024,8 @@ impl EmberGame for Game {
         }
         let state = serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"), "stage": self.sim.stage, "objective": self.sim.objective(),
+            "location": self.sim.location(),
+            "exploration": { "visited": self.sim.explored_count(), "total": end_game_core::TOTAL_EXPLORE_COUNT },
             "prompt": self.sim.prompt(), "health": self.sim.health, "stamina": self.sim.stamina,
             "form": if self.sim.werewolf { "Werewolf" } else { "Wolf" }, "alert": self.sim.alert,
             "event": self.sim.event, "message": self.sim.message, "footsteps": self.sim.footsteps,
@@ -1008,7 +1065,13 @@ impl EmberGame for Game {
             "physics": { "gravity": end_game_core::GRAVITY, "crateMass": self.sim.body.mass(), "crateWear": self.sim.body.wear }
         });
         HUD.with(|hud| *hud.borrow_mut() = state.to_string());
-        self.scene.frame(&self.sim, self.third_person, self.wake)
+        let lift = self.stair_eye.update(
+            self.sim.position.y,
+            self.sim.grounded,
+            if ui.paused { 0.0 } else { dt },
+        );
+        self.scene
+            .frame_with_camera_lift(&self.sim, self.third_person, self.wake, lift)
     }
     fn feedback(&mut self) -> Feedback {
         std::mem::take(&mut self.feedback)

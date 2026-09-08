@@ -331,7 +331,8 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - Extend sword contact beyond V4's one-time range/cone target selection to swept blade geometry, wall obstruction and direction-specific enemy hit reactions.
 - Replace End Game's unrigged imported heroes and spatial material zones with an authored skeleton, per-part physical material IDs, cape cloth and a continuous wolf-to-werewolf morph; the v1 camera sequence currently swaps meshes.
 - Add calibrated indoor light transport, shadowed local lights and normal/roughness texture maps before claiming photorealistic surfaces; v1 uses base color, scalar materials and unshadowed local torch lights.
-- Extend End Game beyond the first dungeon chapter with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.
+- Extend End Game with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.
+- Populate V9's connected castle, garden, battlements and tower with inhabitants, encounters and interactive world detail in a later version.
 - Validate End Game on a physical DualSense and representative iOS/Android devices, including controller haptics, touch cancellation, fullscreen and measured 5K frame pacing.
 - Extend V7's rigid jailer articulation with weighted skin/coat deformation, independently rigged fingers and planted-foot anchors during turns; its straight full-speed gait currently cancels body travel while acceleration and turning use pose blending.
 - Re-run the repository's Linux-host deployment suites on Linux: the broader V3 validation encountered Git Bash failures in host-kings, host-prebuilt, republish-host and host-loopback; the End Game Pages publisher uses the independently checked scoped assembly path.

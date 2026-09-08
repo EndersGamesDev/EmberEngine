@@ -6,6 +6,24 @@ use ember_engine::{
 use end_game_core::{Dungeon, Material};
 use glam::{Quat, Vec2, Vec3};
 
+fn castle_camera(target: Vec3, ideal: Vec3) -> Vec3 {
+    let steps = ((ideal - target).length() / 0.06).ceil().max(1.0) as usize;
+    let mut safe = target.lerp(ideal, 0.005);
+    for step in 1..=steps {
+        let p = target.lerp(ideal, step as f32 / steps as f32);
+        let blocked = end_game_core::layout::castle().solids.iter().any(|solid| {
+            let min = Vec3::from_array(solid.bounds.min) - Vec3::splat(0.12);
+            let max = Vec3::from_array(solid.bounds.max) + Vec3::splat(0.12);
+            p.cmpge(min).all() && p.cmple(max).all()
+        });
+        if blocked {
+            break;
+        }
+        safe = p;
+    }
+    safe
+}
+
 pub struct Model {
     pub ids: Vec<(u32, Vec3, Option<Material>)>,
 }
@@ -18,6 +36,7 @@ struct Prop {
 }
 pub struct Scene {
     cell: Cell,
+    castle: super::castle::CastleScene,
     oak: u32,
     iron: u32,
     wolf: Model,
@@ -32,7 +51,7 @@ pub struct Scene {
 }
 
 use super::cell::{Cell, hash};
-fn model(meshes: &mut Vec<MeshData>, bytes: &[u8]) -> Model {
+pub(super) fn model(meshes: &mut Vec<MeshData>, bytes: &[u8]) -> Model {
     let parts = load_glb(bytes).expect("validated End Game GLB");
     let ids = parts
         .into_iter()
@@ -88,7 +107,7 @@ fn armor(meshes: &mut Vec<MeshData>, bytes: &[u8]) -> Model {
     }
     Model { ids }
 }
-fn draw_model(
+pub(super) fn draw_model(
     out: &mut Vec<Instance>,
     model: &Model,
     position: Vec3,
@@ -118,12 +137,7 @@ impl Scene {
         let mut meshes = vec![
             MeshData::textured_box(
                 1.0,
-                Some(
-                    TextureData::from_png_bytes(include_bytes!(
-                        "../../../assets/end-game/v2/oak.png"
-                    ))
-                    .unwrap(),
-                ),
+                Some(TextureData::from_png_bytes(super::cell::OAK_PNG).unwrap()),
             ),
             MeshData::textured_box(
                 1.0,
@@ -216,9 +230,11 @@ impl Scene {
             &mut meshes,
             include_bytes!("../../../assets/end-game/v3/iron-key.glb"),
         );
+        let castle = super::castle::CastleScene::build(&mut meshes, 2);
         (
             Self {
                 cell,
+                castle,
                 oak: 1,
                 iron: 2,
                 wolf,
@@ -235,10 +251,22 @@ impl Scene {
         )
     }
 
+    #[cfg(test)]
     pub fn frame(&self, game: &Dungeon, third_person: bool, wake: f32) -> Frame {
+        self.frame_with_camera_lift(game, third_person, wake, 0.0)
+    }
+
+    pub fn frame_with_camera_lift(
+        &self,
+        game: &Dungeon,
+        third_person: bool,
+        wake: f32,
+        camera_lift: f32,
+    ) -> Frame {
         let fwd = game.forward();
         let right = Vec3::new(-fwd.z, 0.0, fwd.x);
-        let presentation = super::hands::view(game, wake);
+        let mut presentation = super::hands::view(game, wake);
+        presentation.head += Vec3::Y * camera_lift;
         let head = presentation.head;
         let view = presentation.forward;
         let motion = self.hands.motion(game, &presentation);
@@ -252,14 +280,19 @@ impl Scene {
             } else {
                 -fwd * 2.1 + right * 0.6
             };
-            let eye = Vec3::new(
-                (head.x + offset.x).clamp(-2.5, 4.4),
-                head.y + 0.25,
-                (head.z + offset.z).clamp(-6.5, 4.6),
-            );
+            let target = game.position + Vec3::Y * (1.25 + camera_lift);
+            let eye = if game.position.z > -7.0 {
+                Vec3::new(
+                    (head.x + offset.x).clamp(-2.5, 4.4),
+                    head.y + 0.25,
+                    (head.z + offset.z).clamp(-6.5, 4.6),
+                )
+            } else {
+                castle_camera(target, head + offset + Vec3::Y * 0.25)
+            };
             Camera {
                 eye,
-                target: game.position + Vec3::Y * 1.25,
+                target,
                 fov_y_deg: 64.0,
             }
         } else {
@@ -302,6 +335,7 @@ impl Scene {
             intensity: 1.0 * flicker,
             radius: 3.6,
         };
+        let basement = super::castle::CastleScene::basement_detail(&camera);
         let mut frame = Frame {
             camera,
             environment: env,
@@ -309,83 +343,95 @@ impl Scene {
                 color: [0.012, 0.019, 0.03],
                 density: 0.022,
             },
-            instances: self.cell.world.clone(),
+            instances: if basement {
+                self.cell.world.clone()
+            } else {
+                self.cell.distant.clone()
+            },
             ..Frame::default()
         };
+        self.castle.light(&mut frame, t);
+        self.castle.draw(&mut frame, &self.torch, t);
         let out = &mut frame.instances;
-        self.cell.animate(out, t, game.gate_open);
-        for prop in &self.props {
-            let motion = if prop.sway {
-                Quat::from_rotation_x((t * 1.3 + prop.position.z).sin() * 0.025)
-            } else {
-                Quat::IDENTITY
-            };
-            draw_model(
-                out,
-                &prop.model,
-                prop.position,
-                1.0,
-                prop.rot * motion,
-                prop.material,
-                false,
-            );
-        }
-        for i in 0..5 {
-            let phase = (t * 1.7 + i as f32 * 0.2).fract();
-            frame.particles.push(Particle {
-                position: Vec3::new(-1.417 + (t * 5.0).sin() * 0.008, 0.94 + phase * 0.11, 4.578),
-                color: Vec3::new(1.0, 0.63 + phase * 0.25, 0.20),
-                size: Vec2::new(0.028 * (1.0 - phase) + 0.008, 0.062 * (1.0 - phase) + 0.015),
-                opacity: (1.0 - phase) * 0.86,
-            });
-        }
-        draw_model(
-            out,
-            &self.cot,
-            Vec3::new(-2.25, 0.0, 3.55),
-            1.0,
-            Quat::from_rotation_y(0.0),
-            Material::Oak,
-            false,
-        );
-        self.warden.draw(out, game);
-        for (i, p) in positions.iter().enumerate() {
-            draw_model(
-                out,
-                &self.torch,
-                *p - Vec3::Y * 0.5,
-                1.0,
-                Quat::from_rotation_y(if i == 1 { 0.0 } else { std::f32::consts::PI }),
-                Material::Iron,
-                false,
-            );
-            for j in 0..16 {
-                let phase = (t * (0.48 + hash(j + 2) * 0.6) + hash(j * 71)) % 1.0;
+        if basement {
+            self.cell.animate(out, t, game.gate_open);
+            for prop in &self.props {
+                let motion = if prop.sway {
+                    Quat::from_rotation_x((t * 1.3 + prop.position.z).sin() * 0.025)
+                } else {
+                    Quat::IDENTITY
+                };
+                draw_model(
+                    out,
+                    &prop.model,
+                    prop.position,
+                    1.0,
+                    prop.rot * motion,
+                    prop.material,
+                    false,
+                );
+            }
+            for i in 0..5 {
+                let phase = (t * 1.7 + i as f32 * 0.2).fract();
                 frame.particles.push(Particle {
-                    position: *p
-                        + Vec3::new(
-                            (hash(j * 97) - 0.5) * 0.15,
-                            phase * 0.9,
-                            (hash(j + 99) - 0.5) * 0.16,
-                        ),
-                    color: Vec3::new(1.0, 0.3 + phase * 0.4, 0.05),
-                    size: Vec2::splat((1.0 - phase) * 0.12 + 0.012),
-                    opacity: (1.0 - phase) * 0.85,
+                    position: Vec3::new(
+                        -1.417 + (t * 5.0).sin() * 0.008,
+                        0.94 + phase * 0.11,
+                        4.578,
+                    ),
+                    color: Vec3::new(1.0, 0.63 + phase * 0.25, 0.20),
+                    size: Vec2::new(0.028 * (1.0 - phase) + 0.008, 0.062 * (1.0 - phase) + 0.015),
+                    opacity: (1.0 - phase) * 0.86,
                 });
             }
+            draw_model(
+                out,
+                &self.cot,
+                Vec3::new(-2.25, 0.0, 3.55),
+                1.0,
+                Quat::from_rotation_y(0.0),
+                Material::Oak,
+                false,
+            );
+            self.warden.draw(out, game);
+            for (i, p) in positions.iter().enumerate() {
+                draw_model(
+                    out,
+                    &self.torch,
+                    *p - Vec3::Y * 0.5,
+                    1.0,
+                    Quat::from_rotation_y(if i == 1 { 0.0 } else { std::f32::consts::PI }),
+                    Material::Iron,
+                    false,
+                );
+                for j in 0..16 {
+                    let phase = (t * (0.48 + hash(j + 2) * 0.6) + hash(j * 71)) % 1.0;
+                    frame.particles.push(Particle {
+                        position: *p
+                            + Vec3::new(
+                                (hash(j * 97) - 0.5) * 0.15,
+                                phase * 0.9,
+                                (hash(j + 99) - 0.5) * 0.16,
+                            ),
+                        color: Vec3::new(1.0, 0.3 + phase * 0.4, 0.05),
+                        size: Vec2::splat((1.0 - phase) * 0.12 + 0.012),
+                        opacity: (1.0 - phase) * 0.85,
+                    });
+                }
+            }
+            let (plank_position, plank_rotation) =
+                end_game_core::interaction::board_pose(game.board_open);
+            out.push(
+                Instance::new(
+                    plank_position,
+                    Vec3::new(0.30, 0.07, 1.30),
+                    Vec3::new(0.9, 0.84, 0.72),
+                )
+                .with_mesh(self.oak)
+                .with_rot(plank_rotation)
+                .with_surface(0.95, 0.0),
+            );
         }
-        let (plank_position, plank_rotation) =
-            end_game_core::interaction::board_pose(game.board_open);
-        out.push(
-            Instance::new(
-                plank_position,
-                Vec3::new(0.30, 0.07, 1.30),
-                Vec3::new(0.9, 0.84, 0.72),
-            )
-            .with_mesh(self.oak)
-            .with_rot(plank_rotation)
-            .with_surface(0.95, 0.0),
-        );
         if let Some(key) = motion
             .key
             .or_else(|| (game.stage == 1).then(super::hands::ground_key))
@@ -400,48 +446,55 @@ impl Scene {
                 motion.key.is_some(),
             );
         }
-        let body = &game.body;
-        out.push(
-            Instance::new(
-                body.position,
-                body.size,
-                Vec3::splat(1.0 - body.wear * 0.25),
-            )
-            .with_mesh(self.oak)
-            .with_surface(0.9, 0.0),
-        );
-        for x in [-0.28, 0.28] {
+        if basement {
+            let body = &game.body;
             out.push(
                 Instance::new(
-                    body.position + Vec3::new(x, 0.0, 0.0),
-                    Vec3::new(0.025, 0.66, 0.67),
-                    Vec3::splat(0.45),
+                    body.position,
+                    body.size,
+                    Vec3::splat(1.0 - body.wear * 0.25),
                 )
-                .with_mesh(self.iron),
+                .with_mesh(self.oak)
+                .with_surface(0.9, 0.0),
             );
+            for x in [-0.28, 0.28] {
+                out.push(
+                    Instance::new(
+                        body.position + Vec3::new(x, 0.0, 0.0),
+                        Vec3::new(0.025, 0.66, 0.67),
+                        Vec3::splat(0.45),
+                    )
+                    .with_mesh(self.iron),
+                );
+            }
+            for x in [-0.65, -0.32, 0.0, 0.32, 0.65] {
+                out.push(
+                    Instance::new(
+                        Vec3::new(
+                            x,
+                            1.35 + end_game_core::EXIT_GATE_LIFT * game.exit_open,
+                            -7.0,
+                        ),
+                        Vec3::new(0.07, 2.7, 0.08),
+                        Vec3::ONE,
+                    )
+                    .with_mesh(self.iron),
+                );
+            }
+            if game.stage < 5 {
+                out.push(
+                    Instance::new(
+                        Vec3::new(0.0, 1.05, -6.88),
+                        Vec3::new(1.4, 0.065, 0.065),
+                        Vec3::new(0.85, 0.62, 0.35),
+                    )
+                    .with_mesh(self.iron)
+                    .with_rot(Quat::from_rotation_z(0.35)),
+                );
+            }
         }
-        for x in [-0.65, -0.32, 0.0, 0.32, 0.65] {
-            out.push(
-                Instance::new(
-                    Vec3::new(x, 1.35, -7.0),
-                    Vec3::new(0.07, 2.7, 0.08),
-                    Vec3::ONE,
-                )
-                .with_mesh(self.iron),
-            );
-        }
-        if game.stage < 5 {
-            out.push(
-                Instance::new(
-                    Vec3::new(0.0, 1.05, -6.88),
-                    Vec3::new(1.4, 0.065, 0.065),
-                    Vec3::new(0.85, 0.62, 0.35),
-                )
-                .with_mesh(self.iron)
-                .with_rot(Quat::from_rotation_z(0.35)),
-            );
-        }
-        if game.stage < 4
+        if basement
+            && game.stage < 4
             && !game
                 .interaction
                 .is_some_and(|a| a.kind == end_game_core::InteractionKind::Sword)
@@ -561,43 +614,45 @@ impl Scene {
                 }
             }
         }
-        for i in 0..54u32 {
-            let p = Vec3::new(
-                (hash(i * 17) - 0.5) * 9.2,
-                0.4 + (hash(i + 99) * 3.0 + t * 0.035) % 3.0,
-                -6.0 + hash(i * 341) * 10.6,
-            );
-            frame.particles.push(Particle {
-                position: p,
-                color: Vec3::new(0.68, 0.62, 0.51),
-                size: Vec2::splat(0.012 + hash(i) * 0.018),
-                opacity: 0.25,
-            });
-        }
-        for i in 0..5 {
-            let age = (t + i as f32 * 0.43).rem_euclid(2.1);
-            let impact = (2.0 * 3.15 / end_game_core::GRAVITY).sqrt();
-            let x = 2.60 + (hash(i * 91) - 0.5) * 0.18;
-            let z = 4.46 + (hash(i * 19) - 0.5) * 0.14;
-            if age <= impact {
+        if basement {
+            for i in 0..54u32 {
+                let p = Vec3::new(
+                    (hash(i * 17) - 0.5) * 9.2,
+                    0.4 + (hash(i + 99) * 3.0 + t * 0.035) % 3.0,
+                    -6.0 + hash(i * 341) * 10.6,
+                );
                 frame.particles.push(Particle {
-                    position: Vec3::new(x, 3.15 - 0.5 * end_game_core::GRAVITY * age * age, z),
-                    color: Vec3::new(0.48, 0.64, 0.72),
-                    size: Vec2::new(0.012, 0.035),
-                    opacity: 0.58,
+                    position: p,
+                    color: Vec3::new(0.68, 0.62, 0.51),
+                    size: Vec2::splat(0.012 + hash(i) * 0.018),
+                    opacity: 0.25,
                 });
             }
-            let splash = age - impact;
-            if (0.0..0.32).contains(&splash) {
-                let radius = splash * 0.4;
-                for point in 0..10 {
-                    let a = point as f32 * std::f32::consts::TAU / 10.0;
+            for i in 0..5 {
+                let age = (t + i as f32 * 0.43).rem_euclid(2.1);
+                let impact = (2.0 * 3.15 / end_game_core::GRAVITY).sqrt();
+                let x = 2.60 + (hash(i * 91) - 0.5) * 0.18;
+                let z = 4.46 + (hash(i * 19) - 0.5) * 0.14;
+                if age <= impact {
                     frame.particles.push(Particle {
-                        position: Vec3::new(x + a.cos() * radius, 0.014, z + a.sin() * radius),
-                        color: Vec3::new(0.25, 0.37, 0.41),
-                        size: Vec2::splat(0.013),
-                        opacity: (1.0 - splash / 0.32) * 0.28,
+                        position: Vec3::new(x, 3.15 - 0.5 * end_game_core::GRAVITY * age * age, z),
+                        color: Vec3::new(0.48, 0.64, 0.72),
+                        size: Vec2::new(0.012, 0.035),
+                        opacity: 0.58,
                     });
+                }
+                let splash = age - impact;
+                if (0.0..0.32).contains(&splash) {
+                    let radius = splash * 0.4;
+                    for point in 0..10 {
+                        let a = point as f32 * std::f32::consts::TAU / 10.0;
+                        frame.particles.push(Particle {
+                            position: Vec3::new(x + a.cos() * radius, 0.014, z + a.sin() * radius),
+                            color: Vec3::new(0.25, 0.37, 0.41),
+                            size: Vec2::splat(0.013),
+                            opacity: (1.0 - splash / 0.32) * 0.28,
+                        });
+                    }
                 }
             }
         }
@@ -621,7 +676,7 @@ impl Scene {
 mod tests {
     use super::*;
     #[test]
-    fn generated_props_decode_and_the_cell_fits_its_render_budget() {
+    fn generated_props_decode_and_representative_frames_fit_the_v9_budget() {
         let (scene, meshes) = Scene::build();
         for model in std::iter::once(&scene.cot).chain(scene.props.iter().map(|p| &p.model)) {
             for (id, _, _) in &model.ids {
@@ -640,23 +695,78 @@ mod tests {
             .filter_map(|m| m.texture.as_ref())
             .map(|t| t.rgba8.len())
             .sum();
-        let frame = scene.frame(&Dungeon::default(), false, 0.0);
-        let triangles: usize = frame
-            .instances
-            .iter()
-            .map(|i| {
-                if i.mesh == 0 {
-                    12
-                } else {
-                    meshes[i.mesh as usize - 1].vertices.len() / 3
+        let count = |frame: &Frame| -> usize {
+            frame
+                .instances
+                .iter()
+                .map(|i| {
+                    if i.mesh == 0 {
+                        12
+                    } else {
+                        meshes[i.mesh as usize - 1].vertices.len() / 3
+                    }
+                })
+                .sum()
+        };
+        let mut maximum = count(&scene.frame(&Dungeon::default(), false, 0.0));
+        for position in [
+            Vec3::new(0., 0., -6.),
+            Vec3::new(0., 0., -8.),
+            Vec3::new(0., 0., -12.),
+            Vec3::new(0., 0., -21.),
+            Vec3::new(0., 0., -27.),
+            Vec3::new(0., 0., -38.),
+            Vec3::new(0., 3., -59.),
+            Vec3::new(0., 6., -66.),
+            Vec3::new(0., 6., -80.),
+            Vec3::new(14., 6., -87.5),
+            Vec3::new(18.5, 10., -97.),
+            Vec3::new(24., 14., -80.),
+            Vec3::new(16., 22., -90.),
+        ] {
+            let mut local_max = 0;
+            for yaw in 0..8 {
+                let mut game = Dungeon::default();
+                game.position = position;
+                game.stage = 5;
+                game.exit_open = 1.;
+                game.warden_health = 0.;
+                game.warden_ai.on_sword_hit(true, true);
+                game.yaw = yaw as f32 * std::f32::consts::FRAC_PI_4;
+                for third_person in [false, true] {
+                    let frame = scene.frame(&game, third_person, 0.0);
+                    let triangles = count(&frame);
+                    local_max = local_max.max(triangles);
+                    assert!(
+                        triangles <= 260_000,
+                        "{position:?}, yaw {yaw}, third {third_person}: {triangles}"
+                    );
+                    assert!(
+                        frame.camera.eye.is_finite()
+                            && frame.camera.eye.distance(frame.camera.target) > 0.001
+                    );
                 }
-            })
-            .sum();
+            }
+            eprintln!("V9 position {position:?}: maximum {local_max} submitted triangles");
+            maximum = maximum.max(local_max);
+        }
         eprintln!(
-            "V8 frame triangles: {triangles}; texture bytes incl. mip estimate: {}",
+            "V9 maximum frame triangles: {maximum}; unique mesh triangles: {}; texture bytes incl. mip estimate: {}",
+            meshes.iter().map(|m| m.vertices.len() / 3).sum::<usize>(),
             textures * 4 / 3
         );
-        assert!(triangles < 220_000);
-        assert!(textures * 4 / 3 < 120 * 1024 * 1024);
+        assert!(maximum <= 260_000);
+        assert!(textures * 4 / 3 < 136 * 1024 * 1024);
+    }
+
+    #[test]
+    fn castle_camera_stays_local_and_pulls_in_before_a_wall() {
+        let target = Vec3::new(1.65, 1.3, -12.);
+        let eye = castle_camera(target, Vec3::new(4.0, 1.7, -12.));
+        assert!(eye.x < 1.89 && eye.x > target.x);
+        assert!((eye.z + 12.).abs() < 0.001);
+        let target = Vec3::new(0., 7.3, -80.);
+        let ideal = target + Vec3::new(0.6, 0.4, 2.1);
+        assert!(castle_camera(target, ideal).distance(ideal) < 0.001);
     }
 }
