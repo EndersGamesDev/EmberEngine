@@ -16,6 +16,10 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### Exact camera
+
+The new dependency-free `ember-camera` crate owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`f3191623`, `bcc2e484`, `375995c0`, `5aaed6df`).
+
 ### Julibrot rounds two and three
 
 Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).

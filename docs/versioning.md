@@ -6,18 +6,21 @@ Ember, every game, and every lab use three-grade `MAJOR.MINOR.PATCH` versions. A
 
 Each independently released game or lab owns a series. Its application, core, server, and other dedicated crates carry the same explicit package version rather than inheriting the workspace version.
 
-| Series | Crates | Initial three-grade version |
-|---|---|---|
-| `arena` | `arena`, `arena-core`, `arena-server` | `31.0.0` |
-| `fire` | `fire`, `fire-core`, `fire-server` | `1.0.0` |
-| `kings` | `kings`, `kings-core`, `kings-server` | `1.0.0` |
-| `league` | `league`, `league-core`, `league-server` | `2.0.0` |
-| `what-is-this` | `what-is-this` | `1.0.0` |
-| `julibrot` | `ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-worker` | `1.0.0` |
-| `heap` | `ember-lab-heap` | `0.1.0` |
-| `layer` | `ember-lab-layer` | `0.1.0` |
+|Series|Crates|Initial three-grade version|
+|------|------|---------------------------|
+|`arena`|`arena`, `arena-core`, `arena-server`|`31.0.0`|
+|`fire`|`fire`, `fire-core`, `fire-server`|`1.0.0`|
+|`kings`|`kings`, `kings-core`, `kings-server`|`1.0.0`|
+|`league`|`league`, `league-core`, `league-server`|`2.0.0`|
+|`what-is-this`|`what-is-this`|`1.0.0`|
+|`julibrot`|`ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-worker`|`1.0.0`|
+|`camera`|`ember-camera`|`0.1.0`|
+|`heap`|`ember-lab-heap`|`0.1.0`|
+|`layer`|`ember-lab-layer`|`0.1.0`|
 
 A lab with no historical release tag begins at `0.1.0`; a lab with a historical tag begins at that tag's major in `.0.0` form.
+
+`ember-camera` begins as an independently versioned, consumer-free exact-math crate at `0.1.0`; its first adoption decides when that provisional series becomes a shared engine contract.
 
 Frozen game crates under `games/` carry the three-grade form of the major represented by their directory, such as `games/arena/v012` at `12.0.0`. They remain buildable history rather than inheriting a current series version.
 

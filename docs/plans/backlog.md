@@ -255,6 +255,8 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
+- Adopt `ember-camera` as Julibrot's exact view and navigation authority, mapping the existing camera-angle product order and presentation controls at the app boundary while removing the replaced bignum edit path only after its frozen navigation and screen-map oracles agree.
+- Native-versus-wasm execution equality for `ember-camera` is asserted structurally by core-only arithmetic and pinned byte/bit goldens until a wasm test runner exists on the servers.
 - Round two completion record: [Pending → Julibrot rounds two and three](../../CHANGELOG.md#julibrot-rounds-two-and-three).
 - R2-01b now asserts the refresh submission order: both drivers run one ordered refresh executor whose typed stages the scene and warp effects consume. The browser-mode `BROWSER_ACTION_TRACE_FIXTURE` asserts scene-before-warp and fence-observation order per turn for the short, zoom, height, capture, and finished-picture scenarios. The R2-01b frame trace is byte-unchanged, so R2-04a–c may start.
 - The browser-model fixture emits one `HotWritten` per turn while production keeps three conditional `presenter.write_hot` sites around the arrival and accepted-warp branches; browser-model cases covering those branches and freezing every conditional `HotWritten { slot_order }` action are follow-up work.
