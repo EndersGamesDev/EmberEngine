@@ -588,17 +588,11 @@ impl DirectedInterval {
     }
 
     fn add(self, addend: Self) -> Option<Self> {
-        outward_interval([
-            self.lower + addend.lower,
-            self.upper + addend.upper,
-        ])
+        outward_interval([self.lower + addend.lower, self.upper + addend.upper])
     }
 
     fn subtract(self, subtrahend: Self) -> Option<Self> {
-        outward_interval([
-            self.lower - subtrahend.upper,
-            self.upper - subtrahend.lower,
-        ])
+        outward_interval([self.lower - subtrahend.upper, self.upper - subtrahend.lower])
     }
 
     fn multiply(self, multiplier: Self) -> Option<Self> {
@@ -652,14 +646,12 @@ impl DirectedInterval {
     fn hypot(self, other: Self) -> Option<Self> {
         let left = self.absolute();
         let right = other.absolute();
-        outward_interval([
-            left.lower.hypot(right.lower),
-            left.upper.hypot(right.upper),
-        ])
-        .map(|interval| Self {
-            lower: interval.lower.max(0.0),
-            upper: interval.upper,
-        })
+        outward_interval([left.lower.hypot(right.lower), left.upper.hypot(right.upper)]).map(
+            |interval| Self {
+                lower: interval.lower.max(0.0),
+                upper: interval.upper,
+            },
+        )
     }
 
     fn square_root(self) -> Option<Self> {
@@ -702,8 +694,17 @@ fn source_density_interval(source: &Pose, pixel: [f64; 2]) -> Option<[f64; 2]> {
     if source.grid_width == 0 {
         return None;
     }
-    let [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth] =
-        map.rows.map(DirectedInterval::point);
+    let [
+        first,
+        second,
+        third,
+        fourth,
+        fifth,
+        sixth,
+        seventh,
+        eighth,
+        ninth,
+    ] = map.rows.map(DirectedInterval::point);
     let coefficients = [
         first?, second?, third?, fourth?, fifth?, sixth?, seventh?, eighth?, ninth?,
     ];
@@ -724,17 +725,12 @@ fn density_jacobian(
     let [x, y] = pixel.map(DirectedInterval::point);
     let x = x?;
     let y = y?;
-    let denominator = coefficients[6].mul_add(
-        x,
-        coefficients[7].mul_add(y, coefficients[8])?,
-    )?;
+    let denominator = coefficients[6].mul_add(x, coefficients[7].mul_add(y, coefficients[8])?)?;
     if denominator.lower <= 0.0 {
         return None;
     }
-    let numerator_x =
-        coefficients[0].mul_add(x, coefficients[1].mul_add(y, coefficients[2])?)?;
-    let numerator_y =
-        coefficients[3].mul_add(x, coefficients[4].mul_add(y, coefficients[5])?)?;
+    let numerator_x = coefficients[0].mul_add(x, coefficients[1].mul_add(y, coefficients[2])?)?;
+    let numerator_y = coefficients[3].mul_add(x, coefficients[4].mul_add(y, coefficients[5])?)?;
     let denominator_squared = denominator.multiply(denominator)?;
     Some([
         scale
@@ -765,29 +761,22 @@ fn density_jacobian(
 }
 
 fn density_from_jacobian(jacobian: [DirectedInterval; 4]) -> Option<[f64; 2]> {
-    let horizontal_metric =
-        jacobian[0].mul_add(jacobian[0], jacobian[2].multiply(jacobian[2])?)?;
-    let mixed_metric =
-        jacobian[0].mul_add(jacobian[1], jacobian[2].multiply(jacobian[3])?)?;
-    let vertical_metric =
-        jacobian[1].mul_add(jacobian[1], jacobian[3].multiply(jacobian[3])?)?;
+    let horizontal_metric = jacobian[0].mul_add(jacobian[0], jacobian[2].multiply(jacobian[2])?)?;
+    let mixed_metric = jacobian[0].mul_add(jacobian[1], jacobian[2].multiply(jacobian[3])?)?;
+    let vertical_metric = jacobian[1].mul_add(jacobian[1], jacobian[3].multiply(jacobian[3])?)?;
     let two = DirectedInterval::point(2.0)?;
     let discriminant = horizontal_metric
         .subtract(vertical_metric)?
         .hypot(two.multiply(mixed_metric)?)?;
-    let metric_sum = horizontal_metric
-        .add(vertical_metric)?
-        .add(discriminant)?;
+    let metric_sum = horizontal_metric.add(vertical_metric)?.add(discriminant)?;
     let sigma_maximum = DirectedInterval::point(0.5)?
         .multiply(metric_sum)?
         .square_root()?;
     if sigma_maximum.contains_zero() {
         return None;
     }
-    let determinant = jacobian[0].mul_add(
-        jacobian[3],
-        jacobian[1].multiply(jacobian[2])?.negated(),
-    )?;
+    let determinant =
+        jacobian[0].mul_add(jacobian[3], jacobian[1].multiply(jacobian[2])?.negated())?;
     if determinant.contains_zero() {
         return None;
     }
@@ -957,13 +946,7 @@ fn add_origin_delta_product(
     canonical_origin: f64,
     negative: bool,
 ) -> Option<()> {
-    add_exact_triple_product(
-        expansion,
-        basis_left,
-        basis_right,
-        source_origin,
-        negative,
-    )?;
+    add_exact_triple_product(expansion, basis_left, basis_right, source_origin, negative)?;
     add_exact_triple_product(
         expansion,
         basis_left,
@@ -1716,8 +1699,7 @@ mod tests {
 
         let boundary = SliceIdentity::new(canonical_plane, [1.0, 4.0, 0.5, 0.0]);
         assert!(certify_same_slice(source, boundary, 1.0).is_none());
-        let in_plane_boundary =
-            SliceIdentity::new(canonical_plane, [1.5, 4.0, 0.0, 0.0]);
+        let in_plane_boundary = SliceIdentity::new(canonical_plane, [1.5, 4.0, 0.0, 0.0]);
         let in_plane_transform = certify_same_slice(source, in_plane_boundary, 1.0)
             .expect("half-source-sample in-plane pan remains the same slice");
         assert_eq!(in_plane_transform.out_of_plane_error, 0.0);
