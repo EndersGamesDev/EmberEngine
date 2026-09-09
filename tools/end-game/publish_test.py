@@ -25,7 +25,10 @@ class ReleaseAssembly(unittest.TestCase):
             ]}
             (source / 'web/games.json').write_text(json.dumps({'games': [game]}))
             (dest / 'games.json').write_text(json.dumps(old))
-            (dest / 'index.html').write_text('<style>existing</style><main>keep live content</main>')
+            stale = ('    .card[data-game="end-game"]::before { height: 190px; background: '
+                     'url("games/end-game/v1/cover.png") center / cover; }')
+            (dest / 'index.html').write_text(
+                '<style>existing' + chr(10) + stale + chr(10) + '</style><main>keep live content</main>')
             (dest / 'server.json').write_bytes(b'keep host book')
             frozen = {}
             for version in range(1, 12):
@@ -49,6 +52,10 @@ class ReleaseAssembly(unittest.TestCase):
             self.assertEqual(stamp['source'], 'source-sha')
             self.assertEqual(stamp['version'], '12.0.0')
             self.assertEqual(len(stamp['files']), 23)
+            landing = (dest / 'index.html').read_text()
+            self.assertEqual(landing.count(publish.ACCENT), 1)
+            self.assertNotIn('games/end-game/v1/cover.png', landing)
+            self.assertEqual(landing.count('.card[data-game=' + chr(34) + 'end-game'), 1)
             publish.assemble(source, dest, 'source-sha')
             self.assertEqual((dest / 'index.html').read_text().count(publish.ACCENT), 1)
             for relative, payload in frozen.items():

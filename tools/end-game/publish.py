@@ -41,6 +41,11 @@ def assemble(source, destination, commit):
     catalog_path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + '\n', encoding='utf-8', newline='\n')
     landing = destination / 'index.html'
     text = landing.read_text(encoding='utf-8')
+    # Drop the accent this game already carries before adding the current
+    # one: an append leaves a dead rule per release, naming the cover of a
+    # version nobody serves, and the pile only ever grows.
+    marker = '.card[data-game="end-game"]::before'
+    text = chr(10).join(l for l in text.split(chr(10)) if marker not in l)
     if ACCENT not in text:
         if '</style>' not in text:
             raise RuntimeError('Landing page style structure changed; inspect before publishing')
