@@ -1586,8 +1586,10 @@ self_test() {
 
 if [ "${1:-}" = "--self-test" ]; then
     [ "$#" -eq 1 ] || { printf 'usage: bash deploy/tests/test-shaders.sh [--self-test]\n' >&2; exit 2; }
-    self_test
-    exit $?
+    if self_test && "$PYTHON_BIN" "$HERE/repository_shader_check.py" --self-test; then
+        exit 0
+    fi
+    exit 1
 fi
 [ "$#" -eq 0 ] || { printf 'usage: bash deploy/tests/test-shaders.sh [--self-test]\n' >&2; exit 2; }
 
@@ -1601,3 +1603,5 @@ else
     printf 'SHADER CHECK FAIL: Julibrot shader policy violation, %ss\n' "$(( $(date +%s) - started ))" >&2
     exit "$status"
 fi
+
+"$PYTHON_BIN" "$HERE/repository_shader_check.py" --root "$ROOT"
