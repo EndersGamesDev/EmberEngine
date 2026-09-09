@@ -6,8 +6,9 @@
 )]
 
 use ember_camera::{
-    CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, Observer, Orientation, Turn,
-    TwoStageProjection, View, orientation_from_frame, rebuild_basis,
+    CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, MAX_EXPONENT_QUANTA,
+    MIN_EXPONENT_QUANTA, Observer, Orientation, Turn, TwoStageProjection, View,
+    orientation_from_frame, rebuild_basis,
 };
 use ember_julibrot_math::{
     BigCentre, BigScalar, ObjectAngles, Plane, ViewControls, decode_big_scalar, encode_big_scalar,
@@ -172,8 +173,12 @@ fn turn_to_radians(turn: Turn) -> f64 {
     reason = "the rounded value is checked against the camera's small i32 exponent range"
 )]
 fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
-    if !zoom_log2.is_finite() {
-        return Err(AppError::Math("zoom input is not finite".to_string()));
+    let minimum = f64::from(MIN_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+    let maximum = f64::from(MAX_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+    if !zoom_log2.is_finite() || !(minimum..=maximum).contains(&zoom_log2) {
+        return Err(AppError::Math(
+            "zoom input is outside the camera range".to_string(),
+        ));
     }
     let scaled = zoom_log2 * f64::from(EXPONENT_QUANTA_PER_OCTAVE);
     let rounded = scaled.round_ties_even();
@@ -560,17 +565,117 @@ mod tests {
     }
 
     #[test]
-    fn zoom_quantisation_is_nearest_even_and_round_trips_every_quantum() {
-        let lower_even = 10.5 / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
-        let upper_even = 11.5 / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+    fn zoom_quantisation_is_nearest_even_on_both_sides_of_every_tie() {
+        let quantum = f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+        let lower_even = 10.5 / quantum;
+        let upper_even = 11.5 / quantum;
+        assert_eq!(
+            quantize_zoom_log2(lower_even.next_down())
+                .expect("below positive even tie")
+                .quanta(),
+            10
+        );
         assert_eq!(
             quantize_zoom_log2(lower_even).expect("lower tie").quanta(),
             10
         );
         assert_eq!(
+            quantize_zoom_log2(lower_even.next_up())
+                .expect("above positive even tie")
+                .quanta(),
+            11
+        );
+        assert_eq!(
+            quantize_zoom_log2(upper_even.next_down())
+                .expect("below positive odd tie")
+                .quanta(),
+            11
+        );
+        assert_eq!(
             quantize_zoom_log2(upper_even).expect("upper tie").quanta(),
             12
         );
+        assert_eq!(
+            quantize_zoom_log2(upper_even.next_up())
+                .expect("above positive odd tie")
+                .quanta(),
+            12
+        );
+
+        let negative_lower_even = -lower_even;
+        let negative_upper_even = -upper_even;
+        assert_eq!(
+            quantize_zoom_log2(negative_lower_even.next_down())
+                .expect("below negative even tie")
+                .quanta(),
+            -11
+        );
+        assert_eq!(
+            quantize_zoom_log2(negative_lower_even)
+                .expect("negative even tie")
+                .quanta(),
+            -10
+        );
+        assert_eq!(
+            quantize_zoom_log2(negative_lower_even.next_up())
+                .expect("above negative even tie")
+                .quanta(),
+            -10
+        );
+        assert_eq!(
+            quantize_zoom_log2(negative_upper_even.next_down())
+                .expect("below negative odd tie")
+                .quanta(),
+            -12
+        );
+        assert_eq!(
+            quantize_zoom_log2(negative_upper_even)
+                .expect("negative odd tie")
+                .quanta(),
+            -12
+        );
+        assert_eq!(
+            quantize_zoom_log2(negative_upper_even.next_up())
+                .expect("above negative odd tie")
+                .quanta(),
+            -11
+        );
+    }
+
+    #[test]
+    fn absolute_zoom_rejects_raw_values_outside_the_closed_camera_range() {
+        let minimum = f64::from(MIN_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+        let maximum = f64::from(MAX_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+        assert_eq!(
+            quantize_zoom_log2(minimum)
+                .expect("minimum endpoint")
+                .quanta(),
+            MIN_EXPONENT_QUANTA
+        );
+        assert_eq!(
+            quantize_zoom_log2(minimum.next_up())
+                .expect("inside minimum endpoint")
+                .quanta(),
+            MIN_EXPONENT_QUANTA
+        );
+        assert!(quantize_zoom_log2(minimum.next_down()).is_err());
+        assert_eq!(
+            quantize_zoom_log2(maximum.next_down())
+                .expect("inside maximum endpoint")
+                .quanta(),
+            MAX_EXPONENT_QUANTA
+        );
+        assert_eq!(
+            quantize_zoom_log2(maximum)
+                .expect("maximum endpoint")
+                .quanta(),
+            MAX_EXPONENT_QUANTA
+        );
+        assert!(quantize_zoom_log2(maximum.next_up()).is_err());
+        assert!(quantize_zoom_log2(minimum - 0.5 / 1_024.0).is_err());
+        assert!(quantize_zoom_log2(maximum + 0.5 / 1_024.0).is_err());
+        assert!(quantize_zoom_log2(f64::NAN).is_err());
+
         for quanta in ember_camera::MIN_EXPONENT_QUANTA..=ember_camera::MAX_EXPONENT_QUANTA {
             let exponent = Exponent::new(quanta).expect("in-range exponent");
             let displayed = zoom_log2_from_exponent(exponent);
@@ -579,8 +684,6 @@ mod tests {
                 exponent
             );
         }
-        assert!(quantize_zoom_log2(f64::NAN).is_err());
-        assert!(quantize_zoom_log2(120.0 + 1.0 / 1_024.0).is_err());
     }
 
     #[test]
