@@ -51,14 +51,13 @@ impl Rig {
             .await
             .expect("device at WebGL2 limit floor");
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shipping environment WGSL"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
+        let rendered_shader =
+            shader_templates::scene_shader().expect("shipping environment shader must render");
+        let shader = create_shader_module(&device, "shipping environment WGSL", &rendered_shader);
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("test scene uniform layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
+                binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
@@ -72,7 +71,7 @@ impl Rig {
             label: Some("test mesh texture layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -82,7 +81,7 @@ impl Rig {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -123,7 +122,7 @@ impl Rig {
             label: Some("test uniform bind"),
             layout: &uniform_layout,
             entries: &[wgpu::BindGroupEntry {
-                binding: 0,
+                binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                 resource: uniform.as_entire_binding(),
             }],
         });
@@ -153,11 +152,11 @@ impl Rig {
             layout: &mesh_layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                     resource: wgpu::BindingResource::TextureView(&white_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -276,7 +275,11 @@ impl Rig {
             });
             if cast_shadows && frame.environment.enabled {
                 pass.set_pipeline(&self.shadow_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.instances.slice(..));
                 for (i, instance) in frame.instances.iter().enumerate() {
@@ -318,22 +321,46 @@ impl Rig {
             });
             if frame.environment.enabled {
                 pass.set_pipeline(&self.sky);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.draw(0..3, 0..1);
             }
             if !instances.is_empty() {
                 pass.set_pipeline(&self.scene);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
-                pass.set_bind_group(1, &self.mesh_bind, &[]);
-                pass.set_bind_group(2, &self.shadow.bind, &[]);
-                pass.set_bind_group(3, &occlusion_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::MESH_TEXTURE_BINDING.group,
+                    &self.mesh_bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::SHADOW_TEXTURE_BINDING.group,
+                    &self.shadow.bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::OCCLUSION_XY_BINDING.group,
+                    &occlusion_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.instances.slice(..));
                 pass.draw(0..36, 0..instances.len() as u32);
             }
             if !particles.is_empty() {
                 pass.set_pipeline(&self.particles);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
                 pass.draw(0..6, 0..particles.len() as u32);
             }

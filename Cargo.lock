@@ -1017,6 +1017,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "ember-shader",
  "gilrs",
  "glam",
  "gltf",

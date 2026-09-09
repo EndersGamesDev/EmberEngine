@@ -1,7 +1,5 @@
 # Closed repository migration debt outside Julibrot. Delete records as sources migrate; additions require changing the executable ceiling and its reason.
 # kind|owner package|path|Rust symbol or included path|docs/shaders.md migration row
-file|ember-engine|crates/ember-engine/src/present.wgsl|-|SH-ENGINE
-file|ember-engine|crates/ember-engine/src/shader.wgsl|-|SH-ENGINE
 file|ember-lab-heap|crates/labs/heap/src/draw-heap.wgsl|-|SH-HEAP
 file|ember-lab-heap|crates/labs/heap/src/draw-traditional.wgsl|-|SH-HEAP
 file|ember-lab-heap|crates/labs/heap/src/fetch-direct.wgsl|-|SH-HEAP
@@ -9,9 +7,6 @@ file|ember-lab-heap|crates/labs/heap/src/fetch-heap.wgsl|-|SH-HEAP
 file|ember-lab-heap|crates/labs/heap/src/layer-draw.wgsl|-|SH-HEAP
 file|ember-lab-heap|crates/labs/heap/src/mode-a.wgsl|-|SH-HEAP
 file|ember-lab-heap|crates/labs/heap/src/mode-c.wgsl|-|SH-HEAP
-include|ember-engine|crates/ember-engine/src/renderer.rs|present.wgsl|SH-ENGINE
-include|ember-engine|crates/ember-engine/src/renderer.rs|shader.wgsl|SH-ENGINE
-include|ember-engine|crates/ember-engine/src/renderer_gpu_test.rs|shader.wgsl|SH-ENGINE
 include|ember-lab-heap|crates/labs/heap/src/kernels.rs|draw-heap.wgsl|SH-HEAP
 include|ember-lab-heap|crates/labs/heap/src/kernels.rs|draw-traditional.wgsl|SH-HEAP
 include|ember-lab-heap|crates/labs/heap/src/kernels.rs|fetch-direct.wgsl|SH-HEAP
@@ -28,9 +23,6 @@ inline|ember-lab-layer|crates/labs/layer/src/compute.rs|assemble|SH-LAYER
 inline|ember-lab-layer|crates/labs/layer/src/demo.rs|RENDER_SHADER|SH-LAYER
 inline|what-is-this|crates/what-is-this/src/gpu.rs|SHADER|SH-WHAT-IS-THIS
 inline|what-is-this|crates/what-is-this/src/render_bar.rs|SHADER|SH-WHAT-IS-THIS
-lowering|ember-engine|crates/ember-engine/src/renderer.rs|new|SH-ENGINE
-lowering|ember-engine|crates/ember-engine/src/renderer.rs|try_compile|SH-ENGINE
-lowering|ember-engine|crates/ember-engine/src/renderer_gpu_test.rs|new|SH-ENGINE
 lowering|ember-lab-heap|crates/labs/heap/src/executor.rs|compute_pipeline|SH-HEAP
 lowering|ember-lab-heap|crates/labs/heap/src/lattice_gpu.rs|draw_pipeline|SH-HEAP
 lowering|ember-lab-heap|crates/labs/heap/src/lattice_gpu.rs|layer_compute_pipeline|SH-HEAP

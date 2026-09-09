@@ -13,7 +13,8 @@ pub use enum_meta::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslEnu
 #[doc(hidden)]
 pub use runtime::validate_rendered_wgsl;
 pub use runtime::{
-    RenderError, RenderedShader, ShaderConstant, ShaderContext, WgslBinding, render,
+    ENGINE_PRESENT_TEMPLATE, ENGINE_SCENE_TEMPLATE, RenderError, RenderedShader, ShaderConstant,
+    ShaderContext, WgslBinding, render,
 };
 pub use type_meta::{
     F32Vec2, F32Vec3, F32Vec4, I32Vec2, I32Vec3, I32Vec4, U32Vec2, U32Vec3, U32Vec4, WgslField,

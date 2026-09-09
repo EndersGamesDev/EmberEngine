@@ -1,6 +1,6 @@
 # Ember engine source
 
-`lib.rs` defines `EmberGame` and re-exports the public runtime surface; `app.rs` owns platform events, timing, input, diagnostics, and haptics, while `renderer.rs`, `shader.wgsl`, and `present.wgsl` exclusively own GPU work and scene presentation.
+`lib.rs` defines `EmberGame` and re-exports the public runtime surface; `app.rs` owns platform events, timing, input, diagnostics, and haptics, while `renderer.rs` owns GPU work and `shader_templates.rs` renders the engine's scene and presentation WGSL from Rust-owned interfaces through `ember-shader`.
 
 `assets.rs` imports GLB meshes and base-colour textures, `environment.rs` creates presentation-only weather particles, and `occlusion.rs` bakes deterministic static directional visibility fields. `feedback.rs` carries game-to-platform effects without involving the renderer.
 

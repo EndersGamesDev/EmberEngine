@@ -1,40 +1,47 @@
-// Scene, sky, shadow and particles share one atomically hot-reloaded module.
-struct SceneUniform {
-    view_proj: mat4x4<f32>,
-    fog: vec4<f32>,
-    inverse_view_proj: mat4x4<f32>,
-    light_view_proj: mat4x4<f32>,
-    eye: vec4<f32>,
-    sun_direction: vec4<f32>, // xyz TOWARD sun; w enables environment
-    sun_color: vec4<f32>,     // rgb radiance, w intensity
-    sky_zenith: vec4<f32>,    // rgb colour, w cloud coverage
-    sky_horizon: vec4<f32>,   // rgb colour, w wetness
-    wind_time: vec4<f32>,     // xy wind, z visual time, w shadow extent
-    camera_right: vec4<f32>,
-    camera_up: vec4<f32>,
-    occlusion_min_strength: vec4<f32>,
-    occlusion_cell: vec4<f32>,
-    light_positions: array<vec4<f32>, 4>,
-    light_colors: array<vec4<f32>, 4>,
-};
-@group(0) @binding(0) var<uniform> scene: SceneUniform;
-@group(1) @binding(0) var mesh_tex: texture_2d<f32>;
-@group(1) @binding(1) var mesh_samp: sampler;
+// Scene, sky, shadow and particles share one Rust-rendered module.
+{{ "SceneUniform"|wgsl_type }}
+{{ "MESH_POSITION_LOCATION"|wgsl_constant }}
+{{ "MESH_NORMAL_LOCATION"|wgsl_constant }}
+{{ "MESH_UV_LOCATION"|wgsl_constant }}
+{{ "INSTANCE_POSITION_LOCATION"|wgsl_constant }}
+{{ "INSTANCE_SCALE_LOCATION"|wgsl_constant }}
+{{ "INSTANCE_COLOR_LOCATION"|wgsl_constant }}
+{{ "INSTANCE_ROTATION_LOCATION"|wgsl_constant }}
+{{ "INSTANCE_MATERIAL_LOCATION"|wgsl_constant }}
+{{ "PARTICLE_POSITION_LOCATION"|wgsl_constant }}
+{{ "PARTICLE_SIZE_LOCATION"|wgsl_constant }}
+{{ "PARTICLE_COLOR_LOCATION"|wgsl_constant }}
+{{ "PARTICLE_OPACITY_LOCATION"|wgsl_constant }}
+{{ "scene"|wgsl_binding }} var<uniform> scene: SceneUniform;
+{{ "mesh_tex"|wgsl_binding }} var mesh_tex: texture_2d<f32>;
+{{ "mesh_samp"|wgsl_binding }} var mesh_samp: sampler;
 // textureLoad avoids optional float filtering and depth-sampler differences.
-@group(2) @binding(0) var shadow_tex: texture_2d<f32>;
-@group(3) @binding(0) var occlusion_xy: texture_3d<f32>;
-@group(3) @binding(1) var occlusion_z: texture_3d<f32>;
-@group(3) @binding(2) var occlusion_sampler: sampler;
+{{ "shadow_tex"|wgsl_binding }} var shadow_tex: texture_2d<f32>;
+{{ "occlusion_xy"|wgsl_binding }} var occlusion_xy: texture_3d<f32>;
+{{ "occlusion_z"|wgsl_binding }} var occlusion_z: texture_3d<f32>;
+{{ "occlusion_sampler"|wgsl_binding }} var occlusion_sampler: sampler;
+
+fn scene_view_proj() -> mat4x4<f32> {
+    return mat4x4<f32>(scene.view_proj_0, scene.view_proj_1, scene.view_proj_2, scene.view_proj_3);
+}
+fn scene_inverse_view_proj() -> mat4x4<f32> {
+    return mat4x4<f32>(scene.inverse_view_proj_0, scene.inverse_view_proj_1,
+        scene.inverse_view_proj_2, scene.inverse_view_proj_3);
+}
+fn scene_light_view_proj() -> mat4x4<f32> {
+    return mat4x4<f32>(scene.light_view_proj_0, scene.light_view_proj_1,
+        scene.light_view_proj_2, scene.light_view_proj_3);
+}
 
 struct VsIn {
-    @location(0) pos: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(3) i_pos: vec3<f32>,
-    @location(4) i_scale: vec3<f32>,
-    @location(5) i_color: vec3<f32>,
-    @location(6) i_rot: vec4<f32>,
-    @location(7) i_material: vec4<f32>, // wettable, shadow, roughness (-1 legacy), metallic
+    @location(MESH_POSITION_LOCATION) pos: vec3<f32>,
+    @location(MESH_NORMAL_LOCATION) normal: vec3<f32>,
+    @location(MESH_UV_LOCATION) uv: vec2<f32>,
+    @location(INSTANCE_POSITION_LOCATION) i_pos: vec3<f32>,
+    @location(INSTANCE_SCALE_LOCATION) i_scale: vec3<f32>,
+    @location(INSTANCE_COLOR_LOCATION) i_color: vec3<f32>,
+    @location(INSTANCE_ROTATION_LOCATION) i_rot: vec4<f32>,
+    @location(INSTANCE_MATERIAL_LOCATION) i_material: vec4<f32>, // wettable, shadow, roughness (-1 legacy), metallic
 };
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
@@ -57,7 +64,7 @@ fn safe_normalize(v: vec3<f32>) -> vec3<f32> {
 fn vs_main(in: VsIn) -> VsOut {
     let world = quat_rotate(in.i_rot, in.pos * in.i_scale) + in.i_pos;
     var out: VsOut;
-    out.clip = scene.view_proj * vec4<f32>(world, 1.0);
+    out.clip = scene_view_proj() * vec4<f32>(world, 1.0);
     // Outdoor geometry gets inverse-transpose normals for nonuniform scale;
     // the disabled path retains the old scene's exact lighting calculation.
     var normal_scale = sign(in.i_scale);
@@ -117,7 +124,8 @@ fn sky_radiance(direction: vec3<f32>) -> vec3<f32> {
 }
 
 fn shadow_visibility(world: vec3<f32>, normal: vec3<f32>, ndotl: f32) -> f32 {
-    let light = scene.light_view_proj * vec4<f32>(world + normal * 0.035, 1.0);
+    let light_view_proj = scene_light_view_proj();
+    let light = light_view_proj * vec4<f32>(world + normal * 0.035, 1.0);
     let ndc = light.xyz / light.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if any(uv < vec2<f32>(0.002)) || any(uv > vec2<f32>(0.998)) || ndc.z <= 0.0 || ndc.z >= 1.0 {
@@ -130,9 +138,9 @@ fn shadow_visibility(world: vec3<f32>, normal: vec3<f32>, ndotl: f32) -> f32 {
     // especially in a wider shadow volume. Transform the normal by inverse
     // transpose using the orthogonal rows of our directional-light matrix.
     // This analytic slope needs no screen derivatives or extra GPU features.
-    let row_x = vec3<f32>(scene.light_view_proj[0].x, scene.light_view_proj[1].x, scene.light_view_proj[2].x);
-    let row_y = vec3<f32>(scene.light_view_proj[0].y, scene.light_view_proj[1].y, scene.light_view_proj[2].y);
-    let row_z = vec3<f32>(scene.light_view_proj[0].z, scene.light_view_proj[1].z, scene.light_view_proj[2].z);
+    let row_x = vec3<f32>(light_view_proj[0].x, light_view_proj[1].x, light_view_proj[2].x);
+    let row_y = vec3<f32>(light_view_proj[0].y, light_view_proj[1].y, light_view_proj[2].y);
+    let row_z = vec3<f32>(light_view_proj[0].z, light_view_proj[1].z, light_view_proj[2].z);
     let plane = vec3<f32>(dot(normal, row_x) / dot(row_x, row_x),
         dot(normal, row_y) / dot(row_y, row_y), dot(normal, row_z) / dot(row_z, row_z));
     if abs(plane.z) < 0.00001 {
@@ -314,7 +322,7 @@ fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
 }
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let world = scene.inverse_view_proj * vec4<f32>(in.ndc, 0.9999, 1.0);
+    let world = scene_inverse_view_proj() * vec4<f32>(in.ndc, 0.9999, 1.0);
     let direction = safe_normalize(world.xyz / world.w - scene.eye.xyz);
     return vec4<f32>(aces(sky_radiance(direction)), 1.0);
 }
@@ -322,7 +330,7 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
 @vertex
 fn vs_shadow(in: VsIn) -> @builtin(position) vec4<f32> {
     let world = quat_rotate(in.i_rot, in.pos * in.i_scale) + in.i_pos;
-    return scene.light_view_proj * vec4<f32>(world, 1.0);
+    return scene_light_view_proj() * vec4<f32>(world, 1.0);
 }
 @fragment
 fn fs_shadow(@builtin(position) clip: vec4<f32>) -> @location(0) vec4<f32> {
@@ -333,10 +341,10 @@ fn fs_shadow(@builtin(position) clip: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 struct ParticleIn {
-    @location(0) position: vec3<f32>,
-    @location(1) size: vec2<f32>,
-    @location(2) color: vec3<f32>,
-    @location(3) opacity: f32,
+    @location(PARTICLE_POSITION_LOCATION) position: vec3<f32>,
+    @location(PARTICLE_SIZE_LOCATION) size: vec2<f32>,
+    @location(PARTICLE_COLOR_LOCATION) color: vec3<f32>,
+    @location(PARTICLE_OPACITY_LOCATION) opacity: f32,
 };
 struct ParticleOut {
     @builtin(position) clip: vec4<f32>,
@@ -353,7 +361,7 @@ fn vs_particle(in: ParticleIn, @builtin(vertex_index) index: u32) -> ParticleOut
     let world = in.position + scene.camera_right.xyz * corner.x * in.size.x * 0.5
         + scene.camera_up.xyz * corner.y * in.size.y * 0.5;
     var out: ParticleOut;
-    out.clip = scene.view_proj * vec4<f32>(world, 1.0);
+    out.clip = scene_view_proj() * vec4<f32>(world, 1.0);
     out.uv = corner;
     out.color = in.color;
     out.opacity = in.opacity;

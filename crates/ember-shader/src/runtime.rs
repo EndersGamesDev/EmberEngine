@@ -8,6 +8,13 @@ use minijinja::{Environment, ErrorKind, UndefinedBehavior};
 
 use crate::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslType, WgslTypeDescription};
 
+/// Embedded scene and environment template used by `ember-engine`.
+pub const ENGINE_SCENE_TEMPLATE: &str = "engine-scene.wgsl.jinja";
+const ENGINE_SCENE_SOURCE: &str = include_str!("../templates/engine-scene.wgsl.jinja");
+/// Embedded presentation template used by `ember-engine`.
+pub const ENGINE_PRESENT_TEMPLATE: &str = "engine-present.wgsl.jinja";
+const ENGINE_PRESENT_SOURCE: &str = include_str!("../templates/engine-present.wgsl.jinja");
+
 #[cfg(test)]
 const INTERFACE_TEST_NAME: &str = "interface-test.wgsl.jinja";
 #[cfg(test)]
@@ -66,7 +73,10 @@ const REVERSED_EMISSION_TEST_NAME: &str = "reversed-emission-test.wgsl.jinja";
 #[cfg(test)]
 const REVERSED_EMISSION_TEST_SOURCE: &str =
     include_str!("../templates/reversed-emission-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[];
+const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[
+    (ENGINE_SCENE_TEMPLATE, ENGINE_SCENE_SOURCE),
+    (ENGINE_PRESENT_TEMPLATE, ENGINE_PRESENT_SOURCE),
+];
 #[cfg(test)]
 const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
