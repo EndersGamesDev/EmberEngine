@@ -16,6 +16,10 @@ The full evidence for every row, including the freeze commits and every publicat
 
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
+### Exact camera
+
+The new dependency-free `ember-camera` shared engine crate is part of the `ember` workspace series and owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`, `7a5ccf12`, `2343336e`). Across five fixed-evaluation samples, edit measured 28,149–42,129 ns, reference displacement 355,220–435,949 ns, and combined 383,369–478,078 ns. Earlier floating-evaluation samples measured 3,580–7,960 ns for reference displacement and 24,920–63,170 ns combined; the roughly 47-fold row-9 regression remains within the 1,000,000 ns release ceiling.
+
 ### Julibrot rounds two and three
 
 Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).

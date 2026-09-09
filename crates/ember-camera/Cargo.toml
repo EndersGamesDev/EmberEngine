@@ -1,0 +1,7 @@
+[package]
+name = "ember-camera"
+edition.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
