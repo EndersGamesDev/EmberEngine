@@ -1324,6 +1324,7 @@ version = "1.0.1"
 dependencies = [
  "bytemuck",
  "minijinja",
+ "naga",
 ]
 
 [[package]]

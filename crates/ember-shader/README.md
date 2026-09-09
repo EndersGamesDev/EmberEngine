@@ -6,6 +6,8 @@ Julibrot's `ember-julibrot-shader` crate remains the upstream design source and 
 
 Its metadata describes host-shareable Rust types and enum discriminants from the same layouts and values that pipeline owners use. A strict, feature-full Minijinja environment renders embedded templates from those types, values, binding numbers, and named constants without a global cache or mutable static state.
 
-The pipeline owner retains the exact rendered source and its stable hash beside the pipeline. Native validation and anti-drift auditing join the same render path as later structural steps land; template debug diagnostics are test- or feature-only and do not enter a default release build.
+The pipeline owner retains the exact rendered source and its stable hash beside the pipeline. Native renders parse and validate WGSL with naga, audit every registered interface item against the parsed module, and require every CPU-visible declaration's exact bytes to come from its traced filter under a render-local tag. Wasm returns the source for wgpu's shader-module creation to perform the browser path's single validation.
+
+Template debug diagnostics are test- or feature-only and do not enter a default release build. Every production template must be paired with the crate's deterministic native validation macro; the repository checker authenticates and executes those compiled tests.
 
 Repository shader policy and migration evidence live in [`../../docs/shaders.md`](../../docs/shaders.md).

@@ -812,6 +812,13 @@ fn shader_type_name(module: &naga::Module, handle: naga::Handle<naga::Type>) -> 
             let scalar = scalar_name(*scalar)?;
             Some(format!("vec{}<{scalar}>", vector_width(*size)))
         }
+        naga::TypeInner::Array { base, size, .. } => {
+            let base = shader_type_name(module, *base)?;
+            let naga::ArraySize::Constant(length) = size else {
+                return None;
+            };
+            Some(format!("array<{base}, {}>", length.get()))
+        }
         naga::TypeInner::Struct { .. } => shader_type.name.clone(),
         _ => None,
     }
@@ -1354,6 +1361,9 @@ mod tests {
         UNTRACED_TYPE_TEST_NAME, emission_marker, render, stable_hash, strip_emission_markers,
     };
 
+    #[cfg(not(target_arch = "wasm32"))]
+    use super::shader_type_name;
+
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C, align(16))]
     struct TestUniform {
@@ -1365,6 +1375,31 @@ mod tests {
         colour: F32Vec4,
         flags: U32Vec4,
     });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fixed_array_type_names_match_rust_metadata() {
+        let module =
+            naga::front::wgsl::parse_str("struct ArrayUniform { values: array<vec4<f32>, 4>, }")
+                .expect("the fixed-array test module parses");
+        let array = module
+            .types
+            .iter()
+            .find_map(|(_, shader_type)| {
+                let naga::TypeInner::Struct { members, .. } = &shader_type.inner else {
+                    return None;
+                };
+                if shader_type.name.as_deref() != Some("ArrayUniform") {
+                    return None;
+                }
+                members.first().map(|member| member.ty)
+            })
+            .expect("the fixed-array field has a parsed type");
+        assert_eq!(
+            shader_type_name(&module, array).as_deref(),
+            Some(<[F32Vec4; 4] as crate::WgslType>::DESCRIPTION.name),
+        );
+    }
 
     #[derive(Clone, Copy)]
     #[repr(u32)]

@@ -1,0 +1,7 @@
+{% set type_declaration = "TestUniform"|wgsl_type %}
+{% set enum_declaration = "TestMode"|wgsl_enum %}
+{{ enum_declaration }}
+{{ type_declaration }}
+{{ "TEST_SCALE"|wgsl_constant }}
+{{ "values"|wgsl_binding }} var values: texture_2d<f32>;
+@compute @workgroup_size(1) fn main() {}
