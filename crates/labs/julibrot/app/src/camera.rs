@@ -266,8 +266,12 @@ fn math_error(error: ember_julibrot_math::MathError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use ember_camera::{PROJECT_PIXEL_TOLERANCE_PIXELS, Screen, invert_perspective};
-    use ember_julibrot_math::{ObjectAngles, construct_plane};
+    use ember_camera::{
+        PROJECT_PIXEL_TOLERANCE_PIXELS, Screen, View, click, invert_perspective, pan, zoom_about,
+    };
+    use ember_julibrot_math::{
+        NavigationDelta, ObjectAngles, construct_plane, navigation_delta, screen_to_plane,
+    };
     use ember_julibrot_worker::EncodedCentre;
 
     use super::*;
@@ -394,5 +398,68 @@ mod tests {
             centre
         );
         assert_eq!(encoded.revision, 19);
+    }
+
+    #[test]
+    fn integer_identity_navigation_agrees_before_the_old_path_is_removed() {
+        let object = ObjectAngles::IDENTITY;
+        let controls = ViewControls::MANDELBROT_FLAT;
+        let map = screen_to_plane(&object, &controls, 0.0, 1_024, 512, 2.0)
+            .expect("canonical screen map");
+        assert_eq!(map, ember_julibrot_math::Homography::IDENTITY);
+        let plane = construct_plane(object).expect("legacy plane");
+        let orientation = orientation_from_object(&object).expect("mapped orientation");
+        let basis = rebuild_basis(&orientation).expect("mapped basis");
+        assert_eq!(basis.u, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(basis.v, [0.0, 0.0, 0.0, 1.0]);
+        let screen = Screen::new(1_024, 512).expect("screen");
+        let anchor = [256.0, -128.0];
+
+        let delta =
+            navigation_delta(&map, [32.0, 16.0], 1.0, anchor).expect("identity navigation map");
+        assert_eq!(delta.pan_canvas_px, [32.0, -16.0]);
+        let mut legacy =
+            BigCentre::from_f64([0.0; 4], CAMERA_PRECISION_BITS).expect("legacy centre");
+        legacy
+            .apply_navigation(&delta, &plane, 0.0, 1.0, screen.width())
+            .expect("legacy navigation");
+        let mut exact = View::new([Fixed::ZERO; 4], Exponent::ZERO, orientation);
+        zoom_about(&mut exact, screen, anchor, EXPONENT_QUANTA_PER_OCTAVE).expect("exact zoom");
+        pan(
+            &mut exact,
+            screen,
+            delta.pan_canvas_px[0],
+            delta.pan_canvas_px[1],
+        )
+        .expect("exact pan");
+        assert_eq!(
+            big_centre_from_fixed(&exact.centre).expect("published exact centre"),
+            legacy
+        );
+
+        let point = click(
+            &View::new([Fixed::ZERO; 4], Exponent::ZERO, orientation),
+            screen,
+            anchor,
+        )
+        .expect("exact click");
+        let mut legacy_point =
+            BigCentre::from_f64([0.0; 4], CAMERA_PRECISION_BITS).expect("legacy point");
+        legacy_point
+            .apply_navigation(
+                &NavigationDelta {
+                    pan_canvas_px: [-anchor[0], -anchor[1]],
+                    ..NavigationDelta::default()
+                },
+                &plane,
+                0.0,
+                0.0,
+                screen.width(),
+            )
+            .expect("legacy click");
+        assert_eq!(
+            big_centre_from_fixed(&point).expect("published exact point"),
+            legacy_point
+        );
     }
 }
