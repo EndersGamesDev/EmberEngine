@@ -15,7 +15,7 @@ pub(crate) mod types;
 
 pub use basis::rebuild_basis;
 pub use fixed::{CameraError, FIXED_INTEGER_BITS, Fixed};
-pub use frame::orientation_from_frame;
+pub use frame::{orientation_from_frame, same_image_plane};
 pub use navigation::{
     EXPONENT_QUANTUM_EDGE_TOLERANCE, MAX_SCREEN_COORDINATE_PIXELS, click, frame_points, pan,
     rotate_about, select_box, zoom_about,

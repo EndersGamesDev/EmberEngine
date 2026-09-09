@@ -89,6 +89,8 @@ const FRAME_ORTHONORMAL_TOLERANCE: f64 = 2.0e-10;
 /// `2e-8` covers two turn quanta plus the fixed polynomial basis error without accepting a
 /// malformed axis.
 const FRAME_REBUILD_TOLERANCE: f64 = 2.0e-8;
+const PLANE_RELATION_LIMBS: usize = 3;
+const PLANE_RELATION_TOLERANCE: f64 = 8.0e-8;
 
 /// Quantises a complete floating-point frame into the canonical integer orientation.
 ///
@@ -144,6 +146,86 @@ pub fn orientation_from_frame<const N: usize>(
         }
     }
     Ok(orientation)
+}
+
+/// Reports whether two exact orientations select the same unoriented image plane.
+///
+/// Each deterministically rebuilt basis enters internal fixed precision once. The comparison then
+/// uses the Plucker coordinates of the two image axes, accepting either common sign so a reflected
+/// chart still names the same plane. The tolerance covers two turn quanta and the documented basis
+/// rebuild bound; it affects only the plane-identity decision and never enters a view update.
+///
+/// # Errors
+///
+/// Returns a typed refusal when the dimension cannot contain an image plane or fixed arithmetic
+/// overflows.
+pub fn same_image_plane<const N: usize>(
+    first: &Orientation<N>,
+    second: &Orientation<N>,
+) -> Result<bool, CameraError> {
+    let first_basis = rebuild_basis(first)?;
+    let second_basis = rebuild_basis(second)?;
+    let first_u = fixed_axis(&first_basis.u)?;
+    let first_v = fixed_axis(&first_basis.v)?;
+    let second_u = fixed_axis(&second_basis.u)?;
+    let second_v = fixed_axis(&second_basis.v)?;
+    let tolerance = Fixed::from_f64(PLANE_RELATION_TOLERANCE)?;
+
+    let mut pivot = None;
+    let mut pivot_magnitude = Fixed::ZERO;
+    for (first_axis, _) in first_u.iter().enumerate() {
+        for (second_axis, _) in first_u.iter().enumerate().skip(first_axis + 1) {
+            let coordinate = wedge_coordinate(&first_u, &first_v, first_axis, second_axis)?;
+            let magnitude = coordinate.abs_checked()?;
+            if magnitude > pivot_magnitude {
+                pivot = Some((first_axis, second_axis, coordinate));
+                pivot_magnitude = magnitude;
+            }
+        }
+    }
+    let Some((first_axis, second_axis, first_pivot)) = pivot else {
+        return Err(CameraError::DimensionTooSmall);
+    };
+    let second_pivot = wedge_coordinate(&second_u, &second_v, first_axis, second_axis)?;
+    if second_pivot.abs_checked()? <= tolerance {
+        return Ok(false);
+    }
+    let reflected = first_pivot.is_negative() != second_pivot.is_negative();
+    for (first_axis, _) in first_u.iter().enumerate() {
+        for (second_axis, _) in first_u.iter().enumerate().skip(first_axis + 1) {
+            let first_coordinate = wedge_coordinate(&first_u, &first_v, first_axis, second_axis)?;
+            let second_coordinate =
+                wedge_coordinate(&second_u, &second_v, first_axis, second_axis)?;
+            let difference = if reflected {
+                first_coordinate.add(&second_coordinate)?
+            } else {
+                first_coordinate.sub(&second_coordinate)?
+            };
+            if difference.abs_checked()? > tolerance {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn fixed_axis<const N: usize>(
+    axis: &[f64; N],
+) -> Result<[Fixed<PLANE_RELATION_LIMBS>; N], CameraError> {
+    let mut fixed = [Fixed::ZERO; N];
+    for (output, component) in fixed.iter_mut().zip(axis) {
+        *output = Fixed::from_f64(*component)?;
+    }
+    Ok(fixed)
+}
+
+fn wedge_coordinate<const N: usize>(
+    u: &[Fixed<PLANE_RELATION_LIMBS>; N],
+    v: &[Fixed<PLANE_RELATION_LIMBS>; N],
+    first: usize,
+    second: usize,
+) -> Result<Fixed<PLANE_RELATION_LIMBS>, CameraError> {
+    u[first].mul(&v[second])?.sub(&u[second].mul(&v[first])?)
 }
 
 fn validate_frame<const N: usize>(frame: &[[f64; N]; N]) -> Result<(), CameraError> {
@@ -352,7 +434,7 @@ fn turn_from_wide(angle: u64) -> Turn {
 
 #[cfg(test)]
 mod tests {
-    use super::{QUARTER_TURN, orientation_for_segment, orientation_from_frame};
+    use super::{QUARTER_TURN, orientation_for_segment, orientation_from_frame, same_image_plane};
     use crate::{CameraError, Exponent, Fixed, Orientation, Turn, View, rebuild_basis};
 
     /// Two Turn quanta plus deterministic CORDIC and basis-polynomial error.
@@ -516,5 +598,25 @@ mod tests {
     #[test]
     fn frame_constructor_refuses_a_reflected_frame() {
         assert_malformed_frame_is_refused([[1.0, 0.0], [0.0, -1.0]]);
+    }
+
+    #[test]
+    fn exact_orientation_classifies_image_plane_changes() -> Result<(), CameraError> {
+        let identity = Orientation::<4>::IDENTITY;
+        let mut in_plane_angles = [[Turn::ZERO; 4]; 4];
+        in_plane_angles[0][1] = Turn::from_bits(0x1357_9bdf);
+        let in_plane = Orientation::new(in_plane_angles)?;
+        assert!(same_image_plane(&identity, &in_plane)?);
+
+        let mut complement_angles = [[Turn::ZERO; 4]; 4];
+        complement_angles[2][3] = Turn::from_bits(0x2468_ace0);
+        let complement = Orientation::new(complement_angles)?;
+        assert!(same_image_plane(&identity, &complement)?);
+
+        let mut tilted_angles = [[Turn::ZERO; 4]; 4];
+        tilted_angles[0][2] = Turn::from_bits(0x1020_3040);
+        let tilted = Orientation::new(tilted_angles)?;
+        assert!(!same_image_plane(&identity, &tilted)?);
+        Ok(())
     }
 }
