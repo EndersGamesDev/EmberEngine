@@ -1,6 +1,6 @@
 # Exact N-dimensional camera
 
-`ember-camera` owns a two-dimensional view embedded in N-dimensional space without owning a renderer, a game, or a laboratory. Its exact record is the authority for centre, logarithmic scale, and image-plane orientation; an observer and rebuilt floating-point basis are presentation products, never alternate camera state.
+`ember-camera` is a shared engine crate in the `ember` workspace series. It owns a two-dimensional view embedded in N-dimensional space without owning a renderer, a game, or a laboratory. Its exact record is the authority for centre, logarithmic scale, and image-plane orientation; an observer and rebuilt floating-point basis are presentation products, never alternate camera state.
 
 ## Degrees of freedom
 
