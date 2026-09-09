@@ -62,6 +62,10 @@
     .update { min-height: 50px; padding: 9px 10px; border-left: 2px solid var(--gold); background: rgba(4, 10, 22, .36); color: #dce5ef; font-size: .82rem; line-height: 1.38; }
     .update b { display: block; color: var(--gold); font-size: .67rem; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 2px; }
     .playrow { display: flex; gap: 10px; align-items: center; margin-top: auto; }
+    .trailer-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: #05080f; border: 1px solid rgba(225, 235, 255, .12); }
+    .trailer-thumb img, .trailer-thumb video { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .trailer-play { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; padding: 9px 17px; border: 0; border-radius: 999px; cursor: pointer; background: rgba(6, 11, 20, .74); color: var(--gold); font: 700 .78rem/1 inherit; letter-spacing: .07em; text-transform: uppercase; }
+    .trailer-thumb:hover .trailer-play { background: var(--gold); color: #12160c; }
     select {
       min-width: 0; max-width: 100%; background: rgba(3, 10, 23, .76); border: 1px solid var(--line); border-radius: 8px;
       color: var(--ink); padding: 8px 9px; font: inherit;
@@ -404,6 +408,66 @@
         story.textContent = 'Story & trailer';
         story.style.cssText = 'color:#72d5b5;font-size:.82rem;margin-top:10px;display:inline-block;text-underline-offset:3px';
         card.append(story);
+      }
+      /* game-trailer-card:v1 — a facade, deliberately not a <video>. The hub
+         lists every game at once, so a real player per card would have the
+         browser fetching a poster and metadata for each of them before anyone
+         asks. This puts the poster in as an image and builds the player only
+         on click, so a visitor who never presses play pays for one JPEG.
+
+         It inserts BEFORE the play row rather than being appended, because
+         `card.append(h, tag, desc, update, row)` above is the exact substring
+         tools/league/publish-landing.cjs asserts on when it patches the
+         published hub, and must stay byte-identical.
+
+         If the poster does not load — the media directory is not published
+         yet — the block removes itself rather than leaving a dead frame in
+         the card. */
+      if (g.trailer && g.trailer.src && g.trailer.poster) {
+        const fig = document.createElement('div');
+        fig.className = 'trailer-thumb';
+        const shot = document.createElement('img');
+        shot.src = g.trailer.poster;
+        shot.alt = `${g.title} trailer`;
+        shot.loading = 'lazy';
+        shot.addEventListener('error', () => fig.remove());
+        const play = document.createElement('button');
+        play.type = 'button';
+        play.className = 'trailer-play';
+        play.textContent = '▶ Trailer';
+        play.title = `Watch the ${g.title} trailer`;
+        play.addEventListener('click', () => {
+          const video = document.createElement('video');
+          video.src = g.trailer.src;
+          video.poster = g.trailer.poster;
+          video.controls = true;
+          video.autoplay = true;
+          video.playsInline = true;
+          if (g.trailer.captions) {
+            const track = document.createElement('track');
+            track.kind = 'captions';
+            track.src = g.trailer.captions;
+            track.srclang = 'en';
+            track.label = 'English';
+            track.default = true;
+            video.append(track);
+          }
+          fig.replaceChildren(video);
+        });
+        fig.append(shot, play);
+        card.insertBefore(fig, row);
+      }
+      /* game-landing-link:v1 — the generic form. The league block above is left
+         byte-identical on purpose: tools/league/publish-landing.cjs patches the
+         PUBLISHED hub by asserting on that exact substring, so rewriting it
+         here would break the league release. This block reads `landing` from
+         games.json instead, and skips league because it is handled above. */
+      if (g.landing && g.id !== 'league') {
+        const landing = document.createElement('a');
+        landing.href = g.landing;
+        landing.textContent = 'Story & trailer';
+        landing.style.cssText = 'color:#ffb74d;font-size:.82rem;margin-top:10px;display:inline-block;text-underline-offset:3px';
+        card.append(landing);
       }
       cards.append(card);
     }
