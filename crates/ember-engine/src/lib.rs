@@ -22,6 +22,7 @@ pub mod rig;
 mod app;
 mod input;
 mod occlusion;
+mod shader_templates;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::init_diagnostics;

@@ -1,11 +1,18 @@
-//! Offscreen regression checks use the shipping pipeline builders and WGSL.
-//! Run explicitly with `cargo test -p ember-engine environment_gpu -- --ignored`.
-//! Optional `EMBER_ENV_CAPTURE_DIR` saves diagnostic PNGs; no window is created.
+//! Offscreen regression checks use the shipping pipeline builders and rendered WGSL. The focused
+//! runtime proof runs with the normal native suite; run broader environment checks explicitly with
+//! `cargo test -p ember-engine environment_gpu -- --ignored`. Optional `EMBER_ENV_CAPTURE_DIR`
+//! saves diagnostic PNGs; no window is created.
 
 use super::*;
 use crate::OcclusionBox;
 
 const SIZE: u32 = 256;
+const TEST_CLEAR: wgpu::Color = wgpu::Color {
+    r: 0.008,
+    g: 0.028,
+    b: 0.12,
+    a: 1.0,
+};
 
 struct Rig {
     device: wgpu::Device,
@@ -30,20 +37,26 @@ impl Rig {
     #[allow(clippy::too_many_lines)]
     async fn new() -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                force_fallback_adapter: false,
-                compatible_surface: None,
-            })
-            .await
-            .expect("explicit GPU regression requires a headless adapter");
+        let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter,
+            compatible_surface: None,
+        };
+        let adapter = match instance.request_adapter(&request(true)).await {
+            Some(adapter) => adapter,
+            None => instance
+                .request_adapter(&request(false))
+                .await
+                .expect("a native GPU or software adapter is available for engine readback"),
+        };
+        let required_limits =
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("environment floor regression device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                    required_limits,
                     memory_hints: wgpu::MemoryHints::default(),
                 },
                 None,
@@ -51,14 +64,13 @@ impl Rig {
             .await
             .expect("device at WebGL2 limit floor");
         device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("shipping environment WGSL"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
+        let rendered_shader =
+            shader_templates::scene_shader().expect("shipping environment shader must render");
+        let shader = create_shader_module(&device, "shipping environment WGSL", &rendered_shader);
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("test scene uniform layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
+                binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
@@ -72,7 +84,7 @@ impl Rig {
             label: Some("test mesh texture layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -82,7 +94,7 @@ impl Rig {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -123,7 +135,7 @@ impl Rig {
             label: Some("test uniform bind"),
             layout: &uniform_layout,
             entries: &[wgpu::BindGroupEntry {
-                binding: 0,
+                binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                 resource: uniform.as_entire_binding(),
             }],
         });
@@ -153,11 +165,11 @@ impl Rig {
             layout: &mesh_layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
+                    binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                     resource: wgpu::BindingResource::TextureView(&white_view),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -276,7 +288,11 @@ impl Rig {
             });
             if cast_shadows && frame.environment.enabled {
                 pass.set_pipeline(&self.shadow_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.instances.slice(..));
                 for (i, instance) in frame.instances.iter().enumerate() {
@@ -296,12 +312,7 @@ impl Rig {
                     view: &target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.008,
-                            g: 0.028,
-                            b: 0.12,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(TEST_CLEAR),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -318,22 +329,46 @@ impl Rig {
             });
             if frame.environment.enabled {
                 pass.set_pipeline(&self.sky);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.draw(0..3, 0..1);
             }
             if !instances.is_empty() {
                 pass.set_pipeline(&self.scene);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
-                pass.set_bind_group(1, &self.mesh_bind, &[]);
-                pass.set_bind_group(2, &self.shadow.bind, &[]);
-                pass.set_bind_group(3, &occlusion_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::MESH_TEXTURE_BINDING.group,
+                    &self.mesh_bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::SHADOW_TEXTURE_BINDING.group,
+                    &self.shadow.bind,
+                    &[],
+                );
+                pass.set_bind_group(
+                    shader_templates::OCCLUSION_XY_BINDING.group,
+                    &occlusion_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.vertices.slice(..));
                 pass.set_vertex_buffer(1, self.instances.slice(..));
                 pass.draw(0..36, 0..instances.len() as u32);
             }
             if !particles.is_empty() {
                 pass.set_pipeline(&self.particles);
-                pass.set_bind_group(0, &self.uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.uniform_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(0, self.particle_buffer.slice(..));
                 pass.draw(0..6, 0..particles.len() as u32);
             }
@@ -384,6 +419,65 @@ impl Rig {
         );
         pixels
     }
+}
+
+fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let index = usize::try_from(y * SIZE + x).expect("test image index fits usize");
+    pixels
+        .as_chunks::<4>()
+        .0
+        .get(index)
+        .copied()
+        .expect("test pixel is inside the readback")
+}
+
+#[test]
+fn runtime_rendered_engine_pipeline_reads_back_rust_owned_scene() {
+    let rig = pollster::block_on(Rig::new());
+    let frame = Frame {
+        camera: Camera {
+            eye: Vec3::new(0.0, 0.0, 5.0),
+            target: Vec3::ZERO,
+            fov_y_deg: 60.0,
+        },
+        fog: Fog {
+            color: [0.0; 3],
+            density: 0.0,
+        },
+        instances: vec![
+            Instance::new(Vec3::ZERO, Vec3::splat(1.5), Vec3::new(0.85, 0.12, 0.04))
+                .without_shadow(),
+        ],
+        ..Frame::default()
+    };
+    let pixels = rig.render(&frame, false);
+    let background = pixel(&pixels, 4, 4);
+    for (x, y) in [(4, 4), (SIZE - 5, 4), (4, SIZE - 5), (SIZE - 5, SIZE - 5)] {
+        assert_eq!(
+            pixel(&pixels, x, y),
+            background,
+            "the Rust-owned clear must remain visible around the centered scene"
+        );
+    }
+    assert_eq!(background[3], u8::MAX);
+    assert!(background[2] > background[1] && background[1] > background[0]);
+
+    let centre = pixel(&pixels, SIZE / 2, SIZE / 2);
+    assert_eq!(centre[3], u8::MAX);
+    assert!(
+        centre[0] > centre[1].saturating_add(32) && centre[0] > centre[2].saturating_add(32),
+        "the Rust-owned red material must dominate the centre pixel: {centre:?}"
+    );
+    let changed = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|rgba| rgba[..3] != background[..3])
+        .count();
+    assert!(
+        changed > 1_000,
+        "the centered cube must cover a substantial picture region: {changed} pixels"
+    );
 }
 
 fn changed_pixels(a: &[u8], b: &[u8], threshold: u8) -> usize {
@@ -809,7 +903,6 @@ fn material_test_frame() -> Frame {
 }
 
 #[test]
-#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_local_light_is_bounded_and_falls_off() {
     let rig = pollster::block_on(Rig::new());
     let mut frame = material_test_frame();

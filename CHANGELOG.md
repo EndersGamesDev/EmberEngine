@@ -19,6 +19,7 @@ This is the repository's only ledger for finished work that has not yet been ass
 ### Exact camera
 
 The new dependency-free `ember-camera` shared engine crate is part of the `ember` workspace series and owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`, `7a5ccf12`, `2343336e`). Across five fixed-evaluation samples, edit measured 28,149–42,129 ns, reference displacement 355,220–435,949 ns, and combined 383,369–478,078 ns. Earlier floating-evaluation samples measured 3,580–7,960 ns for reference displacement and 24,920–63,170 ns combined; the roughly 47-fold row-9 regression remains within the 1,000,000 ns release ceiling.
+
 ### End Game v11
 
 Weight and Impact connects an upper-right-to-lower-left cut, horizontal backhand and steeper finishing diagonal through shared edge-leading sword poses. Sixteen subdivisions per 60 Hz contact tick sweep the blade and player frame against five anatomical zones and castle surfaces. Actual contact drives directional reactions, hitstop and rebound; missed cuts create no impact. Separate heavy input selects an overhead strike on the ground or a downward airborne cut that holds through landing without extra landing damage. The projected aim marker and confirmed hit label distinguish intent from contact (`9ab4fcec`).
@@ -173,6 +174,8 @@ The diagnostic crate's client-network dependency is now wasm-only, matching its 
 
 ### Engine and workspace debt cleanup
 
+The engine's scene and presentation shaders now render through the shared template mechanism from Rust-owned layouts, fixed point-light arrays, binding slots and constants. The former native raw-file reload is retired because accepting edited WGSL after startup would bypass declaration provenance and the anti-drift oracle; runtime context rendering is the sole dynamic shader-generation path. Every engine-backed game bundle now carries that shared runtime; the pre-rebase sokol arena measurement was 755,558 bytes (+1.68%), while the `62f5c450` merge candidate awaits its same-host measurement (`bd0e13ee`).
+
 The final inline transient-read copies moved onto the shared network predicate, the never-run 9 mm converter was removed, stale lint suppressions disappeared and the workspace gate remained green, closing the planned cleanup slices while leaving the two explicitly ranked follow-ups open (`9918e39c`).
 
 Three unreferenced assets totaling 5,397,461 bytes were removed without changing shipped bundle hashes; network sanitization, digest framing and transient-read handling gained shared implementations with game-specific fallbacks and failure behavior preserved (`9501ec2b`).
@@ -183,7 +186,7 @@ The workspace returned to a green gate after League formatting and lint repairs,
 
 The retired multiplayer prototype established the authoritative-server and client-snapshot boundary now used by the online games (`9484b7dd`).
 
-Per-mesh textures and UVs, glTF texture coordinates, Blinn-Phong lighting, fog, the native diagnostic overlay, scene-rate controls and shader hot reload form the completed early rendering layer (`6cbb4612`).
+Per-mesh textures and UVs, glTF texture coordinates, Blinn-Phong lighting, fog, the native diagnostic overlay, scene-rate controls and the now-retired native raw-file shader reload formed the completed early rendering layer at that revision (`6cbb4612`).
 
 The offline Blender-to-glTF path established multi-mesh instancing and the first authored Arena viewmodel (`b4ccb6ac`).
 

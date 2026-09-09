@@ -8,9 +8,12 @@ use minijinja::{Environment, ErrorKind, UndefinedBehavior};
 
 use crate::{WgslEnum, WgslEnumDescription, WgslEnumDiscriminant, WgslType, WgslTypeDescription};
 
-/// Embedded template for Julibrot's final value-to-colour presentation pass.
-pub const PRESENT_SHADE_TEMPLATE: &str = "present-shade.wgsl.jinja";
-const PRESENT_SHADE_SOURCE: &str = include_str!("../templates/present-shade.wgsl.jinja");
+/// Embedded scene and environment template used by `ember-engine`.
+pub const ENGINE_SCENE_TEMPLATE: &str = "engine-scene.wgsl.jinja";
+const ENGINE_SCENE_SOURCE: &str = include_str!("../templates/engine-scene.wgsl.jinja");
+/// Embedded presentation template used by `ember-engine`.
+pub const ENGINE_PRESENT_TEMPLATE: &str = "engine-present.wgsl.jinja";
+const ENGINE_PRESENT_SOURCE: &str = include_str!("../templates/engine-present.wgsl.jinja");
 
 #[cfg(test)]
 const INTERFACE_TEST_NAME: &str = "interface-test.wgsl.jinja";
@@ -39,6 +42,10 @@ const ORACLE_TEST_NAME: &str = "oracle-test.wgsl.jinja";
 #[cfg(test)]
 const ORACLE_TEST_SOURCE: &str = include_str!("../templates/oracle-test.wgsl.jinja");
 #[cfg(test)]
+const PROBE_TEST_NAME: &str = "probe-test.wgsl.jinja";
+#[cfg(test)]
+const PROBE_TEST_SOURCE: &str = include_str!("../templates/probe-test.wgsl.jinja");
+#[cfg(test)]
 const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
 #[cfg(test)]
 const UNREGISTERED_TYPE_TEST_SOURCE: &str =
@@ -66,7 +73,10 @@ const REVERSED_EMISSION_TEST_NAME: &str = "reversed-emission-test.wgsl.jinja";
 #[cfg(test)]
 const REVERSED_EMISSION_TEST_SOURCE: &str =
     include_str!("../templates/reversed-emission-test.wgsl.jinja");
-const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[(PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE)];
+const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[
+    (ENGINE_SCENE_TEMPLATE, ENGINE_SCENE_SOURCE),
+    (ENGINE_PRESENT_TEMPLATE, ENGINE_PRESENT_SOURCE),
+];
 #[cfg(test)]
 const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
@@ -75,6 +85,7 @@ const TEST_TEMPLATES: &[(&str, &str)] = &[
     (HIDDEN_FILTER_TEST_NAME, HIDDEN_FILTER_TEST_SOURCE),
     (LITERAL_MARKER_TEST_NAME, LITERAL_MARKER_TEST_SOURCE),
     (ORACLE_TEST_NAME, ORACLE_TEST_SOURCE),
+    (PROBE_TEST_NAME, PROBE_TEST_SOURCE),
     (REVERSED_EMISSION_TEST_NAME, REVERSED_EMISSION_TEST_SOURCE),
     (UNREGISTERED_TYPE_TEST_NAME, UNREGISTERED_TYPE_TEST_SOURCE),
     (UNTRACED_TYPE_TEST_NAME, UNTRACED_TYPE_TEST_SOURCE),
@@ -94,7 +105,6 @@ enum EmissionKind {
     Binding,
     Constant,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Emission {
     kind: EmissionKind,

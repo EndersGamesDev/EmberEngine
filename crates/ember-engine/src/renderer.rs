@@ -18,12 +18,14 @@
 
 use std::sync::Arc;
 
+use ember_shader::{F32Vec4, RenderedShader};
 use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::OcclusionField;
 use crate::environment::{Environment, Particle};
+use crate::shader_templates;
 
 /// A vertex of a registered mesh (matches the built-in cube's layout).
 #[derive(Clone, Copy, Debug)]
@@ -285,29 +287,138 @@ pub struct Frame {
     pub particles: Vec<Particle>,
 }
 
-/// Scene-pass uniform (group 0, binding 0). Mirrors `SceneUniform` in
-/// `shader.wgsl`: WGSL uniform layout wants a 16-byte-multiple struct and
-/// a 16-byte-aligned `vec3`, so fog colour and density share one `vec4`.
-#[repr(C)]
+/// Scene-pass uniform rendered into WGSL from this exact Rust layout.
+#[repr(C, align(16))]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SceneUniform {
-    view_proj: [[f32; 4]; 4],
+pub(crate) struct SceneUniform {
+    view_proj_0: F32Vec4,
+    view_proj_1: F32Vec4,
+    view_proj_2: F32Vec4,
+    view_proj_3: F32Vec4,
     /// `Fog::color` in xyz, `Fog::density` in w.
-    fog: [f32; 4],
-    inverse_view_proj: [[f32; 4]; 4],
-    light_view_proj: [[f32; 4]; 4],
-    eye: [f32; 4],
-    sun_direction: [f32; 4],
-    sun_color: [f32; 4],
-    sky_zenith: [f32; 4],
-    sky_horizon: [f32; 4],
-    wind_time: [f32; 4],
-    camera_right: [f32; 4],
-    camera_up: [f32; 4],
-    occlusion_min_strength: [f32; 4],
-    occlusion_cell: [f32; 4],
-    light_positions: [[f32; 4]; 4],
-    light_colors: [[f32; 4]; 4],
+    fog: F32Vec4,
+    inverse_view_proj_0: F32Vec4,
+    inverse_view_proj_1: F32Vec4,
+    inverse_view_proj_2: F32Vec4,
+    inverse_view_proj_3: F32Vec4,
+    light_view_proj_0: F32Vec4,
+    light_view_proj_1: F32Vec4,
+    light_view_proj_2: F32Vec4,
+    light_view_proj_3: F32Vec4,
+    eye: F32Vec4,
+    sun_direction: F32Vec4,
+    sun_color: F32Vec4,
+    sky_zenith: F32Vec4,
+    sky_horizon: F32Vec4,
+    wind_time: F32Vec4,
+    camera_right: F32Vec4,
+    camera_up: F32Vec4,
+    occlusion_min_strength: F32Vec4,
+    occlusion_cell: F32Vec4,
+    light_positions: [F32Vec4; 4],
+    light_colors: [F32Vec4; 4],
+}
+
+ember_shader::impl_wgsl_struct!(SceneUniform, "SceneUniform", {
+    view_proj_0: F32Vec4,
+    view_proj_1: F32Vec4,
+    view_proj_2: F32Vec4,
+    view_proj_3: F32Vec4,
+    fog: F32Vec4,
+    inverse_view_proj_0: F32Vec4,
+    inverse_view_proj_1: F32Vec4,
+    inverse_view_proj_2: F32Vec4,
+    inverse_view_proj_3: F32Vec4,
+    light_view_proj_0: F32Vec4,
+    light_view_proj_1: F32Vec4,
+    light_view_proj_2: F32Vec4,
+    light_view_proj_3: F32Vec4,
+    eye: F32Vec4,
+    sun_direction: F32Vec4,
+    sun_color: F32Vec4,
+    sky_zenith: F32Vec4,
+    sky_horizon: F32Vec4,
+    wind_time: F32Vec4,
+    camera_right: F32Vec4,
+    camera_up: F32Vec4,
+    occlusion_min_strength: F32Vec4,
+    occlusion_cell: F32Vec4,
+    light_positions: [F32Vec4; 4],
+    light_colors: [F32Vec4; 4],
+});
+
+fn matrix_columns(matrix: &Mat4) -> [F32Vec4; 4] {
+    matrix.to_cols_array_2d().map(F32Vec4::new)
+}
+
+fn camera_uniform_facts(frame: &Frame, aspect: f32) -> (Vec3, Vec3, Vec3, Mat4) {
+    let eye = finite_vec3(frame.camera.eye, Vec3::new(0.0, 32.0, 40.0));
+    let forward = finite_vec3(frame.camera.target - eye, -Vec3::Z)
+        .try_normalize()
+        .unwrap_or(-Vec3::Z);
+    let up = if forward.cross(Vec3::Y).length_squared() < 1.0e-8 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let right = forward.cross(up).normalize();
+    let camera_up = right.cross(forward).normalize();
+    let view_projection = Mat4::perspective_rh(
+        finite_clamp(frame.camera.fov_y_deg, 50.0, 1.0, 179.0).to_radians(),
+        finite_clamp(aspect, 1.0, 0.01, 100.0),
+        0.1,
+        500.0,
+    ) * Mat4::look_at_rh(eye, eye + forward, up);
+    (eye, right, camera_up, view_projection)
+}
+
+fn light_uniform_facts(environment: &Environment, eye: Vec3) -> (Vec3, f32, Mat4) {
+    let sun_direction = finite_vec3(environment.sun_direction, Vec3::new(0.4, 1.0, 0.3))
+        .try_normalize()
+        .unwrap_or(Vec3::Y);
+    let extent = finite_clamp(environment.shadow_extent, 90.0, 16.0, 180.0);
+    // Camera-centred orthographic map: quantize its two lateral coordinates
+    // to shadow texels so walking does not make static shadows shimmer.
+    let light_up = if sun_direction.dot(Vec3::Y).abs() > 0.995 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let light_right = (-sun_direction).cross(light_up).normalize();
+    let light_vertical = light_right.cross(-sun_direction).normalize();
+    let texel = 2.0 * extent / SHADOW_SIZE as f32;
+    let center = eye
+        + light_right
+            * (eye.dot(light_right) / texel)
+                .round()
+                .mul_add(texel, -eye.dot(light_right))
+        + light_vertical
+            * (eye.dot(light_vertical) / texel)
+                .round()
+                .mul_add(texel, -eye.dot(light_vertical));
+    let view_projection =
+        Mat4::orthographic_rh(-extent, extent, -extent, extent, 0.1, extent * 4.0)
+            * Mat4::look_at_rh(center + sun_direction * extent * 2.0, center, light_up);
+    (sun_direction, extent, view_projection)
+}
+
+fn point_light_uniform_facts(environment: &Environment) -> ([F32Vec4; 4], [F32Vec4; 4]) {
+    let positions = environment.lights.map(|light| {
+        F32Vec4::new(
+            finite_vec3(light.position, Vec3::ZERO)
+                .extend(finite_clamp(light.radius, 0.0, 0.0, 50.0))
+                .to_array(),
+        )
+    });
+    let colors = environment.lights.map(|light| {
+        F32Vec4::new(
+            finite_vec3(light.color, Vec3::ZERO)
+                .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                .extend(finite_clamp(light.intensity, 0.0, 0.0, 40.0))
+                .to_array(),
+        )
+    });
+    (positions, colors)
 }
 
 impl SceneUniform {
@@ -315,106 +426,109 @@ impl SceneUniform {
 
     fn new(frame: &Frame, aspect: f32) -> Self {
         let environment = &frame.environment;
-        let eye = finite_vec3(frame.camera.eye, Vec3::new(0.0, 32.0, 40.0));
-        let forward = finite_vec3(frame.camera.target - eye, -Vec3::Z)
-            .try_normalize()
-            .unwrap_or(-Vec3::Z);
-        let up = if forward.cross(Vec3::Y).length_squared() < 1.0e-8 {
-            Vec3::Z
-        } else {
-            Vec3::Y
-        };
-        let right = forward.cross(up).normalize();
-        let camera_up = right.cross(forward).normalize();
-        let view_proj = Mat4::perspective_rh(
-            finite_clamp(frame.camera.fov_y_deg, 50.0, 1.0, 179.0).to_radians(),
-            finite_clamp(aspect, 1.0, 0.01, 100.0),
-            0.1,
-            500.0,
-        ) * Mat4::look_at_rh(eye, eye + forward, up);
-        let sun_direction = finite_vec3(environment.sun_direction, Vec3::new(0.4, 1.0, 0.3))
-            .try_normalize()
-            .unwrap_or(Vec3::Y);
-        let extent = finite_clamp(environment.shadow_extent, 90.0, 16.0, 180.0);
-        // Camera-centred orthographic map: quantize its two lateral coordinates
-        // to shadow texels so walking does not make static shadows shimmer.
-        let light_up = if sun_direction.dot(Vec3::Y).abs() > 0.995 {
-            Vec3::Z
-        } else {
-            Vec3::Y
-        };
-        let light_right = (-sun_direction).cross(light_up).normalize();
-        let light_vertical = light_right.cross(-sun_direction).normalize();
-        let texel = 2.0 * extent / SHADOW_SIZE as f32;
-        let center = eye
-            + light_right
-                * (eye.dot(light_right) / texel)
-                    .round()
-                    .mul_add(texel, -eye.dot(light_right))
-            + light_vertical
-                * (eye.dot(light_vertical) / texel)
-                    .round()
-                    .mul_add(texel, -eye.dot(light_vertical));
-        let light_view_proj =
-            Mat4::orthographic_rh(-extent, extent, -extent, extent, 0.1, extent * 4.0)
-                * Mat4::look_at_rh(center + sun_direction * extent * 2.0, center, light_up);
+        let (eye, right, camera_up, view_proj) = camera_uniform_facts(frame, aspect);
+        let (sun_direction, extent, light_view_proj) = light_uniform_facts(environment, eye);
+        let (light_positions, light_colors) = point_light_uniform_facts(environment);
         let fog_color = finite_vec3(
             Vec3::from_array(frame.fog.color),
             Vec3::from_array(Fog::default().color),
         )
         .clamp(Vec3::ZERO, Vec3::ONE);
+        let [view_proj_0, view_proj_1, view_proj_2, view_proj_3] = matrix_columns(&view_proj);
+        let [
+            inverse_view_proj_0,
+            inverse_view_proj_1,
+            inverse_view_proj_2,
+            inverse_view_proj_3,
+        ] = matrix_columns(&view_proj.inverse());
+        let [
+            light_view_proj_0,
+            light_view_proj_1,
+            light_view_proj_2,
+            light_view_proj_3,
+        ] = matrix_columns(&light_view_proj);
         Self {
-            view_proj: view_proj.to_cols_array_2d(),
-            fog: fog_color
-                .extend(finite_clamp(frame.fog.density, 0.005, 0.0, 1.0))
-                .to_array(),
-            inverse_view_proj: view_proj.inverse().to_cols_array_2d(),
-            light_view_proj: light_view_proj.to_cols_array_2d(),
-            eye: eye.extend(1.0).to_array(),
-            sun_direction: sun_direction
-                .extend(f32::from(u8::from(environment.enabled)))
-                .to_array(),
-            sun_color: finite_vec3(environment.sun_color, Vec3::ONE)
-                .clamp(Vec3::ZERO, Vec3::splat(4.0))
-                .extend(finite_clamp(environment.sun_intensity, 1.15, 0.0, 8.0))
-                .to_array(),
-            sky_zenith: finite_vec3(environment.sky_zenith, Vec3::new(0.12, 0.3, 0.65))
-                .clamp(Vec3::ZERO, Vec3::splat(4.0))
-                .extend(finite_clamp(environment.cloud_coverage, 0.45, 0.0, 1.0))
-                .to_array(),
-            sky_horizon: finite_vec3(environment.sky_horizon, Vec3::new(0.55, 0.65, 0.75))
-                .clamp(Vec3::ZERO, Vec3::splat(4.0))
-                .extend(finite_clamp(environment.wetness, 0.0, 0.0, 1.0))
-                .to_array(),
-            wind_time: [
+            view_proj_0,
+            view_proj_1,
+            view_proj_2,
+            view_proj_3,
+            fog: F32Vec4::new(
+                fog_color
+                    .extend(finite_clamp(frame.fog.density, 0.005, 0.0, 1.0))
+                    .to_array(),
+            ),
+            inverse_view_proj_0,
+            inverse_view_proj_1,
+            inverse_view_proj_2,
+            inverse_view_proj_3,
+            light_view_proj_0,
+            light_view_proj_1,
+            light_view_proj_2,
+            light_view_proj_3,
+            eye: F32Vec4::new(eye.extend(1.0).to_array()),
+            sun_direction: F32Vec4::new(
+                sun_direction
+                    .extend(f32::from(u8::from(environment.enabled)))
+                    .to_array(),
+            ),
+            sun_color: F32Vec4::new(
+                finite_vec3(environment.sun_color, Vec3::ONE)
+                    .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                    .extend(finite_clamp(environment.sun_intensity, 1.15, 0.0, 8.0))
+                    .to_array(),
+            ),
+            sky_zenith: F32Vec4::new(
+                finite_vec3(environment.sky_zenith, Vec3::new(0.12, 0.3, 0.65))
+                    .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                    .extend(finite_clamp(environment.cloud_coverage, 0.45, 0.0, 1.0))
+                    .to_array(),
+            ),
+            sky_horizon: F32Vec4::new(
+                finite_vec3(environment.sky_horizon, Vec3::new(0.55, 0.65, 0.75))
+                    .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                    .extend(finite_clamp(environment.wetness, 0.0, 0.0, 1.0))
+                    .to_array(),
+            ),
+            wind_time: F32Vec4::new([
                 finite_clamp(environment.wind.x, 0.0, -30.0, 30.0),
                 finite_clamp(environment.wind.y, 0.0, -30.0, 30.0),
                 finite_clamp(environment.time, 0.0, 0.0, 1.0e7),
                 extent,
-            ],
-            camera_right: right.extend(0.0).to_array(),
-            camera_up: camera_up.extend(0.0).to_array(),
-            occlusion_min_strength: frame
-                .occlusion
-                .as_ref()
-                .map_or([0.0; 4], |field| field.min().extend(0.65).to_array()),
-            occlusion_cell: frame
-                .occlusion
-                .as_ref()
-                .map_or([1.0; 4], |field| field.cell_size().extend(0.0).to_array()),
-            light_positions: environment.lights.map(|light| {
-                finite_vec3(light.position, Vec3::ZERO)
-                    .extend(finite_clamp(light.radius, 0.0, 0.0, 50.0))
-                    .to_array()
-            }),
-            light_colors: environment.lights.map(|light| {
-                finite_vec3(light.color, Vec3::ZERO)
-                    .clamp(Vec3::ZERO, Vec3::splat(4.0))
-                    .extend(finite_clamp(light.intensity, 0.0, 0.0, 40.0))
-                    .to_array()
-            }),
+            ]),
+            camera_right: F32Vec4::new(right.extend(0.0).to_array()),
+            camera_up: F32Vec4::new(camera_up.extend(0.0).to_array()),
+            occlusion_min_strength: F32Vec4::new(
+                frame
+                    .occlusion
+                    .as_ref()
+                    .map_or([0.0; 4], |field| field.min().extend(0.65).to_array()),
+            ),
+            occlusion_cell: F32Vec4::new(
+                frame
+                    .occlusion
+                    .as_ref()
+                    .map_or([1.0; 4], |field| field.cell_size().extend(0.0).to_array()),
+            ),
+            light_positions,
+            light_colors,
         }
     }
+}
+
+const fn vec3_from_shader(vector: F32Vec4) -> Vec3 {
+    let [x, y, z, _] = vector.into_array();
+    Vec3::new(x, y, z)
+}
+
+fn create_shader_module(
+    device: &wgpu::Device,
+    label: &str,
+    shader: &ember_shader::RenderedShader,
+) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(label),
+        source: wgpu::ShaderSource::Wgsl(shader.source().into()),
+    })
 }
 
 const fn finite_clamp(value: f32, fallback: f32, min: f32, max: f32) -> f32 {
@@ -551,18 +665,9 @@ pub struct Renderer {
     /// Set when the surface format itself is non-sRGB (WebGPU canvases):
     /// the present pass renders into an sRGB reinterpreting view.
     surface_view_format: Option<wgpu::TextureFormat>,
-    // Pipeline layouts kept so WGSL hot-reload can rebuild pipelines
-    // (native-only reader, hence unused on wasm).
-    // Native hot reload reads this layout; wasm intentionally retains it without reading it.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    scene_pipeline_layout: wgpu::PipelineLayout,
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    effect_pipeline_layout: wgpu::PipelineLayout,
-    // Native hot reload reads this layout; wasm intentionally retains it without reading it.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    present_pipeline_layout: wgpu::PipelineLayout,
-    #[cfg(not(target_arch = "wasm32"))]
-    shader_reload: ShaderReload,
+    // Keep the validated runtime products beside the pipelines they created.
+    _rendered_scene_shader: RenderedShader,
+    _rendered_present_shader: RenderedShader,
     /// Scene-pass Hz cap for the ATW rig; 0 = uncapped (overlay-controlled).
     #[cfg(not(target_arch = "wasm32"))]
     scene_hz_cap: f32,
@@ -572,22 +677,14 @@ pub struct Renderer {
     egui_painter: Option<egui_wgpu::Renderer>,
 }
 
-/// Tracks shader sources on disk for native WGSL hot-reload.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
-struct ShaderReload {
-    frame: u32,
-    scene_mtime: Option<std::time::SystemTime>,
-    present_mtime: Option<std::time::SystemTime>,
-}
-
 impl Renderer {
     /// Create a renderer for `window` and register the supplied meshes.
     ///
     /// # Panics
     ///
     /// Panics when the platform cannot create a compatible surface, adapter,
-    /// device, or surface configuration.
+    /// device, or surface configuration, or when an embedded engine shader
+    /// cannot render from its Rust-owned interface.
     // GPU initialization is a linear descriptor pipeline whose ordering mirrors resource dependencies.
     #[allow(clippy::too_many_lines)]
     pub async fn new(window: Arc<Window>, extra_meshes: Vec<MeshData>) -> Self {
@@ -663,10 +760,9 @@ impl Renderer {
         let scene = create_scene_targets(&device, &config, scene_scale);
 
         // ---- scene pass ----
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("scene shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-        });
+        let rendered_scene_shader =
+            shader_templates::scene_shader().expect("embedded scene shader must render");
+        let shader = create_shader_module(&device, "scene shader", &rendered_scene_shader);
 
         // Per-mesh textures: group(1) of the scene pass. Meshes without a
         // texture share a 1x1 white pixel, keeping the instance-color look.
@@ -674,7 +770,7 @@ impl Renderer {
             label: Some("mesh texture layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -684,7 +780,7 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -757,11 +853,11 @@ impl Renderer {
                 layout: &mesh_tex_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
-                        binding: 0,
+                        binding: shader_templates::MESH_TEXTURE_BINDING.binding,
                         resource: wgpu::BindingResource::TextureView(&view),
                     },
                     wgpu::BindGroupEntry {
-                        binding: 1,
+                        binding: shader_templates::MESH_SAMPLER_BINDING.binding,
                         resource: wgpu::BindingResource::Sampler(&mesh_sampler),
                     },
                 ],
@@ -816,7 +912,7 @@ impl Renderer {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("scene uniform layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                     // The vertex stage reads the camera, the fragment stage
                     // reads the fog.
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -832,7 +928,7 @@ impl Renderer {
             label: Some("scene uniform bind"),
             layout: &scene_uniform_layout,
             entries: &[wgpu::BindGroupEntry {
-                binding: 0,
+                binding: shader_templates::SCENE_UNIFORM_BINDING.binding,
                 resource: scene_uniform_buf.as_entire_binding(),
             }],
         });
@@ -884,15 +980,15 @@ impl Renderer {
         let instance_buf = create_instance_buf(&device, instance_cap);
 
         // ---- presenter ----
-        let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("present shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
-        });
+        let rendered_present_shader =
+            shader_templates::present_shader().expect("embedded present shader must render");
+        let present_shader =
+            create_shader_module(&device, "present shader", &rendered_present_shader);
         let present_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("present layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: shader_templates::PRESENT_TEXTURE_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -902,7 +998,7 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 1,
+                    binding: shader_templates::PRESENT_SAMPLER_BINDING.binding,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -961,11 +1057,8 @@ impl Renderer {
             present_bind,
             present_sampler,
             surface_view_format,
-            scene_pipeline_layout,
-            effect_pipeline_layout,
-            present_pipeline_layout,
-            #[cfg(not(target_arch = "wasm32"))]
-            shader_reload: ShaderReload::default(),
+            _rendered_scene_shader: rendered_scene_shader,
+            _rendered_present_shader: rendered_present_shader,
             #[cfg(not(target_arch = "wasm32"))]
             scene_hz_cap: 0.0,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1104,9 +1197,6 @@ impl Renderer {
         frame: &Frame,
         #[cfg(not(target_arch = "wasm32"))] overlay: Option<crate::overlay::OverlayDraw>,
     ) {
-        #[cfg(not(target_arch = "wasm32"))]
-        self.maybe_reload_shaders();
-
         // ATW rig throttle: skip the scene pass while capped — the presenter
         // below keeps re-presenting the last SceneFrame (that staleness is
         // exactly what the rig exists to demonstrate).
@@ -1249,7 +1339,11 @@ impl Renderer {
                     occlusion_query_set: None,
                 });
                 pass.set_pipeline(&self.shadow_pipeline);
-                pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                pass.set_bind_group(
+                    shader_templates::SCENE_UNIFORM_BINDING.group,
+                    &self.scene_uniform_bind,
+                    &[],
+                );
                 pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                 for (mi, range) in &shadow_ranges {
                     let mesh = &self.meshes[*mi];
@@ -1288,25 +1382,49 @@ impl Renderer {
                 });
                 if frame.environment.enabled {
                     pass.set_pipeline(&self.sky_pipeline);
-                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                    pass.set_bind_group(
+                        shader_templates::SCENE_UNIFORM_BINDING.group,
+                        &self.scene_uniform_bind,
+                        &[],
+                    );
                     pass.draw(0..3, 0..1);
                 }
                 if !raws.is_empty() {
                     pass.set_pipeline(&self.scene_pipeline);
-                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
-                    pass.set_bind_group(2, &self.shadow.bind, &[]);
-                    pass.set_bind_group(3, &self.occlusion_bind, &[]);
+                    pass.set_bind_group(
+                        shader_templates::SCENE_UNIFORM_BINDING.group,
+                        &self.scene_uniform_bind,
+                        &[],
+                    );
+                    pass.set_bind_group(
+                        shader_templates::SHADOW_TEXTURE_BINDING.group,
+                        &self.shadow.bind,
+                        &[],
+                    );
+                    pass.set_bind_group(
+                        shader_templates::OCCLUSION_XY_BINDING.group,
+                        &self.occlusion_bind,
+                        &[],
+                    );
                     pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                     for (mi, range) in &ranges {
                         let mesh = &self.meshes[*mi];
-                        pass.set_bind_group(1, &mesh.bind, &[]);
+                        pass.set_bind_group(
+                            shader_templates::MESH_TEXTURE_BINDING.group,
+                            &mesh.bind,
+                            &[],
+                        );
                         pass.set_vertex_buffer(0, mesh.buf.slice(..));
                         pass.draw(0..mesh.count, range.clone());
                     }
                 }
                 if !particles.is_empty() {
                     pass.set_pipeline(&self.particle_pipeline);
-                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                    pass.set_bind_group(
+                        shader_templates::SCENE_UNIFORM_BINDING.group,
+                        &self.scene_uniform_bind,
+                        &[],
+                    );
                     pass.set_vertex_buffer(0, self.particle_buf.slice(..));
                     pass.draw(0..6, 0..particles.len() as u32);
                 }
@@ -1337,7 +1455,11 @@ impl Renderer {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(&self.present_pipeline);
-            pass.set_bind_group(0, &self.present_bind, &[]);
+            pass.set_bind_group(
+                shader_templates::PRESENT_TEXTURE_BINDING.group,
+                &self.present_bind,
+                &[],
+            );
             pass.draw(0..3, 0..1);
         }
 
@@ -1391,102 +1513,11 @@ impl Renderer {
             .submit(scene_cmd.into_iter().chain([present_enc.finish()]));
         surface_tex.present();
     }
-
-    /// Native-only WGSL hot-reload: every 60 rendered frames poll the shader
-    /// sources on disk and rebuild the affected pipeline when a file changed.
-    /// A shader that fails validation is logged and the old pipeline kept.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn maybe_reload_shaders(&mut self) {
-        const SCENE_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shader.wgsl");
-        const PRESENT_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/present.wgsl");
-
-        self.shader_reload.frame = self.shader_reload.frame.wrapping_add(1);
-        if !self.shader_reload.frame.is_multiple_of(60) {
-            return;
-        }
-
-        if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime)
-            && let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)")
-        {
-            // Entry-point/layout mismatches are pipeline errors, not module
-            // errors. Validate the complete family before replacing any part.
-            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let scene = build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
-            let sky = build_effect_pipeline(
-                &self.device,
-                &self.effect_pipeline_layout,
-                &module,
-                EffectPass::Sky,
-            );
-            let shadow = build_effect_pipeline(
-                &self.device,
-                &self.effect_pipeline_layout,
-                &module,
-                EffectPass::Shadow,
-            );
-            let particle = build_effect_pipeline(
-                &self.device,
-                &self.effect_pipeline_layout,
-                &module,
-                EffectPass::Particle,
-            );
-            if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
-                tracing::error!(path = SCENE_SRC, %error, "scene shader hot-reload rejected; keeping all old pipelines");
-            } else {
-                self.scene_pipeline = scene;
-                self.sky_pipeline = sky;
-                self.shadow_pipeline = shadow;
-                self.particle_pipeline = particle;
-                tracing::info!(
-                    path = SCENE_SRC,
-                    "scene and environment shaders hot-reloaded"
-                );
-            }
-        }
-        if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime)
-            && let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)")
-        {
-            let format = self.surface_view_format.unwrap_or(self.config.format);
-            self.present_pipeline = build_present_pipeline(
-                &self.device,
-                &self.present_pipeline_layout,
-                &module,
-                format,
-            );
-            tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
-        }
-    }
-
-    /// Compile WGSL from `path` under a validation error scope. None (plus an
-    /// error log) when the file is unreadable or the shader fails validation.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn try_compile(&self, path: &str, label: &str) -> Option<wgpu::ShaderModule> {
-        let source = match std::fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(path, error = %e, "shader hot-reload: read failed");
-                return None;
-            }
-        };
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-        if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
-            tracing::error!(path, %err, "shader hot-reload: validation failed; keeping old pipeline");
-            return None;
-        }
-        Some(module)
-    }
 }
 
 fn particle_instances(frame: &Frame, uniform: &SceneUniform) -> Vec<ParticleRaw> {
-    let eye = Vec3::from_slice(&uniform.eye);
-    let forward =
-        Vec3::from_slice(&uniform.camera_up).cross(Vec3::from_slice(&uniform.camera_right));
+    let eye = vec3_from_shader(uniform.eye);
+    let forward = vec3_from_shader(uniform.camera_up).cross(vec3_from_shader(uniform.camera_right));
     let mut particles: Vec<&Particle> = frame
         .particles
         .iter()
@@ -1533,10 +1564,10 @@ fn create_occlusion_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("static indirect visibility layout"),
         entries: &[
-            volume(0),
-            volume(1),
+            volume(shader_templates::OCCLUSION_XY_BINDING.binding),
+            volume(shader_templates::OCCLUSION_Z_BINDING.binding),
             wgpu::BindGroupLayoutEntry {
-                binding: 2,
+                binding: shader_templates::OCCLUSION_SAMPLER_BINDING.binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
@@ -1598,15 +1629,15 @@ fn create_occlusion_bind(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
-                binding: 0,
+                binding: shader_templates::OCCLUSION_XY_BINDING.binding,
                 resource: wgpu::BindingResource::TextureView(&a),
             },
             wgpu::BindGroupEntry {
-                binding: 1,
+                binding: shader_templates::OCCLUSION_Z_BINDING.binding,
                 resource: wgpu::BindingResource::TextureView(&b),
             },
             wgpu::BindGroupEntry {
-                binding: 2,
+                binding: shader_templates::OCCLUSION_SAMPLER_BINDING.binding,
                 resource: wgpu::BindingResource::Sampler(&sampler),
             },
         ],
@@ -1617,7 +1648,7 @@ fn create_shadow_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("packed shadow texture layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
+            binding: shader_templates::SHADOW_TEXTURE_BINDING.binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -1662,7 +1693,7 @@ fn create_shadow_targets(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) 
         label: Some("directional shadow texture"),
         layout,
         entries: &[wgpu::BindGroupEntry {
-            binding: 0,
+            binding: shader_templates::SHADOW_TEXTURE_BINDING.binding,
             resource: wgpu::BindingResource::TextureView(&color_view),
         }],
     });
@@ -1674,9 +1705,50 @@ fn create_shadow_targets(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) 
 }
 
 const fn mesh_vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
-    const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
-    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4, 7 => Float32x4];
+    const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(Vertex, pos) as u64,
+            shader_location: shader_templates::MESH_POSITION_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(Vertex, normal) as u64,
+            shader_location: shader_templates::MESH_NORMAL_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: std::mem::offset_of!(Vertex, uv) as u64,
+            shader_location: shader_templates::MESH_UV_LOCATION,
+        },
+    ];
+    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(InstanceRaw, pos) as u64,
+            shader_location: shader_templates::INSTANCE_POSITION_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(InstanceRaw, scale) as u64,
+            shader_location: shader_templates::INSTANCE_SCALE_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(InstanceRaw, color) as u64,
+            shader_location: shader_templates::INSTANCE_COLOR_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: std::mem::offset_of!(InstanceRaw, rot) as u64,
+            shader_location: shader_templates::INSTANCE_ROTATION_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x4,
+            offset: std::mem::offset_of!(InstanceRaw, material) as u64,
+            shader_location: shader_templates::INSTANCE_MATERIAL_LOCATION,
+        },
+    ];
     [
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -1704,8 +1776,28 @@ fn build_effect_pipeline(
     shader: &wgpu::ShaderModule,
     effect: EffectPass,
 ) -> wgpu::RenderPipeline {
-    const PARTICLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32];
+    const PARTICLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] = [
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(ParticleRaw, position) as u64,
+            shader_location: shader_templates::PARTICLE_POSITION_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: std::mem::offset_of!(ParticleRaw, size) as u64,
+            shader_location: shader_templates::PARTICLE_SIZE_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::offset_of!(ParticleRaw, color) as u64,
+            shader_location: shader_templates::PARTICLE_COLOR_LOCATION,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32,
+            offset: std::mem::offset_of!(ParticleRaw, opacity) as u64,
+            shader_location: shader_templates::PARTICLE_OPACITY_LOCATION,
+        },
+    ];
     let (label, vertex, fragment) = match effect {
         EffectPass::Sky => ("sky pipeline", "vs_sky", "fs_sky"),
         EffectPass::Shadow => ("shadow pipeline", "vs_shadow", "fs_shadow"),
@@ -1825,18 +1917,18 @@ fn create_present_bind(
         layout,
         entries: &[
             wgpu::BindGroupEntry {
-                binding: 0,
+                binding: shader_templates::PRESENT_TEXTURE_BINDING.binding,
                 resource: wgpu::BindingResource::TextureView(scene_color),
             },
             wgpu::BindGroupEntry {
-                binding: 1,
+                binding: shader_templates::PRESENT_SAMPLER_BINDING.binding,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
         ],
     })
 }
 
-/// Scene render pipeline; shared by startup and WGSL hot-reload.
+/// Scene render pipeline built from the runtime-rendered engine template.
 fn build_scene_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -1879,7 +1971,7 @@ fn build_scene_pipeline(
     })
 }
 
-/// Presenter pipeline; shared by startup and WGSL hot-reload.
+/// Presenter pipeline built from the runtime-rendered engine template.
 fn build_present_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -1911,29 +2003,6 @@ fn build_present_pipeline(
         multiview: None,
         cache: None,
     })
-}
-
-/// True when the file's mtime differs from `tracked` (which is updated).
-/// The first successful stat only records the baseline and reports false.
-#[cfg(not(target_arch = "wasm32"))]
-fn check_mtime(path: &str, tracked: &mut Option<std::time::SystemTime>) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    let Ok(mtime) = meta.modified() else {
-        return false;
-    };
-    match tracked {
-        Some(prev) if *prev != mtime => {
-            *tracked = Some(mtime);
-            true
-        }
-        Some(_) => false,
-        None => {
-            *tracked = Some(mtime);
-            false
-        }
-    }
 }
 
 /// Decode a PNG file into RGBA8 (native debug/tooling path).
@@ -2118,6 +2187,15 @@ fn cube_vertices() -> Vec<Vertex> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn matrix_from_columns(columns: &[F32Vec4; 4]) -> Mat4 {
+        Mat4::from_cols_array_2d(&[
+            columns[0].into_array(),
+            columns[1].into_array(),
+            columns[2].into_array(),
+            columns[3].into_array(),
+        ])
+    }
 
     #[test]
     fn surface_upload_preserves_legacy_flags_and_finite_material_bounds() {
@@ -2396,7 +2474,7 @@ mod tests {
             ..Frame::default()
         };
         let u = SceneUniform::new(&frame, 1.0);
-        assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(u.fog.into_array(), [0.1, 0.2, 0.3, 0.4]);
         let bytes = bytemuck::bytes_of(&u);
         assert_eq!(bytes.len(), 496);
         assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
@@ -2420,7 +2498,12 @@ mod tests {
         let uniform = SceneUniform::new(&frame, f32::NAN);
         let values: &[f32] = bytemuck::cast_slice(bytemuck::bytes_of(&uniform));
         assert!(values.iter().all(|value| value.is_finite()));
-        let light = Mat4::from_cols_array_2d(&uniform.light_view_proj);
+        let light = matrix_from_columns(&[
+            uniform.light_view_proj_0,
+            uniform.light_view_proj_1,
+            uniform.light_view_proj_2,
+            uniform.light_view_proj_3,
+        ]);
         assert!(light.determinant().abs() > 1.0e-10);
     }
 
@@ -2435,7 +2518,12 @@ mod tests {
             ..Frame::default()
         };
         let uniform = SceneUniform::new(&frame, 16.0 / 9.0);
-        let actual = Mat4::from_cols_array_2d(&uniform.view_proj);
+        let actual = matrix_from_columns(&[
+            uniform.view_proj_0,
+            uniform.view_proj_1,
+            uniform.view_proj_2,
+            uniform.view_proj_3,
+        ]);
         assert!(actual.abs_diff_eq(frame.camera.view_proj(16.0 / 9.0), 0.0001));
     }
 
@@ -2451,11 +2539,14 @@ mod tests {
             ..Frame::default()
         };
         let uniform = SceneUniform::new(&frame, 1.0);
-        assert!(
-            Mat4::from_cols_array_2d(&uniform.view_proj)
-                .abs_diff_eq(frame.camera.view_proj(1.0), 0.0001)
-        );
-        assert!(Vec3::from_slice(&uniform.camera_right).abs_diff_eq(Vec3::X, 0.0001));
+        let actual = matrix_from_columns(&[
+            uniform.view_proj_0,
+            uniform.view_proj_1,
+            uniform.view_proj_2,
+            uniform.view_proj_3,
+        ]);
+        assert!(actual.abs_diff_eq(frame.camera.view_proj(1.0), 0.0001));
+        assert!(vec3_from_shader(uniform.camera_right).abs_diff_eq(Vec3::X, 0.0001));
     }
 
     #[test]
@@ -2490,7 +2581,8 @@ mod tests {
 
     #[test]
     fn environment_wgsl_validates_all_entrypoints() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shader.wgsl"))
+        let rendered = shader_templates::scene_shader().expect("engine scene shader must render");
+        let module = wgpu::naga::front::wgsl::parse_str(rendered.source())
             .expect("environment shader must parse");
         wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),

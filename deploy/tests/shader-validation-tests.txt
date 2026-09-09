@@ -1,0 +1,3 @@
+# production template|owning Rust test source|template constant|production render function
+crates/ember-shader/templates/engine-present.wgsl.jinja|crates/ember-engine/src/shader_templates.rs|ENGINE_PRESENT_TEMPLATE|present_shader
+crates/ember-shader/templates/engine-scene.wgsl.jinja|crates/ember-engine/src/shader_templates.rs|ENGINE_SCENE_TEMPLATE|scene_shader

@@ -3,8 +3,8 @@
 // replace this shader with rotation-only / depth-aware reprojection; the
 // scene renderer never has to know.
 
-@group(0) @binding(0) var scene_tex: texture_2d<f32>;
-@group(0) @binding(1) var scene_samp: sampler;
+{{ "scene_tex"|wgsl_binding }} var scene_tex: texture_2d<f32>;
+{{ "scene_samp"|wgsl_binding }} var scene_samp: sampler;
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,

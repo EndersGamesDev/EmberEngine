@@ -8,6 +8,8 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## engine-renderer
 
+- Before the `62f5c450` point-light rebase, the shared shader renderer added 755,558 bytes (+1.68%) to each engine-backed wasm game bundle on the measured sokol toolchain; remeasure the rebased candidate, then determine whether target-specific Minijinja feature factoring can retain the feature-full dynamic-generation contract while avoiding unreachable wasm machinery.
+- A provenance-preserving native template reload remains possible: watch the `.wgsl.jinja` files, render changed source through the same `ShaderContext`, require emission-marker verification, naga validation and the layout oracle, and replace pipelines only after success. It needs an audited render-from-template-source API because public `ember_shader::render` resolves embedded names; direct raw WGSL lowering must remain forbidden.
 - The scene and present command buffers reach the queue in one `submit` (`crates/ember-engine/src/renderer.rs:1313`) under a comment claiming the ATW sliced-submission rule (`crates/ember-engine/src/renderer.rs:1144`); splitting the call is a one-line fix for the stage boundary but delivers no slicing on one in-order queue, so fix the comment with the code.
 - Pointer capture fires on any mouse press with no button filter: `crates/ember-engine/src/app.rs:290` binds `button` and then tests only `state == ElementState::Pressed`.
 - A rejected pointer-lock grab is dropped unhandled at `crates/ember-engine/src/app.rs:302`, and the capture path has no rejection arm; needs: a sandboxed-iframe run to confirm whether a denied grab still kills the wasm client.
@@ -18,7 +20,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - `scene_scale` is pinned at 1.0 (`crates/ember-engine/src/renderer.rs:647`) against a backing store sized from `client_width() * dpr` with no cap (`crates/ember-engine/src/app.rs:336`).
 - The ATW rig is compiled out on wasm, the only genuinely weak target: `crates/ember-engine/src/renderer.rs:1039` forces `scene_pass_due = true` there.
 - The scene-Hz throttle lives inside the renderer (`crates/ember-engine/src/renderer.rs:1033`, set by `set_scene_hz_cap` at `:965`), so the renderer decides whether the renderer runs.
-- Shader hot-reload rebuilds the scene and present pipelines from one 60-frame clock (`crates/ember-engine/src/renderer.rs:1322`); it needs re-homing before the presenter split.
 - Scene depth is stored every frame (`crates/ember-engine/src/renderer.rs:1199`) and sampled by nothing; the comment names warp stage C and future SSAO/TAA as the readers.
 - Backface culling is off on both scene pipelines (`crates/ember-engine/src/renderer.rs:1676`), so the interiors of open shapes render solid.
 - One base-colour texture per mesh: per-face detail and normal/roughness maps need a second texture binding in the scene pass, and `Instance` (`crates/ember-engine/src/renderer.rs:149`) has neither that nor a UV field, so v13 cover boxes bake a nominal tiling a per-instance UV scale would remove. No test pins either absence.
@@ -31,8 +32,8 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - There is no viewmodel pass, so first-person geometry clips into walls; a wall-contact retraction or a second pass is the fix.
 - Characters, gloves and mixed-material meshes need authored masks and normal detail the scalar-only `Surface` cannot carry (`crates/ember-engine/src/renderer.rs:149`); upgrading the operator assets to use them is a measured project of its own.
 - Thin geometry aliases with no antialiasing path in the scene pass (`crates/ember-engine/src/renderer.rs:1712`, one sample per pixel on every pipeline), which railings, cables and grips show first.
-- The sky term is a pure function of direction (`crates/ember-engine/src/shader.wgsl:96`) with no occlusion input, so a roofed interior receives the same sky light as open ground; occluding it under roofs is a separate feature.
-- Reflections are the analytic sky, sun and clouds alone and never scene geometry, as the shader states (`crates/ember-engine/src/shader.wgsl:95`); local reflection probes are a separate feature with a device-floor cost to establish first.
+- The sky term is a pure function of direction (`crates/ember-shader/templates/engine-scene.wgsl.jinja:105`) with no occlusion input, so a roofed interior receives the same sky light as open ground; occluding it under roofs is a separate feature.
+- Reflections are the analytic sky, sun and clouds alone and never scene geometry, as the shader states (`crates/ember-shader/templates/engine-scene.wgsl.jinja:282-284`); local reflection probes are a separate feature with a device-floor cost to establish first.
 - Harbor's moored ship and sea sit outside the playable terminal; boarding, water physics, animated cargo and water reflection have no renderer path, v26 having added only the analytic sky reflection.
 - `aspect()` and `cursor_ndc()` measure winit `inner_size` (`crates/ember-engine/src/app.rs:374`) while the wasm surface is sized from `client_width() * dpr` (`:336`); only the native editor exercises them, so the divergence stays latent until the editor gets a web shell. needs: a picking measurement at three window sizes.
 - `crates/labs/heap/src/page_contract.rs:120` asserts that English sentences appear verbatim in `docs/gpu-heap-lattice.md` and that a sliced range of `lattice_gpu.rs` source text contains no `.unwrap()` — a prose lint and a source lint carried as tests.
