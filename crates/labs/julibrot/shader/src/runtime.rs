@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::ops::Range;
@@ -26,6 +26,15 @@ const INVALID_VALIDATION_TEST_NAME: &str = "invalid-validation-test.wgsl.jinja";
 const INVALID_VALIDATION_TEST_SOURCE: &str =
     include_str!("../templates/invalid-validation-test.wgsl.jinja");
 #[cfg(test)]
+const HIDDEN_FILTER_TEST_NAME: &str = "hidden-filter-test.wgsl.jinja";
+#[cfg(test)]
+const HIDDEN_FILTER_TEST_SOURCE: &str = include_str!("../templates/hidden-filter-test.wgsl.jinja");
+#[cfg(test)]
+const LITERAL_MARKER_TEST_NAME: &str = "literal-marker-test.wgsl.jinja";
+#[cfg(test)]
+const LITERAL_MARKER_TEST_SOURCE: &str =
+    include_str!("../templates/literal-marker-test.wgsl.jinja");
+#[cfg(test)]
 const ORACLE_TEST_NAME: &str = "oracle-test.wgsl.jinja";
 #[cfg(test)]
 const ORACLE_TEST_SOURCE: &str = include_str!("../templates/oracle-test.wgsl.jinja");
@@ -52,13 +61,21 @@ const UNTRACED_CONSTANT_TEST_NAME: &str = "untraced-constant-test.wgsl.jinja";
 #[cfg(test)]
 const UNTRACED_CONSTANT_TEST_SOURCE: &str =
     include_str!("../templates/untraced-constant-test.wgsl.jinja");
+#[cfg(test)]
+const REVERSED_EMISSION_TEST_NAME: &str = "reversed-emission-test.wgsl.jinja";
+#[cfg(test)]
+const REVERSED_EMISSION_TEST_SOURCE: &str =
+    include_str!("../templates/reversed-emission-test.wgsl.jinja");
 const EMBEDDED_TEMPLATES: &[(&str, &str)] = &[(PRESENT_SHADE_TEMPLATE, PRESENT_SHADE_SOURCE)];
 #[cfg(test)]
 const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INTERFACE_TEST_NAME, INTERFACE_TEST_SOURCE),
     (INVALID_TEST_NAME, INVALID_TEST_SOURCE),
     (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
+    (HIDDEN_FILTER_TEST_NAME, HIDDEN_FILTER_TEST_SOURCE),
+    (LITERAL_MARKER_TEST_NAME, LITERAL_MARKER_TEST_SOURCE),
     (ORACLE_TEST_NAME, ORACLE_TEST_SOURCE),
+    (REVERSED_EMISSION_TEST_NAME, REVERSED_EMISSION_TEST_SOURCE),
     (UNREGISTERED_TYPE_TEST_NAME, UNREGISTERED_TYPE_TEST_SOURCE),
     (UNTRACED_TYPE_TEST_NAME, UNTRACED_TYPE_TEST_SOURCE),
     (UNTRACED_ENUM_TEST_NAME, UNTRACED_ENUM_TEST_SOURCE),
@@ -89,26 +106,36 @@ struct Emission {
 struct PendingEmission {
     kind: EmissionKind,
     name: String,
+    declaration: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct EmissionRecorder {
+    /// Per-render correlation tag; integrity comes from the checked marker prefix and exact body
+    /// comparison, not from this value being secret.
+    render_tag: String,
     pending: Vec<PendingEmission>,
 }
 
 impl EmissionRecorder {
+    const fn new() -> Self {
+        Self {
+            render_tag: String::new(),
+            pending: Vec::new(),
+        }
+    }
+
     fn record(&mut self, kind: EmissionKind, name: &str, declaration: &str) -> String {
         let id = self.pending.len();
         self.pending.push(PendingEmission {
             kind,
             name: name.to_owned(),
+            declaration: declaration.to_owned(),
         });
         let mut marked = String::new();
-        write!(marked, "/*{EMISSION_MARKER_PREFIX}{id}_START__*/")
-            .expect("String writes are infallible");
+        marked.push_str(&emission_marker(&self.render_tag, id, "START"));
         marked.push_str(declaration);
-        write!(marked, "/*{EMISSION_MARKER_PREFIX}{id}_END__*/")
-            .expect("String writes are infallible");
+        marked.push_str(&emission_marker(&self.render_tag, id, "END"));
         marked
     }
 }
@@ -371,15 +398,22 @@ impl ShaderContext {
     }
 
     fn expand(&self, template_name: &str) -> Result<(String, Vec<Emission>), RenderError> {
-        let recorder = Arc::new(Mutex::new(EmissionRecorder::default()));
-        let environment = environment(self, &recorder)?;
-        let marked_source = environment.get_template(template_name)?.render(())?;
-        let pending = recorder
+        let recorder = Arc::new(Mutex::new(EmissionRecorder::new()));
+        let render_tag = format!("{:p}", Arc::as_ptr(&recorder));
+        recorder
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pending
-            .clone();
-        strip_emission_markers(template_name, &marked_source, &pending)
+            .render_tag
+            .clone_from(&render_tag);
+        let environment = environment(self, &recorder)?;
+        let marked_source = environment.get_template(template_name)?.render(())?;
+        let (render_tag, pending) = {
+            let recorder = recorder
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (recorder.render_tag.clone(), recorder.pending.clone())
+        };
+        strip_emission_markers(template_name, &marked_source, &render_tag, &pending)
     }
 }
 
@@ -1141,26 +1175,53 @@ fn record_emission(
 fn strip_emission_markers(
     template_name: &str,
     marked_source: &str,
+    render_tag: &str,
     pending: &[PendingEmission],
 ) -> Result<(String, Vec<Emission>), RenderError> {
     let mut source = String::with_capacity(marked_source.len());
     let mut trace = Vec::with_capacity(pending.len());
+    let mut seen = BTreeSet::new();
+    let marker_prefix = emission_marker_prefix(render_tag);
     let mut cursor = 0;
-    for (id, pending_emission) in pending.iter().enumerate() {
-        let start_marker = emission_marker(id, "START");
-        let end_marker = emission_marker(id, "END");
-        let start = marked_source[cursor..]
-            .find(&start_marker)
-            .map(|offset| cursor + offset)
-            .ok_or_else(|| emission_trace_error(template_name, id, "start marker is missing"))?;
+    while let Some(offset) = marked_source[cursor..].find(&marker_prefix) {
+        let start = cursor + offset;
         source.push_str(&marked_source[cursor..start]);
+        let (id, start_marker) = pending
+            .iter()
+            .enumerate()
+            .find_map(|(id, _)| {
+                let marker = emission_marker(render_tag, id, "START");
+                marked_source[start..]
+                    .starts_with(&marker)
+                    .then_some((id, marker))
+            })
+            .ok_or_else(|| {
+                emission_trace_error(template_name, pending.len(), "an unrecorded marker remains")
+            })?;
+        if !seen.insert(id) {
+            return Err(emission_trace_error(
+                template_name,
+                id,
+                "start marker occurs more than once",
+            ));
+        }
+        let pending_emission = &pending[id];
+        let end_marker = emission_marker(render_tag, id, "END");
         let declaration_start = start + start_marker.len();
         let end = marked_source[declaration_start..]
             .find(&end_marker)
             .map(|offset| declaration_start + offset)
             .ok_or_else(|| emission_trace_error(template_name, id, "end marker is missing"))?;
+        let emitted_body = &marked_source[declaration_start..end];
+        if emitted_body != pending_emission.declaration.as_str() {
+            return Err(emission_trace_error(
+                template_name,
+                id,
+                "emission body differs from Rust rendering",
+            ));
+        }
         let range_start = source.len();
-        source.push_str(&marked_source[declaration_start..end]);
+        source.push_str(emitted_body);
         trace.push(Emission {
             kind: pending_emission.kind,
             name: pending_emission.name.clone(),
@@ -1169,6 +1230,13 @@ fn strip_emission_markers(
         cursor = end + end_marker.len();
     }
     source.push_str(&marked_source[cursor..]);
+    if let Some(id) = (0..pending.len()).find(|id| !seen.contains(id)) {
+        return Err(emission_trace_error(
+            template_name,
+            id,
+            "start marker is missing",
+        ));
+    }
     if source.contains(EMISSION_MARKER_PREFIX) {
         return Err(emission_trace_error(
             template_name,
@@ -1197,8 +1265,12 @@ fn extend_binding_emissions(source: &str, trace: &mut [Emission]) {
     }
 }
 
-fn emission_marker(id: usize, boundary: &str) -> String {
-    format!("/*{EMISSION_MARKER_PREFIX}{id}_{boundary}__*/")
+fn emission_marker_prefix(render_tag: &str) -> String {
+    format!("/*{EMISSION_MARKER_PREFIX}{render_tag}_")
+}
+
+fn emission_marker(render_tag: &str, id: usize, boundary: &str) -> String {
+    format!("{}{id}_{boundary}__*/", emission_marker_prefix(render_tag))
 }
 
 fn emission_trace_error(template_name: &str, id: usize, diagnostic: &str) -> RenderError {
@@ -1275,9 +1347,11 @@ mod tests {
     use crate::{F32Vec4, U32Vec4};
 
     use super::{
-        INTERFACE_TEST_NAME, INVALID_TEST_NAME, INVALID_VALIDATION_TEST_NAME, RenderError,
-        ShaderConstant, ShaderContext, UNTRACED_BINDING_TEST_NAME, UNTRACED_CONSTANT_TEST_NAME,
-        UNTRACED_ENUM_TEST_NAME, UNTRACED_TYPE_TEST_NAME, render, stable_hash,
+        EmissionKind, HIDDEN_FILTER_TEST_NAME, INTERFACE_TEST_NAME, INVALID_TEST_NAME,
+        INVALID_VALIDATION_TEST_NAME, LITERAL_MARKER_TEST_NAME, PendingEmission,
+        REVERSED_EMISSION_TEST_NAME, RenderError, ShaderConstant, ShaderContext,
+        UNTRACED_BINDING_TEST_NAME, UNTRACED_CONSTANT_TEST_NAME, UNTRACED_ENUM_TEST_NAME,
+        UNTRACED_TYPE_TEST_NAME, emission_marker, render, stable_hash, strip_emission_markers,
     };
 
     #[derive(Clone, Copy, Pod, Zeroable)]
@@ -1367,6 +1441,56 @@ mod tests {
                 "{template_name} returned the wrong audit error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn a_hidden_filter_result_cannot_attest_a_declaration() {
+        let error = render(HIDDEN_FILTER_TEST_NAME, &test_context())
+            .expect_err("a hidden filter emission must not attest hand-written source");
+        assert!(error.to_string().contains("start marker is missing"));
+    }
+
+    #[test]
+    fn a_literal_marker_cannot_attest_a_declaration() {
+        let error = render(LITERAL_MARKER_TEST_NAME, &test_context())
+            .expect_err("a marker literal must not create an emission");
+        assert!(error.to_string().contains("an unrecorded marker remains"));
+    }
+
+    #[test]
+    fn an_emission_body_must_equal_the_rust_rendering() {
+        let pending = [PendingEmission {
+            kind: EmissionKind::Constant,
+            name: "TEST_SCALE".to_owned(),
+            declaration: "const TEST_SCALE: f32 = 2.5;".to_owned(),
+        }];
+        let marked = format!(
+            "{}const TEST_SCALE: f32 = 9.5;{}",
+            emission_marker("opaque", 0, "START"),
+            emission_marker("opaque", 0, "END")
+        );
+        let error = strip_emission_markers("forged.wgsl.jinja", &marked, "opaque", &pending)
+            .expect_err("mutating bytes inside a genuine marker must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("emission body differs from Rust rendering")
+        );
+    }
+
+    #[test]
+    fn emissions_may_be_output_in_a_different_order_than_their_filters_run() {
+        let shader = render(REVERSED_EMISSION_TEST_NAME, &test_context())
+            .expect("reverse-order declaration output validates");
+        let enum_position = shader
+            .source()
+            .find("const TestMode_Preview")
+            .expect("the enum declaration is emitted");
+        let type_position = shader
+            .source()
+            .find("struct TestUniform")
+            .expect("the type declaration is emitted");
+        assert!(enum_position < type_position);
     }
 
     #[test]
