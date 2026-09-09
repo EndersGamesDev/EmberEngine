@@ -495,67 +495,67 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ### v11 — 2026-09-08
 
-no proto · stamp — · source `2dae79206c564b91837473c65c039c7d21472827` (not on main) · no tag · published `e0a4a7b74d8456f3696356a36cd84493a0ab6a2c` (release stamp)
+no proto · stamp — · source `2dae79206c564b91837473c65c039c7d21472827` · no tag · published `e0a4a7b74d8456f3696356a36cd84493a0ab6a2c` (release stamp)
 
 Weight and Impact focuses the greatsword combo, aimed body zones, a separate jumping heavy attack and visible hit reactions.
 
 ### v10 — 2026-09-08
 
-no proto · stamp — · source `ffe576b58c333517f8c5ff3e9f24483b00b0c507` (not on main) · no tag · published `43d5d806c439f2b1e01a486c89df0f0fbf6122fa` (release stamp)
+no proto · stamp — · source `ffe576b58c333517f8c5ff3e9f24483b00b0c507` · no tag · published `43d5d806c439f2b1e01a486c89df0f0fbf6122fa` (release stamp)
 
 The Last Seal populates the castle with armed enemies and a cyclops Castellan, and connects its clues to a final escape.
 
 ### v9 — 2026-09-08
 
-no proto · stamp — · source `6cf7e07aa0acdce01e7e1a1953a130c61967e1b4` (not on main) · no tag · published `f7aa1a7f625c31b7e60de6b62a907b31897dc8a5` (release stamp)
+no proto · stamp — · source `6cf7e07aa0acdce01e7e1a1953a130c61967e1b4` · no tag · published `f7aa1a7f625c31b7e60de6b62a907b31897dc8a5` (release stamp)
 
 Beyond the Dungeon opens a connected castle route through a basement hall, great hall, garden, battlements and climbable tower. V8 sword combat and blocking remain.
 
 ### v8 — 2026-09-08
 
-no proto · stamp — · source `47c944f9773a7a30cd0525db0d9eb87c0d8f1f1a` (not on main) · no tag · published `0d37d956a9913735fd14a3b4a7bcdf1d245a76da` (release stamp)
+no proto · stamp — · source `47c944f9773a7a30cd0525db0d9eb87c0d8f1f1a` · no tag · published `0d37d956a9913735fd14a3b4a7bcdf1d245a76da` (release stamp)
 
 Edge and Guard aligns sword cuts with the sharp edge, connects combo transitions and adds directional blocking. The generated V7 warden and V6 voices remain.
 
 ### v7 — 2026-09-08
 
-no proto · stamp — · source `2f199f71f8210138b0047ca16dc5123ef81c89a6` (not on main) · no tag · published `890dd6c62eac9cd4caba2aa0df4467deb70515e4` (release stamp)
+no proto · stamp — · source `2f199f71f8210138b0047ca16dc5123ef81c89a6` · no tag · published `890dd6c62eac9cd4caba2aa0df4467deb70515e4` (release stamp)
 
 The Dread Warden redesigns the jailer with a generated textured character and more grounded rise, pursuit and knife animations. V6 voice reactions and V1–V6 releases remain available.
 
 ### v6 — 2026-09-08
 
-no proto · stamp — · source `b7a6b00c09bd36e7122b8f5ff90b9b9a8f27a343` (not on main) · no tag · published `67025a3a608ce49a4e1a3e42572c9b891c56c13f` (release stamp)
+no proto · stamp — · source `b7a6b00c09bd36e7122b8f5ff90b9b9a8f27a343` · no tag · published `67025a3a608ce49a4e1a3e42572c9b891c56c13f` (release stamp)
 
 The Warden’s Voice adds spoken reactions to noisy movement, the unlocked cell, claiming the greatsword and the warden’s death. Subtitles accompany the four lines, movement barks have a cooldown, and V1–V5 remain available.
 
 ### v5 — 2026-09-08
 
-no proto · stamp — · source `c79a32cd7706a141d5fff6d3dcb9ed29e4298a1d` (not on main) · no tag · published `1a1080695f9f9f0d35bff2477843a57ce1e5fb69` (release stamp)
+no proto · stamp — · source `c79a32cd7706a141d5fff6d3dcb9ed29e4298a1d` · no tag · published `1a1080695f9f9f0d35bff2477843a57ce1e5fb69` (release stamp)
 
 The Warden’s Knife replaces the seated guard with an articulated enemy who rises, draws a knife and pursues the player. Telegraphed knife attacks resolve damage at contact and recover before repeating; V4 sword combos and the complete V1–V4 releases remain available.
 
 ### v4 — 2026-09-08
 
-no proto · stamp — · source `f6fd41399a943c6dd91e9e4689f6ff1d377c5d44` (not on main) · no tag · published `f562dc067175ed5f22b357ab9439c589307fad74` (release stamp)
+no proto · stamp — · source `f6fd41399a943c6dd91e9e4689f6ff1d377c5d44` · no tag · published `f562dc067175ed5f22b357ab9439c589307fad74` (release stamp)
 
 Weight of the Blade adds five directional greatsword arcs, single strikes and three buffered rhythm combos, with contact-timed damage, impact pauses, sparks, sound and controller feedback. Both articulated gauntlets stay attached to the shared hilt; V1, V2 and V3 retain their published pages and bundles.
 
 ### v3 — 2026-09-08
 
-no proto · stamp — · source `91e5f93a7d28fa0e25e19ab30a56161034e45816` (not on main) · no tag · published `bd21d0f45100d1f33195c9ebead0c41843270477` (release stamp)
+no proto · stamp — · source `91e5f93a7d28fa0e25e19ab30a56161034e45816` · no tag · published `bd21d0f45100d1f33195c9ebead0c41843270477` (release stamp)
 
 Hands of the Wolf adds articulated gauntlets and contact-timed floorboard, key, lock and two-hand greatsword interactions. The launcher retains V1 and V2 alongside the new release.
 
 ### v2 — 2026-09-08
 
-no proto · stamp — · source `48a37a7115b5cab12f6162752f711d59edc6df89` (not on main) · no tag · published `e36d50bede1d46a543199c61cfd32cc45a6bafdb` (release stamp)
+no proto · stamp — · source `48a37a7115b5cab12f6162752f711d59edc6df89` · no tag · published `e36d50bede1d46a543199c61cfd32cc45a6bafdb` (release stamp)
 
 The Living Cell adds generated stone and timber surfaces, fitted masonry, detailed furnishings, and animated chains, cloth, gate and water. The release-local stamp and hashes identify the preserved 2.0.0 bundle.
 
 ### v1 — 2026-09-08
 
-no proto · stamp — · source `9f4acfbf96484714efd06f47e784e96a110f8879` (not on main) · no tag · published `d5710a94593320494f7e07342932118c22d55523` (release stamp)
+no proto · stamp — · source `9f4acfbf96484714efd06f47e784e96a110f8879` · no tag · published `d5710a94593320494f7e07342932118c22d55523` (release stamp)
 
 The Awakening introduces the first Ember dungeon chapter, wolf armor, greatsword, material physics, torch lighting, and keyboard/mouse, gamepad and touch controls. The release-local stamp and hashes identify the preserved 1.0.0 bundle.
 

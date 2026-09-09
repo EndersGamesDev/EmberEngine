@@ -9,6 +9,7 @@ Each game or lab runs in the browser as one WebAssembly (wasm) bundle.
 ## The games
 
 - [Killshot](https://endersgamesdev.github.io/EmberEngine/games/arena/v31/) — an eight-player first-person arena shooter.
+- [End Game](https://endersgamesdev.github.io/EmberEngine/games/end-game/v11/) — a single-player dark fantasy castle escape with heavy sword combat.
 - [Fire Racer](https://endersgamesdev.github.io/EmberEngine/games/fire/v2/) — castle-circuit drift racing with online lobbies.
 - [Four Kings](https://endersgamesdev.github.io/EmberEngine/games/kings/v1/) — four-corner chess for two to four players with 15-second turns.
 - [UltimateLegue](https://endersgamesdev.github.io/EmberEngine/games/league/v4/) — the current Crystalforge build.

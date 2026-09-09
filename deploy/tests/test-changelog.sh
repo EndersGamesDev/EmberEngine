@@ -450,12 +450,17 @@ else
     HAVE_PAGES=""
 fi
 
+# A publication's version.json names the commit it was built from. The hub
+# publisher writes that under "commit"; End Game's own publisher writes the
+# same sha under "source". Both are read wherever a stamp is resolved, so
+# those releases are checkable at all; every sha comparison downstream is
+# unchanged, so this verifies more, not less.
 # The applicable stamp of one publication, by the changelog's precedence.
 applicable_source() {
     local c="$1" path="$2" got tok
     got="$(git -C "$REPO" show "$c:$path/version.json" 2>/dev/null \
            | "$PY" -c 'import json,sys
-try: print(json.load(sys.stdin)["commit"])
+try: stamp = json.load(sys.stdin); print(stamp.get("commit") or stamp.get("source") or "")
 except Exception: print("")')"
     if [ -n "$got" ]; then echo "$got"; return; fi
     for tok in $(git -C "$REPO" log -1 --format=%s "$c" | grep -oE '[0-9a-f]{7,40}' || true); do
@@ -463,7 +468,7 @@ except Exception: print("")')"
     done
     git -C "$REPO" show "$c:version.json" 2>/dev/null \
         | "$PY" -c 'import json,sys
-try: print(json.load(sys.stdin)["commit"])
+try: stamp = json.load(sys.stdin); print(stamp.get("commit") or stamp.get("source") or "")
 except Exception: print("")'
 }
 
@@ -578,7 +583,7 @@ if [ -n "$IN_GIT" ]; then
                 fi
                 got="$(git -C "$REPO" show "$pubsha:$path" 2>/dev/null \
                        | "$PY" -c 'import json,sys
-try: print(json.load(sys.stdin)["commit"])
+try: stamp = json.load(sys.stdin); print(stamp.get("commit") or stamp.get("source") or "")
 except Exception: print("")')"
                 if [ -z "$got" ]; then
                     bad "$section $version: publication $pubsha has no readable $path"

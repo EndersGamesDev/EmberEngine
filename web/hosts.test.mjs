@@ -719,11 +719,12 @@ test('games.json: every launcher entry has a three-grade semantic version', () =
   const liveVersions = Object.fromEntries(catalog.games.map((g) => [g.id, g.versions.find((entry) => entry.live).version]));
   assert.deepEqual(liveVersions, {
     arena: '31.0.0',
+    'end-game': '11.0.0',
     league: '2.0.0',
     fire: '1.0.0',
     kings: '1.0.0',
     'what-is-this': '1.0.0',
-    julibrot: '1.0.0',
+    julibrot: '1.0.5',
   });
 });
 
