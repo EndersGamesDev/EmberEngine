@@ -1030,7 +1030,10 @@ mod tests {
     #[test]
     fn support_does_not_snap_to_floors_above_the_player() {
         let map = castle();
-        assert_eq!(map.support_below(24., -80., 6.28, PLAYER_RADIUS), Some(6.));
+        assert_eq!(
+            map.support_below(24., -80., core::f32::consts::TAU, PLAYER_RADIUS),
+            Some(6.)
+        );
         let mut b = Body::new([24., 6., -80.]);
         for _ in 0..120 {
             advance_body(map, &mut b, [0., 0.], 1. / 60.);
