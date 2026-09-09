@@ -44,6 +44,17 @@ const CORDIC_INVERSE_GAIN_BITS: u64 = 0x3fe3_6e9d_b508_6bcc;
 const QUARTER_TURN: Turn = Turn::from_bits(1_u32 << (u32::BITS - 2));
 const HALF_TURN: Turn = Turn::from_bits(1_u32 << (u32::BITS - 1));
 
+/// Dot-product and determinant tolerance for a complete binary64 frame.
+///
+/// `2e-10` covers accumulated binary64 products at ordinary camera dimensions while remaining
+/// below one `Turn` step in the rebuilt presentation.
+const FRAME_ORTHONORMAL_TOLERANCE: f64 = 2.0e-10;
+/// Complete-frame comparison tolerance after deterministic basis reconstruction.
+///
+/// `2e-8` covers two turn quanta plus the fixed polynomial basis error without accepting a
+/// malformed axis.
+const FRAME_REBUILD_TOLERANCE: f64 = 2.0e-8;
+
 /// Quantises a complete floating-point frame into the canonical integer orientation.
 ///
 /// Each supplied basis bit pattern enters fixed precision once. Successive fixed-point CORDIC
@@ -68,6 +79,7 @@ pub fn orientation_from_frame<const N: usize, const LIMBS: usize>(
     {
         return Err(CameraError::NonFinite);
     }
+    validate_frame(frame)?;
     let mut angles = [[Turn::ZERO; N]; N];
     for (first, candidate) in frame.iter().enumerate().take(N.saturating_sub(1)) {
         let partial = Orientation::new(angles)?;
@@ -83,7 +95,88 @@ pub fn orientation_from_frame<const N: usize, const LIMBS: usize>(
             return Err(CameraError::DegenerateFrame);
         }
     }
-    Orientation::new(angles)
+    let orientation = Orientation::new(angles)?;
+    let rebuilt = rebuild_basis(&orientation)?;
+    for (actual, expected) in rebuilt_frame(&rebuilt).iter().zip(frame) {
+        if actual
+            .iter()
+            .zip(expected)
+            .any(|(actual, expected)| (*actual - *expected).abs() > FRAME_REBUILD_TOLERANCE)
+        {
+            return Err(CameraError::DegenerateFrame);
+        }
+    }
+    Ok(orientation)
+}
+
+fn validate_frame<const N: usize>(frame: &[[f64; N]; N]) -> Result<(), CameraError> {
+    for (row_index, row) in frame.iter().enumerate() {
+        let norm = dot(row, row);
+        if (norm - 1.0).abs() > FRAME_ORTHONORMAL_TOLERANCE {
+            return Err(CameraError::DegenerateFrame);
+        }
+        for previous in &frame[..row_index] {
+            if dot(row, previous).abs() > FRAME_ORTHONORMAL_TOLERANCE {
+                return Err(CameraError::DegenerateFrame);
+            }
+        }
+    }
+    if (determinant(frame) - 1.0).abs() > FRAME_ORTHONORMAL_TOLERANCE {
+        return Err(CameraError::DegenerateFrame);
+    }
+    Ok(())
+}
+
+fn dot<const N: usize>(left: &[f64; N], right: &[f64; N]) -> f64 {
+    // The fixed 2e-10 frame tolerance covers separately rounded binary64 products and sums by
+    // many orders of magnitude for the unit camera frames accepted here, so fusion is immaterial.
+    left.iter()
+        .zip(right)
+        .fold(0.0, |sum, (left, right)| (*left * *right) + sum)
+}
+
+fn determinant<const N: usize>(frame: &[[f64; N]; N]) -> f64 {
+    let mut matrix = *frame;
+    let mut result = 1.0;
+    let mut column = 0;
+    while column < N {
+        let Some((pivot_row, _)) = matrix
+            .iter()
+            .enumerate()
+            .skip(column)
+            .max_by(|(_, left), (_, right)| left[column].abs().total_cmp(&right[column].abs()))
+        else {
+            return 0.0;
+        };
+        if matrix[pivot_row][column].abs() <= FRAME_ORTHONORMAL_TOLERANCE {
+            return 0.0;
+        }
+        if pivot_row != column {
+            matrix.swap(pivot_row, column);
+            result = -result;
+        }
+        let pivot = matrix[column][column];
+        result *= pivot;
+        let pivot_row = matrix[column];
+        for row in matrix.iter_mut().skip(column + 1) {
+            let factor = row[column] / pivot;
+            for (entry, pivot_entry) in row
+                .iter_mut()
+                .skip(column + 1)
+                .zip(pivot_row.iter().skip(column + 1))
+            {
+                // This elimination only classifies a frame against the same 2e-10 tolerance;
+                // separate core multiplication and addition cannot affect that classification.
+                *entry -= factor * *pivot_entry;
+            }
+        }
+        column += 1;
+    }
+    result
+}
+
+fn rebuilt_frame<const N: usize>(basis: &Basis<N>) -> [[f64; N]; N] {
+    core::array::from_fn(|index| basis.vector(index).copied().unwrap_or([0.0; N]))
 }
 
 /// Reconstructs an orientation whose first axis follows an exact segment.
@@ -298,5 +391,32 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    fn assert_malformed_frame_is_refused(frame: [[f64; 2]; 2]) {
+        assert_eq!(
+            orientation_from_frame::<2, 8>(&frame),
+            Err(CameraError::DegenerateFrame)
+        );
+    }
+
+    #[test]
+    fn frame_constructor_refuses_a_zero_final_axis() {
+        assert_malformed_frame_is_refused([[1.0, 0.0], [0.0, 0.0]]);
+    }
+
+    #[test]
+    fn frame_constructor_refuses_a_duplicated_axis() {
+        assert_malformed_frame_is_refused([[1.0, 0.0], [1.0, 0.0]]);
+    }
+
+    #[test]
+    fn frame_constructor_refuses_a_scaled_axis() {
+        assert_malformed_frame_is_refused([[2.0, 0.0], [0.0, 1.0]]);
+    }
+
+    #[test]
+    fn frame_constructor_refuses_a_reflected_frame() {
+        assert_malformed_frame_is_refused([[1.0, 0.0], [0.0, -1.0]]);
     }
 }
