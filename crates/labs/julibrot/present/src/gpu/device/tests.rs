@@ -7,9 +7,16 @@ use super::ledger::{LatticeRefusal, presentation_ledger_entry, redraw_source_cov
 use super::readback::{FrameReadback, FrameReadbackRoute};
 use super::*;
 use crate::fence::FenceDecision;
+use crate::palette::{
+    CLEAR_STATUS, EXPOSED_STATUS, GLITCH_STATUS, HORIZON_STATUS, MALFORMED_STATUS,
+    MAP_UNCERTAIN_STATUS, REGULAR_STATUS, SKY_STATUS,
+};
+use crate::shade_shader::{NEAREST_VALUE_BINDING, PRESENTATION_VALUES_BINDING};
 use crate::state::{PendingScene, SceneCompletion};
 use crate::{
-    FrameReceipt, FrameState, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
+    CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, FrameReceipt, FrameState, GLITCH_DIAGNOSTIC,
+    ICE_PALETTE, PaletteRecord, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
+    exterior_zero, shade_presentation_value,
 };
 
 #[test]
@@ -366,6 +373,19 @@ enum NativeValuePattern {
     Split,
 }
 
+const STATUS_PAGE_EXTENT: [u32; 2] = [64, 1];
+const STATUS_PAGE_TEXELS: usize = 64;
+const STATUS_VALUES: [[f32; 4]; 8] = [
+    [12.0, 1.0, REGULAR_STATUS, 0.7],
+    [0.0, 1.0, GLITCH_STATUS, 0.7],
+    [0.0, 1.0, HORIZON_STATUS, 0.7],
+    [-1.0, 0.0, MAP_UNCERTAIN_STATUS, 0.7],
+    [0.0, 0.0, CLEAR_STATUS, 1.0],
+    [0.0, 0.0, EXPOSED_STATUS, 1.0],
+    [0.0, 1.0, SKY_STATUS, 1.0],
+    [0.0, 0.0, MALFORMED_STATUS, 1.0],
+];
+
 fn native_split_value_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
     const SOURCE: &str = r"
         @vertex
@@ -555,6 +575,160 @@ fn capture_native_palette_on(
         .expect("the offscreen palette copy maps")
         .expect("the offscreen palette copy is ready");
     (receipt, readback)
+}
+
+fn status_page_values() -> [[f32; 4]; STATUS_PAGE_TEXELS] {
+    let mut values = [STATUS_VALUES[0]; STATUS_PAGE_TEXELS];
+    values[..STATUS_VALUES.len()].copy_from_slice(&STATUS_VALUES);
+    values
+}
+
+fn install_native_status_values(presenter: &mut Presenter) {
+    let texture = presenter.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native status value target"),
+        size: extent_3d(STATUS_PAGE_EXTENT),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SCENE_FORMAT,
+        usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    presenter.queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&status_page_values()),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(STATUS_PAGE_EXTENT[0] * 16),
+            rows_per_image: Some(STATUS_PAGE_EXTENT[1]),
+        },
+        extent_3d(STATUS_PAGE_EXTENT),
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let warp_group = presenter
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Julibrot native status shade group"),
+            layout: &presenter.gpu.warp_texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: PRESENTATION_VALUES_BINDING,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: NEAREST_VALUE_BINDING,
+                    resource: wgpu::BindingResource::Sampler(&presenter.gpu.scene_sampler),
+                },
+            ],
+        });
+    presenter.gpu.presentation_values = SceneTexture {
+        _texture: texture,
+        view,
+        warp_group,
+        extent: STATUS_PAGE_EXTENT,
+    };
+}
+
+fn capture_native_status_page(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    selected: PaletteRecord,
+) -> FrameReadback {
+    super::shade::write_palette(&presenter.queue, &presenter.gpu, selected);
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot native status colour target"),
+        size: extent_3d(STATUS_PAGE_EXTENT),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Julibrot native status shade encoder"),
+    });
+    super::shade::encode_shade(&mut encoder, &presenter.gpu, &view);
+    presenter.queue.submit([encoder.finish()]);
+    presenter
+        .request_frame_readback(&target)
+        .expect("the native status colour target can be copied");
+    device.poll(wgpu::Maintain::Wait);
+    presenter
+        .take_frame_readback()
+        .expect("the native status colour copy maps")
+        .expect("the native status colour copy is ready")
+}
+
+fn expected_status_colours(selected: PaletteRecord) -> [[f32; 4]; 8] {
+    [
+        shade_presentation_value(STATUS_VALUES[0], selected).rgba,
+        GLITCH_DIAGNOSTIC,
+        exterior_zero(selected),
+        shade_presentation_value(STATUS_VALUES[3], selected).rgba,
+        selected.clear_rgba,
+        selected.clear_rgba,
+        exterior_zero(selected),
+        DEBUG_TINT,
+    ]
+}
+
+fn expected_status_page_colours(selected: PaletteRecord) -> [[f32; 4]; STATUS_PAGE_TEXELS] {
+    let status_colours = expected_status_colours(selected);
+    let mut colours = [status_colours[0]; STATUS_PAGE_TEXELS];
+    colours[..status_colours.len()].copy_from_slice(&status_colours);
+    colours
+}
+
+fn assert_status_page(readback: &FrameReadback, selected: PaletteRecord, palette_name: &str) {
+    assert_eq!([readback.width, readback.height], STATUS_PAGE_EXTENT);
+    assert_eq!(readback.route, FrameReadbackRoute::Surface);
+    for (pixel, (actual, expected)) in readback
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected_status_page_colours(selected))
+        .enumerate()
+    {
+        let status = if pixel < STATUS_VALUES.len() {
+            pixel
+        } else {
+            0
+        };
+        for (channel, (&actual, expected)) in actual.iter().zip(expected).enumerate() {
+            let rendered = f32::from(actual) / 255.0;
+            assert!(
+                (rendered - expected).abs() <= 1.0 / 255.0,
+                "{palette_name} pixel {pixel} (status {status}) channel {channel}: rendered {rendered}, expected {expected}"
+            );
+        }
+    }
+}
+
+/// Uses a complete 64-cell heap page rather than an eight-cell row because the fixture cannot
+/// allocate its page class in a smaller grid. The first eight texels cover every status; the rest
+/// pin status zero as fill.
+#[test]
+fn runtime_rendered_shade_pipeline_reads_back_every_status_for_every_palette() {
+    let (mut presenter, device) =
+        native_palette_presenter_on(STATUS_PAGE_EXTENT, NativeValuePattern::Uniform);
+    install_native_status_values(&mut presenter);
+
+    for (name, selected) in [
+        ("Classic", CLASSIC_PALETTE),
+        ("Ember", EMBER_PALETTE),
+        ("Ice", ICE_PALETTE),
+    ] {
+        let readback = capture_native_status_page(&mut presenter, &device, selected);
+        assert_status_page(&readback, selected, name);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1358,7 +1532,12 @@ fn palette_is_not_a_scene_selection_key_and_is_uploaded_before_shade() {
         assert!(!source.contains("PaletteUniform"));
         assert!(!source.contains("palette."));
     }
-    assert!(crate::shade_shader().contains("palette."));
+    assert!(
+        crate::shade_shader()
+            .expect("shade template renders")
+            .source()
+            .contains("palette.")
+    );
     assert!(!include_str!("scene/submit.rs").contains("selected_palette"));
 }
 

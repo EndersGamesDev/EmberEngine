@@ -1,0 +1,5 @@
+{{ "TestUniform"|wgsl_type }}
+{{ "TestMode"|wgsl_enum -}}
+@group(0) @binding(3) var values: texture_2d<f32>;
+/* {{ "values"|wgsl_binding }} */
+{{ "TEST_SCALE"|wgsl_constant }}

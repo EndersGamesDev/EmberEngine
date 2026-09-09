@@ -1,18 +1,20 @@
 [package]
 name = "ember-julibrot-present"
 edition.workspace = true
-version = "1.0.4"
+version = "1.0.5"
 
 [dependencies]
 bytemuck.workspace = true
 ember-lab-heap = { path = "../../heap" }
 ember-julibrot-kernels = { path = "../kernels" }
 ember-julibrot-math = { path = "../math" }
+ember-julibrot-shader = { path = "../shader" }
 ember-julibrot-worker = { path = "../worker" }
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 
 [dev-dependencies]
+ember-julibrot-shader = { path = "../shader", features = ["template-debug"] }
 naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in", "glsl-out"] }
 pollster.workspace = true
 

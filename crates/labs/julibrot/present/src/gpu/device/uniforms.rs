@@ -2,6 +2,10 @@ use std::num::NonZeroU64;
 
 use ember_lab_heap::DialectLimits;
 
+use crate::shade_shader::{
+    NEAREST_VALUE_BINDING, PALETTE_UNIFORM_BINDING, PRESENTATION_VALUES_BINDING,
+    palette_uniform_bytes,
+};
 use crate::{HOT_PAYLOAD_BYTES, PresentError, SCENE_PAYLOAD_BYTES};
 
 pub(super) fn create_heap_layout(
@@ -83,7 +87,10 @@ pub(super) fn warp_hot_layout_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
 }
 
 pub(super) fn palette_layout_entries() -> [wgpu::BindGroupLayoutEntry; 1] {
-    [static_uniform_entry(0, 48)]
+    [static_uniform_entry(
+        PALETTE_UNIFORM_BINDING,
+        palette_uniform_bytes(),
+    )]
 }
 
 pub(super) fn create_scene_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -107,7 +114,7 @@ pub(super) fn create_warp_texture_layout(device: &wgpu::Device) -> wgpu::BindGro
         label: Some("Julibrot retained scene texture layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
-                binding: 0,
+                binding: PRESENTATION_VALUES_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -117,7 +124,7 @@ pub(super) fn create_warp_texture_layout(device: &wgpu::Device) -> wgpu::BindGro
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 1,
+                binding: NEAREST_VALUE_BINDING,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
                 count: None,

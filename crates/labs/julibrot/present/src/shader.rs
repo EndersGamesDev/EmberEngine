@@ -382,6 +382,7 @@ mod tests {
     #[test]
     fn every_present_shader_translates_for_webgl2() {
         let scene = scene_shader(limits());
+        let shade = crate::shade_shader().expect("shade template renders");
         for (source, entries) in [
             (
                 scene.as_str(),
@@ -398,7 +399,7 @@ mod tests {
                 ],
             ),
             (
-                crate::shade_shader(),
+                shade.source(),
                 [
                     (naga::ShaderStage::Vertex, "shade_vertex"),
                     (naga::ShaderStage::Fragment, "shade_fragment"),

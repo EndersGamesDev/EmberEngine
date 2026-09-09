@@ -1,0 +1,2 @@
+# template|native test source|template constant|production render function (also derives the test name)
+crates/labs/julibrot/shader/templates/present-shade.wgsl.jinja|crates/labs/julibrot/present/src/shade_shader.rs|PRESENT_SHADE_TEMPLATE|shade_shader
