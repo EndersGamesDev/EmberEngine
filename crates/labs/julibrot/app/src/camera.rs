@@ -1,10 +1,5 @@
 //! Boundary adapters between Julibrot controls and the exact camera record.
 
-#![allow(
-    dead_code,
-    reason = "the migration pins boundary adapters before the controller switches authority"
-)]
-
 use ember_camera::{
     CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, MAX_EXPONENT_QUANTA,
     MIN_EXPONENT_QUANTA, Observer, Orientation, Turn, TwoStageProjection, View,
@@ -37,6 +32,7 @@ fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppE
     if !angles.is_valid() {
         return Err(AppError::Math("object angles are not valid".to_string()));
     }
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let legacy = legacy_orientation(angles)?;
     let basis = rebuild_basis(&legacy).map_err(camera_error)?;
     let frame = [
@@ -56,6 +52,7 @@ fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppE
 /// `[-pi, pi)`, so that half-turn becomes negative pi. At a factorisation singularity an equivalent
 /// half-turn can move between factors, but the first canonical readout is stable thereafter.
 fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles, AppError> {
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let basis = rebuild_basis(orientation).map_err(camera_error)?;
     let legacy_frame = [
         basis.remaining[2].map(|component| -component),
@@ -78,6 +75,7 @@ fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles,
 
 /// Rounds the exact camera's rebuilt image axes once into the unchanged renderer plane shape.
 fn plane_from_orientation(orientation: &Orientation<4>) -> Result<Plane, AppError> {
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let basis = rebuild_basis(orientation).map_err(camera_error)?;
     let mut basis_u = [0.0_f32; 4];
     let mut basis_v = [0.0_f32; 4];
@@ -151,6 +149,7 @@ const fn round_right_ties_even(value: u64, shift: usize) -> u64 {
 }
 
 fn legacy_orientation(angles: &ObjectAngles) -> Result<Orientation<4>, AppError> {
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let mut turns = [[Turn::ZERO; 4]; 4];
     for ((first, second), radians) in OBJECT_PLANES.into_iter().zip(angles.as_array()) {
         turns[first][second] = Turn::from_radians(radians).map_err(camera_error)?;
@@ -168,10 +167,6 @@ fn turn_to_radians(turn: Turn) -> f64 {
 /// The unbiased tie rule makes equal opposing device deltas cancel instead of accumulating a
 /// directional half-quantum bias. This is the sole binary64-to-exponent conversion; displayed and
 /// persisted zoom values are derived from the resulting integer quanta.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "the rounded value is checked against the camera's small i32 exponent range"
-)]
 fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
     let minimum = f64::from(MIN_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
     let maximum = f64::from(MAX_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
@@ -187,7 +182,31 @@ fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
             "zoom input is outside the exponent representation".to_string(),
         ));
     }
-    Exponent::new(rounded as i32).map_err(camera_error)
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
+    Exponent::new(rounded_binary64_to_i32(rounded)?).map_err(camera_error)
+}
+
+fn rounded_binary64_to_i32(value: f64) -> Result<i32, AppError> {
+    let range_error =
+        || AppError::Math("zoom input is outside the exponent representation".to_string());
+    if value == 0.0 {
+        return Ok(0);
+    }
+    let bits = value.to_bits();
+    let negative = bits >> 63 != 0;
+    let exponent_field = (bits >> 52) & 0x7ff;
+    let exponent = i64::try_from(exponent_field).map_err(|_| range_error())? - 1_023;
+    let significand = (1_u64 << 52) | (bits & ((1_u64 << 52) - 1));
+    let magnitude = if exponent >= 52 {
+        significand
+            .checked_shl(u32::try_from(exponent - 52).map_err(|_| range_error())?)
+            .ok_or_else(range_error)?
+    } else {
+        significand >> u32::try_from(52 - exponent).map_err(|_| range_error())?
+    };
+    let magnitude = i64::try_from(magnitude).map_err(|_| range_error())?;
+    let signed = if negative { -magnitude } else { magnitude };
+    i32::try_from(signed).map_err(|_| range_error())
 }
 
 fn zoom_log2_from_exponent(exponent: Exponent) -> f64 {
@@ -206,6 +225,7 @@ fn observer_from_view(camera: &ExactView, view: &ViewControls) -> Result<Observe
             "presentation controls are not valid".to_string(),
         ));
     }
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let basis = rebuild_basis(&camera.orientation).map_err(camera_error)?;
     Observer::two_stage(TwoStageProjection {
         image_plane: [
@@ -237,6 +257,7 @@ fn big_centre_from_fixed(centre: &ExactCentre) -> Result<BigCentre, AppError> {
 }
 
 fn big_scalar_from_fixed(value: Fixed<CAMERA_LIMBS>) -> Result<BigScalar, AppError> {
+    let math_error = |error: ember_julibrot_math::MathError| AppError::Math(error.to_string());
     let negative = value.is_negative();
     let mut magnitude = value.to_le_bytes().map(u64::from_le_bytes);
     if negative {
@@ -276,6 +297,7 @@ fn fixed_centre_from_big(centre: &BigCentre) -> Result<ExactCentre, AppError> {
 }
 
 fn fixed_from_big_scalar(value: &BigScalar) -> Result<Fixed<CAMERA_LIMBS>, AppError> {
+    let math_error = |error: ember_julibrot_math::MathError| AppError::Math(error.to_string());
     let encoded = encode_big_scalar(value).map_err(math_error)?;
     let shift = i64::from(encoded.exponent) + i64::from(CAMERA_FRACTION_BITS);
     let mut magnitude = [0_u64; CAMERA_LIMBS];
@@ -336,22 +358,6 @@ fn twos_complement(words: &mut [u64; CAMERA_LIMBS]) {
 
 fn fixed_range_error() -> AppError {
     AppError::Math("centre is not exactly representable by Fixed<8>".to_string())
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Result::map_err supplies the owned camera error"
-)]
-fn camera_error(error: CameraError) -> AppError {
-    AppError::Math(error.to_string())
-}
-
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Result::map_err supplies the owned math error"
-)]
-fn math_error(error: ember_julibrot_math::MathError) -> AppError {
-    AppError::Math(error.to_string())
 }
 
 #[cfg(test)]
