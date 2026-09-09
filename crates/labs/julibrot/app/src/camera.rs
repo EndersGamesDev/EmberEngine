@@ -7,7 +7,7 @@
 
 use ember_camera::{
     CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, Observer, Orientation, Turn,
-    orientation_from_frame, rebuild_basis,
+    TwoStageProjection, View, orientation_from_frame, rebuild_basis,
 };
 use ember_julibrot_math::{
     BigCentre, BigScalar, ObjectAngles, ViewControls, decode_big_scalar, encode_big_scalar,
@@ -23,6 +23,7 @@ const OBJECT_PLANES: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 
 const TURN_RADIANS_PER_BIT: f64 = core::f64::consts::TAU / 4_294_967_296.0;
 
 type ExactCentre = [Fixed<CAMERA_LIMBS>; 4];
+type ExactView = View<4, CAMERA_LIMBS>;
 
 /// Maps Julibrot's object-product convention onto the exact camera's image axes.
 ///
@@ -107,28 +108,31 @@ fn zoom_log2_from_exponent(exponent: Exponent) -> f64 {
     f64::from(exponent.quanta()) / f64::from(EXPONENT_QUANTA_PER_OCTAVE)
 }
 
-/// Maps the final four-dimensional presentation observer without changing exact camera state.
+/// Maps Julibrot's complete two-stage presentation observer without changing exact camera state.
 ///
-/// Relief amplitude and the preceding five-dimensional scene transform remain renderer inputs.
-/// Base-plane targeting uses the final yaw, pitch, translation, and perspective distance, so
-/// changing relief height cannot move the point returned by perspective inversion.
-fn observer_from_view(view: &ViewControls) -> Result<Observer<4>, AppError> {
+/// The image axes come from the exact record. All ten presentation rotations, all five translation
+/// components, and both perspective distances remain binary64 observer inputs. In particular,
+/// `camera_translation[3]` and `[4]` change the five-to-four denominator rather than being silently
+/// discarded. Relief amplitude is absent because targeting intersects the flat base plane.
+fn observer_from_view(camera: &ExactView, view: &ViewControls) -> Result<Observer<5>, AppError> {
     if !view.is_valid() {
         return Err(AppError::Math(
             "presentation controls are not valid".to_string(),
         ));
     }
-    Observer::new(
-        view.camera_yaw,
-        view.camera_pitch,
-        [
-            view.camera_translation[0],
-            view.camera_translation[1],
-            view.camera_translation[2],
-            view.camera_translation[3],
+    let basis = rebuild_basis(&camera.orientation).map_err(camera_error)?;
+    Observer::two_stage(TwoStageProjection {
+        image_plane: [
+            [basis.u[0], basis.u[1], basis.u[2], basis.u[3], 0.0],
+            [basis.v[0], basis.v[1], basis.v[2], basis.v[3], 0.0],
         ],
-        view.distance_four,
-    )
+        frame_angles: view.camera,
+        translation: view.camera_translation,
+        yaw: view.camera_yaw,
+        pitch: view.camera_pitch,
+        distance_five: view.distance_five,
+        distance_four: view.distance_four,
+    })
     .map_err(camera_error)
 }
 
@@ -267,14 +271,18 @@ fn math_error(error: ember_julibrot_math::MathError) -> AppError {
 #[cfg(test)]
 mod tests {
     use ember_camera::{
-        PROJECT_PIXEL_TOLERANCE_PIXELS, Screen, View, click, invert_perspective, pan, zoom_about,
+        PROJECT_PIXEL_TOLERANCE_PIXELS, Screen, View, click, invert_perspective, pan,
+        project_perspective, zoom_about,
     };
     use ember_julibrot_math::{
-        NavigationDelta, ObjectAngles, construct_plane, navigation_delta, screen_to_plane,
+        NavigationDelta, ObjectAngles, construct_plane, navigation_delta, plane_to_screen,
+        screen_to_plane,
     };
     use ember_julibrot_worker::EncodedCentre;
 
     use super::*;
+
+    const OBSERVER_ORACLE_TOLERANCE_PIXELS: f64 = 1.0e-8;
 
     #[test]
     fn object_product_mapping_preserves_the_sampled_plane() {
@@ -342,14 +350,19 @@ mod tests {
 
     #[test]
     fn observer_mapping_is_presentation_only_and_relief_independent() {
-        let flat = ViewControls::NEUTRAL;
+        let flat = ViewControls::MANDELBROT_FLAT;
         let lifted = ViewControls {
             height_scale: 4.0,
             ..flat
         };
-        let flat_observer = observer_from_view(&flat).expect("flat observer");
+        let camera = View::new(
+            [Fixed::ZERO; 4],
+            Exponent::ZERO,
+            orientation_from_object(&ObjectAngles::IDENTITY).expect("identity mapping"),
+        );
+        let flat_observer = observer_from_view(&camera, &flat).expect("flat observer");
         assert_eq!(
-            observer_from_view(&lifted).expect("lifted observer"),
+            observer_from_view(&camera, &lifted).expect("lifted observer"),
             flat_observer
         );
         let screen = Screen::new(960, 540).expect("screen");
@@ -357,6 +370,40 @@ mod tests {
         let inverted = invert_perspective(&flat_observer, screen, pixel).expect("base plane");
         assert!((inverted[0] - pixel[0]).abs() <= PROJECT_PIXEL_TOLERANCE_PIXELS);
         assert!((inverted[1] - pixel[1]).abs() <= PROJECT_PIXEL_TOLERANCE_PIXELS);
+    }
+
+    #[test]
+    fn observer_mapping_matches_the_non_neutral_screen_oracle() {
+        let object = ObjectAngles::IDENTITY;
+        let orientation = orientation_from_object(&object).expect("identity mapping");
+        let camera = View::new([Fixed::ZERO; 4], Exponent::ZERO, orientation);
+        let mut controls = ViewControls::MANDELBROT_FLAT;
+        controls.camera[0] = 0.13;
+        controls.camera[8] = -0.21;
+        controls.camera_translation = [0.2, -0.1, 0.3, -0.2, 0.15];
+        controls.camera_yaw = 0.17;
+        controls.camera_pitch = -0.12;
+        controls.distance_five = 7.0;
+        let screen = Screen::new(1_024, 576).expect("screen");
+        let map = screen_to_plane(&object, &controls, 0.0, 1_024, 576, 16.0 / 9.0)
+            .expect("legacy screen oracle");
+        let observer = observer_from_view(&camera, &controls).expect("two-stage observer");
+        for base_pixel in [[0.0; 2], [91.5, -37.25], [-211.0, 83.0]] {
+            let expected = plane_to_screen(&map, base_pixel).expect("legacy forward map");
+            let actual =
+                project_perspective(&observer, screen, base_pixel).expect("camera forward map");
+            assert!((actual[0] - expected[0]).abs() <= OBSERVER_ORACLE_TOLERANCE_PIXELS);
+            assert!((actual[1] - expected[1]).abs() <= OBSERVER_ORACLE_TOLERANCE_PIXELS);
+        }
+        for screen_pixel in [[0.0; 2], [137.0, -64.0], [-311.5, 123.25]] {
+            let expected = navigation_delta(&map, [0.0; 2], 0.0, screen_pixel)
+                .expect("legacy inverse map")
+                .anchor_canvas_px;
+            let actual =
+                invert_perspective(&observer, screen, screen_pixel).expect("camera inverse map");
+            assert!((actual[0] - expected[0]).abs() <= OBSERVER_ORACLE_TOLERANCE_PIXELS);
+            assert!((actual[1] - expected[1]).abs() <= OBSERVER_ORACLE_TOLERANCE_PIXELS);
+        }
     }
 
     #[test]

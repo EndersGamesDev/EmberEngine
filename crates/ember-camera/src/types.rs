@@ -401,6 +401,49 @@ impl Screen {
     }
 }
 
+/// Product order for a four-dimensional frame followed by rotations into its fifth axis.
+pub const TWO_STAGE_FRAME_PLANES: [(usize, usize); 10] = [
+    (0, 1),
+    (0, 2),
+    (0, 3),
+    (1, 2),
+    (1, 3),
+    (2, 3),
+    (0, 4),
+    (1, 4),
+    (2, 4),
+    (3, 4),
+];
+
+/// Inputs for a five-to-four-to-three presentation projection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TwoStageProjection {
+    /// Exact camera image axes embedded in the five-dimensional presentation space.
+    pub image_plane: [[f64; 5]; 2],
+    /// Ten binary64 presentation rotations in [`TWO_STAGE_FRAME_PLANES`] order.
+    pub frame_angles: [f64; 10],
+    /// Five-dimensional translation after the presentation rotations.
+    pub translation: [f64; 5],
+    /// Final observer yaw in radians.
+    pub yaw: f64,
+    /// Final observer pitch in radians.
+    pub pitch: f64,
+    /// Positive pole distance of the five-to-four projection.
+    pub distance_five: f64,
+    /// Positive pole distance of the four-to-three projection.
+    pub distance_four: f64,
+}
+
+/// Compact selector for the observer's presentation transform.
+///
+/// The complete two-stage payload is stored separately on [`Observer`]. Keeping the selector and
+/// payload split avoids a large enum variant without requiring allocation in this core-only crate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObserverProjection {
+    Simple,
+    TwoStage,
+}
+
 /// Presentation-only observer controls, never read by exact camera edits.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Observer<const N: usize> {
@@ -409,9 +452,14 @@ pub struct Observer<const N: usize> {
     /// Pitch in radians about the rebuilt image-plane frame.
     pub pitch: f64,
     /// Translation after frame rotation and before perspective division, in view units.
+    ///
+    /// A simple observer is three-dimensional and requires every component after index two to be
+    /// zero. Use [`Observer::two_stage`] when higher-dimensional translation affects projection.
     pub translation: [f64; N],
     /// Positive perspective pole distance in view units.
     pub perspective: f64,
+    pub(crate) projection: ObserverProjection,
+    pub(crate) two_stage: Option<TwoStageProjection>,
 }
 
 impl<const N: usize> Observer<N> {
@@ -419,7 +467,8 @@ impl<const N: usize> Observer<N> {
     ///
     /// # Errors
     ///
-    /// Returns an error for non-finite values or a nonpositive perspective distance.
+    /// Returns an error for non-finite values, a nonpositive perspective distance, or nonzero
+    /// translation beyond the three-dimensional simple transform.
     pub fn new(
         yaw: f64,
         pitch: f64,
@@ -431,6 +480,10 @@ impl<const N: usize> Observer<N> {
             || !perspective.is_finite()
             || perspective <= 0.0
             || !translation.iter().all(|component| component.is_finite())
+            || translation
+                .iter()
+                .skip(3)
+                .any(|component| component.to_bits() << 1 != 0)
         {
             return Err(CameraError::InvalidPerspective);
         }
@@ -439,6 +492,45 @@ impl<const N: usize> Observer<N> {
             pitch,
             translation,
             perspective,
+            projection: ObserverProjection::Simple,
+            two_stage: None,
+        })
+    }
+}
+
+impl Observer<5> {
+    /// Creates the complete two-stage presentation observer used by a five-dimensional renderer.
+    ///
+    /// The image plane comes from an exact [`View`](crate::View), but every field stored here is a
+    /// binary64 presentation value and none can alter that view.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite value or a nonpositive perspective distance.
+    pub fn two_stage(projection: TwoStageProjection) -> Result<Self, CameraError> {
+        if !projection
+            .image_plane
+            .iter()
+            .flatten()
+            .chain(projection.frame_angles.iter())
+            .chain(projection.translation.iter())
+            .all(|value| value.is_finite())
+            || !projection.yaw.is_finite()
+            || !projection.pitch.is_finite()
+            || !projection.distance_five.is_finite()
+            || projection.distance_five <= 0.0
+            || !projection.distance_four.is_finite()
+            || projection.distance_four <= 0.0
+        {
+            return Err(CameraError::InvalidPerspective);
+        }
+        Ok(Self {
+            yaw: projection.yaw,
+            pitch: projection.pitch,
+            translation: projection.translation,
+            perspective: projection.distance_four,
+            projection: ObserverProjection::TwoStage,
+            two_stage: Some(projection),
         })
     }
 }
