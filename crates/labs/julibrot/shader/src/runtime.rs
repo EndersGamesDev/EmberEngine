@@ -439,6 +439,26 @@ fn validate_wgsl(
     context: &ShaderContext,
     trace: &[Emission],
 ) -> Result<(), RenderError> {
+    let module = parse_and_validate_wgsl(template_name, source)?;
+    audit_context(template_name, &module, context, trace)?;
+    Ok(())
+}
+
+/// Parses and validates rendered WGSL for the production-template test macro.
+///
+/// # Errors
+///
+/// Returns [`RenderError::WgslParse`] for WGSL syntax or name-resolution failures and
+/// [`RenderError::WgslValidation`] for invalid shader semantics.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn validate_rendered_wgsl(template_name: &str, source: &str) -> Result<(), RenderError> {
+    parse_and_validate_wgsl(template_name, source)?;
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_and_validate_wgsl(template_name: &str, source: &str) -> Result<naga::Module, RenderError> {
     let module = naga::front::wgsl::parse_str(source).map_err(|error| {
         let number = error.location(source).map(|location| location.line_number);
         RenderError::WgslParse {
@@ -462,8 +482,7 @@ fn validate_wgsl(
             diagnostic: error.emit_to_string(source),
         }
     })?;
-    audit_context(template_name, &module, context, trace)?;
-    Ok(())
+    Ok(module)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

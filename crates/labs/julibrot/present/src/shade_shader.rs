@@ -87,7 +87,11 @@ pub fn shade_shader() -> Result<RenderedShader, RenderError> {
 mod production_validation {
     use super::{PRESENT_SHADE_TEMPLATE, shade_shader};
 
-    ember_julibrot_shader::production_template_test!(PRESENT_SHADE_TEMPLATE, shade_shader);
+    ::ember_julibrot_shader::production_template_test!(
+        PRESENT_SHADE_TEMPLATE,
+        shade_shader,
+        production_template_shade_shader_renders_and_validates,
+    );
 }
 
 #[cfg(test)]

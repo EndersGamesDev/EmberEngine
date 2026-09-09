@@ -8,4 +8,4 @@
 
 `present-shade.wgsl.jinja` is the first production template. Julibrot keeps this crate when a later lane builds a separate shared implementation for the remainder of the repository.
 
-The deployment checker pairs each production template with exactly one macro-generated native production-context validation test.
+The deployment checker binds each derived test name to one macro invocation, requires that test in the owning crate's compiled test binary, and runs it normally and with a nonce-bearing invalid-WGSL probe.
