@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "method": "Authored measured rigid weapons; seeded RGB8 wood/steel/stone/leather atlas",
+  "weapons": [
+    {
+      "name": "sword",
+      "file": "weapon-sword.glb",
+      "node": "weapon_sword",
+      "units": "meters",
+      "primary_grip": [
+        0,
+        0,
+        0
+      ],
+      "support_grip": null,
+      "tip": [
+        1.1,
+        0,
+        0
+      ],
+      "cutting_point": [
+        1.1,
+        0,
+        0
+      ],
+      "long_axis": "+X",
+      "broad_face_normal": "+Y",
+      "edge_axis": "Z",
+      "triangles": 300,
+      "bytes": 86828,
+      "sha256": "5b117f135f558be615c040d70e896e523dcbdfcd40cf909d2e747db5f3daf14d",
+      "texture_size": [
+        256,
+        256
+      ],
+      "texture_gpu_bytes_with_mips": 349524
+    },
+    {
+      "name": "spear",
+      "file": "weapon-spear.glb",
+      "node": "weapon_spear",
+      "units": "meters",
+      "primary_grip": [
+        0,
+        0,
+        0
+      ],
+      "support_grip": [
+        0.24,
+        0,
+        0
+      ],
+      "tip": [
+        2.0,
+        0,
+        0
+      ],
+      "cutting_point": [
+        2.0,
+        0,
+        0
+      ],
+      "long_axis": "+X",
+      "broad_face_normal": "+Y",
+      "edge_axis": "Z",
+      "triangles": 188,
+      "bytes": 77480,
+      "sha256": "5bac1140ed64672697d3b473059bac97c1193cacd93483d23cdd15927580c595",
+      "texture_size": [
+        256,
+        256
+      ],
+      "texture_gpu_bytes_with_mips": 349524
+    },
+    {
+      "name": "axe",
+      "file": "weapon-axe.glb",
+      "node": "weapon_axe",
+      "units": "meters",
+      "primary_grip": [
+        0,
+        0,
+        0
+      ],
+      "support_grip": [
+        -0.22,
+        0,
+        0
+      ],
+      "tip": [
+        1.25,
+        0,
+        0
+      ],
+      "cutting_point": [
+        1.25,
+        0,
+        -0.29
+      ],
+      "long_axis": "+X",
+      "broad_face_normal": "+Y",
+      "edge_axis": "Z",
+      "triangles": 304,
+      "bytes": 87024,
+      "sha256": "62e2010dfb01467db0e8ea959e4d77d6ca81a8160c46bfe3cf0e58e5ec3951b9",
+      "texture_size": [
+        256,
+        256
+      ],
+      "texture_gpu_bytes_with_mips": 349524
+    },
+    {
+      "name": "maul",
+      "file": "weapon-maul.glb",
+      "node": "weapon_maul",
+      "units": "meters",
+      "primary_grip": [
+        0,
+        0,
+        0
+      ],
+      "support_grip": [
+        -0.22,
+        0,
+        0
+      ],
+      "tip": [
+        1.25,
+        0,
+        0
+      ],
+      "cutting_point": [
+        1.25,
+        0,
+        0
+      ],
+      "long_axis": "+X",
+      "broad_face_normal": "+Y",
+      "edge_axis": "Z",
+      "triangles": 500,
+      "bytes": 103952,
+      "sha256": "1dcb87446932e21c948671e2463c858af208f7596f7a9517b3b0273a157ea0f0",
+      "texture_size": [
+        256,
+        256
+      ],
+      "texture_gpu_bytes_with_mips": 349524
+    }
+  ],
+  "wall_seconds": 2.266
+}

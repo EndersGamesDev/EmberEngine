@@ -808,6 +808,32 @@ fn material_test_frame() -> Frame {
     }
 }
 
+#[test]
+#[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
+fn environment_gpu_local_light_is_bounded_and_falls_off() {
+    let rig = pollster::block_on(Rig::new());
+    let mut frame = material_test_frame();
+    frame.environment.sun_intensity = 0.0;
+    frame.instances[0] = frame.instances[0].with_surface(0.8, 0.0);
+    let unlit = rig.render(&frame, false);
+    frame.environment.lights[0] = crate::environment::PointLight {
+        position: Vec3::new(0.0, 0.0, 1.0),
+        color: Vec3::new(1.0, 0.4, 0.1),
+        intensity: 2.0,
+        radius: 6.0,
+    };
+    let near = rig.render(&frame, false);
+    frame.environment.lights[0].position.z = 3.0;
+    let far = rig.render(&frame, false);
+    assert!(
+        mean_luminance_in(&near, material_center) > mean_luminance_in(&far, material_center) + 8.0
+    );
+    assert!(changed_pixels(&unlit, &near, 3) > 100);
+    assert_eq!(changed_pixels_in(&unlit, &near, 0, material_background), 0);
+    frame.environment.lights[0].radius = 0.0;
+    assert_eq!(rig.render(&frame, false), unlit);
+}
+
 fn mean_luminance_in(pixels: &[u8], selected: impl Fn(u32, u32) -> bool) -> f64 {
     let mut sum = 0.0;
     let mut count = 0_u32;

@@ -1,0 +1,77 @@
+{
+  "prop": "courtyard-fountain",
+  "source": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\mesh\\20260908-162737-de4cb4.glb",
+  "source_sha256": "03892bdd2a7d27f5f437264885c93ca0572bbff9b004b1b492dd454ab41dca1f",
+  "output": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\converted\\courtyard-fountain.glb",
+  "bytes": 1669624,
+  "sha256": "2f336343ffbe9d3251d47e4ddd2a6e8d3ccc5a144425009c9eaac4c207935e23",
+  "source_triangles": 471826,
+  "triangles": 11996,
+  "height_m": 1.15,
+  "engine_bounds_min": [
+    -1.1289234161376953,
+    0.0002204527409048751,
+    -1.1306962966918945
+  ],
+  "engine_bounds_max": [
+    1.1267348527908325,
+    1.152144193649292,
+    1.1225602626800537
+  ],
+  "base_anchor": "center of ground contact",
+  "axes": "engine +Y up; concept front faces -Z",
+  "albedo_pixels": [
+    768,
+    768
+  ],
+  "scalar_surface": {
+    "roughness": 0.9,
+    "metallic": 0
+  },
+  "wall_seconds": 6.324,
+  "primitive_count": 1,
+  "texture_pixels": [
+    768,
+    768
+  ],
+  "texture_mode": "RGB",
+  "texture_bit_depth": 8,
+  "cloned_texture_bytes_with_mips": 3145720,
+  "provenance": {
+    "method": "SDXL concept -> rembg cutout -> TRELLIS.2 textured GLB -> local Blender decimation and RGB8 atlas reduction",
+    "image_model": "SDXL 1.0 base on Specht",
+    "image_prompt_ids": [
+      "27719483-391a-48b8-bd1e-c7b41151b71c"
+    ],
+    "mesh_model": "TRELLIS.2 4B, 1024_cascade, Adler RTX 4090",
+    "mesh_job": "20260908-162737-de4cb4",
+    "seed": 909082,
+    "concept": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\image\\20260908_00024_.png",
+      "bytes": 1985963,
+      "sha256": "e49c6fc44974118650e1698bc9d6538feff2c5569e699cb1c4b73276a315506e"
+    },
+    "cutout": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\cutout\\20260908_00024_-rgba.png",
+      "bytes": 1907301,
+      "sha256": "919e3f2dc449826d1fa82b1d7f05efb7388c29bb91013f5327d1331b210824e8"
+    },
+    "raw_mesh": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\mesh\\20260908-162737-de4cb4.glb",
+      "bytes": 16215724,
+      "sha256": "03892bdd2a7d27f5f437264885c93ca0572bbff9b004b1b492dd454ab41dca1f"
+    },
+    "wall_seconds": {
+      "image": 16.439,
+      "cutout": 4.12,
+      "mesh": 65.771
+    },
+    "source_inputs": {
+      "image": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\image-arguments.json",
+      "cutout": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\cutout-arguments.json",
+      "mesh": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\courtyard-fountain\\mesh-arguments.json"
+    }
+  },
+  "verified": "Exported RGB8 atlas, one primitive, finite positions/normals/UVs, index bounds, nondegenerate triangles, budgets, passive Blender front/back previews.",
+  "not_verified": "Ember runtime rendering, gameplay collision, browser/device performance; integration awaits root authorization."
+}

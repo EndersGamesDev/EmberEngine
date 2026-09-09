@@ -1,0 +1,527 @@
+{
+  "schema_version": 1,
+  "file": "soldier.glb",
+  "sha256": "59a893544226dec8e7946583dc3a496b24f67301cd2a35e3461f86ea344dd0f1",
+  "bytes": 1587564,
+  "triangles": 13226,
+  "nodes": 18,
+  "cloned_texture_gpu_bytes_with_mips": 5767064,
+  "parts": [
+    {
+      "name": "enemy_boot_l",
+      "triangles": 650,
+      "bounds_min": [
+        -0.1346849799156189,
+        0.0,
+        -0.2337179034948349
+      ],
+      "bounds_max": [
+        0.017264913767576218,
+        0.23049026727676392,
+        0.08443771302700043
+      ],
+      "surface_area": 0.18097002804279327,
+      "image": 0
+    },
+    {
+      "name": "enemy_boot_r",
+      "triangles": 650,
+      "bounds_min": [
+        -0.017249997705221176,
+        0.0,
+        -0.22482699155807495
+      ],
+      "bounds_max": [
+        0.22004783153533936,
+        0.22850348055362701,
+        0.10080642253160477
+      ],
+      "surface_area": 0.22258424758911133,
+      "image": 1
+    },
+    {
+      "name": "enemy_coat_l",
+      "triangles": 434,
+      "bounds_min": [
+        -0.2894252836704254,
+        0.5692499876022339,
+        -0.17126338183879852
+      ],
+      "bounds_max": [
+        0.00261459918692708,
+        0.9713985919952393,
+        0.18625059723854065
+      ],
+      "surface_area": 0.39170414209365845,
+      "image": 2
+    },
+    {
+      "name": "enemy_coat_r",
+      "triangles": 408,
+      "bounds_min": [
+        -0.0026665818877518177,
+        0.5692499876022339,
+        -0.1967170387506485
+      ],
+      "bounds_max": [
+        0.30706077814102173,
+        0.9715255498886108,
+        0.18527939915657043
+      ],
+      "surface_area": 0.45917990803718567,
+      "image": 3
+    },
+    {
+      "name": "enemy_forearm_l",
+      "triangles": 502,
+      "bounds_min": [
+        -0.354928195476532,
+        0.8460071086883545,
+        -0.04772340506315231
+      ],
+      "bounds_max": [
+        -0.13947917520999908,
+        1.19464910030365,
+        0.16281817853450775
+      ],
+      "surface_area": 0.22704538702964783,
+      "image": 4
+    },
+    {
+      "name": "enemy_forearm_r",
+      "triangles": 550,
+      "bounds_min": [
+        0.13857083022594452,
+        0.8462375998497009,
+        -0.04772340506315231
+      ],
+      "bounds_max": [
+        0.3350408375263214,
+        1.19464910030365,
+        0.15361841022968292
+      ],
+      "surface_area": 0.2186644822359085,
+      "image": 5
+    },
+    {
+      "name": "enemy_hand_l",
+      "triangles": 400,
+      "bounds_min": [
+        -0.33433404564857483,
+        0.674885630607605,
+        -0.029588501900434494
+      ],
+      "bounds_max": [
+        -0.14007756114006042,
+        0.876649022102356,
+        0.12740007042884827
+      ],
+      "surface_area": 0.09953904151916504,
+      "image": 6
+    },
+    {
+      "name": "enemy_hand_r",
+      "triangles": 400,
+      "bounds_min": [
+        0.13895347714424133,
+        0.699161171913147,
+        -0.038004934787750244
+      ],
+      "bounds_max": [
+        0.33251890540122986,
+        0.8771730661392212,
+        0.13494378328323364
+      ],
+      "surface_area": 0.1015951931476593,
+      "image": 7
+    },
+    {
+      "name": "enemy_head",
+      "triangles": 2598,
+      "bounds_min": [
+        -0.13649453222751617,
+        1.6382994651794434,
+        -0.1605762094259262
+      ],
+      "bounds_max": [
+        0.11724923551082611,
+        1.8648076057434082,
+        0.10978817194700241
+      ],
+      "surface_area": 0.2118331491947174,
+      "image": 8
+    },
+    {
+      "name": "enemy_neck",
+      "triangles": 188,
+      "bounds_min": [
+        -0.17211025953292847,
+        1.5216953754425049,
+        -0.20045310258865356
+      ],
+      "bounds_max": [
+        0.17171673476696014,
+        1.6462327241897583,
+        0.18595589697360992
+      ],
+      "surface_area": 0.3125493824481964,
+      "image": 9
+    },
+    {
+      "name": "enemy_pelvis",
+      "triangles": 650,
+      "bounds_min": [
+        -0.29018691182136536,
+        0.9683873653411865,
+        -0.18567651510238647
+      ],
+      "bounds_max": [
+        0.277889221906662,
+        1.056618571281433,
+        0.1829552799463272
+      ],
+      "surface_area": 0.4172239303588867,
+      "image": 10
+    },
+    {
+      "name": "enemy_shin_l",
+      "triangles": 442,
+      "bounds_min": [
+        -0.21562691032886505,
+        0.21158690750598907,
+        -0.14144372940063477
+      ],
+      "bounds_max": [
+        0.01582002267241478,
+        0.5408809781074524,
+        0.11355099827051163
+      ],
+      "surface_area": 0.2856382131576538,
+      "image": 11
+    },
+    {
+      "name": "enemy_shin_r",
+      "triangles": 450,
+      "bounds_min": [
+        -0.017601963132619858,
+        0.09108001738786697,
+        -0.15329670906066895
+      ],
+      "bounds_max": [
+        0.2171928435564041,
+        0.5589200258255005,
+        0.11163567751646042
+      ],
+      "surface_area": 0.46690118312835693,
+      "image": 12
+    },
+    {
+      "name": "enemy_thigh_l",
+      "triangles": 450,
+      "bounds_min": [
+        -0.2209836095571518,
+        0.5211377143859863,
+        -0.17765718698501587
+      ],
+      "bounds_max": [
+        0.015879038721323013,
+        0.9888622164726257,
+        0.14634273946285248
+      ],
+      "surface_area": 0.6735707521438599,
+      "image": 13
+    },
+    {
+      "name": "enemy_thigh_r",
+      "triangles": 450,
+      "bounds_min": [
+        -0.015821892768144608,
+        0.5211377143859863,
+        -0.17684510350227356
+      ],
+      "bounds_max": [
+        0.2211921215057373,
+        0.9888622164726257,
+        0.1328093707561493
+      ],
+      "surface_area": 0.6715788841247559,
+      "image": 14
+    },
+    {
+      "name": "enemy_torso",
+      "triangles": 2704,
+      "bounds_min": [
+        -0.2918473184108734,
+        1.053491473197937,
+        -0.20260582864284515
+      ],
+      "bounds_max": [
+        0.2916410267353058,
+        1.6214160919189453,
+        0.2025892585515976
+      ],
+      "surface_area": 1.0462048053741455,
+      "image": 15,
+      "frontal_core_coverage": 1.0
+    },
+    {
+      "name": "enemy_upperarm_l",
+      "triangles": 650,
+      "bounds_min": [
+        -0.3425840437412262,
+        1.112797737121582,
+        -0.10703889280557632
+      ],
+      "bounds_max": [
+        -0.15929950773715973,
+        1.6079074144363403,
+        0.1741381138563156
+      ],
+      "surface_area": 0.35422593355178833,
+      "image": 16
+    },
+    {
+      "name": "enemy_upperarm_r",
+      "triangles": 650,
+      "bounds_min": [
+        0.15929950773715973,
+        1.1179829835891724,
+        -0.10703889280557632
+      ],
+      "bounds_max": [
+        0.33110684156417847,
+        1.602640986442566,
+        0.15950052440166473
+      ],
+      "surface_area": 0.3254152238368988,
+      "image": 17
+    }
+  ],
+  "images": [
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 36315,
+      "gpu_bytes_with_mips": 196600,
+      "std": 20.865596403805753
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 35960,
+      "gpu_bytes_with_mips": 196600,
+      "std": 20.08428209438332
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 40283,
+      "gpu_bytes_with_mips": 196600,
+      "std": 20.560077563048797
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 40691,
+      "gpu_bytes_with_mips": 196600,
+      "std": 28.298855977198414
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 51485,
+      "gpu_bytes_with_mips": 196600,
+      "std": 17.866958784961437
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 52365,
+      "gpu_bytes_with_mips": 196600,
+      "std": 17.810775716260235
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 21849,
+      "gpu_bytes_with_mips": 87380,
+      "std": 18.373595191555403
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 21250,
+      "gpu_bytes_with_mips": 87380,
+      "std": 19.888354754944483
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "bytes": 249041,
+      "gpu_bytes_with_mips": 1398100,
+      "std": 54.018770298185636
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 22575,
+      "gpu_bytes_with_mips": 87380,
+      "std": 24.44493139791364
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "bytes": 56655,
+      "gpu_bytes_with_mips": 349524,
+      "std": 25.765645489981093
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 46306,
+      "gpu_bytes_with_mips": 196600,
+      "std": 20.374119523518807
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 42109,
+      "gpu_bytes_with_mips": 196600,
+      "std": 21.58230854476617
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 52203,
+      "gpu_bytes_with_mips": 196600,
+      "std": 19.73194522283869
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 57242,
+      "gpu_bytes_with_mips": 196600,
+      "std": 22.90308694752393
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "bytes": 231000,
+      "gpu_bytes_with_mips": 1398100,
+      "std": 22.92812461654981
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 59879,
+      "gpu_bytes_with_mips": 196600,
+      "std": 22.240444966207708
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 58060,
+      "gpu_bytes_with_mips": 196600,
+      "std": 20.377324638898543
+    }
+  ],
+  "provenance": {
+    "image": {
+      "tool": "image_generate",
+      "arguments": {
+        "prompt": "One full body armored medieval castle soldier, standing symmetrical relaxed A pose, both empty arms held thirty degrees away from torso, open empty hands, legs separated, boots completely visible. Human anatomy, realistic detailed textured dark fantasy game sculpt. Face hidden in battered steel sallet helmet with dark narrow visor, modest iron pauldrons, segmented steel cuirass over faded oxblood red quilted tunic ending at hip, dark leather belt and buckles, visible armored thighs, knee guards, tall battered iron and leather boots. Strong readable sturdy silhouette, no cape, no skirt, no weapon. Entire figure centered on plain light grey background, orthographic front studio asset photography, neutral even lighting, sharp materials and anatomy.",
+        "negative": "cropped, closeup, portrait, two people, multiple characters, duplicate limbs, fused arms, fused legs, hands touching body, crossed arms, hands on hips, sword, spear, axe, club, maul, shield, weapon, scenery, text, watermark, logo, cute, cartoon, toy, smooth plastic, long robe, floor length coat, cape, wings, blurry",
+        "width": 1024,
+        "height": 1536,
+        "steps": 35,
+        "cfg": 6.5,
+        "seed": 1009081,
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\image",
+        "timeout_s": 600
+      },
+      "stdout": "seed 1009081, 35 step(s), 1024x1536\nC:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\image\\20260908_00026_.png (2307377 bytes)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 16.411,
+      "utc": "2026-09-08T17:20:43Z",
+      "input_sha256": null
+    },
+    "cutout": {
+      "tool": "image_cutout",
+      "arguments": {
+        "image": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\image\\20260908_00026_.png",
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\cutout",
+        "margin": 0.06
+      },
+      "stdout": "cutout (1720, 1720) opaque fraction 0.203\n  C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\cutout\\20260908_00026_-rgba.png (1436978 bytes)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 4.676,
+      "utc": "2026-09-08T17:20:57Z",
+      "input_sha256": "8793c61b0581281c05f07ca83c7e3ebec82da856eb3b9347503b80b616e34f24"
+    },
+    "mesh": {
+      "tool": "mesh_generate_pbr",
+      "arguments": {
+        "image": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\cutout\\20260908_00026_-rgba.png",
+        "seed": 1009081,
+        "texture_size": 2048,
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\mesh",
+        "timeout_s": 1200
+      },
+      "stdout": "job 20260908-172103-353948 completed\n  C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\soldier\\mesh\\20260908-172103-353948.glb (20591480 bytes, GLB with PBR materials)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 41.162,
+      "utc": "2026-09-08T17:21:43Z",
+      "input_sha256": "d561270408cb70ad876b80dcb38e1d8668df02713df9ded8f9261dcb013a23b0"
+    }
+  },
+  "sidecar": "soldier-rig.json",
+  "sidecar_sha256": "502dcceb9633cb6719619ac79dfc823d66dd06504f97c259c7ff72b009bc725e",
+  "verification_seconds": 0.064,
+  "verification": "Decoded GLB names, identity transforms, finite attributes, normalized normals, index/triangle/UV validity, opaque white materials, RGB8 basecolor images, memory/triangle budgets and central torso area/coverage. Native animation check remains separate.",
+  "source_mesh": {
+    "file": "20260908-172103-353948.glb",
+    "bytes": 20591480,
+    "sha256": "e343c4e72aac130fd96c4b86489014cd7a6695a3ae190837a64b0705bfcb71d0"
+  },
+  "conversion_method": "SDXL reference -> TRELLIS.2 sculpt -> rigid segmentation, closed convex part retopology with facial relief projection, RGB source rebake, bind retarget",
+  "limits": "Single-view generated character; inferred back, rigid parts and fused fingers. Closed inner leg/joint covers use nearby generated material samples. Incidental held objects excluded; separately authored measured weapons."
+}

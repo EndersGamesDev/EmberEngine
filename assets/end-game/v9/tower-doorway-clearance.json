@@ -1,0 +1,178 @@
+{
+  "prop": "tower-doorway",
+  "boundary_edges_welded": 224,
+  "nonmanifold_edges_welded": 710,
+  "collision_verified": false,
+  "portal_rays": [
+    {
+      "height_m": 0.1,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    },
+    {
+      "height_m": 0.2,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    },
+    {
+      "height_m": 0.35,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 0.5,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 0.75,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 1.0,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 1.25,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 1.5,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.48,
+        0.48
+      ],
+      "width_sampled_m": 0.96
+    },
+    {
+      "height_m": 1.75,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.4,
+        0.4
+      ],
+      "width_sampled_m": 0.8
+    },
+    {
+      "height_m": 2.0,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.24,
+        0.24
+      ],
+      "width_sampled_m": 0.48
+    },
+    {
+      "height_m": 2.15,
+      "center_clear": true,
+      "clear_span_x": [
+        -0.08,
+        0.08
+      ],
+      "width_sampled_m": 0.16
+    },
+    {
+      "height_m": 2.3,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    },
+    {
+      "height_m": 2.5,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    },
+    {
+      "height_m": 2.75,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    },
+    {
+      "height_m": 3.0,
+      "center_clear": false,
+      "clear_span_x": null,
+      "width_sampled_m": 0
+    }
+  ],
+  "recommended_instance": {
+    "uniform_scale": 1.25,
+    "base_y_below_floor": 0.4,
+    "test_width": 0.72,
+    "ray_rows": [
+      {
+        "height_above_floor": 0.05,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 0.15,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 0.4,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 0.75,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 1.0,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 1.4,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 1.7,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 1.85,
+        "blocked_x": []
+      },
+      {
+        "height_above_floor": 2.0,
+        "blocked_x": []
+      }
+    ]
+  },
+  "placed_body_clearance": {
+    "width": 0.9,
+    "min_height": 0.05,
+    "max_height": 1.7,
+    "sample_spacing": 0.05,
+    "rays": 646,
+    "blocked": []
+  },
+  "ray_note": "Visual mesh rays only, 4 cm raw sampling and 0.72 m placed body corridor; root must author and test collision separately.",
+  "wall_seconds": 0.345
+}

@@ -1,0 +1,77 @@
+{
+  "prop": "gothic-pillar",
+  "source": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\mesh\\20260908-162452-2c14f5.glb",
+  "source_sha256": "c44a5bad7c25e43d3fff380f02222059159859bc3ed5f4e2103f0b16e6aa8ed9",
+  "output": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\converted\\gothic-pillar.glb",
+  "bytes": 1327044,
+  "sha256": "2fa94b868ccc202ee278e9310c35062e1006a9925b8588ba0fe15655ee899508",
+  "source_triangles": 475019,
+  "triangles": 9456,
+  "height_m": 4.4,
+  "engine_bounds_min": [
+    -1.2142442464828491,
+    -0.000864081084728241,
+    -1.36715567111969
+  ],
+  "engine_bounds_max": [
+    1.2047487497329712,
+    4.397078514099121,
+    1.3612732887268066
+  ],
+  "base_anchor": "center of ground contact",
+  "axes": "engine +Y up; concept front faces -Z",
+  "albedo_pixels": [
+    768,
+    768
+  ],
+  "scalar_surface": {
+    "roughness": 0.9,
+    "metallic": 0
+  },
+  "wall_seconds": 5.826,
+  "primitive_count": 1,
+  "texture_pixels": [
+    768,
+    768
+  ],
+  "texture_mode": "RGB",
+  "texture_bit_depth": 8,
+  "cloned_texture_bytes_with_mips": 3145720,
+  "provenance": {
+    "method": "SDXL concept -> rembg cutout -> TRELLIS.2 textured GLB -> local Blender decimation and RGB8 atlas reduction",
+    "image_model": "SDXL 1.0 base on Specht",
+    "image_prompt_ids": [
+      "ce463b40-a2c9-41bf-9b9a-d7dbfe3b8436"
+    ],
+    "mesh_model": "TRELLIS.2 4B, 1024_cascade, Adler RTX 4090",
+    "mesh_job": "20260908-162452-2c14f5",
+    "seed": 909081,
+    "concept": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\image\\20260908_00023_.png",
+      "bytes": 2380320,
+      "sha256": "bcc1ace8715a94075560d889cbef244bfcccdddcbe5a21cb77faf2ef6d5ba0e7"
+    },
+    "cutout": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\cutout\\20260908_00023_-rgba.png",
+      "bytes": 2465676,
+      "sha256": "53b58aed24ae01a69d43e1f228779ff5b8e3c0149837fd2a204f502e4d1e5722"
+    },
+    "raw_mesh": {
+      "path": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\mesh\\20260908-162452-2c14f5.glb",
+      "bytes": 16642992,
+      "sha256": "c44a5bad7c25e43d3fff380f02222059159859bc3ed5f4e2103f0b16e6aa8ed9"
+    },
+    "wall_seconds": {
+      "image": 16.503,
+      "cutout": 4.637,
+      "mesh": 76.579
+    },
+    "source_inputs": {
+      "image": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\image-arguments.json",
+      "cutout": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\cutout-arguments.json",
+      "mesh": "C:\\Users\\end\\dev\\end-game\\runtime-v9-assets\\gothic-pillar\\mesh-arguments.json"
+    }
+  },
+  "verified": "Exported RGB8 atlas, one primitive, finite positions/normals/UVs, index bounds, nondegenerate triangles, budgets, passive Blender front/back previews.",
+  "not_verified": "Ember runtime rendering, gameplay collision, browser/device performance; integration awaits root authorization."
+}

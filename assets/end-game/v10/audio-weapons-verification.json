@@ -1,0 +1,99 @@
+{
+  "weapons": [
+    {
+      "file": "weapon-sword.glb",
+      "bounds_min": [
+        -0.20499999821186066,
+        -0.04500000178813934,
+        -0.14000000059604645
+      ],
+      "bounds_max": [
+        1.100000023841858,
+        0.04500000178813934,
+        0.14000000059604645
+      ],
+      "sha256": "5b117f135f558be615c040d70e896e523dcbdfcd40cf909d2e747db5f3daf14d"
+    },
+    {
+      "file": "weapon-spear.glb",
+      "bounds_min": [
+        -0.5,
+        -0.03700000047683716,
+        -0.08500000089406967
+      ],
+      "bounds_max": [
+        2.0,
+        0.03700000047683716,
+        0.08500000089406967
+      ],
+      "sha256": "5bac1140ed64672697d3b473059bac97c1193cacd93483d23cdd15927580c595"
+    },
+    {
+      "file": "weapon-axe.glb",
+      "bounds_min": [
+        -0.4000000059604645,
+        -0.05249999836087227,
+        -0.28999999165534973
+      ],
+      "bounds_max": [
+        1.25,
+        0.05249999836087227,
+        0.20000000298023224
+      ],
+      "sha256": "62e2010dfb01467db0e8ea959e4d77d6ca81a8160c46bfe3cf0e58e5ec3951b9"
+    },
+    {
+      "file": "weapon-maul.glb",
+      "bounds_min": [
+        -0.4000000059604645,
+        -0.2070000022649765,
+        -0.25999999046325684
+      ],
+      "bounds_max": [
+        1.25,
+        0.2070000022649765,
+        0.25999999046325684
+      ],
+      "sha256": "1dcb87446932e21c948671e2463c858af208f7596f7a9517b3b0273a157ea0f0"
+    }
+  ],
+  "audio": [
+    {
+      "file": "boss-intro.wav",
+      "frames": 125558,
+      "seconds": 5.23158,
+      "nonclipped": true
+    },
+    {
+      "file": "boss-phase2.wav",
+      "frames": 96506,
+      "seconds": 4.02108,
+      "nonclipped": true
+    },
+    {
+      "file": "boss-defeat.wav",
+      "frames": 98400,
+      "seconds": 4.1,
+      "nonclipped": true
+    },
+    {
+      "file": "escape-clue.wav",
+      "frames": 217800,
+      "seconds": 9.075,
+      "nonclipped": true
+    },
+    {
+      "file": "escape-ending.wav",
+      "frames": 102000,
+      "seconds": 4.25,
+      "nonclipped": true
+    },
+    {
+      "file": "castle-ambience.wav",
+      "frames": 768000,
+      "seconds": 16.0,
+      "nonclipped": true
+    }
+  ],
+  "wall_seconds": 0.0243
+}

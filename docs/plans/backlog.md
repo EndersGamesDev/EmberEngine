@@ -331,3 +331,13 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - League scene: the camera follows the own champion only; edge-pan and a space-to-recentre toggle are the MOBA norm and both need `world.cam` (client) rather than `scene.rs`.
 - League review harness: `tools/league/review.ps1` photographs the SCREEN like the arena harness, so a window dragged over the client lands in the picture; an off-screen capture written by the client itself would need no screen space.
 - League review harness: the human seat idles at its fountain in a practice run because the harness sends no input by rule; a `LEAGUE_BOT_ME=1` that hands the own seat to the bot brain would put the review camera in a real 3v3 instead of a 3v2 plus a bystander.
+- `deploy/tests/test-changelog.sh`: a release line naming `tag X` must fail when no such tag exists; the League v4 row claimed `league-v4` with no such tag on any remote and the suite passed. Add the existence check and pin it with a fixture.
+
+## end-game
+
+- Replace End Game's unrigged imported heroes and spatial material zones with an authored skeleton, per-part physical material IDs, cape cloth and a continuous wolf-to-werewolf morph; the v1 camera sequence currently swaps meshes.
+- Add calibrated indoor light transport, shadowed local lights and normal/roughness texture maps before claiming photorealistic surfaces; v1 uses base color, scalar materials and unshadowed local torch lights.
+- Extend End Game with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.
+- Validate End Game on a physical DualSense and representative iOS/Android devices, including controller haptics, touch cancellation, fullscreen and measured 5K frame pacing.
+- Extend V7's rigid jailer articulation with weighted skin/coat deformation, independently rigged fingers and planted-foot anchors during turns; its straight full-speed gait currently cancels body travel while acceleration and turning use pose blending.
+- Re-run the repository's Linux-host deployment suites on Linux: the broader V3 validation encountered Git Bash failures in host-kings, host-prebuilt, republish-host and host-loopback; the End Game Pages publisher uses the independently checked scoped assembly path.

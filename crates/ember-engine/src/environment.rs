@@ -6,9 +6,20 @@
 
 use glam::{Vec2, Vec3};
 
+/// Bounded, inverse-square local light. Zero radius disables a slot.
+/// Local lights do not cast shadow maps; the directional light still does.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PointLight {
+    pub position: Vec3,
+    pub color: Vec3,
+    pub intensity: f32,
+    pub radius: f32,
+}
+
 /// Lighting and sky state consumed by the renderer. Opt in with `outdoor`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Environment {
+    pub lights: [PointLight; 4],
     pub enabled: bool,
     /// Unit vector from the world toward the sun, shared by sky and shadows.
     pub sun_direction: Vec3,
@@ -29,6 +40,7 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         Self {
+            lights: [PointLight::default(); 4],
             enabled: false,
             sun_direction: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_color: Vec3::new(1.0, 0.95, 0.85),

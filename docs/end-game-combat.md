@@ -1,0 +1,33 @@
+# End Game sword motion, contact and guard
+
+V11, Weight and Impact, builds on V8's historical cutting references with shared sword choreography, swept contact, five anatomical target zones and material feedback. End Game uses an oversized fantasy sword and authored motion, timing and stamina rules; the references guide readable movement rather than biomechanical or historical reconstruction.
+
+## Reference and application
+
+[Fiore de'i Liberi's sword in two hands, Getty manuscript folio 23r](https://wiktenauer.com/wiki/Fiore_de%27i_Liberi/Sword_in_Two_Hands), in the transcriptions and translations collected by Wiktenauer, describes descending, rising and crosswise blows, their edge choices and their return into guards. End Game adapts those directional families. In the view-aligned blade frame, the first three connected cuts are Cut from upper right to lower left, Backhand from left to right, and Finisher on a steeper upper-right-to-lower-left diagonal. Overhead, Rising and JumpHeavy supply the other authored paths. The generated blade runs along +X, its sharp edges lie on ±Z and its broad faces on ±Y; Backhand uses the opposite edge while the broad-face normal stays outside the cutting plane.
+
+[Joachim Meyer's sword teaching, part three, Rebecca Garber translation](https://wiktenauer.com/wiki/Joachim_Meyer/Garber_Sword_3P_2023) describes connected redirections after contact and receiving opposing cuts on the strong near the hilt. Buffered recoveries lead into the next prepared position, and the angled chest guard presents the strong near the hands. Weapon mass, balance and muscle forces are not solved from these references.
+
+## Player rules
+
+Left click, controller R1 or touch Strike supplies one normal cut per press. Three quick presses select Wolf's Fang, Cut → Backhand → Finisher; press, pause, press selects Gravebreaker, Cut → Overhead; press, press, pause, press selects Rising Wolf, Cut → Backhand → Rising. A quick interval is at most 0.30 seconds, and a delayed interval is greater than 0.30 and at most 0.90 seconds. Up to two valid follow-ups buffer. Holding attack does not repeat; insufficient stamina returns the weapon smoothly without an extra swing or damage event.
+
+R, middle click, controller R2 or touch Heavy supplies a separate heavy request. Grounded heavy selects Overhead. Jump first with Space, Cross or Jump, then press heavy while airborne for JumpHeavy: a downward airborne cut followed by a held follow-through until natural landing. The landing itself adds no second damage or shockwave event. One airborne heavy is allowed per jump, and the same fixed-step gravity continues except during confirmed-hit hitstop.
+
+Hold right mouse, F, controller L2 or touch Guard after equipping the sword. The guard takes 0.18 seconds to raise and 0.12 seconds to lower. Existing committed attacks finish first; holding guard rejects new normal and heavy requests. Guarding slows movement, prevents sprinting and pauses stamina regeneration. Releasing it restores movement and regeneration.
+
+A raised guard covers a 120-degree view cone. Enemy contact must first pass its normal range, obstruction, dodge and height checks. A knife block costs 28 stamina; castle weapons cost 22–38. Insufficient stamina breaks the guard for 0.90 seconds and permits damage. The Castellan's warned crushing slam requires a dodge. There is no timed-parry bonus, and guard is unavailable before sword pickup, while airborne, during interactions or during a dodge.
+
+## Shared contact and feedback
+
+`end-game-core/src/blade.rs` owns the same edge-leading pose used by collision and articulated hands. `SwordSweep` interpolates the previous/current physical eye frame and samples the authored blade through each 60 Hz contact window, including player yaw and translation. Longitudinal blade tracks and connecting substep tracks test both edges and the centre. Damage occurs at the first confirmed body contact rather than a single range/cone sample; a miss does not create impact feedback. Solid contact records its point, plane normal and blade tangent, stops the cut at that transform and feeds a rebound into recovery. Hitstop freezes the world and look while valid combo press edges remain buffered.
+
+Five target zones are available: Head, Left torso, Right torso, Left leg and Right leg. The neutral cutting axis supplies the intended zone. The browser projects that world aim through the actual frame camera, applies viewport aspect ratio and places the reticle there; invalid or offscreen aim hides the armed reticle. Aimed-zone text describes intent, while a separate short label confirms the zone or material actually struck. Camera recoil and stair smoothing do not move the active collision blade; noncontact preparation and recovery blend back to the presentation camera.
+
+Directional hit reactions affect the relevant head, torso or leg chain and carry their current pose through repeated hits and death. Small cosmetic scratches attach to an available rigid body surface. Stone/paving, iron, timber and grass contacts retain material identity for authored WebAudio cues; stone contacts produce dust and the impact point drives particles and rumble. The surface history retains at most 64 contacts. Structural planes can keep bounded, face-clipped scratch ribbons; generated-prop blockers, grass and moving gates use transient feedback. Checkpoint recovery and a fresh run clear surface marks.
+
+## Validation and limits
+
+Tests cover shared edge orientation, contact velocity, early/late links, failed follow-ups, two-hand reach, five-zone contacts, wall obstruction, thin surfaces, fast turning/translation, airborne heavy, hitstop, guard and input cancellation. Passive native captures inspect scene poses without machine input. Browser gameplay, physical controller/mobile behavior, audible playback, vibration and measured 5K frame pacing require separate validation.
+
+Enemy targets are five yaw-oriented anatomical proxy volumes, with seated-height adjustment for the warden. They are sampled from core poses, not from every animated bone, finger or deformed triangle. Generated props and gates use authored box blockers; detailed openings and surface recesses can differ from the visible mesh. Cosmetic marks do not deform armor or masonry, and sword contacts do not drive moving-prop physics or structural destruction. Existing rigid articulation, fused fingers and unrigged hero form swaps remain prototype limits.

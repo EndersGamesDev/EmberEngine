@@ -1,0 +1,54 @@
+{
+  "verified": [
+    {
+      "prop": "gothic-pillar",
+      "bytes": 1327044,
+      "sha256": "2fa94b868ccc202ee278e9310c35062e1006a9925b8588ba0fe15655ee899508",
+      "triangles": 9456,
+      "primitive_count": 1,
+      "texture_pixels": [
+        768,
+        768
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "cloned_texture_bytes_with_mips": 3145720
+    },
+    {
+      "prop": "courtyard-fountain",
+      "bytes": 1669624,
+      "sha256": "2f336343ffbe9d3251d47e4ddd2a6e8d3ccc5a144425009c9eaac4c207935e23",
+      "triangles": 11996,
+      "primitive_count": 1,
+      "texture_pixels": [
+        768,
+        768
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "cloned_texture_bytes_with_mips": 3145720
+    },
+    {
+      "prop": "tower-doorway",
+      "bytes": 1604948,
+      "sha256": "b06d1eb0b256542ead525337d3033519230a92c167080f76346b5e2816f0b42f",
+      "triangles": 11477,
+      "primitive_count": 1,
+      "texture_pixels": [
+        768,
+        768
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "cloned_texture_bytes_with_mips": 3145720
+    }
+  ],
+  "totals": {
+    "props": 3,
+    "bytes": 4601616,
+    "triangles": 32929,
+    "cloned_texture_bytes_with_mips": 9437160
+  },
+  "wall_seconds": 0.021,
+  "runtime_verified": false
+}

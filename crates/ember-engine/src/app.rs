@@ -336,6 +336,18 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                             let dpr = web_sys::window()
                                 .map(|w| w.device_pixel_ratio())
                                 .unwrap_or(1.0);
+                            // Opt-in page quality controller. Missing/invalid values retain
+                            // the historical device-pixel ratio for every existing game.
+                            let scale = web_sys::window()
+                                .and_then(|w| {
+                                    js_sys::Reflect::get(&w, &"__emberRenderScale".into())
+                                        .ok()
+                                        .and_then(|v| v.as_f64())
+                                })
+                                .filter(|v| v.is_finite())
+                                .unwrap_or(1.0)
+                                .clamp(0.25, 1.0);
+                            let dpr = dpr * scale;
                             let w = (canvas.client_width() as f64 * dpr) as u32;
                             let h = (canvas.client_height() as f64 * dpr) as u32;
                             if w > 0 && h > 0 {
@@ -432,6 +444,13 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                         _ => None,
                     };
                     renderer.render_with_overlay(&frame, draw);
+                    if let Some(path) = std::env::var_os("EMBER_CAPTURE_PATH") {
+                        match renderer.capture_scene(std::path::Path::new(&path)) {
+                            Ok(()) => tracing::info!("scene captured; no desktop input used"),
+                            Err(error) => tracing::error!(%error, "scene capture failed"),
+                        }
+                        event_loop.exit();
+                    }
                 }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(renderer) = self.renderer.as_mut() {

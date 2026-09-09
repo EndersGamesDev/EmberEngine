@@ -273,6 +273,91 @@
       ]
     },
     {
+      "id": "end-game",
+      "title": "End Game",
+      "tag": "single player · dark fantasy · controller + touch",
+      "desc": "Escape a dark fantasy castle: claim a greatsword, battle armed soldiers and hollow knights, defeat the cyclops Castellan, and follow ancient clues to break the last seal. Generated 3D characters and voices, heavy sword combos, blocking, adaptive resolution, and controller, keyboard and touch controls.",
+      "versions": [
+        {
+          "v": "v11",
+          "version": "11.0.0",
+          "path": "games/end-game/v11/",
+          "live": true,
+          "note": "Weight and Impact — aimed sword combos, jumping heavy attacks and visible impacts"
+        },
+        {
+          "v": "v10",
+          "version": "10.0.0",
+          "path": "games/end-game/v10/",
+          "live": false,
+          "note": "The Last Seal: armed soldiers, hollow knights, a cyclops boss and a castle escape mystery"
+        },
+        {
+          "v": "v9",
+          "version": "9.0.0",
+          "path": "games/end-game/v9/",
+          "live": false,
+          "note": "Beyond the Dungeon: explore the great hall, garden, castle walls and climb the tower"
+        },
+        {
+          "v": "v8",
+          "version": "8.0.0",
+          "path": "games/end-game/v8/",
+          "live": false,
+          "note": "Edge and Guard: edge-leading sword cuts, connected combos and directional blocking"
+        },
+        {
+          "v": "v7",
+          "version": "7.0.0",
+          "path": "games/end-game/v7/",
+          "live": false,
+          "note": "The Dread Warden: a generated textured jailer, stronger silhouette and weighted rise, pursuit and knife animations"
+        },
+        {
+          "v": "v6",
+          "version": "6.0.0",
+          "path": "games/end-game/v6/",
+          "live": false,
+          "note": "The Warden’s Voice: spoken reactions to noise, the cell key, the greatsword and defeat, with subtitles and dialogue priority"
+        },
+        {
+          "v": "v5",
+          "version": "5.0.0",
+          "path": "games/end-game/v5/",
+          "live": false,
+          "note": "The warden rises, draws his knife and attacks with dodgable strikes"
+        },
+        {
+          "v": "v4",
+          "version": "4.0.0",
+          "path": "games/end-game/v4/",
+          "live": false,
+          "note": "Heavy directional sword strikes, buffered rhythm combos and hit feedback"
+        },
+        {
+          "v": "v3",
+          "version": "3.0.0",
+          "path": "games/end-game/v3/",
+          "live": false,
+          "note": "Articulated wolf gauntlets, finger grips and timed item pickups"
+        },
+        {
+          "v": "v2",
+          "version": "2.0.0",
+          "path": "games/end-game/v2/",
+          "live": false,
+          "note": "The Living Cell: generated stone and oak surfaces, detailed furnishings, fitted masonry, moving chains, cloth and dripping water"
+        },
+        {
+          "v": "v1",
+          "version": "1.0.0",
+          "path": "games/end-game/v1/",
+          "live": false,
+          "note": "The Awakening: a playable prison escape, wolf and werewolf armor, greatsword, prologue, torch lighting and adaptive resolution"
+        }
+      ]
+    },
+    {
       "id": "league",
       "title": "UltimateLegue",
       "tag": "1v1 + 3v3 · one lane · five champions",

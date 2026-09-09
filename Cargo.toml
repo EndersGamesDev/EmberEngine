@@ -2,6 +2,8 @@
 resolver = "3"
 members = [
     "crates/ember-camera",
+    "crates/end-game",
+    "crates/end-game-core",
     "crates/ember-client-net",
     "crates/ember-editor",
     "crates/ember-engine",

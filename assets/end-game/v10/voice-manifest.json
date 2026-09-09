@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "file": "boss-intro.wav",
+      "bytes": 251160,
+      "sha256": "55fccc7e726afcd85177129ff14361bdaffdc6eaf1b30922d424bb74941f33a6",
+      "frames": 125558,
+      "duration": 5.23158,
+      "sample_rate": 24000,
+      "channels": 1,
+      "peak_dbfs": -3.0,
+      "rms_dbfs": -17.078,
+      "clipped_samples": 0,
+      "boundary_jump": 0.0,
+      "id": "boss_intro",
+      "text": "A thief in my halls. Kneel before the One-Eyed Castellan!",
+      "speaker": "Castellan",
+      "source_sha256": "55b5744bae2fe806853237281f74ea99c506cf08f42f55767f245b914679416e"
+    },
+    {
+      "file": "boss-phase2.wav",
+      "bytes": 193056,
+      "sha256": "d20da29b6df2ffc4c3d7404c398511acbb575fac7d2b4b3dcb3d7a4f86be5702",
+      "frames": 96506,
+      "duration": 4.02108,
+      "sample_rate": 24000,
+      "channels": 1,
+      "peak_dbfs": -3.0,
+      "rms_dbfs": -17.657,
+      "clipped_samples": 0,
+      "boundary_jump": 0.0,
+      "id": "boss_phase2",
+      "text": "You have cracked my armor. Now face my wrath!",
+      "speaker": "Castellan",
+      "source_sha256": "41bb4fa0e88c2f65673127d38ac648b5170956d842582a536dc19a61b49bebdf"
+    },
+    {
+      "file": "boss-defeat.wav",
+      "bytes": 196844,
+      "sha256": "3e249da6c1c69df278457fe2fdc15d37124825d535b0b0e189374f40e6368ded",
+      "frames": 98400,
+      "duration": 4.1,
+      "sample_rate": 24000,
+      "channels": 1,
+      "peak_dbfs": -3.0,
+      "rms_dbfs": -18.151,
+      "clipped_samples": 0,
+      "boundary_jump": 0.0,
+      "id": "boss_defeat",
+      "text": "The gate... my seal... take it, and be gone.",
+      "speaker": "Castellan",
+      "source_sha256": "ca836c4fcf5a6165e78aedbdbf8edb4169ea035bee8ae054e30267df056d92f2"
+    },
+    {
+      "file": "escape-clue.wav",
+      "bytes": 435644,
+      "sha256": "9c6fa39296a81b88a3f6d309eaebad2d2f076a26baac89a876d875d11c523cae",
+      "frames": 217800,
+      "duration": 9.075,
+      "sample_rate": 24000,
+      "channels": 1,
+      "peak_dbfs": -5.0,
+      "rms_dbfs": -24.819,
+      "clipped_samples": 0,
+      "boundary_jump": 0.0,
+      "id": "escape_clue",
+      "text": "Wake the sun in the dry fountain. Then the wolf on the wall. Ring the bell above. The Castellan's crown breaks the final chain.",
+      "speaker": "Inscription",
+      "source_sha256": "50868299b3e3d64d48deb59f6ebccbf445e1fd69a235274bf451e6a59ef4b4d1"
+    },
+    {
+      "file": "escape-ending.wav",
+      "bytes": 204044,
+      "sha256": "ef56698d5e13d17fb0135a4628fd44d7657348f7a9a4eb3f67c72a21a4a148c2",
+      "frames": 102000,
+      "duration": 4.25,
+      "sample_rate": 24000,
+      "channels": 1,
+      "peak_dbfs": -3.0,
+      "rms_dbfs": -22.74,
+      "clipped_samples": 0,
+      "boundary_jump": 0.0,
+      "id": "escape_ending",
+      "text": "At last. The castle is behind you. Keep moving.",
+      "speaker": "Prisoner",
+      "source_sha256": "39603ce9e0e7aa255628129f568f085b4a2eef1e939af7063e10936684f6683e"
+    }
+  ],
+  "ambience": {
+    "file": "castle-ambience.wav",
+    "bytes": 1536044,
+    "sha256": "c1e88f0f4f57801a5cb53dc4b875b7bdad041494460ea9b007de2e56dd90891a",
+    "frames": 768000,
+    "duration": 16.0,
+    "sample_rate": 48000,
+    "channels": 1,
+    "peak_dbfs": -12.0,
+    "rms_dbfs": -23.232,
+    "clipped_samples": 0,
+    "boundary_jump": 0.001922607421875,
+    "id": "castle_ambience",
+    "method": "Authored seeded offline DSP, not model-generated: periodic spectral wind, integer-cycle low drone, damped metallic chain partials and circular echoes.",
+    "seed": 100908,
+    "loop": true
+  },
+  "total_bytes": 2816792,
+  "provenance": {
+    "schema_version": 1,
+    "model": "hexgrad/Kokoro-82M",
+    "model_revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+    "device": "CPU",
+    "threads": 2,
+    "priority": "nice 19",
+    "offline": true,
+    "seed": 100908,
+    "voices": {
+      "Castellan": {
+        "bm_george": 0.85,
+        "bm_lewis": 0.15
+      },
+      "Inscription": {
+        "bm_lewis": 0.75,
+        "bm_george": 0.25
+      },
+      "Prisoner": {
+        "bm_lewis": 1
+      }
+    },
+    "versions": {
+      "kokoro": "0.9.4",
+      "torch": "2.14.0+cpu",
+      "misaki": "0.9.4",
+      "numpy": "2.5.3"
+    },
+    "files": [
+      {
+        "id": "boss_intro",
+        "text": "A thief in my halls. Kneel before the One-Eyed Castellan!",
+        "speaker": "Castellan",
+        "speed": 0.93,
+        "file": "boss-intro-raw.wav",
+        "phonemes": [
+          "\u0250 \u03b8\u02c8i\u02d0f \u026an mI h\u02c8\u0254\u02d0lz. n\u02c8i\u02d0l b\u026af\u02c8\u0254\u02d0 \u00f0\u0259 w\u02cc\u028cn\u02c8Id k\u02c8\u0251\u02d0st\u0259l\u0259n!"
+        ],
+        "graphemes": [
+          "A thief in my halls. Kneel before the One-Eyed Castellan!"
+        ],
+        "seconds": 4.875,
+        "peak": 0.3374388813972473,
+        "sha256": "55b5744bae2fe806853237281f74ea99c506cf08f42f55767f245b914679416e",
+        "generation_seconds": 1.404
+      },
+      {
+        "id": "boss_phase2",
+        "text": "You have cracked my armor. Now face my wrath!",
+        "speaker": "Castellan",
+        "speed": 0.93,
+        "file": "boss-phase2-raw.wav",
+        "phonemes": [
+          "j\u02ccu\u02d0 hav k\u0279\u02c8akt mI \u02c8\u0251\u02d0m\u0259. n\u02c8W f\u02c8As mI \u0279\u02c8\u0252\u03b8!"
+        ],
+        "graphemes": [
+          "You have cracked my armor. Now face my wrath!"
+        ],
+        "seconds": 3.725,
+        "peak": 0.41547971963882446,
+        "sha256": "41bb4fa0e88c2f65673127d38ac648b5170956d842582a536dc19a61b49bebdf",
+        "generation_seconds": 1.097
+      },
+      {
+        "id": "boss_defeat",
+        "text": "The gate... my seal... take it, and be gone.",
+        "speaker": "Castellan",
+        "speed": 0.88,
+        "file": "boss-defeat-raw.wav",
+        "phonemes": [
+          "\u00f0\u0259 \u0261\u02c8At... mI s\u02c8i\u02d0l... t\u02c8Ak \u026at, and bi\u02d0 \u0261\u02c8\u0252n."
+        ],
+        "graphemes": [
+          "The gate... my seal... take it, and be gone."
+        ],
+        "seconds": 3.8,
+        "peak": 0.42777958512306213,
+        "sha256": "ca836c4fcf5a6165e78aedbdbf8edb4169ea035bee8ae054e30267df056d92f2",
+        "generation_seconds": 1.07
+      },
+      {
+        "id": "escape_clue",
+        "text": "Wake the sun in the dry fountain. Then the wolf on the wall. Ring the bell above. The Castellan's crown breaks the final chain.",
+        "speaker": "Inscription",
+        "speed": 0.95,
+        "file": "escape-clue-raw.wav",
+        "phonemes": [
+          "w\u02c8Ak \u00f0\u0259 s\u02c8\u028cn \u026an \u00f0\u0259 d\u0279\u02c8I f\u02c8Wnt\u026an. \u00f0\u02c8\u025bn \u00f0\u0259 w\u02c8\u028alf \u02cc\u0252n \u00f0\u0259 w\u02c8\u0254\u02d0l. \u0279\u02c8\u026a\u014b \u00f0\u0259 b\u02c8\u025bl \u0259b\u02c8\u028cv. \u00f0\u0259 k\u02c8\u0251\u02d0st\u0259l\u0259nz k\u0279\u02c8Wn b\u0279\u02c8Aks \u00f0\u0259 f\u02c8In\u1d4al \u02a7\u02c8An."
+        ],
+        "graphemes": [
+          "Wake the sun in the dry fountain. Then the wolf on the wall. Ring the bell above. The Castellan's crown breaks the final chain."
+        ],
+        "seconds": 8.975,
+        "peak": 0.4485428035259247,
+        "sha256": "50868299b3e3d64d48deb59f6ebccbf445e1fd69a235274bf451e6a59ef4b4d1",
+        "generation_seconds": 2.674
+      },
+      {
+        "id": "escape_ending",
+        "text": "At last. The castle is behind you. Keep moving.",
+        "speaker": "Prisoner",
+        "speed": 0.97,
+        "file": "escape-ending-raw.wav",
+        "phonemes": [
+          "\u02ccat l\u02c8\u0251\u02d0st. \u00f0\u0259 k\u02c8\u0251\u02d0s\u1d4al \u026az b\u026ah\u02c8Ind ju\u02d0. k\u02c8i\u02d0p m\u02c8u\u02d0v\u026a\u014b."
+        ],
+        "graphemes": [
+          "At last. The castle is behind you. Keep moving."
+        ],
+        "seconds": 4.15,
+        "peak": 0.41883519291877747,
+        "sha256": "39603ce9e0e7aa255628129f568f085b4a2eef1e939af7063e10936684f6683e",
+        "generation_seconds": 1.098
+      }
+    ],
+    "generation_seconds": 8.182
+  },
+  "processing": {
+    "boss_pitch_rate": 0.95,
+    "boss_saturation_drive": 2.3,
+    "inscription_breath_mix": 0.24,
+    "voice_peak_dbfs": -3,
+    "clue_peak_dbfs": -5
+  },
+  "verification": "Decoded PCM waveform, finite samples, durations, hashes and clipping checked. No listening, browser playback or physical-device check.",
+  "wall_seconds": 0.347
+}

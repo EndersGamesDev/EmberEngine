@@ -1,0 +1,316 @@
+{
+  "units": "meters",
+  "axes": "Y up; cot length Z, headboard positive Z; wall props face positive Z",
+  "props": [
+    {
+      "file": "bucket.glb",
+      "node": "bucket",
+      "triangles": 3048,
+      "primitives": 1,
+      "bytes": 227116,
+      "texture_bytes": 103255,
+      "texture_size": [
+        512,
+        512
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.24775861203670502,
+        0.0,
+        -0.2409999966621399
+      ],
+      "bounds_max": [
+        0.24775861203670502,
+        0.6600000262260437,
+        0.2409999966621399
+      ],
+      "size": [
+        0.49551722407341003,
+        0.6600000262260437,
+        0.4819999933242798
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "handle_axis": [
+          0,
+          0.352,
+          0
+        ],
+        "collision": "cylinder radius0.25m,height0.42m; handle is decor"
+      },
+      "sha256": "2d395468ca0537f9e9ccd4d609f316ac893171cedf2fb8168e61b5b3867c5c29"
+    },
+    {
+      "file": "candle-stool.glb",
+      "node": "candle-stool",
+      "triangles": 4102,
+      "primitives": 1,
+      "bytes": 293380,
+      "texture_bytes": 106435,
+      "texture_size": [
+        512,
+        512
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.2574999928474426,
+        0.0,
+        -0.2600001096725464
+      ],
+      "bounds_max": [
+        0.2575000524520874,
+        0.9165253043174744,
+        0.2600000202655792
+      ],
+      "size": [
+        0.51500004529953,
+        0.9165253043174744,
+        0.5200001001358032
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "flame_anchor": [
+          0.003,
+          0.9279868741035462,
+          -0.002
+        ],
+        "animation": "Particle flame center above wick; point light anchor atY0.96. Stool static.",
+        "collision": "box0.52x0.615x0.52m; candle is decor"
+      },
+      "sha256": "4c05923af15a58d45ff8cbacc9e606cc805a79f2053ebf7bcc608b3c001d3a21"
+    },
+    {
+      "file": "chain-shackle.glb",
+      "node": "chain-shackle",
+      "triangles": 3428,
+      "primitives": 1,
+      "bytes": 297084,
+      "texture_bytes": 155469,
+      "texture_size": [
+        512,
+        512
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.10300000011920929,
+        -0.7959999442100525,
+        -0.032499998807907104
+      ],
+      "bounds_max": [
+        0.11150000244379044,
+        0.06499999761581421,
+        0.05562916398048401
+      ],
+      "size": [
+        0.21450001001358032,
+        0.8609999418258667,
+        0.08812916278839111
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "animation": "Sway whole mesh around origin: rotation about X or Z, amplitude<=0.04rad; top is wall anchor",
+        "mount_normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "sha256": "9a3534e7343ac02152c423d275b81bd04378fb53a8d4fe677568b16a11491b54"
+    },
+    {
+      "file": "cot-detailed.glb",
+      "node": "cot-detailed",
+      "triangles": 8904,
+      "primitives": 1,
+      "bytes": 873876,
+      "texture_bytes": 420543,
+      "texture_size": [
+        1024,
+        1024
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.5125957727432251,
+        0.0,
+        -1.0500000715255737
+      ],
+      "bounds_max": [
+        0.5152165293693542,
+        1.0399999618530273,
+        1.0499999523162842
+      ],
+      "size": [
+        1.0278122425079346,
+        1.0399999618530273,
+        2.0999999046325684
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "mattress_top": [
+          0,
+          0.66,
+          0
+        ],
+        "head_end": "positive engine Z",
+        "collision": "box approximately0.96X x0.70Y x2.13Z; headboard reaches1.04Y"
+      },
+      "sha256": "c7558125a312768b48efd656fc97215925d99ab90a89d9d197cd70215c7f53e6"
+    },
+    {
+      "file": "drain-grate.glb",
+      "node": "drain-grate",
+      "triangles": 2060,
+      "primitives": 1,
+      "bytes": 227432,
+      "texture_bytes": 106337,
+      "texture_size": [
+        512,
+        512
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.23800000548362732,
+        0.0,
+        -0.2004999965429306
+      ],
+      "bounds_max": [
+        0.23800000548362732,
+        0.052000001072883606,
+        0.2004999965429306
+      ],
+      "size": [
+        0.47600001096725464,
+        0.052000001072883606,
+        0.4009999930858612
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "collision": "decor inset into floor; full height0.054m",
+        "animation": "static"
+      },
+      "sha256": "75ab8afb20029e5fa7dff21e6f01425606563ba2ca14ef5e416d4f9d3418dfc4"
+    },
+    {
+      "file": "hanging-rag.glb",
+      "node": "hanging-rag",
+      "triangles": 3296,
+      "primitives": 1,
+      "bytes": 167276,
+      "texture_bytes": 66237,
+      "texture_size": [
+        512,
+        512
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.35112297534942627,
+        -0.8084864020347595,
+        -0.024479588493704796
+      ],
+      "bounds_max": [
+        0.35181450843811035,
+        0.015000000596046448,
+        0.02599763311445713
+      ],
+      "size": [
+        0.7029374837875366,
+        0.8234863877296448,
+        0.050477221608161926
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "animation": "Top-hem origin: slow0.02rad X/Z sway; mesh hangs in negative Y",
+        "mount_normal": [
+          0,
+          0,
+          1
+        ]
+      },
+      "sha256": "b0ac5f2f6b1c6d4d84cad03b6dcad4c933640e6ce3c2783fd14b683b6f72f4a8"
+    },
+    {
+      "file": "straw-scatter.glb",
+      "node": "straw-scatter",
+      "triangles": 1470,
+      "primitives": 1,
+      "bytes": 131164,
+      "texture_bytes": 39976,
+      "texture_size": [
+        256,
+        256
+      ],
+      "texture_mode": "RGB",
+      "texture_bit_depth": 8,
+      "texture_format": "JPEG quality93 no chroma subsampling",
+      "bounds_min": [
+        -0.4503321349620819,
+        0.0,
+        -0.32147690653800964
+      ],
+      "bounds_max": [
+        0.48387250304222107,
+        0.019221169874072075,
+        0.36519336700439453
+      ],
+      "size": [
+        0.934204638004303,
+        0.019221169874072075,
+        0.6866703033447266
+      ],
+      "anchors": {
+        "pivot": [
+          0,
+          0,
+          0
+        ],
+        "collision": "none, floor dressing",
+        "animation": "static"
+      },
+      "sha256": "eff4943e909835ef390d181f084819981a4a7f06cafd65fb52c967143b0028ef"
+    }
+  ],
+  "total_triangles": 26308,
+  "total_embedded_texture_bytes": 998252,
+  "total_glb_bytes": 2217328,
+  "build_seconds": 35.88,
+  "verify_seconds": 0.72,
+  "provenance": "Local deterministic Blender geometry, seeded non-wood materials, and root-supplied ImageGen aged-oak picture. No reserved LAN image or mesh service called; fleet reservations honored.",
+  "oak_source": "C:\\Users\\end\\dev\\end-game\\runtime-v2-assets\\surfaces\\oak-aged-albedo-v2.png",
+  "oak_source_sha256": "fc4611bcaafa8e2831bd676e55791167324d31ab1ec501b06a380b287b9e6b37"
+}

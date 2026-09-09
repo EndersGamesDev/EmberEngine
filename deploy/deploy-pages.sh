@@ -54,7 +54,7 @@ V1_COMMIT="e7b85e8"
 # Release versions come from the packages being shipped. Validate every
 # catalog entry before a build or publish, then use Arena's release major to
 # select its stable vN directory. Other legacy slots remain explicit locators.
-IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE < <("$PY" - web/games.json <<'PY'
+IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE END_GAME_LIVE < <("$PY" - web/games.json <<'PY'
 import json, pathlib, re, sys
 
 catalog_path = pathlib.Path(sys.argv[1])
@@ -66,6 +66,7 @@ manifests = {
     "kings": "crates/kings/Cargo.toml",
     "league": "crates/league/Cargo.toml",
     "what-is-this": "crates/what-is-this/Cargo.toml",
+    "end-game": "crates/end-game/Cargo.toml",
     "julibrot": "crates/labs/julibrot/app/Cargo.toml",
 }
 
@@ -102,15 +103,19 @@ if arena.get("v") != "v%s" % arena_major or arena.get("path") != arena_path:
 league = next(release for release in games["league"]["versions"] if release.get("live") is True)
 if re.fullmatch(r"games/league/v[1-9][0-9]*/", league.get("path", "")) is None:
     raise SystemExit("FAILED: League catalog must select exactly one safe live version path")
-print(arena_path.rstrip("/") + "\t" + league["path"].rstrip("/"))
+end_game = next(release for release in games["end-game"]["versions"] if release.get("live") is True)
+if re.fullmatch(r"games/end-game/v[1-9][0-9]*/", end_game.get("path", "")) is None:
+    raise SystemExit("FAILED: End Game catalog must select exactly one safe live version path")
+print(arena_path.rstrip("/") + "\t" + league["path"].rstrip("/") + "\t" + end_game["path"].rstrip("/"))
 PY
 )
 ARENA_LIVE="${ARENA_LIVE//$'\r'/}"
 LEAGUE_LIVE="${LEAGUE_LIVE//$'\r'/}"
+END_GAME_LIVE="${END_GAME_LIVE//$'\r'/}"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     missing=()
-    for bundle in fire arena kings league what_is_this; do
+    for bundle in fire arena kings league what_is_this end_game; do
         for artifact in "$bundle.js" "${bundle}_bg.wasm"; do
             [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
         done
@@ -119,7 +124,7 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
         [ -f "web/labs/julibrot/pkg/$artifact" ] || missing+=("web/labs/julibrot/pkg/$artifact")
     done
     if [ "${#missing[@]}" -ne 0 ]; then
-        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all five game bundles and the Julibrot lab bundle; missing:" >&2
+        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all six game bundles and the Julibrot lab bundle; missing:" >&2
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
@@ -129,7 +134,7 @@ echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
-    echo "== using five prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
+    echo "== using six prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p fire --lib
@@ -137,6 +142,7 @@ else
     cargo build --target wasm32-unknown-unknown --release -p kings --lib
     cargo build --target wasm32-unknown-unknown --release -p league --lib
     cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
+    cargo build --target wasm32-unknown-unknown --release -p end-game --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/fire.wasm
@@ -148,6 +154,8 @@ else
         target/wasm32-unknown-unknown/release/league.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/what_is_this.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/end_game.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
         target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 fi
@@ -193,10 +201,10 @@ WHAT_LIVE="games/what-is-this/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
 rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
-    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$LEAGUE_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" \
+    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$LEAGUE_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" "${PAGES_DIR:?}/$END_GAME_LIVE" \
     "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
     "${PAGES_DIR:?}"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$END_GAME_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 # The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
 # and every live page imports it from there, so there is one copy of the rule
@@ -247,6 +255,13 @@ for path in sorted(source.rglob("*")):
 PY
 cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
+# End Game has version-local UI and media. Copy only its source assets here;
+# generated bindings come from the verified root pkg below.
+for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
+    cp "web/$END_GAME_LIVE/$name" "$PAGES_DIR/$END_GAME_LIVE/"
+done
+cp web/version.json "$PAGES_DIR/$END_GAME_LIVE/"
+
 # lab.js is not optional furniture: main.js imports it statically, so a deploy
 # that omits it resolves the import to a missing file and the whole module graph
 # fails to load — no page, no controls, and not even the page's own error
@@ -280,6 +295,7 @@ copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
 copy_pkg "$PAGES_DIR/$LEAGUE_LIVE/pkg" league
 copy_pkg "$PAGES_DIR/$WHAT_LIVE/pkg" what_is_this
+copy_pkg "$PAGES_DIR/$END_GAME_LIVE/pkg" end_game
 cp -r web/pkg "$PAGES_DIR"/pkg
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
 cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"

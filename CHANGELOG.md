@@ -19,6 +19,79 @@ This is the repository's only ledger for finished work that has not yet been ass
 ### Exact camera
 
 The new dependency-free `ember-camera` shared engine crate is part of the `ember` workspace series and owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`, `7a5ccf12`, `2343336e`). Across five fixed-evaluation samples, edit measured 28,149–42,129 ns, reference displacement 355,220–435,949 ns, and combined 383,369–478,078 ns. Earlier floating-evaluation samples measured 3,580–7,960 ns for reference displacement and 24,920–63,170 ns combined; the roughly 47-fold row-9 regression remains within the 1,000,000 ns release ceiling.
+### End Game v11
+
+Weight and Impact connects an upper-right-to-lower-left cut, horizontal backhand and steeper finishing diagonal through shared edge-leading sword poses. Sixteen subdivisions per 60 Hz contact tick sweep the blade and player frame against five anatomical zones and castle surfaces. Actual contact drives directional reactions, hitstop and rebound; missed cuts create no impact. Separate heavy input selects an overhead strike on the ground or a downward airborne cut that holds through landing without extra landing damage. The projected aim marker and confirmed hit label distinguish intent from contact (`9ab4fcec`).
+
+Bounded structural scratches sit on the rendered surfaces; armor scratches follow their rigid body parts. Material-specific dust, sparks and authored sound cues distinguish stone, timber, iron and body contact. Moving gates and generated-prop proxy bounds produce transient feedback. Existing textures and generated assets are reused; target volumes remain anatomical proxies, marks are cosmetic and weapon motion is authored rather than a solved mass-and-muscle simulation (`9ab4fcec`).
+
+All 116 core and 66 client tests, 36 JavaScript tests, 126 Pages fixtures, scoped publication preservation, README coverage and done-list checks pass. Tests include continuous two-hand reach, moving-frame blade collision, all five actual hit zones, jump-heavy timing and interruption, wall rebound, repeated reactions and the complete V10 escape route. Twenty-seven passive native views plus two focused floor-mark recaptures were inspected in 53.70 seconds of capture wall time. The final Idle browser helper takes 6.04 seconds and the native build 3.78 seconds. The WASM is 34,763,523 bytes; the worst sampled view including the bounded mark history has 270,892 submitted triangles, with 157,714,026 estimated resident texture bytes including mipmaps. Browser gameplay, physical controls, audible output, vibration and measured 5K frame pacing remain unverified (`9ab4fcec`).
+
+### End Game v10
+
+The Last Seal adds eight armed soldiers and hollow knights plus the two-phase One-Eyed Castellan. Timed weapon contacts, per-attack guard costs, a single committed attacker and an unblockable slam warning create recovery openings. Castle inscriptions, an ordered Sun-Wolf-Bell puzzle, the Castellan's crown and a rising west gate lead to a physical escape ending. A discovered-clue journal, persistent castle checkpoint and three finite healing shrines support the route (`2b6a5b24`).
+
+Three SDXL/TRELLIS body bases become 18-part articulated rigs with compact RGB8 atlases; separate measured sword, spear, axe and maul models share registered mesh IDs. Bodies and weapons total 38,308 triangles, 5,159,880 GLB bytes and 18,699,288 texture bytes including mipmaps. Five cached Kokoro voice clips and an authored ambient loop add 2,816,792 audio bytes. Provenance, closed retopology limitations and portable reproduction tools accompany the assets. The final WASM is 34,721,738 bytes; 330 sampled frames peak at 270,300 submitted triangles with 157,714,026 estimated resident texture bytes including mipmaps (`2b6a5b24`).
+
+All 102 core and 52 client tests, 29 JavaScript tests, 126 Pages fixtures, scoped publication preservation, decoded asset checks, README coverage and done-list checks pass. Actual rig, socket, weapon, gait and collapse geometry is checked at 120 Hz, and a movement-driven test completes the ordered castle route and crosses the final gate. Twenty-seven passive native pose views plus three focused reframings were inspected in 31.72 seconds of capture wall time. The final Idle browser helper takes 6.37 seconds; the native build takes 4.483 seconds. Browser gameplay, physical controls, audible output, vibration and measured 5K frame pacing remain unverified (`2b6a5b24`).
+
+### End Game v9
+
+Beyond the Dungeon continues after the greatsword, warden fight and broken exit chain. A rising portcullis opens the lower passage, monumental great hall, grand stair, backyard garden, castle walls and tower summit. Shared measured geometry supplies 451 solids, 88 stair treads and eight prop placements; grounded movement, jumping, guard, footsteps and discovery work across elevations. Separate portal jambs, protected outer rails, swept support and ceiling checks, and out-of-world recovery keep the connected route traversable in both directions (`47e98a90`).
+
+Three SDXL/TRELLIS generated props add carved supports, a dry fountain and a tower entrance: 32,929 triangles, 4,601,616 GLB bytes and 9,437,160 texture bytes including mipmaps. Instanced masonry, physical surface coordinates, blended entry lighting and visibility selection accompany them. Shared PNG storage removes 6,887,552 duplicate download bytes; the final WASM is 29,442,625 bytes. Across 208 representative views the maximum is 255,264 submitted triangles, with 139,014,421 resident texture bytes including mipmaps (`47e98a90`).
+
+All 82 core and 42 client tests, 21 JavaScript tests, 126 Pages fixtures, scoped publication preservation, asset export checks, README coverage and done-list checks pass. An independent audit passes nine offset routes, five perimeter loops and repeated standing/crouched boundary jumps. Twenty-three final passive native frames were inspected in 25.39 seconds; the passage remains byte-identical after PNG deduplication. The Idle browser helper takes 6.89 seconds and the final native build takes 3.91 seconds. Browser gameplay, physical devices, audible output and 5K frame pacing remain unverified. The castle is prepared for later inhabitants and encounters (`47e98a90`).
+
+### End Game v8
+
+Edge and Guard rotates the cutting edge into each descending, rising and crosswise strike, with accelerating contact and connected recoveries for all three existing input rhythms. Late buffered presses retain their partial chamber pose, both gauntlets remain on the hilt, and a held directional guard receives frontal knife hits on the strong of the sword. Blocking costs 28 stamina; a depleted guard breaks, while hits from behind and unfinished raises remain vulnerable. Mouse, keyboard, gamepad and touch share held guard, release and pause handling, with steel sparks, recoil, sound events and rumble (`9aeca184`).
+
+All 67 core and 35 client tests, 20 JavaScript tests, 126 Pages fixtures, scoped publication preservation, README coverage and done-list checks pass. Forty-eight passive native strike, transition and guard frames were inspected in 41.49 seconds. The Idle browser helper builds the 27,832,573-byte WASM in 3.45 seconds; the native build takes 1.59 seconds. Browser gameplay, physical devices, audible output and 5K frame pacing remain unverified. Contact still uses the game's timed range and facing checks; full swept blade collision remains in the backlog (`9aeca184`).
+
+### End Game v7
+
+The Dread Warden replaces the primitive jailer with an SDXL/TRELLIS generated scarred character, worn leather coat, straps, pouches and boots. Conversion cleans the sculpt, repairs closed lower legs and hidden thigh coverage, removes detached fragments and fits the existing twenty-part rig. The 4,138,652-byte GLB has 20,780 triangles and 20,097,700 cloned texture bytes including mipmaps; source jobs, hashes and seven reproduction scripts accompany it (`d792d205`).
+
+The warden shifts his weight forward before rising, plants his feet during straight full-speed pursuit, counter-rotates his upper body and braces into knife attacks. Existing contact timing, interrupted poses, controls and all four V6 voice reactions remain. Fifty-seven core tests, twenty-six client tests, fourteen JavaScript tests, shell syntax, exported-asset checks, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. Thirty-nine final passive native poses were inspected in 35.58 seconds; the Idle browser helper takes 6.37 seconds and produces a 27,821,775-byte WASM. The complete scene stays within its existing limits at 217,128 triangles and 122,499,349 estimated texture bytes. Browser gameplay, audible output, physical devices and 5K frame pacing remain unverified. The generated fingers remain partly fused, clothing uses rigid articulation and turning blends foot poses (`d792d205`).
+
+### End Game v6
+
+The Warden’s Voice adds four prerecorded reactions: audible cell footsteps, unlocking the gate, claiming the greatsword and the warden’s death. A twelve-second movement cooldown, once-per-life story events and a bounded event history prevent repetition and lost reactions. One-speaker playback gives story lines priority over barks and death priority over live speech; subtitles, ambience ducking, saved pause offsets, background-resume handling and respawn resets accompany the voice (`e8a7a6f7`).
+
+Four cached CPU Kokoro clips total 404,288 bytes, with exact source transcripts, phonemes, provenance and unclipped mono PCM waveforms. Fifty-seven core tests, twenty-one client tests, eleven dialogue tests, three resolution tests, JavaScript syntax, audio waveform/hash checks, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. The Idle-priority browser helper takes 7.69 seconds and produces a 24,167,561-byte WASM. Offline dictation recovers the first two lines exactly and the remaining clauses with documented word substitutions; this is not listening. Browser playback, physical devices, audible output, vibration and 5K frame pacing remain unverified (`e8a7a6f7`).
+
+### End Game v5
+
+The Warden’s Knife replaces proximity damage with an enemy who wakes, stands, draws a knife, pursues around the corridor plinth and commits to a visible windup, contact and recovery. A knife strike deals 15 damage once when range, facing, height, walls, the sliding gate and dodge timing allow it. Heavy greatsword hits interrupt upright attacks; feet settle when movement stops, the chair stays behind, and death preserves a partial rise (`7d4dae50`).
+
+The deterministic 20-part warden and knife use 11,830 triangles and a 486,824-byte GLB, with measured grips, planted-foot rise and authored gait, draw, strike, stagger and death poses. Enemy health, attack status, hit sound, camera movement and rumble accompany the fight. Forty-five core tests, eighteen client/geometry/IK/input tests, three resolution tests, JavaScript syntax, scoped publication preservation, all 126 Pages fixtures, README coverage and done-list checks pass. Eighteen passive native pose captures were inspected. The final Idle-priority release build takes 7.08 seconds and produces a 24,166,325-byte WASM. Browser gameplay, physical DualSense/mobile controls, audible output, device vibration and 5K frame pacing remain unverified; direction-specific enemy hit reactions remain in the backlog (`7d4dae50`).
+
+Knife interruptions now retain the struck pose before blending into stagger or collapse, including a fatal hit during an earlier stagger. Flinch starts continuously, the collapsing elbow avoids a pole flip, and saved poses clear before the next attack. All forty-eight core and twenty client tests pass, including exact joint continuity at windup and contact, and twelve additional passive native interruption captures were inspected. The final Idle-priority browser build takes 7.83 seconds and produces a 24,167,864-byte WASM; browser and physical-device verification remain outstanding (`a873c796`).
+
+### End Game v4
+
+Weight of the Blade adds Cut, Backhand, Finisher, Overhead and Rising arcs. One tap strikes once; three quick taps select Wolf's Fang, tap-pause-tap selects Gravebreaker, and tap-tap-pause-tap selects Rising Wolf. Counted input preserves rapid mouse/touch taps, held buttons do not repeat, and valid follow-ups buffer through recovery. Damage occurs at contact, with a short impact freeze, sparks, camera movement, sound and rumble; final gate recovery completes before the chapter overlay. Both V3 gauntlets retain their hilt grips throughout the authored arcs (`d550af5a`).
+
+Twenty-eight core tests, fifteen client/geometry/IK/input tests, three resolution tests, JavaScript syntax, scoped publication preservation, all 126 Pages fixtures, all 222 changelog checks, README coverage and done-list checks pass. Fifteen passive native strike-phase captures and one staged heavy-impact frame were inspected; real contact behavior is covered by simulation tests. The final release helper builds the 24,773,487-byte WASM in 7.64 seconds at Idle priority. Browser gameplay, physical DualSense/mobile controls, audible output, device vibration and 5K frame pacing remain unverified. Swept weapon collision and rigged enemy reactions remain in the backlog (`d550af5a`).
+
+Sword audio consumes event counters on each animation frame before the slower HUD refresh, preserving short windup-to-contact timing. Syntax and event ordering were checked; audible output remains unverified (`7a463b2c`).
+
+### End Game v3
+
+Hands of the Wolf replaces the box gauntlets with 34 articulated parts, finger curl, thumb opposition and measured key/sword grips. Grounded, collision-checked approaches lead into contact, grasp, lift, stow and recovery; the key follows its ring socket, the gate waits for key withdrawal, and the greatsword lifts its shallow-seated tip clear before rotating. The generated three-asset kit is 644,048 bytes. Fourteen core tests, eight client/geometry/IK/input tests, three resolution tests, exported GLB checks, native contact captures and scoped publication preservation pass; the browser bundle is 24,757,936 bytes. Browser gameplay, physical DualSense/mobile devices and 5K frame pacing remain unverified (`21c289ef`).
+
+### End Game v2
+
+The Living Cell replaces the first chapter's blockout architecture with smaller beveled and chipped masonry, generated limestone and oak surfaces, recessed mortar and barred window, fitted roof timbers, layered cage ironwork, and a fully lined barrel vault. The gate and loose floorboard animate; the gate's physical aperture follows its opening. The launcher and both publishers select v2 while retaining the original v1 page and bundle (`1ca5514a`).
+
+Seven generated furnishings add a stitched straw cot, iron-hooped bucket, shackles, torn cloth, drain, candle stool and scattered straw in a 2.22 MB / 26,308-triangle kit. Cloth, chains, flame and gravity-timed drips animate around the same traversable escape route. Six simulation tests, five client/geometry/asset-budget tests, three resolution tests, native visual captures, scoped publication preservation and all 126 deployment fixtures pass; the final 24,818,334-byte WASM builds in 6.2 seconds through the Idle-priority helper. Browser gameplay, physical controllers/mobile devices and 5K frame rates remain unverified, and cloth/chain motion remains authored animation (`cc11b1af`).
+
+### End Game v1
+
+The first End Game chapter runs on Ember: awaken in a wooden-floored dungeon cell, recover a key, evade or fight the sleeping warden, claim the greatsword and break the exit chain. Wolf and werewolf armor forms, a prerecorded prologue, material densities and gravity, individually varied surfaces, local torch lighting and adaptive resolution up to a 5120-pixel width accompany keyboard/mouse, standard gamepad and touch controls. The launcher entry and scoped publisher preserve the other live games; each targeted release records its source and file hashes in the game's own `version.json` (`9e664ac0`).
+
+Validation covered six simulation tests, three client input tests, three resolution tests, 53 engine tests, 12 GPU tests, 125 deployment fixtures, offline publication preservation, sibling-client compilation and passive native visual inspection. Release WASM builds successfully. Physical controllers, mobile devices, browser gameplay and 5K frame rates remain unverified; the unrigged armor swap and supplied dragon film establish a v1 prototype, with continuous animation and photorealistic material simulation left in the backlog (`9e664ac0`).
 
 ### Julibrot rounds two and three
 
@@ -417,6 +490,74 @@ no proto · stamp r1469 · source `f28a145f` · tag `arena-0.0.0` · published `
 The original local game — the pong classic. Two players, one keyboard, first to 7; the paddle simulation runs entirely in the client and there is no online pong.
 
 The page itself is older than its arena path: it entered as `web/games/pong/v2/index.html` with the games hub at `b4a9ad1e` and was renamed under `web/games/arena/v0/` at `11d6ab2d`, "rename: move pong lineage under arena paths". That rename is also why the launcher has no arena v2: the number belonged to the pong lineage and was not re-used. v0 is not frozen — the paddle simulation ships inside the arena bundle, so every hub deploy rebuilds this page too. Twenty-five publications, the newest with an on-`main` stamp being r1469 `f28a145f`, which is what serves.
+
+## End Game
+
+### v11 — 2026-09-08
+
+no proto · stamp — · source `2dae79206c564b91837473c65c039c7d21472827` (not on main) · no tag · published `e0a4a7b74d8456f3696356a36cd84493a0ab6a2c` (release stamp)
+
+Weight and Impact focuses the greatsword combo, aimed body zones, a separate jumping heavy attack and visible hit reactions.
+
+### v10 — 2026-09-08
+
+no proto · stamp — · source `ffe576b58c333517f8c5ff3e9f24483b00b0c507` (not on main) · no tag · published `43d5d806c439f2b1e01a486c89df0f0fbf6122fa` (release stamp)
+
+The Last Seal populates the castle with armed enemies and a cyclops Castellan, and connects its clues to a final escape.
+
+### v9 — 2026-09-08
+
+no proto · stamp — · source `6cf7e07aa0acdce01e7e1a1953a130c61967e1b4` (not on main) · no tag · published `f7aa1a7f625c31b7e60de6b62a907b31897dc8a5` (release stamp)
+
+Beyond the Dungeon opens a connected castle route through a basement hall, great hall, garden, battlements and climbable tower. V8 sword combat and blocking remain.
+
+### v8 — 2026-09-08
+
+no proto · stamp — · source `47c944f9773a7a30cd0525db0d9eb87c0d8f1f1a` (not on main) · no tag · published `0d37d956a9913735fd14a3b4a7bcdf1d245a76da` (release stamp)
+
+Edge and Guard aligns sword cuts with the sharp edge, connects combo transitions and adds directional blocking. The generated V7 warden and V6 voices remain.
+
+### v7 — 2026-09-08
+
+no proto · stamp — · source `2f199f71f8210138b0047ca16dc5123ef81c89a6` (not on main) · no tag · published `890dd6c62eac9cd4caba2aa0df4467deb70515e4` (release stamp)
+
+The Dread Warden redesigns the jailer with a generated textured character and more grounded rise, pursuit and knife animations. V6 voice reactions and V1–V6 releases remain available.
+
+### v6 — 2026-09-08
+
+no proto · stamp — · source `b7a6b00c09bd36e7122b8f5ff90b9b9a8f27a343` (not on main) · no tag · published `67025a3a608ce49a4e1a3e42572c9b891c56c13f` (release stamp)
+
+The Warden’s Voice adds spoken reactions to noisy movement, the unlocked cell, claiming the greatsword and the warden’s death. Subtitles accompany the four lines, movement barks have a cooldown, and V1–V5 remain available.
+
+### v5 — 2026-09-08
+
+no proto · stamp — · source `c79a32cd7706a141d5fff6d3dcb9ed29e4298a1d` (not on main) · no tag · published `1a1080695f9f9f0d35bff2477843a57ce1e5fb69` (release stamp)
+
+The Warden’s Knife replaces the seated guard with an articulated enemy who rises, draws a knife and pursues the player. Telegraphed knife attacks resolve damage at contact and recover before repeating; V4 sword combos and the complete V1–V4 releases remain available.
+
+### v4 — 2026-09-08
+
+no proto · stamp — · source `f6fd41399a943c6dd91e9e4689f6ff1d377c5d44` (not on main) · no tag · published `f562dc067175ed5f22b357ab9439c589307fad74` (release stamp)
+
+Weight of the Blade adds five directional greatsword arcs, single strikes and three buffered rhythm combos, with contact-timed damage, impact pauses, sparks, sound and controller feedback. Both articulated gauntlets stay attached to the shared hilt; V1, V2 and V3 retain their published pages and bundles.
+
+### v3 — 2026-09-08
+
+no proto · stamp — · source `91e5f93a7d28fa0e25e19ab30a56161034e45816` (not on main) · no tag · published `bd21d0f45100d1f33195c9ebead0c41843270477` (release stamp)
+
+Hands of the Wolf adds articulated gauntlets and contact-timed floorboard, key, lock and two-hand greatsword interactions. The launcher retains V1 and V2 alongside the new release.
+
+### v2 — 2026-09-08
+
+no proto · stamp — · source `48a37a7115b5cab12f6162752f711d59edc6df89` (not on main) · no tag · published `e36d50bede1d46a543199c61cfd32cc45a6bafdb` (release stamp)
+
+The Living Cell adds generated stone and timber surfaces, fitted masonry, detailed furnishings, and animated chains, cloth, gate and water. The release-local stamp and hashes identify the preserved 2.0.0 bundle.
+
+### v1 — 2026-09-08
+
+no proto · stamp — · source `9f4acfbf96484714efd06f47e784e96a110f8879` (not on main) · no tag · published `d5710a94593320494f7e07342932118c22d55523` (release stamp)
+
+The Awakening introduces the first Ember dungeon chapter, wolf armor, greatsword, material physics, torch lighting, and keyboard/mouse, gamepad and touch controls. The release-local stamp and hashes identify the preserved 1.0.0 bundle.
 
 ## UltimateLegue (league)
 

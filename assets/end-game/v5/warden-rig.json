@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "units": "meters",
+  "facing": "-Z",
+  "up": "+Y",
+  "geometry_space": "standing bind coordinates; identity node transforms",
+  "height": 1.865,
+  "parts": [
+    {
+      "name": "warden_pelvis",
+      "parent": null,
+      "pivot": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "warden_torso",
+      "parent": "warden_pelvis",
+      "pivot": [
+        0,
+        1.06,
+        0
+      ]
+    },
+    {
+      "name": "warden_neck",
+      "parent": "warden_torso",
+      "pivot": [
+        0,
+        1.52,
+        0
+      ]
+    },
+    {
+      "name": "warden_head",
+      "parent": "warden_neck",
+      "pivot": [
+        0,
+        1.6,
+        -0.002
+      ]
+    },
+    {
+      "name": "warden_upperarm_r",
+      "parent": "warden_torso",
+      "pivot": [
+        0.26,
+        1.46,
+        0
+      ],
+      "endpoint": [
+        0.26,
+        1.14,
+        0
+      ],
+      "length": 0.32
+    },
+    {
+      "name": "warden_forearm_r",
+      "parent": "warden_upperarm_r",
+      "pivot": [
+        0.26,
+        1.14,
+        0
+      ],
+      "endpoint": [
+        0.26,
+        0.85,
+        0
+      ],
+      "length": 0.29
+    },
+    {
+      "name": "warden_hand_r",
+      "parent": "warden_forearm_r",
+      "pivot": [
+        0.26,
+        0.85,
+        0
+      ],
+      "knife_socket": [
+        0.26,
+        0.782,
+        -0.012
+      ]
+    },
+    {
+      "name": "warden_thigh_r",
+      "parent": "warden_pelvis",
+      "pivot": [
+        0.105,
+        0.97,
+        0
+      ],
+      "endpoint": [
+        0.105,
+        0.54,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "warden_shin_r",
+      "parent": "warden_thigh_r",
+      "pivot": [
+        0.105,
+        0.54,
+        0
+      ],
+      "endpoint": [
+        0.105,
+        0.11,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "warden_boot_r",
+      "parent": "warden_shin_r",
+      "pivot": [
+        0.105,
+        0.11,
+        0
+      ],
+      "sole_y": 0.0
+    },
+    {
+      "name": "warden_coat_r",
+      "parent": "warden_thigh_r",
+      "pivot": [
+        0.105,
+        0.97,
+        0
+      ]
+    },
+    {
+      "name": "warden_upperarm_l",
+      "parent": "warden_torso",
+      "pivot": [
+        -0.26,
+        1.46,
+        0
+      ],
+      "endpoint": [
+        -0.26,
+        1.14,
+        0
+      ],
+      "length": 0.32
+    },
+    {
+      "name": "warden_forearm_l",
+      "parent": "warden_upperarm_l",
+      "pivot": [
+        -0.26,
+        1.14,
+        0
+      ],
+      "endpoint": [
+        -0.26,
+        0.85,
+        0
+      ],
+      "length": 0.29
+    },
+    {
+      "name": "warden_hand_l",
+      "parent": "warden_forearm_l",
+      "pivot": [
+        -0.26,
+        0.85,
+        0
+      ],
+      "knife_socket": null
+    },
+    {
+      "name": "warden_thigh_l",
+      "parent": "warden_pelvis",
+      "pivot": [
+        -0.105,
+        0.97,
+        0
+      ],
+      "endpoint": [
+        -0.105,
+        0.54,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "warden_shin_l",
+      "parent": "warden_thigh_l",
+      "pivot": [
+        -0.105,
+        0.54,
+        0
+      ],
+      "endpoint": [
+        -0.105,
+        0.11,
+        0
+      ],
+      "length": 0.43
+    },
+    {
+      "name": "warden_boot_l",
+      "parent": "warden_shin_l",
+      "pivot": [
+        -0.105,
+        0.11,
+        0
+      ],
+      "sole_y": 0.0
+    },
+    {
+      "name": "warden_coat_l",
+      "parent": "warden_thigh_l",
+      "pivot": [
+        -0.105,
+        0.97,
+        0
+      ]
+    },
+    {
+      "name": "warden_chair",
+      "parent": null,
+      "pivot": [
+        0,
+        0,
+        0
+      ],
+      "stationary": true,
+      "seat_height": 0.54,
+      "origin_world": [
+        -2.9,
+        0,
+        -3.7
+      ],
+      "yaw": 3.141592653589793
+    },
+    {
+      "name": "warden_knife",
+      "parent": "warden_hand_r",
+      "pivot": [
+        0.26,
+        0.782,
+        -0.012
+      ],
+      "grip_anchor": [
+        0.26,
+        0.782,
+        -0.012
+      ],
+      "blade_axis": [
+        1,
+        0,
+        0
+      ],
+      "blade_tip": [
+        0.635,
+        0.782,
+        -0.012
+      ]
+    }
+  ]
+}

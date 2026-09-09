@@ -1,0 +1,527 @@
+{
+  "schema_version": 1,
+  "file": "cyclops.glb",
+  "sha256": "861241c0abe05c7935a1ef5335e1848c5df73667dde202c75f233322b5b1188a",
+  "bytes": 1564084,
+  "triangles": 12974,
+  "nodes": 18,
+  "cloned_texture_gpu_bytes_with_mips": 5767064,
+  "parts": [
+    {
+      "name": "enemy_boot_l",
+      "triangles": 828,
+      "bounds_min": [
+        -0.4084967076778412,
+        0.0,
+        -0.2792995274066925
+      ],
+      "bounds_max": [
+        -0.20427832007408142,
+        0.27617377042770386,
+        0.1505342423915863
+      ],
+      "surface_area": 0.2790391445159912,
+      "image": 0
+    },
+    {
+      "name": "enemy_boot_r",
+      "triangles": 722,
+      "bounds_min": [
+        0.05661165714263916,
+        0.0,
+        -0.26222869753837585
+      ],
+      "bounds_max": [
+        0.3764197826385498,
+        0.23332926630973816,
+        0.17653249204158783
+      ],
+      "surface_area": 0.35079407691955566,
+      "image": 1
+    },
+    {
+      "name": "enemy_coat_l",
+      "triangles": 450,
+      "bounds_min": [
+        -0.3865836560726166,
+        0.5683378577232361,
+        -0.33467087149620056
+      ],
+      "bounds_max": [
+        0.0026886481791734695,
+        0.971579372882843,
+        0.2756006717681885
+      ],
+      "surface_area": 0.609549880027771,
+      "image": 2
+    },
+    {
+      "name": "enemy_coat_r",
+      "triangles": 450,
+      "bounds_min": [
+        -0.008741753175854683,
+        0.5663842558860779,
+        -0.3379811644554138
+      ],
+      "bounds_max": [
+        0.3992018699645996,
+        0.9775460362434387,
+        0.2669806182384491
+      ],
+      "surface_area": 0.565054178237915,
+      "image": 3
+    },
+    {
+      "name": "enemy_forearm_l",
+      "triangles": 550,
+      "bounds_min": [
+        -0.48882821202278137,
+        0.8253228068351746,
+        -0.11856094747781754
+      ],
+      "bounds_max": [
+        -0.2272830307483673,
+        1.206260085105896,
+        0.17475470900535583
+      ],
+      "surface_area": 0.3196967840194702,
+      "image": 4
+    },
+    {
+      "name": "enemy_forearm_r",
+      "triangles": 550,
+      "bounds_min": [
+        0.18947181105613708,
+        0.8201376795768738,
+        -0.11729234457015991
+      ],
+      "bounds_max": [
+        0.4924689531326294,
+        1.212570071220398,
+        0.18172326683998108
+      ],
+      "surface_area": 0.3791802227497101,
+      "image": 5
+    },
+    {
+      "name": "enemy_hand_l",
+      "triangles": 538,
+      "bounds_min": [
+        -0.4484878182411194,
+        0.5029010772705078,
+        -0.0682058110833168
+      ],
+      "bounds_max": [
+        -0.2164916843175888,
+        0.9054120182991028,
+        0.22586016356945038
+      ],
+      "surface_area": 0.28822582960128784,
+      "image": 6
+    },
+    {
+      "name": "enemy_hand_r",
+      "triangles": 744,
+      "bounds_min": [
+        0.21693527698516846,
+        0.5586718916893005,
+        -0.09120984375476837
+      ],
+      "bounds_max": [
+        0.487749844789505,
+        0.8882302045822144,
+        0.17882122099399567
+      ],
+      "surface_area": 0.23114091157913208,
+      "image": 7
+    },
+    {
+      "name": "enemy_head",
+      "triangles": 2600,
+      "bounds_min": [
+        -0.29261332750320435,
+        1.5485484600067139,
+        -0.24802492558956146
+      ],
+      "bounds_max": [
+        0.2989913523197174,
+        1.8648350238800049,
+        0.2926199734210968
+      ],
+      "surface_area": 0.6344687938690186,
+      "image": 8
+    },
+    {
+      "name": "enemy_neck",
+      "triangles": 200,
+      "bounds_min": [
+        -0.172125443816185,
+        1.4605000019073486,
+        -0.1680435985326767
+      ],
+      "bounds_max": [
+        0.17205755412578583,
+        1.631589651107788,
+        0.34525224566459656
+      ],
+      "surface_area": 0.5120886564254761,
+      "image": 9
+    },
+    {
+      "name": "enemy_pelvis",
+      "triangles": 650,
+      "bounds_min": [
+        -0.3168193995952606,
+        0.9682725667953491,
+        -0.348087340593338
+      ],
+      "bounds_max": [
+        0.36674997210502625,
+        1.056646704673767,
+        0.26302072405815125
+      ],
+      "surface_area": 0.7328470945358276,
+      "image": 10
+    },
+    {
+      "name": "enemy_shin_l",
+      "triangles": 450,
+      "bounds_min": [
+        -0.3614462614059448,
+        0.09108001738786697,
+        -0.2847883701324463
+      ],
+      "bounds_max": [
+        -0.07917776703834534,
+        0.5589200258255005,
+        0.1266094446182251
+      ],
+      "surface_area": 0.5615851283073425,
+      "image": 11
+    },
+    {
+      "name": "enemy_shin_r",
+      "triangles": 450,
+      "bounds_min": [
+        0.017637504264712334,
+        0.09108001738786697,
+        -0.24426622688770294
+      ],
+      "bounds_max": [
+        0.32714366912841797,
+        0.5589200258255005,
+        0.16900070011615753
+      ],
+      "surface_area": 0.6075186729431152,
+      "image": 12
+    },
+    {
+      "name": "enemy_thigh_l",
+      "triangles": 450,
+      "bounds_min": [
+        -0.36476990580558777,
+        0.5215981006622314,
+        -0.29331275820732117
+      ],
+      "bounds_max": [
+        0.027387471869587898,
+        0.9884019494056702,
+        0.19783899188041687
+      ],
+      "surface_area": 0.8331009745597839,
+      "image": 13
+    },
+    {
+      "name": "enemy_thigh_r",
+      "triangles": 450,
+      "bounds_min": [
+        -0.027201594784855843,
+        0.5215981006622314,
+        -0.288187712430954
+      ],
+      "bounds_max": [
+        0.3291778862476349,
+        0.9884019494056702,
+        0.20351383090019226
+      ],
+      "surface_area": 0.813927173614502,
+      "image": 14
+    },
+    {
+      "name": "enemy_torso",
+      "triangles": 1584,
+      "bounds_min": [
+        -0.3221625089645386,
+        1.053413987159729,
+        -0.3337446451187134
+      ],
+      "bounds_max": [
+        0.3670119643211365,
+        1.6320106983184814,
+        0.3478250503540039
+      ],
+      "surface_area": 1.6650259494781494,
+      "image": 15,
+      "frontal_core_coverage": 1.0
+    },
+    {
+      "name": "enemy_upperarm_l",
+      "triangles": 658,
+      "bounds_min": [
+        -0.4547031819820404,
+        1.0974568128585815,
+        -0.20200808346271515
+      ],
+      "bounds_max": [
+        -0.21195973455905914,
+        1.6309950351715088,
+        0.17478546500205994
+      ],
+      "surface_area": 0.4775911867618561,
+      "image": 16
+    },
+    {
+      "name": "enemy_upperarm_r",
+      "triangles": 650,
+      "bounds_min": [
+        0.20762792229652405,
+        1.0894067287445068,
+        -0.23466381430625916
+      ],
+      "bounds_max": [
+        0.4506894052028656,
+        1.6307214498519897,
+        0.2286205142736435
+      ],
+      "surface_area": 0.5997891426086426,
+      "image": 17
+    }
+  ],
+  "images": [
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 34652,
+      "gpu_bytes_with_mips": 196600,
+      "std": 24.2252823951515
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 41763,
+      "gpu_bytes_with_mips": 196600,
+      "std": 21.473643542282993
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 41603,
+      "gpu_bytes_with_mips": 196600,
+      "std": 28.716347499521333
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 36576,
+      "gpu_bytes_with_mips": 196600,
+      "std": 26.333402545192133
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 47365,
+      "gpu_bytes_with_mips": 196600,
+      "std": 28.67835736413871
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 49801,
+      "gpu_bytes_with_mips": 196600,
+      "std": 29.714804039918874
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 21053,
+      "gpu_bytes_with_mips": 87380,
+      "std": 28.842631003005508
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 21197,
+      "gpu_bytes_with_mips": 87380,
+      "std": 27.126202143004964
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "bytes": 290550,
+      "gpu_bytes_with_mips": 1398100,
+      "std": 66.43743011585504
+    },
+    {
+      "size": [
+        128,
+        128
+      ],
+      "bytes": 21512,
+      "gpu_bytes_with_mips": 87380,
+      "std": 33.22382957184549
+    },
+    {
+      "size": [
+        256,
+        256
+      ],
+      "bytes": 40078,
+      "gpu_bytes_with_mips": 349524,
+      "std": 22.624757135660275
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 50866,
+      "gpu_bytes_with_mips": 196600,
+      "std": 22.709254742887993
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 42599,
+      "gpu_bytes_with_mips": 196600,
+      "std": 26.847042243645003
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 44258,
+      "gpu_bytes_with_mips": 196600,
+      "std": 28.43134842983364
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 41847,
+      "gpu_bytes_with_mips": 196600,
+      "std": 27.695590339873924
+    },
+    {
+      "size": [
+        512,
+        512
+      ],
+      "bytes": 212732,
+      "gpu_bytes_with_mips": 1398100,
+      "std": 42.04993279480462
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 41719,
+      "gpu_bytes_with_mips": 196600,
+      "std": 55.59699976243889
+    },
+    {
+      "size": [
+        192,
+        192
+      ],
+      "bytes": 50550,
+      "gpu_bytes_with_mips": 196600,
+      "std": 52.227625295942445
+    }
+  ],
+  "provenance": {
+    "image": {
+      "tool": "image_generate",
+      "arguments": {
+        "prompt": "One full body huge terrifying cyclops castle lord monster, symmetrical A pose with both empty arms thirty degrees away from torso, open empty hands, two widely separated legs, all feet visible. Exactly ONE enormous eye centered in the forehead above the nose, absolutely no two ordinary human eyes, thick continuous bony brow, bald scarred head, fierce tusked mouth. Bulky muscular humanoid ogre with broad shoulders, thick powerful arms and legs, mottled pale weathered grey flesh. Blackened iron shoulder armor, iron rings and leather harness across massive chest, broad belt, short ragged brown loincloth ending at upper thigh, knee straps, thick battered leather boots. Realistic highly detailed textured dark fantasy game sculpt, strong heavy silhouette. No weapon, no background objects. Entire figure centered on plain light grey background, orthographic front studio asset photography, neutral even lighting.",
+        "negative": "cropped, closeup, portrait, two people, multiple characters, duplicate limbs, fused arms, fused legs, hands touching body, crossed arms, hands on hips, sword, spear, axe, club, maul, shield, weapon, scenery, text, watermark, logo, cute, cartoon, toy, smooth plastic, long robe, floor length coat, cape, wings, blurry",
+        "width": 1024,
+        "height": 1536,
+        "steps": 35,
+        "cfg": 6.5,
+        "seed": 1009083,
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\image",
+        "timeout_s": 600
+      },
+      "stdout": "seed 1009083, 35 step(s), 1024x1536\nC:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\image\\20260908_00029_.png (2235408 bytes)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 16.477,
+      "utc": "2026-09-08T17:25:23Z",
+      "input_sha256": null
+    },
+    "cutout": {
+      "tool": "image_cutout",
+      "arguments": {
+        "image": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\image\\20260908_00029_.png",
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\cutout",
+        "margin": 0.06
+      },
+      "stdout": "cutout (1692, 1692) opaque fraction 0.288\n  C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\cutout\\20260908_00029_-rgba.png (2022987 bytes)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 3.914,
+      "utc": "2026-09-08T17:27:01Z",
+      "input_sha256": "ea93239ab1d8cd64f8c1024de85c4f857ca8734ca7a2129436d075641515fcad"
+    },
+    "mesh": {
+      "tool": "mesh_generate_pbr",
+      "arguments": {
+        "image": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\cutout\\20260908_00029_-rgba.png",
+        "seed": 1009083,
+        "texture_size": 2048,
+        "local_dir": "C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\mesh",
+        "timeout_s": 1200
+      },
+      "stdout": "job 20260908-172702-70f8fb completed\n  C:\\Users\\end\\dev\\end-game\\runtime-v10-assets\\cyclops\\mesh\\20260908-172702-70f8fb.glb (17967760 bytes, GLB with PBR materials)\n",
+      "stderr": "",
+      "exit_code": 0,
+      "wall_seconds": 34.889,
+      "utc": "2026-09-08T17:27:36Z",
+      "input_sha256": "ce9f1abf0a5175da60eb34004ffddb638873f5d7bb28b311e603046f23fbe715"
+    }
+  },
+  "sidecar": "cyclops-rig.json",
+  "sidecar_sha256": "f65a994033b6b99ff291b05e294e1761f76f9cdb1947499691b7e18a22ed667e",
+  "verification_seconds": 0.059,
+  "verification": "Decoded GLB names, identity transforms, finite attributes, normalized normals, index/triangle/UV validity, opaque white materials, RGB8 basecolor images, memory/triangle budgets and central torso area/coverage. Native animation check remains separate.",
+  "source_mesh": {
+    "file": "20260908-172702-70f8fb.glb",
+    "bytes": 17967760,
+    "sha256": "af505dd7d30361b65de7d1f705f89ead93886f4e0de5167ba9deef305602d3e8"
+  },
+  "conversion_method": "SDXL reference -> TRELLIS.2 sculpt -> rigid segmentation, closed convex part retopology with facial relief projection, RGB source rebake, bind retarget",
+  "limits": "Single-view generated character; inferred back, rigid parts and fused fingers. Closed inner leg/joint covers use nearby generated material samples. Incidental held objects excluded; separately authored measured weapons."
+}

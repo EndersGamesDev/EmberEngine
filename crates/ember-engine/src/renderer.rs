@@ -306,6 +306,8 @@ struct SceneUniform {
     camera_up: [f32; 4],
     occlusion_min_strength: [f32; 4],
     occlusion_cell: [f32; 4],
+    light_positions: [[f32; 4]; 4],
+    light_colors: [[f32; 4]; 4],
 }
 
 impl SceneUniform {
@@ -400,6 +402,17 @@ impl SceneUniform {
                 .occlusion
                 .as_ref()
                 .map_or([1.0; 4], |field| field.cell_size().extend(0.0).to_array()),
+            light_positions: environment.lights.map(|light| {
+                finite_vec3(light.position, Vec3::ZERO)
+                    .extend(finite_clamp(light.radius, 0.0, 0.0, 50.0))
+                    .to_array()
+            }),
+            light_colors: environment.lights.map(|light| {
+                finite_vec3(light.color, Vec3::ZERO)
+                    .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                    .extend(finite_clamp(light.intensity, 0.0, 0.0, 40.0))
+                    .to_array()
+            }),
         }
     }
 }
@@ -486,6 +499,8 @@ const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// samples from. Depth is kept as a first-class texture (needed by warp
 /// stage C and by SSAO/TAA later).
 struct SceneTargets {
+    #[cfg(not(target_arch = "wasm32"))]
+    color: wgpu::Texture,
     color_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     width: u32,
@@ -1007,6 +1022,68 @@ impl Renderer {
             #[cfg(not(target_arch = "wasm32"))]
             None,
         );
+    }
+
+    /// Save only the rendered scene, without reading the desktop or taking focus.
+    ///
+    /// # Errors
+    /// Returns an error if GPU readback or PNG encoding fails.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn capture_scene(&self, path: &std::path::Path) -> Result<(), String> {
+        let width = self.scene.width;
+        let height = self.scene.height;
+        let stride = (width * 4).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scene capture"),
+            size: u64::from(stride) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.scene.color,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+        self.device.poll(wgpu::Maintain::Wait);
+        rx.recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+        let pixels = buffer.slice(..).get_mapped_range();
+        let packed: Vec<u8> = pixels
+            .chunks(stride as usize)
+            .flat_map(|row| row[..width as usize * 4].iter().copied())
+            .collect();
+        image::save_buffer(path, &packed, width, height, image::ColorType::Rgba8)
+            .map_err(|e| e.to_string())?;
+        drop(pixels);
+        buffer.unmap();
+        Ok(())
     }
 
     /// Render plus an optional overlay composited after the present pass
@@ -1712,7 +1789,9 @@ fn create_scene_targets(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: SCENE_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let depth = device.create_texture(&wgpu::TextureDescriptor {
@@ -1727,6 +1806,8 @@ fn create_scene_targets(
     });
     SceneTargets {
         color_view: color.create_view(&wgpu::TextureViewDescriptor::default()),
+        #[cfg(not(target_arch = "wasm32"))]
+        color,
         depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()),
         width,
         height,
@@ -2306,7 +2387,7 @@ mod tests {
 
     #[test]
     fn scene_uniform_keeps_fog_offsets_and_packs_environment_in_vec4s() {
-        assert_eq!(SceneUniform::SIZE, 368, "three mat4 + eleven vec4");
+        assert_eq!(SceneUniform::SIZE, 496, "three mat4 + nineteen vec4");
         let frame = Frame {
             fog: Fog {
                 color: [0.1, 0.2, 0.3],
@@ -2317,11 +2398,12 @@ mod tests {
         let u = SceneUniform::new(&frame, 1.0);
         assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
         let bytes = bytemuck::bytes_of(&u);
-        assert_eq!(bytes.len(), 368);
+        assert_eq!(bytes.len(), 496);
         assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
         assert_eq!(&bytes[76..80], &0.4f32.to_le_bytes());
         assert_eq!(&bytes[336..352], bytemuck::bytes_of(&[0.0_f32; 4]));
         assert_eq!(&bytes[352..368], bytemuck::bytes_of(&[1.0_f32; 4]));
+        assert_eq!(&bytes[368..], &[0; 128], "local lights are opt-in");
     }
 
     #[test]

@@ -1,0 +1,209 @@
+{
+  "assets": [
+    {
+      "file": "bars.glb",
+      "bytes": 821400,
+      "triangles": 5000,
+      "components": 1,
+      "largest_component_triangles": 5000,
+      "bounds_min": [
+        -0.14212480187416077,
+        0.0,
+        -0.9694586992263794
+      ],
+      "bounds_max": [
+        0.14212480187416077,
+        2.700000286102295,
+        0.9694586992263794
+      ],
+      "extent": [
+        0.28424960374832153,
+        2.700000286102295,
+        1.9389173984527588
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 0
+    },
+    {
+      "file": "cot.glb",
+      "bytes": 987900,
+      "triangles": 5000,
+      "components": 1,
+      "largest_component_triangles": 5000,
+      "bounds_min": [
+        -0.6784167289733887,
+        0.0,
+        -1.0499999523162842
+      ],
+      "bounds_max": [
+        0.6784167289733887,
+        1.8479056358337402,
+        1.0499999523162842
+      ],
+      "extent": [
+        1.3568334579467773,
+        1.8479056358337402,
+        2.0999999046325684
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 63142
+    },
+    {
+      "file": "sword.glb",
+      "bytes": 774416,
+      "triangles": 6000,
+      "components": 1,
+      "largest_component_triangles": 6000,
+      "bounds_min": [
+        -0.4320000410079956,
+        -0.2523115277290344,
+        -0.0893811285495758
+      ],
+      "bounds_max": [
+        1.9680002927780151,
+        0.26942116022109985,
+        0.18044398725032806
+      ],
+      "extent": [
+        2.4000003337860107,
+        0.5217326879501343,
+        0.2698251008987427
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 0
+    },
+    {
+      "file": "torch.glb",
+      "bytes": 1055924,
+      "triangles": 4000,
+      "components": 6,
+      "largest_component_triangles": 3792,
+      "bounds_min": [
+        -0.12719321250915527,
+        0.0,
+        -0.2159738838672638
+      ],
+      "bounds_max": [
+        0.12719321250915527,
+        0.8999999165534973,
+        0.2159738838672638
+      ],
+      "extent": [
+        0.25438642501831055,
+        0.8999999165534973,
+        0.4319477677345276
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 0
+    },
+    {
+      "file": "warden.glb",
+      "bytes": 1124904,
+      "triangles": 8000,
+      "components": 8,
+      "largest_component_triangles": 7864,
+      "bounds_min": [
+        -0.44861939549446106,
+        0.0,
+        -0.4772331118583679
+      ],
+      "bounds_max": [
+        0.44861939549446106,
+        1.4500000476837158,
+        0.4772331118583679
+      ],
+      "extent": [
+        0.8972387909889221,
+        1.4500000476837158,
+        0.9544662237167358
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 0
+    },
+    {
+      "file": "werewolf.glb",
+      "bytes": 1110132,
+      "triangles": 14000,
+      "components": 1,
+      "largest_component_triangles": 14000,
+      "bounds_min": [
+        -0.4565574526786804,
+        0.0,
+        -0.5104269981384277
+      ],
+      "bounds_max": [
+        0.4565574526786804,
+        2.450000047683716,
+        0.5104269981384277
+      ],
+      "extent": [
+        0.9131149053573608,
+        2.450000047683716,
+        1.0208539962768555
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 0
+    },
+    {
+      "file": "wolf.glb",
+      "bytes": 1069904,
+      "triangles": 12000,
+      "components": 2,
+      "largest_component_triangles": 11924,
+      "bounds_min": [
+        -0.6973329782485962,
+        0.0,
+        -0.5944645404815674
+      ],
+      "bounds_max": [
+        0.6973329782485962,
+        2.0999999046325684,
+        0.5944645404815674
+      ],
+      "extent": [
+        1.3946659564971924,
+        2.0999999046325684,
+        1.1889290809631348
+      ],
+      "image_size": [
+        768,
+        768
+      ],
+      "image_mode": "RGB",
+      "png_bit_depth": 8,
+      "empty_atlas_pixels_filled": 72567
+    }
+  ],
+  "total_bytes": 6944580,
+  "wall_seconds": 2.75
+}
