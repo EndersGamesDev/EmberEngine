@@ -79,3 +79,48 @@ macro_rules! production_template_test {
         }
     };
 }
+
+#[cfg(test)]
+mod probe_tests {
+    use std::process::Command;
+
+    use crate::{RenderError, RenderedShader, ShaderContext};
+
+    const PROBE_TEMPLATE: &str = "probe-test.wgsl.jinja";
+    const PROBE_TEST: &str = "probe_tests::production_template_render_probe_renders_and_validates";
+
+    fn render_probe() -> Result<RenderedShader, RenderError> {
+        crate::render(PROBE_TEMPLATE, &ShaderContext::new())
+    }
+
+    crate::production_template_test!(
+        PROBE_TEMPLATE,
+        render_probe,
+        production_template_render_probe_renders_and_validates,
+    );
+
+    #[test]
+    fn production_template_macro_probe_names_nonce_and_missing_identifier() {
+        let nonce = format!("ember-shader-crate-probe-{}", std::process::id());
+        let output = Command::new(std::env::current_exe().expect("the test executable has a path"))
+            .args(["--exact", PROBE_TEST, "--nocapture"])
+            .env("EMBER_SHADER_VALIDATION_PROBE", nonce.as_str())
+            .output()
+            .expect("the probe test subprocess starts");
+        let stdout = String::from_utf8(output.stdout).expect("the probe output is UTF-8");
+        let stderr = String::from_utf8(output.stderr).expect("the probe errors are UTF-8");
+
+        assert!(
+            output.status.success(),
+            "probe subprocess failed\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stdout.contains(&format!("SHADER-VALIDATION-PROBE {nonce} {PROBE_TEMPLATE}")),
+            "probe receipt did not bind its nonce and template:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("ember_shader_validation_probe_missing"),
+            "probe diagnostic did not name the undeclared identifier:\n{stdout}"
+        );
+    }
+}
