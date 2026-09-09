@@ -10,4 +10,6 @@ The pipeline owner retains the exact rendered source and its stable hash beside 
 
 Template debug diagnostics are test- or feature-only and do not enter a default release build. Every production template must be paired with the crate's deterministic native validation macro; the repository checker authenticates and executes those compiled tests.
 
+The crate's anti-drift oracle exercises ordinary and padded layouts, signed and unsigned discriminants, every declaration category, reordered emissions, forged marker cases, and the failure path for an unregistered type through the production render path.
+
 Repository shader policy and migration evidence live in [`../../docs/shaders.md`](../../docs/shaders.md).

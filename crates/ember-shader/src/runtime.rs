@@ -31,6 +31,10 @@ const LITERAL_MARKER_TEST_NAME: &str = "literal-marker-test.wgsl.jinja";
 const LITERAL_MARKER_TEST_SOURCE: &str =
     include_str!("../templates/literal-marker-test.wgsl.jinja");
 #[cfg(test)]
+const ORACLE_TEST_NAME: &str = "oracle-test.wgsl.jinja";
+#[cfg(test)]
+const ORACLE_TEST_SOURCE: &str = include_str!("../templates/oracle-test.wgsl.jinja");
+#[cfg(test)]
 const UNREGISTERED_TYPE_TEST_NAME: &str = "unregistered-type-test.wgsl.jinja";
 #[cfg(test)]
 const UNREGISTERED_TYPE_TEST_SOURCE: &str =
@@ -66,6 +70,7 @@ const TEST_TEMPLATES: &[(&str, &str)] = &[
     (INVALID_VALIDATION_TEST_NAME, INVALID_VALIDATION_TEST_SOURCE),
     (HIDDEN_FILTER_TEST_NAME, HIDDEN_FILTER_TEST_SOURCE),
     (LITERAL_MARKER_TEST_NAME, LITERAL_MARKER_TEST_SOURCE),
+    (ORACLE_TEST_NAME, ORACLE_TEST_SOURCE),
     (REVERSED_EMISSION_TEST_NAME, REVERSED_EMISSION_TEST_SOURCE),
     (UNREGISTERED_TYPE_TEST_NAME, UNREGISTERED_TYPE_TEST_SOURCE),
     (UNTRACED_TYPE_TEST_NAME, UNTRACED_TYPE_TEST_SOURCE),
