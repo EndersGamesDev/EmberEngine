@@ -21,11 +21,12 @@ pub const EXPONENT_QUANTUM_EDGE_TOLERANCE: f64 = 0.000_677_130_693_066_407_8;
 
 /// Converts one centred render-grid pixel into its exact N-dimensional plane point.
 ///
-/// Pixel origin is the canvas centre, x points right, and y points up. Binary64 inputs are decoded
-/// by their bits, then all screen scaling, basis weighting, and centre additions use [`Fixed`].
-/// The basis and scale are rebuilt from the view so callers cannot provide a second source of truth.
-/// Nominal input is bounded by [`MAX_SCREEN_COORDINATE_PIXELS`]; the decoder also accepts the named
-/// projection-readout slack so `click(project(point))` closes at that boundary.
+/// Pixel origin is the canvas centre, x points right, and y points up. Finite binary64 magnitude is
+/// validated before its bits are decoded into [`Fixed`], so a narrow consumer width cannot erase an
+/// out-of-range refusal. All subsequent screen scaling, basis weighting, and centre additions use
+/// fixed arithmetic. The basis and scale are rebuilt from the view so callers cannot provide a
+/// second source of truth. Nominal input is bounded by [`MAX_SCREEN_COORDINATE_PIXELS`]; the decoder
+/// also accepts the named projection-readout slack so `click(project(point))` closes there.
 ///
 /// # Errors
 ///
@@ -199,13 +200,15 @@ pub fn select_box<const N: usize, const LIMBS: usize>(
 fn fixed_screen_point<const LIMBS: usize>(
     screen_px: [f64; 2],
 ) -> Result<[Fixed<LIMBS>; 2], CameraError> {
-    let limit = Fixed::from_f64(PROJECT_READOUT_LIMIT_PIXELS)?;
     let mut converted = [Fixed::ZERO; 2];
     for (output, input) in converted.iter_mut().zip(screen_px) {
-        *output = Fixed::from_f64(input)?;
-        if output.abs_checked()? > limit {
+        if !input.is_finite() {
+            return Err(CameraError::NonFinite);
+        }
+        if input.abs() > PROJECT_READOUT_LIMIT_PIXELS {
             return Err(CameraError::ScreenCoordinateOutOfRange);
         }
+        *output = Fixed::from_f64(input)?;
     }
     Ok(converted)
 }
@@ -425,6 +428,21 @@ mod tests {
         assert_eq!(
             click(&camera, screen, [first_refused, 0.0]),
             Err(CameraError::ScreenCoordinateOutOfRange)
+        );
+
+        let narrow = View::new([Fixed::<1>::ZERO; 2], Exponent::ZERO, Orientation::IDENTITY);
+        assert!(click(&narrow, screen, [PROJECT_READOUT_LIMIT_PIXELS, 0.0]).is_ok());
+        assert_eq!(
+            click(&narrow, screen, [first_refused, 0.0]),
+            Err(CameraError::ScreenCoordinateOutOfRange)
+        );
+        assert_eq!(
+            click(&narrow, screen, [f64::NAN, 0.0]),
+            Err(CameraError::NonFinite)
+        );
+        assert_eq!(
+            click(&narrow, screen, [f64::INFINITY, 0.0]),
+            Err(CameraError::NonFinite)
         );
         Ok(())
     }
