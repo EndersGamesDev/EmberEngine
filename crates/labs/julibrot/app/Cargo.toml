@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+ember-camera = { path = "../../../ember-camera" }
 ember-julibrot-kernels = { path = "../kernels" }
 ember-julibrot-math = { path = "../math" }
 ember-julibrot-present = { path = "../present" }

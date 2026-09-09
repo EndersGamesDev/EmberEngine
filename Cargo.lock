@@ -1169,6 +1169,7 @@ name = "ember-julibrot-app"
 version = "1.0.5"
 dependencies = [
  "bytemuck",
+ "ember-camera",
  "ember-julibrot-kernels",
  "ember-julibrot-math",
  "ember-julibrot-present",

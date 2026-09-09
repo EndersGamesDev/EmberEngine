@@ -1,5 +1,6 @@
 //! Integration runtime and page contract for the Julibrot laboratory.
 
+mod camera;
 mod error;
 #[cfg(target_arch = "wasm32")]
 mod facts;
