@@ -1,4 +1,5 @@
 use crate::basis::turn_sin_cos;
+use crate::fixed::solve_two_axis_gram;
 use crate::{CameraError, Fixed, Observer, Screen, Turn, View, rebuild_basis, scale_for};
 
 /// Binary64 encoding of the nominal symmetric projection range.
@@ -14,20 +15,22 @@ pub const PROJECT_RANGE_PIXELS: f64 = f64::from_bits(PROJECT_RANGE_BITS);
 
 /// Binary64 readout budget for reconstructing an arbitrary image-plane point.
 ///
-/// Projection necessarily rounds to a binary64 pixel coordinate. Three representable steps at
-/// that coordinate, scaled by the view's pixel scale, cover the exhaustive all-plane orientation
-/// sweep at every exponent quantum; the uncertainty does not grow with the exponent.
-pub const PROJECT_READOUT_ULPS: u64 = 3;
-
-/// Largest measured pixel error in the exhaustive rotated projection sweep.
+/// Projection necessarily rounds its exact fixed rational quotient to a binary64 pixel coordinate.
 ///
-/// This is three binary64 steps immediately below [`PROJECT_RANGE_PIXELS`]. It replaces the
-/// narrower provisional bound that the maximum-coordinate cases disproved.
-pub const PROJECT_PIXEL_TOLERANCE_PIXELS: f64 = 7.152_557_373_046_875e-7;
+/// Nearest-even conversion is within half a representable step; one complete step is retained as
+/// the public reconstruction budget and does not grow with the exponent or orientation.
+pub const PROJECT_READOUT_ULPS: u64 = 1;
+
+/// Orientation-independent absolute projection-error budget in pixels.
+///
+/// This is one binary64 step immediately above [`PROJECT_RANGE_PIXELS`], the largest spacing in the
+/// readout envelope. The exact fixed rational quotient rounds by at most half of its local step;
+/// the complete step leaves a conservative uniform bound at the binade boundary.
+pub const PROJECT_PIXEL_TOLERANCE_PIXELS: f64 = 4.768_371_582_031_25e-7;
 
 /// Outer projection-readout and exact-decoder range in centred pixels.
 ///
-/// The nominal range plus [`PROJECT_READOUT_ULPS`] upward binary64 steps ensures that
+/// The nominal range plus [`PROJECT_READOUT_ULPS`] upward binary64 step ensures that
 /// `click(project(point))` remains accepted when a boundary readout rounds just outward.
 pub const PROJECT_READOUT_LIMIT_PIXELS: f64 =
     f64::from_bits(PROJECT_RANGE_BITS + PROJECT_READOUT_ULPS);
@@ -37,11 +40,11 @@ const PERSPECTIVE_RAY_EPSILON: f64 = 1.0e-12;
 
 /// Projects an N-dimensional point into centred render-grid pixels.
 ///
-/// The function performs N exact big subtractions first. Each result is then converted once to a
-/// screen-scale binary64 displacement. Two displacement dots are solved through the rebuilt
-/// basis's two-by-two Gram matrix, compensating its bounded polynomial approximation error before
-/// the named range check. Orthogonal components are discarded, so `click(project(point))` is an
-/// inverse only for points on the image plane.
+/// The function performs N exact big subtractions first. Rebuilt binary64 basis bits then enter
+/// fixed precision exactly; both displacement dots and all three Gram terms are evaluated there.
+/// The resulting rational Gram solve is rounded directly to binary64, without floating-point dot
+/// accumulation or division. Orthogonal components are discarded, so `click(project(point))` is
+/// an inverse only for points on the image plane.
 ///
 /// # Errors
 ///
@@ -68,8 +71,8 @@ pub fn project<const N: usize, const LIMBS: usize>(
 
 /// Returns the current centre's render-grid displacement from a reference centre.
 ///
-/// This per-frame renderer quantity performs N exact subtractions, truncates only at the binary64
-/// screen boundary, and solves its two basis dots through the rebuilt frame's Gram matrix.
+/// This per-frame renderer quantity performs N exact subtractions and a fixed-point Gram solve,
+/// then rounds only each final rational pixel quotient to binary64.
 ///
 /// # Errors
 ///
@@ -160,35 +163,19 @@ fn project_delta<const N: usize, const LIMBS: usize>(
     delta: &[Fixed<LIMBS>; N],
 ) -> Result<[f64; 2], CameraError> {
     let basis = rebuild_basis(&view.orientation)?;
-    let scale = scale_for::<LIMBS>(view.exponent, screen)?
-        .units_per_pixel()
-        .to_f64()?;
-    if !scale.is_finite() || scale <= 0.0 {
-        return Err(CameraError::Overflow);
+    let scale = scale_for::<LIMBS>(view.exponent, screen)?.units_per_pixel();
+    let mut horizontal_basis = [Fixed::ZERO; N];
+    let mut vertical_basis = [Fixed::ZERO; N];
+    for (((horizontal, vertical), horizontal_bits), vertical_bits) in horizontal_basis
+        .iter_mut()
+        .zip(&mut vertical_basis)
+        .zip(basis.u)
+        .zip(basis.v)
+    {
+        *horizontal = Fixed::from_binary64_bits(horizontal_bits.to_bits())?;
+        *vertical = Fixed::from_binary64_bits(vertical_bits.to_bits())?;
     }
-    let mut horizontal_dot = 0.0;
-    let mut vertical_dot = 0.0;
-    let mut horizontal_norm_squared = 0.0;
-    let mut cross_dot = 0.0;
-    let mut vertical_norm_squared = 0.0;
-    for ((coordinate, horizontal_basis), vertical_basis) in delta.iter().zip(basis.u).zip(basis.v) {
-        let screen_coordinate = coordinate.to_f64()? / scale;
-        horizontal_dot += screen_coordinate * horizontal_basis;
-        vertical_dot += screen_coordinate * vertical_basis;
-        horizontal_norm_squared += horizontal_basis * horizontal_basis;
-        cross_dot += horizontal_basis * vertical_basis;
-        vertical_norm_squared += vertical_basis * vertical_basis;
-    }
-    let cross_squared = cross_dot * cross_dot;
-    let determinant = horizontal_norm_squared * vertical_norm_squared - cross_squared;
-    if !determinant.is_finite() || determinant <= 0.0 {
-        return Err(CameraError::DegenerateFrame);
-    }
-    let horizontal =
-        (horizontal_dot * vertical_norm_squared - vertical_dot * cross_dot) / determinant;
-    let vertical =
-        (vertical_dot * horizontal_norm_squared - horizontal_dot * cross_dot) / determinant;
-    Ok([horizontal, vertical])
+    solve_two_axis_gram(delta, &horizontal_basis, &vertical_basis, &scale)
 }
 
 #[cfg(test)]
@@ -233,6 +220,15 @@ mod tests {
         angles[2][3] = Turn::from_bits(0x789a_bcde);
         angles[2][4] = Turn::from_bits(0x89ab_cdef);
         angles[3][4] = Turn::from_bits(0x9abc_def0);
+        Orientation::new(angles)
+    }
+
+    fn review_orientation() -> Result<Orientation<ROUND_TRIP_DIMENSIONS>, CameraError> {
+        let mut angles = [[Turn::ZERO; ROUND_TRIP_DIMENSIONS]; ROUND_TRIP_DIMENSIONS];
+        angles[0][3] = Turn::from_bits(0x2b60_35ee);
+        angles[0][4] = Turn::from_bits(0x6b17_5866);
+        angles[1][3] = Turn::from_bits(0xc56a_58ce);
+        angles[1][4] = Turn::from_bits(0xb5cc_ebbf);
         Orientation::new(angles)
     }
 
@@ -290,6 +286,7 @@ mod tests {
 
         let screen = Screen::new(1_024, 512)?;
         let rotated_orientation = all_plane_orientation()?;
+        let review_frame = review_orientation()?;
         let maximum_pixel =
             Fixed::<ROUND_TRIP_LIMBS>::from_i64(MAX_SCREEN_COORDINATE_PIXELS)?.to_f64()?;
         assert_eq!(maximum_pixel.to_bits(), PROJECT_RANGE_PIXELS.to_bits());
@@ -322,6 +319,19 @@ mod tests {
             );
             assert_readout_round_trip(&rotated_view, screen, [2_000_000_000.0, -1_000_000_000.0])?;
             assert_readout_round_trip(&rotated_view, screen, [maximum_pixel, -maximum_pixel])?;
+
+            if quanta == 0 {
+                let review_view = View::new(
+                    [Fixed::<ROUND_TRIP_LIMBS>::ZERO; ROUND_TRIP_DIMENSIONS],
+                    Exponent::ZERO,
+                    review_frame,
+                );
+                assert_readout_round_trip(
+                    &review_view,
+                    screen,
+                    [PROJECT_RANGE_PIXELS, -PROJECT_RANGE_PIXELS],
+                )?;
+            }
         }
         Ok(())
     }

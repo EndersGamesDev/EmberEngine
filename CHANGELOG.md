@@ -18,7 +18,7 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 ### Exact camera
 
-The new dependency-free `ember-camera` crate owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`).
+The new dependency-free `ember-camera` crate owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`). Three fixed-evaluation samples measured 355,220–385,949 ns for `reference_displacement` and 383,369–423,589 ns combined, versus the earlier floating-evaluation ranges of 3,580–7,960 ns and 24,920–63,170 ns respectively; the roughly 47-fold row-9 regression remains within the 1,000,000 ns release ceiling.
 
 ### Julibrot rounds two and three
 

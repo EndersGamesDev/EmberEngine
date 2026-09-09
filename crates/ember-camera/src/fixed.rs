@@ -559,6 +559,81 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SignedWide<const LIMBS: usize, const PARTS: usize> {
+    magnitude: [[u64; LIMBS]; PARTS],
+    negative: bool,
+}
+
+impl<const LIMBS: usize, const PARTS: usize> SignedWide<LIMBS, PARTS> {
+    const ZERO: Self = Self {
+        magnitude: [[0; LIMBS]; PARTS],
+        negative: false,
+    };
+
+    fn is_zero(&self) -> bool {
+        self.magnitude.iter().flatten().all(|limb| *limb == 0)
+    }
+}
+
+/// Solves a two-axis Gram projection with exact nested-limb intermediates.
+///
+/// Fixed inputs are treated as their signed raw integers. Five dot products, the determinant, both
+/// numerators, and the scale denominator retain their complete products without rescaling. The
+/// final rational values are each rounded directly to nearest-even binary64, so the result is
+/// deterministic on native and wasm32.
+///
+/// # Errors
+///
+/// Returns an error for an invalid width, intermediate overflow, a nonpositive Gram determinant or
+/// scale, or a quotient beyond binary64's finite range.
+pub fn solve_two_axis_gram<const N: usize, const LIMBS: usize>(
+    delta: &[Fixed<LIMBS>; N],
+    horizontal_basis: &[Fixed<LIMBS>; N],
+    vertical_basis: &[Fixed<LIMBS>; N],
+    scale: &Fixed<LIMBS>,
+) -> Result<[f64; 2], CameraError> {
+    Fixed::<LIMBS>::validate_width()?;
+    if scale.is_zero() || scale.is_negative() {
+        return Err(CameraError::Overflow);
+    }
+    let horizontal_dot = exact_dot(delta, horizontal_basis)?;
+    let vertical_dot = exact_dot(delta, vertical_basis)?;
+    let horizontal_norm_squared = exact_dot(horizontal_basis, horizontal_basis)?;
+    let cross_dot = exact_dot(horizontal_basis, vertical_basis)?;
+    let vertical_norm_squared = exact_dot(vertical_basis, vertical_basis)?;
+
+    let norm_product =
+        multiply_signed_wide::<LIMBS, 2, 2, 4>(&horizontal_norm_squared, &vertical_norm_squared)?;
+    let cross_squared = multiply_signed_wide::<LIMBS, 2, 2, 4>(&cross_dot, &cross_dot)?;
+    let determinant = subtract_signed_wide(&norm_product, &cross_squared)?;
+    if determinant.is_zero() || determinant.negative {
+        return Err(CameraError::DegenerateFrame);
+    }
+
+    let horizontal_primary =
+        multiply_signed_wide::<LIMBS, 2, 2, 4>(&horizontal_dot, &vertical_norm_squared)?;
+    let horizontal_cross = multiply_signed_wide::<LIMBS, 2, 2, 4>(&vertical_dot, &cross_dot)?;
+    let horizontal_numerator = subtract_signed_wide(&horizontal_primary, &horizontal_cross)?;
+    let vertical_primary =
+        multiply_signed_wide::<LIMBS, 2, 2, 4>(&vertical_dot, &horizontal_norm_squared)?;
+    let vertical_cross = multiply_signed_wide::<LIMBS, 2, 2, 4>(&horizontal_dot, &cross_dot)?;
+    let vertical_numerator = subtract_signed_wide(&vertical_primary, &vertical_cross)?;
+
+    let scale_wide = fixed_as_wide(scale);
+    let scaled_determinant = multiply_signed_wide::<LIMBS, 4, 1, 5>(&determinant, &scale_wide)?;
+    if scaled_determinant.is_zero() || scaled_determinant.negative {
+        return Err(CameraError::Overflow);
+    }
+    let fraction_words = LIMBS.checked_sub(1).ok_or(CameraError::InvalidWidth)?;
+    let horizontal_scaled = shift_wide_words::<LIMBS, 4, 5>(&horizontal_numerator, fraction_words)?;
+    let vertical_scaled = shift_wide_words::<LIMBS, 4, 5>(&vertical_numerator, fraction_words)?;
+    Ok([
+        divide_wide_to_f64(&horizontal_scaled, &scaled_determinant)?,
+        divide_wide_to_f64(&vertical_scaled, &scaled_determinant)?,
+    ])
+}
+
 impl<const LIMBS: usize> Default for Fixed<LIMBS> {
     fn default() -> Self {
         Self::ZERO
@@ -671,6 +746,405 @@ fn highest_set_bit<const LIMBS: usize>(magnitude: &[u64; LIMBS]) -> Option<usize
     index.checked_mul(LIMB_BITS)?.checked_add(within)
 }
 
+fn fixed_as_wide<const LIMBS: usize>(value: &Fixed<LIMBS>) -> SignedWide<LIMBS, 1> {
+    SignedWide {
+        magnitude: [value.magnitude()],
+        negative: value.is_negative(),
+    }
+}
+
+fn exact_dot<const N: usize, const LIMBS: usize>(
+    left: &[Fixed<LIMBS>; N],
+    right: &[Fixed<LIMBS>; N],
+) -> Result<SignedWide<LIMBS, 2>, CameraError> {
+    let mut result = SignedWide::<LIMBS, 2>::ZERO;
+    for (left_component, right_component) in left.iter().zip(right) {
+        let left_wide = fixed_as_wide(left_component);
+        let right_wide = fixed_as_wide(right_component);
+        let product = multiply_signed_wide::<LIMBS, 1, 1, 2>(&left_wide, &right_wide)?;
+        result = add_signed_wide(&result, &product)?;
+    }
+    Ok(result)
+}
+
+fn multiply_signed_wide<
+    const LIMBS: usize,
+    const LEFT_PARTS: usize,
+    const RIGHT_PARTS: usize,
+    const OUTPUT_PARTS: usize,
+>(
+    left: &SignedWide<LIMBS, LEFT_PARTS>,
+    right: &SignedWide<LIMBS, RIGHT_PARTS>,
+) -> Result<SignedWide<LIMBS, OUTPUT_PARTS>, CameraError> {
+    let left_count = LIMBS
+        .checked_mul(LEFT_PARTS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let right_count = LIMBS
+        .checked_mul(RIGHT_PARTS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let output_count = LIMBS
+        .checked_mul(OUTPUT_PARTS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let mut output = SignedWide::<LIMBS, OUTPUT_PARTS>::ZERO;
+    let mut left_index = 0;
+    while left_index < left_count {
+        let left_limb = wide_limb_value(&left.magnitude, left_index);
+        let mut carry = 0_u128;
+        let mut right_index = 0;
+        while right_index < right_count {
+            let output_index = left_index
+                .checked_add(right_index)
+                .ok_or(CameraError::InvalidWidth)?;
+            let right_limb = wide_limb_value(&right.magnitude, right_index);
+            if output_index >= output_count {
+                if left_limb != 0 && right_limb != 0 {
+                    return Err(CameraError::Overflow);
+                }
+            } else {
+                let product = u128::from(left_limb) * u128::from(right_limb)
+                    + u128::from(wide_limb_value(&output.magnitude, output_index))
+                    + carry;
+                set_wide_limb_value(&mut output.magnitude, output_index, low_u64(product)?);
+                carry = product >> LIMB_BITS;
+            }
+            right_index += 1;
+        }
+        let mut output_index = left_index
+            .checked_add(right_count)
+            .ok_or(CameraError::InvalidWidth)?;
+        while carry != 0 {
+            if output_index >= output_count {
+                return Err(CameraError::Overflow);
+            }
+            let sum = u128::from(wide_limb_value(&output.magnitude, output_index)) + carry;
+            set_wide_limb_value(&mut output.magnitude, output_index, low_u64(sum)?);
+            carry = sum >> LIMB_BITS;
+            output_index = output_index
+                .checked_add(1)
+                .ok_or(CameraError::InvalidWidth)?;
+        }
+        left_index += 1;
+    }
+    output.negative = left.negative != right.negative && !output.is_zero();
+    Ok(output)
+}
+
+fn add_signed_wide<const LIMBS: usize, const PARTS: usize>(
+    left: &SignedWide<LIMBS, PARTS>,
+    right: &SignedWide<LIMBS, PARTS>,
+) -> Result<SignedWide<LIMBS, PARTS>, CameraError> {
+    if left.negative == right.negative {
+        let mut result = SignedWide::<LIMBS, PARTS>::ZERO;
+        let mut carry = false;
+        for ((output_part, left_part), right_part) in result
+            .magnitude
+            .iter_mut()
+            .zip(left.magnitude)
+            .zip(right.magnitude)
+        {
+            for ((output, left_limb), right_limb) in
+                output_part.iter_mut().zip(left_part).zip(right_part)
+            {
+                let (partial, first_carry) = left_limb.overflowing_add(right_limb);
+                let (sum, second_carry) = partial.overflowing_add(u64::from(carry));
+                *output = sum;
+                carry = first_carry || second_carry;
+            }
+        }
+        if carry {
+            return Err(CameraError::Overflow);
+        }
+        result.negative = left.negative && !result.is_zero();
+        return Ok(result);
+    }
+
+    match compare_wide_magnitudes(&left.magnitude, &right.magnitude) {
+        Ordering::Equal => Ok(SignedWide::ZERO),
+        Ordering::Greater => Ok(SignedWide {
+            magnitude: subtract_wide_magnitudes(&left.magnitude, &right.magnitude),
+            negative: left.negative,
+        }),
+        Ordering::Less => Ok(SignedWide {
+            magnitude: subtract_wide_magnitudes(&right.magnitude, &left.magnitude),
+            negative: right.negative,
+        }),
+    }
+}
+
+fn subtract_signed_wide<const LIMBS: usize, const PARTS: usize>(
+    left: &SignedWide<LIMBS, PARTS>,
+    right: &SignedWide<LIMBS, PARTS>,
+) -> Result<SignedWide<LIMBS, PARTS>, CameraError> {
+    let mut negated = *right;
+    if !negated.is_zero() {
+        negated.negative = !negated.negative;
+    }
+    add_signed_wide(left, &negated)
+}
+
+fn compare_wide_magnitudes<const LIMBS: usize, const PARTS: usize>(
+    left: &[[u64; LIMBS]; PARTS],
+    right: &[[u64; LIMBS]; PARTS],
+) -> Ordering {
+    let Some(mut index) = LIMBS.checked_mul(PARTS) else {
+        return Ordering::Equal;
+    };
+    while index != 0 {
+        index -= 1;
+        let left_limb = wide_limb_value(left, index);
+        let right_limb = wide_limb_value(right, index);
+        if left_limb != right_limb {
+            return left_limb.cmp(&right_limb);
+        }
+    }
+    Ordering::Equal
+}
+
+fn subtract_wide_magnitudes<const LIMBS: usize, const PARTS: usize>(
+    minuend: &[[u64; LIMBS]; PARTS],
+    subtrahend: &[[u64; LIMBS]; PARTS],
+) -> [[u64; LIMBS]; PARTS] {
+    let mut result = *minuend;
+    let mut borrow = false;
+    for (output, right) in result.iter_mut().flatten().zip(subtrahend.iter().flatten()) {
+        let (partial, first_borrow) = output.overflowing_sub(*right);
+        let (difference, second_borrow) = partial.overflowing_sub(u64::from(borrow));
+        *output = difference;
+        borrow = first_borrow || second_borrow;
+    }
+    result
+}
+
+fn shift_wide_words<const LIMBS: usize, const INPUT_PARTS: usize, const OUTPUT_PARTS: usize>(
+    value: &SignedWide<LIMBS, INPUT_PARTS>,
+    word_count: usize,
+) -> Result<SignedWide<LIMBS, OUTPUT_PARTS>, CameraError> {
+    let input_count = LIMBS
+        .checked_mul(INPUT_PARTS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let output_count = LIMBS
+        .checked_mul(OUTPUT_PARTS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let mut result = SignedWide::<LIMBS, OUTPUT_PARTS>::ZERO;
+    let mut input_index = 0;
+    while input_index < input_count {
+        let limb = wide_limb_value(&value.magnitude, input_index);
+        let output_index = input_index
+            .checked_add(word_count)
+            .ok_or(CameraError::InvalidWidth)?;
+        if output_index >= output_count {
+            if limb != 0 {
+                return Err(CameraError::Overflow);
+            }
+        } else {
+            set_wide_limb_value(&mut result.magnitude, output_index, limb);
+        }
+        input_index += 1;
+    }
+    result.negative = value.negative && !result.is_zero();
+    Ok(result)
+}
+
+fn divide_wide_to_f64<const LIMBS: usize, const PARTS: usize>(
+    numerator: &SignedWide<LIMBS, PARTS>,
+    denominator: &SignedWide<LIMBS, PARTS>,
+) -> Result<f64, CameraError> {
+    if denominator.is_zero() {
+        return Err(CameraError::DegenerateFrame);
+    }
+    let sign = if numerator.negative == denominator.negative {
+        0
+    } else {
+        SIGN_BIT
+    };
+    if numerator.is_zero() {
+        return Ok(f64::from_bits(sign));
+    }
+    let numerator_high = highest_wide_bit(&numerator.magnitude).ok_or(CameraError::Overflow)?;
+    let mut position = i64::try_from(numerator_high).map_err(|_| CameraError::InvalidWidth)?;
+    let mut remainder = [[0; LIMBS]; PARTS];
+    let mut binary_exponent = None;
+    let mut retained_target = None;
+    let mut retained_count = 0;
+    let mut significand = 0_u64;
+
+    loop {
+        let input_bit = if position < 0 {
+            0
+        } else {
+            let bit = usize::try_from(position).map_err(|_| CameraError::InvalidWidth)?;
+            wide_magnitude_bit(&numerator.magnitude, bit)
+        };
+        let quotient_bit =
+            wide_ratio_quotient_bit(&mut remainder, input_bit, &denominator.magnitude);
+        if binary_exponent.is_none() && quotient_bit != 0 {
+            if position > F64_EXPONENT_BIAS {
+                return Err(CameraError::Overflow);
+            }
+            let half_subnormal = F64_SUBNORMAL_EXPONENT - 1;
+            match position.cmp(&half_subnormal) {
+                Ordering::Less => return Ok(f64::from_bits(sign)),
+                Ordering::Equal => {
+                    let rounds_up =
+                        wide_ratio_tail_exists(&remainder, &numerator.magnitude, position)?;
+                    return Ok(f64::from_bits(sign | u64::from(rounds_up)));
+                }
+                Ordering::Greater => {}
+            }
+            binary_exponent = Some(position);
+            retained_target = Some(if position >= F64_MINIMUM_NORMAL_EXPONENT {
+                F64_SIGNIFICAND_BITS
+            } else {
+                let subnormal_bits = position
+                    .checked_sub(F64_SUBNORMAL_EXPONENT)
+                    .and_then(|difference| difference.checked_add(1))
+                    .ok_or(CameraError::InvalidWidth)?;
+                usize::try_from(subnormal_bits).map_err(|_| CameraError::InvalidWidth)?
+            });
+        }
+        if let Some(target) = retained_target {
+            if retained_count < target {
+                significand = (significand << 1) | quotient_bit;
+                retained_count += 1;
+            } else {
+                let sticky = wide_ratio_tail_exists(&remainder, &numerator.magnitude, position)?;
+                if quotient_bit != 0 && (sticky || significand & 1 != 0) {
+                    significand += 1;
+                }
+                return encode_f64_ratio(sign, binary_exponent, significand);
+            }
+        }
+        position = position.checked_sub(1).ok_or(CameraError::InvalidWidth)?;
+    }
+}
+
+fn encode_f64_ratio(
+    sign: u64,
+    binary_exponent: Option<i64>,
+    mut significand: u64,
+) -> Result<f64, CameraError> {
+    let mut exponent = binary_exponent.ok_or(CameraError::Overflow)?;
+    if exponent < F64_MINIMUM_NORMAL_EXPONENT {
+        return Ok(f64::from_bits(sign | significand));
+    }
+    if significand == 1_u64 << F64_SIGNIFICAND_BITS {
+        significand >>= 1;
+        exponent = exponent.checked_add(1).ok_or(CameraError::Overflow)?;
+    }
+    if exponent > F64_EXPONENT_BIAS {
+        return Err(CameraError::Overflow);
+    }
+    let biased = u64::try_from(exponent + F64_EXPONENT_BIAS).map_err(|_| CameraError::Overflow)?;
+    let fraction_mask = (1_u64 << F64_FRACTION_BITS) - 1;
+    Ok(f64::from_bits(
+        sign | (biased << F64_FRACTION_BITS) | (significand & fraction_mask),
+    ))
+}
+
+fn wide_ratio_quotient_bit<const LIMBS: usize, const PARTS: usize>(
+    remainder: &mut [[u64; LIMBS]; PARTS],
+    input_bit: u64,
+    denominator: &[[u64; LIMBS]; PARTS],
+) -> u64 {
+    let mut carry = input_bit;
+    for limb in remainder.iter_mut().flatten() {
+        let next_carry = *limb >> (u64::BITS - 1);
+        *limb = (*limb << 1) | carry;
+        carry = next_carry;
+    }
+    if carry != 0 || compare_wide_magnitudes(remainder, denominator) != Ordering::Less {
+        *remainder = subtract_wide_magnitudes(remainder, denominator);
+        1
+    } else {
+        0
+    }
+}
+
+fn wide_ratio_tail_exists<const LIMBS: usize, const PARTS: usize>(
+    remainder: &[[u64; LIMBS]; PARTS],
+    numerator: &[[u64; LIMBS]; PARTS],
+    position: i64,
+) -> Result<bool, CameraError> {
+    if remainder.iter().flatten().any(|limb| *limb != 0) {
+        return Ok(true);
+    }
+    if position <= 0 {
+        return Ok(false);
+    }
+    let exclusive_bit = usize::try_from(position).map_err(|_| CameraError::InvalidWidth)?;
+    Ok(any_wide_bits_below(numerator, exclusive_bit))
+}
+
+fn highest_wide_bit<const LIMBS: usize, const PARTS: usize>(
+    magnitude: &[[u64; LIMBS]; PARTS],
+) -> Option<usize> {
+    let limb_count = LIMBS.checked_mul(PARTS)?;
+    let limb_index = (0..limb_count)
+        .rev()
+        .find(|index| wide_limb_value(magnitude, *index) != 0)?;
+    let limb = wide_limb_value(magnitude, limb_index);
+    let within = usize::try_from(u64::BITS - 1 - limb.leading_zeros()).ok()?;
+    limb_index.checked_mul(LIMB_BITS)?.checked_add(within)
+}
+
+const fn wide_magnitude_bit<const LIMBS: usize, const PARTS: usize>(
+    magnitude: &[[u64; LIMBS]; PARTS],
+    bit: usize,
+) -> u64 {
+    let limb = bit / LIMB_BITS;
+    let Some(limb_count) = LIMBS.checked_mul(PARTS) else {
+        return 0;
+    };
+    if limb >= limb_count {
+        0
+    } else {
+        (wide_limb_value(magnitude, limb) >> (bit % LIMB_BITS)) & 1
+    }
+}
+
+const fn any_wide_bits_below<const LIMBS: usize, const PARTS: usize>(
+    magnitude: &[[u64; LIMBS]; PARTS],
+    exclusive_bit: usize,
+) -> bool {
+    let Some(limb_count) = LIMBS.checked_mul(PARTS) else {
+        return true;
+    };
+    let available_limbs = exclusive_bit / LIMB_BITS;
+    let full_limbs = if available_limbs < limb_count {
+        available_limbs
+    } else {
+        limb_count
+    };
+    let mut index = 0;
+    while index < full_limbs {
+        if wide_limb_value(magnitude, index) != 0 {
+            return true;
+        }
+        index += 1;
+    }
+    let partial_bits = exclusive_bit % LIMB_BITS;
+    if partial_bits == 0 || full_limbs >= limb_count {
+        return false;
+    }
+    let mask = (1_u64 << partial_bits) - 1;
+    wide_limb_value(magnitude, full_limbs) & mask != 0
+}
+
+const fn wide_limb_value<const LIMBS: usize, const PARTS: usize>(
+    magnitude: &[[u64; LIMBS]; PARTS],
+    index: usize,
+) -> u64 {
+    magnitude[index / LIMBS][index % LIMBS]
+}
+
+const fn set_wide_limb_value<const LIMBS: usize, const PARTS: usize>(
+    magnitude: &mut [[u64; LIMBS]; PARTS],
+    index: usize,
+    value: u64,
+) {
+    magnitude[index / LIMBS][index % LIMBS] = value;
+}
+
 fn twos_complement<const LIMBS: usize>(limbs: &mut [u64; LIMBS]) {
     let mut carry = true;
     for limb in limbs {
@@ -741,13 +1215,17 @@ fn increment<const LIMBS: usize>(limbs: &mut [u64; LIMBS]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CameraError, Fixed};
+    use super::{CameraError, Fixed, divide_wide_to_f64, fixed_as_wide};
     use core::cmp::Ordering;
 
     type TestFixed = Fixed<2>;
 
     fn raw(low: u64, high: u64) -> TestFixed {
         TestFixed::from_le_bytes([low.to_le_bytes(), high.to_le_bytes()])
+    }
+
+    fn ratio(left: &TestFixed, right: &TestFixed) -> Result<f64, CameraError> {
+        divide_wide_to_f64(&fixed_as_wide(left), &fixed_as_wide(right))
     }
 
     #[test]
@@ -811,6 +1289,22 @@ mod tests {
         assert_eq!(
             TestFixed::from_i64(i64::MAX)?.mul(&TestFixed::from_i64(2)?),
             Err(CameraError::Overflow)
+        );
+        assert_eq!(
+            ratio(&raw((1_u64 << 53) + 1, 0), &raw(1_u64 << 53, 0))?.to_bits(),
+            1.0_f64.to_bits()
+        );
+        assert_eq!(
+            ratio(&raw((1_u64 << 53) + 3, 0), &raw(1_u64 << 53, 0))?.to_bits(),
+            0x3ff0_0000_0000_0002
+        );
+        assert_eq!(
+            ratio(&TestFixed::from_i64(1)?, &TestFixed::from_i64(3)?)?.to_bits(),
+            0x3fd5_5555_5555_5555
+        );
+        assert_eq!(
+            ratio(&TestFixed::from_i64(1)?, &TestFixed::ZERO),
+            Err(CameraError::DegenerateFrame)
         );
         Ok(())
     }
