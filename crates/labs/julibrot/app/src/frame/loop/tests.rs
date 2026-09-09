@@ -54,7 +54,7 @@ use super::{
     sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
     stamped_extent, stamped_screen_map, view_projection_changed, warp_submission_due,
 };
-use crate::state::ReferenceSubmission;
+use crate::state::{NAVIGATION_PRECISION_BITS, ReferenceSubmission};
 use crate::{
     AppError, CaptureArming, FramePolicy, HotFrame, LevelTimingLedger, PendingSurface,
     PictureState, SurfaceAction, SurfaceState, ViewerController, anchor_px_up, box_zoom_delta_log2,
@@ -385,8 +385,8 @@ fn the_exact_origin_row_at_zoom_fourteen_corrects_to_a_glitch_free_final() {
         );
         viewer
             .configure_navigation_context(
-                submission.navigation.centre.clone(),
-                submission.reference_centre.clone(),
+                &submission.navigation.centre,
+                &submission.reference_centre,
                 plane,
             )
             .expect("accepted navigation context");
@@ -447,7 +447,10 @@ fn requested_and_owner_hot_zoom_keep_bit_identity_through_every_absolute_reset_p
     let mut viewer = ViewerController::new(EXTENT).expect("canonical viewer");
     viewer.set_zoom_log2(12.0).expect("slider zoom");
     assert_zoom_identity(&mut viewer);
-    viewer.wheel_zoom(0.375, [37.0, -19.0]).expect("wheel zoom");
+    viewer
+        .set_crosshair([37.0, -19.0])
+        .expect("finite zoom anchor");
+    viewer.zoom_about_crosshair(0.375).expect("anchored zoom");
     assert_zoom_identity(&mut viewer);
     viewer
         .set_plane_origin([0.0, 0.0, -0.75, 0.1])
@@ -6379,7 +6382,7 @@ fn picture_fast_advances_directly_from_preview_to_final() {
 }
 
 #[test]
-fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
+fn picture_fast_viewer_builds_the_fast_ladder_at_fixed_camera_width() {
     let mut viewer = ViewerController::new(960).expect("canonical viewer");
     let (precision_mode, mut frame_loop, plan) = precision_runtime_from_viewer(&mut viewer);
     assert_eq!(precision_mode, PrecisionMode::PictureFast);
@@ -6390,7 +6393,7 @@ fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
-        64
+        NAVIGATION_PRECISION_BITS
     );
     assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
     complete_preview(&mut frame_loop, 31);
@@ -6398,7 +6401,7 @@ fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
 }
 
 #[test]
-fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
+fn viewer_mode_changes_reapply_the_ladder_without_changing_camera_width() {
     let mut viewer = ViewerController::new(960).expect("canonical viewer");
     let (mut precision_mode, mut frame_loop, mut plan) = precision_runtime_from_viewer(&mut viewer);
 
@@ -6420,7 +6423,7 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
-        1_024
+        NAVIGATION_PRECISION_BITS
     );
     assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
     complete_preview(&mut frame_loop, 41);
@@ -6444,7 +6447,7 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
-        64
+        NAVIGATION_PRECISION_BITS
     );
     assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
     complete_preview(&mut frame_loop, 42);
@@ -6468,7 +6471,7 @@ fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
             .navigation_centre()
             .expect("configured centre")
             .precision_bits,
-        1_024
+        NAVIGATION_PRECISION_BITS
     );
     assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
     complete_preview(&mut frame_loop, 43);
@@ -7430,7 +7433,7 @@ fn measured_relief_zoom_viewer() -> ViewerController {
         .set_zoom_log2(1.259_194_831_013_92)
         .expect("measured relief scale");
     viewer
-        .set_centre(BigCentre::from_f64(origin, 1_024).expect("finite measured centre"))
+        .set_centre(&BigCentre::from_f64(origin, 1_024).expect("finite measured centre"))
         .expect("measured relief centre");
     viewer
 }
@@ -7907,7 +7910,7 @@ const ANCHOR_TRACE_ORBIT_LENGTH: u32 = 512;
 const ANCHOR_TRACE_EXTRA_SETTLED_FRAMES: u32 = 4;
 const ANCHOR_TRACE_MINIMUM_POST_INPUT_FRAMES: usize = 12;
 const ANCHOR_TRACE_SAMPLE_INDEX: u32 = 405 * MEASURED_FINAL_EXTENT[0] + 720;
-/// Covers the F32 plane-basis and pixel-scale residual without admitting a visible correction.
+/// Covers the downstream F32 presentation basis after the exact camera's final pixel readout.
 const PRESENTED_ANCHOR_TOLERANCE_PX: f64 = 1.0e-3;
 const ANCHOR_PRESENT_HEAP_SIDE: u16 = 1_024;
 const ANCHOR_PRESENT_DESCRIPTOR_CAPACITY: u32 = 256;
@@ -8119,7 +8122,7 @@ fn anchor_trace_scene(
 
 fn accept_anchor_trace_reference(
     viewer: &mut ViewerController,
-    submission: ReferenceSubmission,
+    submission: &ReferenceSubmission,
     orbit_id: u32,
 ) -> [f64; 2] {
     let generation = submission.navigation.generation;
@@ -8160,8 +8163,8 @@ fn accept_anchor_trace_reference(
     ));
     viewer
         .configure_navigation_context(
-            submission.navigation.centre,
-            submission.reference_centre,
+            &submission.navigation.centre,
+            &submission.reference_centre,
             plane,
         )
         .expect("accepted anchor trace navigation context");
@@ -8246,7 +8249,7 @@ impl AnchorTraceHarness {
         let initial = viewer
             .take_reference_submission()
             .expect("anchor trace initial reference");
-        let _initial_shift = accept_anchor_trace_reference(&mut viewer, initial, 1);
+        let _initial_shift = accept_anchor_trace_reference(&mut viewer, &initial, 1);
         let source = anchor_trace_scene(
             &mut viewer,
             1,
@@ -8371,7 +8374,7 @@ impl AnchorTraceHarness {
 
     fn apply_accepted_reference(
         &mut self,
-        requested: ReferenceSubmission,
+        requested: &ReferenceSubmission,
         orbit_id: u32,
         accepted_pose: &Pose,
     ) -> u32 {
@@ -8458,7 +8461,7 @@ impl AnchorTraceHarness {
         generation
     }
 
-    fn present_fast_ladder(&mut self, requested: ReferenceSubmission) {
+    fn present_fast_ladder(&mut self, requested: &ReferenceSubmission) {
         let accepted_pose = self.fast_final.pose;
         let generation = self.apply_accepted_reference(requested, 2, &accepted_pose);
         self.frame_loop.scene_input_ready(generation);
@@ -8519,7 +8522,7 @@ impl AnchorTraceHarness {
             },
         );
         let accepted_pose = self.fast_final.pose;
-        let applied_generation = self.apply_accepted_reference(sampled, 3, &accepted_pose);
+        let applied_generation = self.apply_accepted_reference(&sampled, 3, &accepted_pose);
         assert_eq!(applied_generation, generation);
         self.frame_loop
             .scene_input_resumed(generation, RefinementLevel::Final);
@@ -8664,7 +8667,7 @@ fn drive_anchor_zoom_trace(
     };
     let (mut harness, requested) =
         AnchorTraceHarness::new(script, initial_zoom_log2, device, queue);
-    harness.present_fast_ladder(requested);
+    harness.present_fast_ladder(&requested);
     if sampled_reference {
         harness.present_sampled_correction();
     }
@@ -9577,7 +9580,7 @@ fn the_backdrop_dispatch_is_behind_the_main_reference_and_zoom_guards() {
 // Compatible-reference lease regressions for lane jb-slide-data.
 
 #[test]
-fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
+fn a_sub_quantum_zoom_preserves_the_lease_and_a_threshold_pan_does_not() {
     const WIDTH: u32 = 960;
     const HEIGHT: u32 = 540;
     const CAP: u32 = 512;
@@ -9616,45 +9619,18 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
 
     let nudged_zoom = f64::from_bits(14.0_f64.to_bits() + 1);
     viewer.set_zoom_log2(nudged_zoom).expect("one-ulp zoom");
-    let nudged = viewer
-        .take_reference_submission()
-        .expect("the owner exposes the coalesced navigation");
     let nudged_precision = precision_for(nudged_zoom, WIDTH, CAP).expect("nudged precision");
-    assert_eq!(nudged.navigation.centre, accepted_centre);
-    assert!(
-        !reference_submission_requires_worker(
-            false,
-            true,
-            plane,
-            nudged.navigation.precision_mode,
-            nudged_precision.requested_bits,
-            CAP,
-            Some(lease),
-        ),
-        "zoom is dispatch scale, not a reason to issue another orbit request"
-    );
-    assert!(viewer.accept_navigation_with_orbit(
-        nudged.navigation.generation,
-        nudged.navigation.centre_revision,
-        7,
-        CAP,
-        precision.requested_bits,
-    ));
-    let mut renewed = lease;
-    renew_reference_lease_identity(
-        &mut renewed,
-        nudged.navigation.generation,
-        nudged.navigation.centre_revision,
-        nudged.navigation.precision_mode,
-    );
+    assert_eq!(viewer.navigation_centre(), Some(accepted_centre.clone()));
+    assert_eq!(viewer.requested().zoom_log2, 14.0);
+    assert!(viewer.take_reference_submission().is_none());
     assert!(perturbation_reference_is_current(
-        nudged.navigation.generation,
-        nudged.navigation.centre_revision,
+        accepted.navigation.generation,
+        accepted.navigation.centre_revision,
         plane,
-        nudged.navigation.precision_mode,
+        accepted.navigation.precision_mode,
         nudged_precision.requested_bits,
         CAP,
-        Some(renewed),
+        Some(lease),
     ));
 
     viewer.pan_px([300.0, 0.0]).expect("past-threshold pan");
@@ -9675,7 +9651,7 @@ fn one_ulp_deep_zoom_is_lease_compatible_and_a_threshold_pan_is_not() {
         moved.navigation.precision_mode,
         nudged_precision.requested_bits,
         CAP,
-        Some(renewed),
+        Some(lease),
     ));
 }
 

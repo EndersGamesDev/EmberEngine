@@ -595,10 +595,19 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     assert!(STATE.contains("pub fn crosshair_plane_px(&self) -> Option<[f64; 2]>"));
     assert!(STATE.contains("pub fn zoom_about_crosshair("));
     assert!(STATE.contains("pub fn pan_px("));
-    // The slider goes through the crosshair anchor rather than the screen centre.
-    assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
+    // Relative and absolute zoom both pass the stored exact target into the camera edit.
+    assert!(STATE.contains("let exponent = quantize_zoom_log2(zoom_log2)?;"));
+    assert_eq!(STATE.matches("let target = self.crosshair;").count(), 2);
+    assert_eq!(
+        STATE
+            .matches("self.apply_zoom_quanta(delta_quanta, target.as_ref())?")
+            .count(),
+        2
+    );
+    assert!(STATE.contains("if let Some(target) = target {"));
+    assert!(STATE.contains("zoom_about_point(&mut next, screen, target, delta_quanta)"));
     // A row load clears the replaced picture's point before the atomic row restores its own.
-    assert!(STATE.contains("pub fn clear_crosshair(&mut self)"));
+    assert!(STATE.contains("pub const fn clear_crosshair(&mut self)"));
     assert_eq!(MAIN.matches("api.app_clear_crosshair();").count(), 1);
     assert!(SAVED.contains("pub target: Option<SavedCentre>"));
     assert!(STATE.contains("self.crosshair = target;"));
@@ -636,7 +645,7 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
 /// existed and are asserted so a later edit cannot quietly remove the draw path underneath it.
 #[test]
 fn boot_draws_the_default_seahorse_valley_target() {
-    assert!(STATE.contains("BigCentre::from_f64(SEAHORSE_VALLEY_TARGET"));
+    assert!(STATE.contains("fixed_centre_from_f64(SEAHORSE_VALLEY_TARGET)?"));
     assert!(STATE.contains("crosshair: Some(target),"));
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains(

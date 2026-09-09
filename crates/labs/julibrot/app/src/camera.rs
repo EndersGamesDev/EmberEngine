@@ -11,15 +11,15 @@ use ember_julibrot_math::{
 
 use crate::AppError;
 
-const CAMERA_LIMBS: usize = 8;
-const CAMERA_PRECISION_BITS: u32 = 512;
+pub const CAMERA_LIMBS: usize = 8;
+pub const CAMERA_PRECISION_BITS: u32 = 512;
 const CAMERA_FRACTION_BITS: i32 = 448;
 const FIXED_LIMB_BITS: usize = 64;
 const OBJECT_PLANES: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
 const TURN_RADIANS_PER_BIT: f64 = core::f64::consts::TAU / 4_294_967_296.0;
 
-type ExactCentre = [Fixed<CAMERA_LIMBS>; 4];
-type ExactView = View<4, CAMERA_LIMBS>;
+pub type ExactCentre = [Fixed<CAMERA_LIMBS>; 4];
+pub type ExactView = View<4, CAMERA_LIMBS>;
 
 /// Maps Julibrot's object-product convention onto the exact camera's image axes.
 ///
@@ -28,7 +28,7 @@ type ExactView = View<4, CAMERA_LIMBS>;
 /// legacy frame as `(e3, e4, -e1, -e2)` preserves both image axes and handedness. Saved binary64
 /// angles quantise directly into turns and rebuild this complete binary64 frame; the legacy
 /// binary32 `Plane` is never an input to the camera record.
-fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppError> {
+pub fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppError> {
     if !angles.is_valid() {
         return Err(AppError::Math("object angles are not valid".to_string()));
     }
@@ -51,7 +51,7 @@ fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppE
 /// of pi enter as the single `0x8000_0000` half-turn. Readout uses the half-open signed interval
 /// `[-pi, pi)`, so that half-turn becomes negative pi. At a factorisation singularity an equivalent
 /// half-turn can move between factors, but the first canonical readout is stable thereafter.
-fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles, AppError> {
+pub fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles, AppError> {
     let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let basis = rebuild_basis(orientation).map_err(camera_error)?;
     let legacy_frame = [
@@ -74,7 +74,7 @@ fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles,
 }
 
 /// Rounds the exact camera's rebuilt image axes once into the unchanged renderer plane shape.
-fn plane_from_orientation(orientation: &Orientation<4>) -> Result<Plane, AppError> {
+pub fn plane_from_orientation(orientation: &Orientation<4>) -> Result<Plane, AppError> {
     let camera_error = |error: CameraError| AppError::Math(error.to_string());
     let basis = rebuild_basis(orientation).map_err(camera_error)?;
     let mut basis_u = [0.0_f32; 4];
@@ -167,7 +167,7 @@ fn turn_to_radians(turn: Turn) -> f64 {
 /// The unbiased tie rule makes equal opposing device deltas cancel instead of accumulating a
 /// directional half-quantum bias. This is the sole binary64-to-exponent conversion; displayed and
 /// persisted zoom values are derived from the resulting integer quanta.
-fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
+pub fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
     let minimum = f64::from(MIN_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
     let maximum = f64::from(MAX_EXPONENT_QUANTA) / f64::from(EXPONENT_QUANTA_PER_OCTAVE);
     if !zoom_log2.is_finite() || !(minimum..=maximum).contains(&zoom_log2) {
@@ -175,15 +175,27 @@ fn quantize_zoom_log2(zoom_log2: f64) -> Result<Exponent, AppError> {
             "zoom input is outside the camera range".to_string(),
         ));
     }
-    let scaled = zoom_log2 * f64::from(EXPONENT_QUANTA_PER_OCTAVE);
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
+    Exponent::new(quantize_zoom_delta_quanta(zoom_log2)?).map_err(camera_error)
+}
+
+/// Quantises one relative DOM zoom input without treating it as an absolute exponent.
+///
+/// Round-to-nearest, ties-to-even is unbiased: opposing device deltas cancel rather than building
+/// a directional half-quantum drift. The resulting integer is range-checked again when the camera
+/// adds it to the stored exponent.
+pub fn quantize_zoom_delta_quanta(delta_log2: f64) -> Result<i32, AppError> {
+    if !delta_log2.is_finite() {
+        return Err(AppError::Math("zoom input is not finite".to_string()));
+    }
+    let scaled = delta_log2 * f64::from(EXPONENT_QUANTA_PER_OCTAVE);
     let rounded = scaled.round_ties_even();
     if rounded < f64::from(i32::MIN) || rounded > f64::from(i32::MAX) {
         return Err(AppError::Math(
             "zoom input is outside the exponent representation".to_string(),
         ));
     }
-    let camera_error = |error: CameraError| AppError::Math(error.to_string());
-    Exponent::new(rounded_binary64_to_i32(rounded)?).map_err(camera_error)
+    rounded_binary64_to_i32(rounded)
 }
 
 fn rounded_binary64_to_i32(value: f64) -> Result<i32, AppError> {
@@ -209,7 +221,7 @@ fn rounded_binary64_to_i32(value: f64) -> Result<i32, AppError> {
     i32::try_from(signed).map_err(|_| range_error())
 }
 
-fn zoom_log2_from_exponent(exponent: Exponent) -> f64 {
+pub fn zoom_log2_from_exponent(exponent: Exponent) -> f64 {
     f64::from(exponent.quanta()) / f64::from(EXPONENT_QUANTA_PER_OCTAVE)
 }
 
@@ -219,7 +231,10 @@ fn zoom_log2_from_exponent(exponent: Exponent) -> f64 {
 /// components, and both perspective distances remain binary64 observer inputs. In particular,
 /// `camera_translation[3]` and `[4]` change the five-to-four denominator rather than being silently
 /// discarded. Relief amplitude is absent because targeting intersects the flat base plane.
-fn observer_from_view(camera: &ExactView, view: &ViewControls) -> Result<Observer<5>, AppError> {
+pub fn observer_from_view(
+    camera: &ExactView,
+    view: &ViewControls,
+) -> Result<Observer<5>, AppError> {
     if !view.is_valid() {
         return Err(AppError::Math(
             "presentation controls are not valid".to_string(),
@@ -243,7 +258,7 @@ fn observer_from_view(camera: &ExactView, view: &ViewControls) -> Result<Observe
 }
 
 /// Converts the fixed camera centre into the unchanged full-width worker math shape exactly.
-fn big_centre_from_fixed(centre: &ExactCentre) -> Result<BigCentre, AppError> {
+pub fn big_centre_from_fixed(centre: &ExactCentre) -> Result<BigCentre, AppError> {
     let [a, b, c, d] = *centre;
     Ok(BigCentre {
         coords: [
@@ -286,7 +301,7 @@ fn big_scalar_from_fixed(value: Fixed<CAMERA_LIMBS>) -> Result<BigScalar, AppErr
 }
 
 /// Converts an unchanged worker math centre back into the fixed camera record without rounding.
-fn fixed_centre_from_big(centre: &BigCentre) -> Result<ExactCentre, AppError> {
+pub fn fixed_centre_from_big(centre: &BigCentre) -> Result<ExactCentre, AppError> {
     let [a, b, c, d] = &centre.coords;
     Ok([
         fixed_from_big_scalar(a)?,
@@ -358,6 +373,26 @@ fn twos_complement(words: &mut [u64; CAMERA_LIMBS]) {
 
 fn fixed_range_error() -> AppError {
     AppError::Math("centre is not exactly representable by Fixed<8>".to_string())
+}
+
+pub fn fixed_centre_from_f64(centre: [f64; 4]) -> Result<ExactCentre, AppError> {
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
+    let mut fixed = [Fixed::ZERO; 4];
+    for (output, coordinate) in fixed.iter_mut().zip(centre) {
+        *output = Fixed::from_f64(coordinate).map_err(camera_error)?;
+    }
+    Ok(fixed)
+}
+
+pub fn centre_to_f64(centre: &ExactCentre) -> Result<[f64; 4], AppError> {
+    let camera_error = |error: CameraError| AppError::Math(error.to_string());
+    let [a, b, c, d] = centre;
+    Ok([
+        a.to_f64().map_err(camera_error)?,
+        b.to_f64().map_err(camera_error)?,
+        c.to_f64().map_err(camera_error)?,
+        d.to_f64().map_err(camera_error)?,
+    ])
 }
 
 #[cfg(test)]
@@ -490,6 +525,67 @@ mod tests {
     }
 
     #[test]
+    fn exact_plane_identity_matches_the_frozen_rotation_oracle() {
+        let general = ObjectAngles {
+            rho_12: 0.2,
+            rho_13: -0.4,
+            rho_14: 0.1,
+            rho_23: 0.25,
+            rho_24: -0.3,
+            rho_34: 0.15,
+        };
+        let cases = [
+            (
+                ObjectAngles::IDENTITY,
+                ObjectAngles {
+                    rho_34: 0.3,
+                    ..ObjectAngles::IDENTITY
+                },
+            ),
+            (
+                ObjectAngles::IDENTITY,
+                ObjectAngles {
+                    rho_12: 0.5,
+                    ..ObjectAngles::IDENTITY
+                },
+            ),
+            (
+                ObjectAngles::IDENTITY,
+                ObjectAngles {
+                    rho_14: core::f64::consts::PI,
+                    ..ObjectAngles::IDENTITY
+                },
+            ),
+            (
+                ObjectAngles::IDENTITY,
+                ObjectAngles {
+                    rho_13: 0.3,
+                    ..ObjectAngles::IDENTITY
+                },
+            ),
+            (
+                general,
+                ObjectAngles {
+                    rho_34: general.rho_34 + 0.3,
+                    ..general
+                },
+            ),
+        ];
+        for (retained, requested) in cases {
+            let expected = ember_julibrot_math::object_plane_relation(retained, requested)
+                .expect("legacy plane relation")
+                .is_some();
+            let retained = orientation_from_object(&retained).expect("retained orientation");
+            let requested = orientation_from_object(&requested).expect("requested orientation");
+            assert_eq!(
+                ember_camera::same_image_plane(&retained, &requested)
+                    .expect("exact plane relation"),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn launcher_angle_rows_round_trip_bit_exactly() {
         for object in [ObjectAngles::IDENTITY, ObjectAngles::JULIA] {
             let orientation = orientation_from_object(&object).expect("mapped orientation");
@@ -567,6 +663,27 @@ mod tests {
         assert_eq!(
             turn_to_radians(half_turn).to_bits(),
             (-core::f64::consts::PI).to_bits()
+        );
+    }
+
+    #[test]
+    fn a_canonical_saved_angle_set_is_stable_after_first_quantisation() {
+        let input = ObjectAngles {
+            rho_12: 0.2,
+            rho_13: -0.4,
+            rho_14: 0.1,
+            rho_23: 0.25,
+            rho_24: -0.3,
+            rho_34: 0.15,
+        };
+        let orientation = orientation_from_object(&input).expect("mapped saved row");
+        let saved = object_from_orientation(&orientation).expect("canonical saved row");
+        let reloaded = orientation_from_object(&saved).expect("reloaded saved row");
+        let restored = object_from_orientation(&reloaded).expect("restored saved row");
+        assert_eq!(reloaded, orientation);
+        assert_eq!(
+            restored.as_array().map(f64::to_bits),
+            saved.as_array().map(f64::to_bits)
         );
     }
 
@@ -690,6 +807,19 @@ mod tests {
                 exponent
             );
         }
+    }
+
+    #[test]
+    fn relative_zoom_quantises_once_without_using_the_absolute_range() {
+        assert_eq!(
+            quantize_zoom_delta_quanta(-3.0).expect("relative three-octave delta"),
+            -3 * EXPONENT_QUANTA_PER_OCTAVE
+        );
+        assert_eq!(
+            quantize_zoom_delta_quanta(0.49 / f64::from(EXPONENT_QUANTA_PER_OCTAVE))
+                .expect("sub-half-quantum delta"),
+            0
+        );
     }
 
     #[test]

@@ -123,3 +123,15 @@ pub enum AppError {
     #[error("serialization failure: {0}")]
     Serialization(String),
 }
+
+impl From<ember_camera::CameraError> for AppError {
+    fn from(error: ember_camera::CameraError) -> Self {
+        Self::Math(error.to_string())
+    }
+}
+
+impl From<ember_julibrot_math::MathError> for AppError {
+    fn from(error: ember_julibrot_math::MathError) -> Self {
+        Self::Math(error.to_string())
+    }
+}
