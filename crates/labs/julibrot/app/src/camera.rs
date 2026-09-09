@@ -10,7 +10,7 @@ use ember_camera::{
     TwoStageProjection, View, orientation_from_frame, rebuild_basis,
 };
 use ember_julibrot_math::{
-    BigCentre, BigScalar, ObjectAngles, ViewControls, decode_big_scalar, encode_big_scalar,
+    BigCentre, BigScalar, ObjectAngles, Plane, ViewControls, decode_big_scalar, encode_big_scalar,
 };
 
 use crate::AppError;
@@ -29,8 +29,9 @@ type ExactView = View<4, CAMERA_LIMBS>;
 ///
 /// Julibrot's six row-major factors rotate the seed axes `e3` and `e4`. The camera factors use the
 /// same product order but expose frame rows zero and one as `u` and `v`. Reordering the rebuilt
-/// legacy frame as `(e3, e4, -e1, -e2)` preserves both image axes and handedness; the camera crate
-/// quantises that frame through fixed CORDIC.
+/// legacy frame as `(e3, e4, -e1, -e2)` preserves both image axes and handedness. Saved binary64
+/// angles quantise directly into turns and rebuild this complete binary64 frame; the legacy
+/// binary32 `Plane` is never an input to the camera record.
 fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppError> {
     if !angles.is_valid() {
         return Err(AppError::Math("object angles are not valid".to_string()));
@@ -47,6 +48,12 @@ fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppE
 }
 
 /// Reconstructs the canonical saved object-angle row from an exact camera orientation.
+///
+/// Saved rows in the canonical factor chart round-trip bit-exactly when every angle is an integer
+/// multiple of one `Turn` quantum. Every signed zero enters the record as `Turn::ZERO`; both signs
+/// of pi enter as the single `0x8000_0000` half-turn. Readout uses the half-open signed interval
+/// `[-pi, pi)`, so that half-turn becomes negative pi. At a factorisation singularity an equivalent
+/// half-turn can move between factors, but the first canonical readout is stable thereafter.
 fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles, AppError> {
     let basis = rebuild_basis(orientation).map_err(camera_error)?;
     let legacy_frame = [
@@ -66,6 +73,80 @@ fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles,
         rho_24: values[4],
         rho_34: values[5],
     })
+}
+
+/// Rounds the exact camera's rebuilt image axes once into the unchanged renderer plane shape.
+fn plane_from_orientation(orientation: &Orientation<4>) -> Result<Plane, AppError> {
+    let basis = rebuild_basis(orientation).map_err(camera_error)?;
+    let mut basis_u = [0.0_f32; 4];
+    let mut basis_v = [0.0_f32; 4];
+    for ((u, v), (exact_u, exact_v)) in basis_u
+        .iter_mut()
+        .zip(&mut basis_v)
+        .zip(basis.u.into_iter().zip(basis.v))
+    {
+        *u = binary32_from_binary64(exact_u)?;
+        *v = binary32_from_binary64(exact_v)?;
+    }
+    Ok(Plane { basis_u, basis_v })
+}
+
+fn binary32_from_binary64(value: f64) -> Result<f32, AppError> {
+    if !value.is_finite() {
+        return Err(AppError::Math(
+            "camera basis component is not finite".to_string(),
+        ));
+    }
+    let bits = value.to_bits();
+    let sign = if bits >> 63 == 0 { 0 } else { 1_u32 << 31 };
+    let exponent_field = (bits >> 52) & 0x7ff;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    if exponent_field == 0 {
+        return Ok(f32::from_bits(sign));
+    }
+    let mut exponent = i64::try_from(exponent_field).map_err(|_| fixed_range_error())? - 1_023;
+    let significand = (1_u64 << 52) | fraction;
+    if exponent < -149 {
+        return Ok(f32::from_bits(sign));
+    }
+    let mut rounded = if exponent >= -126 {
+        round_right_ties_even(significand, 29)
+    } else {
+        round_right_ties_even(
+            significand,
+            usize::try_from(-exponent - 97).map_err(|_| fixed_range_error())?,
+        )
+    };
+    if exponent >= -126 && rounded == 1_u64 << 24 {
+        rounded >>= 1;
+        exponent += 1;
+    }
+    let encoded = if exponent >= -126 {
+        let biased = u32::try_from(exponent + 127).map_err(|_| fixed_range_error())?;
+        let fraction =
+            u32::try_from(rounded & ((1_u64 << 23) - 1)).map_err(|_| fixed_range_error())?;
+        sign | (biased << 23) | fraction
+    } else if rounded == 1_u64 << 23 {
+        sign | (1_u32 << 23)
+    } else {
+        sign | u32::try_from(rounded).map_err(|_| fixed_range_error())?
+    };
+    Ok(f32::from_bits(encoded))
+}
+
+const fn round_right_ties_even(value: u64, shift: usize) -> u64 {
+    if shift == 0 {
+        return value;
+    }
+    if shift >= 64 {
+        return 0;
+    }
+    let retained = value >> shift;
+    let halfway = 1_u64 << (shift - 1);
+    let remainder = value & ((1_u64 << shift) - 1);
+    let rounds_up = remainder > halfway || (remainder == halfway && retained & 1 != 0);
+    // This lossless Boolean conversion is available during const evaluation on the pinned compiler.
+    retained + rounds_up as u64
 }
 
 fn legacy_orientation(angles: &ObjectAngles) -> Result<Orientation<4>, AppError> {
@@ -283,10 +364,15 @@ mod tests {
     use super::*;
 
     const OBSERVER_ORACLE_TOLERANCE_PIXELS: f64 = 1.0e-8;
+    /// One stored turn bit is `2π / 2^32` radians.
+    const TURN_QUANTUM_RADIANS: f64 = core::f64::consts::TAU / 4_294_967_296.0;
+    /// At the width-1024 edge, one turn quantum moves a point by at most this many pixels.
+    const TURN_QUANTUM_WIDTH_1024_EDGE_PIXELS: f64 = 7.490_140_565_847_857e-7;
+    /// The sampled legacy binary32 planes differ by at most 18 turn quanta as they migrate.
+    const LEGACY_F32_PROJECTOR_MIGRATION_BOUND_RADIANS: f64 = 18.0 * TURN_QUANTUM_RADIANS;
 
-    #[test]
-    fn object_product_mapping_preserves_the_sampled_plane() {
-        let rows = [
+    fn sampled_objects() -> [ObjectAngles; 3] {
+        [
             ObjectAngles::IDENTITY,
             ObjectAngles::JULIA,
             ObjectAngles {
@@ -297,18 +383,98 @@ mod tests {
                 rho_24: -0.3,
                 rho_34: 0.15,
             },
-        ];
-        for object in rows {
-            let legacy = construct_plane(object).expect("legacy plane");
+        ]
+    }
+
+    fn unrounded_mathematical_plane(object: ObjectAngles) -> [[f64; 4]; 2] {
+        [
+            rotate_unrounded_axis(2, object),
+            rotate_unrounded_axis(3, object),
+        ]
+    }
+
+    fn rotate_unrounded_axis(axis: usize, object: ObjectAngles) -> [f64; 4] {
+        let mut value = [0.0; 4];
+        value[axis] = 1.0;
+        for (first, second, angle) in [
+            (2, 3, object.rho_34),
+            (1, 3, object.rho_24),
+            (1, 2, object.rho_23),
+            (0, 3, object.rho_14),
+            (0, 2, object.rho_13),
+            (0, 1, object.rho_12),
+        ] {
+            let (sine, cosine) = angle.sin_cos();
+            let first_value = cosine.mul_add(value[first], -sine * value[second]);
+            let second_value = sine.mul_add(value[first], cosine * value[second]);
+            value[first] = first_value;
+            value[second] = second_value;
+        }
+        value
+    }
+
+    fn projector_residual(left: [[f64; 4]; 2], right: [[f64; 4]; 2]) -> f64 {
+        let projector = |plane: [[f64; 4]; 2]| -> [[f64; 4]; 4] {
+            core::array::from_fn(|row| {
+                core::array::from_fn(|column| {
+                    plane[0][row].mul_add(plane[0][column], plane[1][row] * plane[1][column])
+                })
+            })
+        };
+        projector(left)
+            .into_iter()
+            .flatten()
+            .zip(projector(right).into_iter().flatten())
+            .map(|(left, right)| (left - right) * (left - right))
+            .sum::<f64>()
+            .sqrt()
+            / core::f64::consts::SQRT_2
+    }
+
+    #[test]
+    fn object_mapping_tracks_unrounded_math_within_one_turn_quantum() {
+        assert_eq!(
+            TURN_QUANTUM_RADIANS * 512.0,
+            TURN_QUANTUM_WIDTH_1024_EDGE_PIXELS
+        );
+        for object in sampled_objects() {
             let exact =
                 rebuild_basis(&orientation_from_object(&object).expect("mapped orientation"))
                     .expect("exact basis");
-            for (actual, expected) in exact.u.iter().zip(legacy.basis_u) {
-                assert!((*actual - f64::from(expected)).abs() <= 2.0e-7);
-            }
-            for (actual, expected) in exact.v.iter().zip(legacy.basis_v) {
-                assert!((*actual - f64::from(expected)).abs() <= 2.0e-7);
-            }
+            let residual =
+                projector_residual([exact.u, exact.v], unrounded_mathematical_plane(object));
+            assert!(
+                residual <= TURN_QUANTUM_RADIANS,
+                "projector residual {residual:e} exceeds one turn quantum"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_binary32_plane_has_a_separate_migration_bound() {
+        for object in sampled_objects() {
+            let orientation = orientation_from_object(&object).expect("mapped orientation");
+            let exact = rebuild_basis(&orientation).expect("exact basis");
+            let legacy = construct_plane(object).expect("legacy plane");
+            let legacy_f64 = [legacy.basis_u.map(f64::from), legacy.basis_v.map(f64::from)];
+            let residual = projector_residual([exact.u, exact.v], legacy_f64);
+            assert!(
+                residual <= LEGACY_F32_PROJECTOR_MIGRATION_BOUND_RADIANS,
+                "legacy projector residual {residual:e} exceeds the migration bound"
+            );
+            let published = plane_from_orientation(&orientation).expect("camera plane boundary");
+            assert_eq!(
+                published.basis_u,
+                exact
+                    .u
+                    .map(|value| binary32_from_binary64(value).expect("binary32 boundary"))
+            );
+            assert_eq!(
+                published.basis_v,
+                exact
+                    .v
+                    .map(|value| binary32_from_binary64(value).expect("binary32 boundary"))
+            );
         }
     }
 
@@ -322,6 +488,75 @@ mod tests {
                 object.as_array().map(f64::to_bits)
             );
         }
+    }
+
+    #[test]
+    fn saved_angle_quantum_and_boundary_canonicalisation_are_explicit() {
+        let quantum_aligned = ObjectAngles {
+            rho_12: turn_to_radians(Turn::from_bits(0x0123_4567)),
+            ..ObjectAngles::IDENTITY
+        };
+        let restored = object_from_orientation(
+            &orientation_from_object(&quantum_aligned).expect("quantum-aligned orientation"),
+        )
+        .expect("quantum-aligned saved row");
+        assert_eq!(
+            restored.as_array().map(f64::to_bits),
+            quantum_aligned.as_array().map(f64::to_bits)
+        );
+
+        let negative_zero = ObjectAngles {
+            rho_12: -0.0,
+            ..ObjectAngles::IDENTITY
+        };
+        let zero_orientation = orientation_from_object(&negative_zero).expect("zero orientation");
+        assert_eq!(
+            zero_orientation,
+            orientation_from_object(&ObjectAngles::IDENTITY).expect("identity orientation")
+        );
+        let canonical_zero =
+            object_from_orientation(&zero_orientation).expect("canonical zero row");
+        assert_eq!(canonical_zero.rho_12.to_bits(), 0.0_f64.to_bits());
+
+        let positive_half_turn = ObjectAngles {
+            rho_13: core::f64::consts::PI,
+            ..ObjectAngles::IDENTITY
+        };
+        let negative_half_turn = ObjectAngles {
+            rho_13: -core::f64::consts::PI,
+            ..ObjectAngles::IDENTITY
+        };
+        let positive_orientation =
+            orientation_from_object(&positive_half_turn).expect("positive half-turn orientation");
+        let negative_orientation =
+            orientation_from_object(&negative_half_turn).expect("negative half-turn orientation");
+        assert_eq!(positive_orientation, negative_orientation);
+        let canonical_positive =
+            object_from_orientation(&positive_orientation).expect("canonical positive half-turn");
+        let canonical_negative =
+            object_from_orientation(&negative_orientation).expect("canonical negative half-turn");
+        assert_eq!(
+            canonical_positive.as_array().map(f64::to_bits),
+            canonical_negative.as_array().map(f64::to_bits)
+        );
+        assert_eq!(
+            orientation_from_object(&canonical_positive).expect("stable canonical half-turn"),
+            positive_orientation
+        );
+
+        let half_turn = Turn::from_bits(0x8000_0000);
+        assert_eq!(
+            Turn::from_radians(core::f64::consts::PI).expect("positive pi"),
+            half_turn
+        );
+        assert_eq!(
+            Turn::from_radians(-core::f64::consts::PI).expect("negative pi"),
+            half_turn
+        );
+        assert_eq!(
+            turn_to_radians(half_turn).to_bits(),
+            (-core::f64::consts::PI).to_bits()
+        );
     }
 
     #[test]
