@@ -70,6 +70,7 @@ pub enum EnemyAttack {
     Chop,
     Sweep,
     Slam,
+    Parry,
 }
 impl EnemyAttack {
     pub fn windup_time(self) -> f32 {
@@ -79,6 +80,7 @@ impl EnemyAttack {
             Self::Chop => 0.72,
             Self::Sweep => 0.80,
             Self::Slam => 1.10,
+            Self::Parry => 0.0,
         }
     }
     pub fn contact_time(self) -> f32 {
@@ -88,6 +90,7 @@ impl EnemyAttack {
             Self::Chop => 0.87,
             Self::Sweep => 0.98,
             Self::Slam => 1.28,
+            Self::Parry => 0.0,
         }
     }
     pub fn follow_end(self) -> f32 {
@@ -97,6 +100,7 @@ impl EnemyAttack {
             Self::Chop => 1.06,
             Self::Sweep => 1.18,
             Self::Slam => 1.50,
+            Self::Parry => 0.0,
         }
     }
     pub fn duration(self) -> f32 {
@@ -106,6 +110,7 @@ impl EnemyAttack {
             Self::Chop => 2.10,
             Self::Sweep => 2.30,
             Self::Slam => 2.85,
+            Self::Parry => 0.0,
         }
     }
     pub fn range(self) -> f32 {
@@ -115,6 +120,7 @@ impl EnemyAttack {
             Self::Chop => 1.95,
             Self::Sweep => 2.95,
             Self::Slam => 3.30,
+            Self::Parry => 0.0,
         }
     }
     pub fn damage(self) -> f32 {
@@ -124,6 +130,7 @@ impl EnemyAttack {
             Self::Chop => 20.,
             Self::Sweep => 24.,
             Self::Slam => 34.,
+            Self::Parry => 0.,
         }
     }
     pub fn block_cost(self) -> f32 {
@@ -133,6 +140,7 @@ impl EnemyAttack {
             Self::Chop => 32.,
             Self::Sweep => 38.,
             Self::Slam => 100.,
+            Self::Parry => 22.,
         }
     }
     pub fn guardable(self) -> bool {
@@ -145,6 +153,7 @@ impl EnemyAttack {
             Self::Chop => "Axe chop",
             Self::Sweep => "Castellan sweep",
             Self::Slam => "Crushing slam — dodge",
+            Self::Parry => "Parry",
         }
     }
 }

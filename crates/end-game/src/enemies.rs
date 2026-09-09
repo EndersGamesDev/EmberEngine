@@ -275,6 +275,7 @@ fn attack_grip(kind: EnemyKind, attack: EnemyAttack, t: f32) -> Grip {
             Grip::new(Vec3::new(0.02, 1.00, -0.47), H, -0.70, H),
             Grip::new(Vec3::new(0.02, 1.00, -0.46), H, -0.72, H),
         ),
+        EnemyAttack::Parry => (rest, rest, rest),
     };
     let windup = attack.windup_time();
     let impact = attack.contact_time();

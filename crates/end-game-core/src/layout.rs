@@ -51,6 +51,31 @@ pub enum SolidKind {
     Rail,
     PropCollider,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct RotatedAabb {
+    pub center: [f32; 3],
+    pub half_extents: [f32; 3],
+    pub yaw: f32,
+}
+impl RotatedAabb {
+    pub fn new(center: [f32; 3], half_extents: [f32; 3], yaw: f32) -> Self {
+        Self {
+            center,
+            half_extents,
+            yaw,
+        }
+    }
+    pub fn to_aabb(self) -> Aabb {
+        let cos = self.yaw.cos();
+        let sin = self.yaw.sin();
+        let dx = self.half_extents[0] * cos.abs() + self.half_extents[2] * sin.abs();
+        let dz = self.half_extents[0] * sin.abs() + self.half_extents[2] * cos.abs();
+        Aabb::new(
+            [self.center[0] - dx, self.center[1] - self.half_extents[1], self.center[2] - dz],
+            [self.center[0] + dx, self.center[1] + self.half_extents[1], self.center[2] + dz],
+        )
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Aabb {
     pub min: [f32; 3],
@@ -70,6 +95,14 @@ impl Aabb {
         let dx = x - x.clamp(self.min[0], self.max[0]);
         let dz = z - z.clamp(self.min[2], self.max[2]);
         dx * dx + dz * dz < r * r - EPS * EPS
+    }
+    pub fn overlaps_aabb(self, other: Aabb) -> bool {
+        self.min[0] < other.max[0]
+            && self.max[0] > other.min[0]
+            && self.min[1] < other.max[1]
+            && self.max[1] > other.min[1]
+            && self.min[2] < other.max[2]
+            && self.max[2] > other.min[2]
     }
 }
 #[derive(Clone, Copy, Debug)]
