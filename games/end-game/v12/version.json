@@ -1,0 +1,30 @@
+{
+  "game": "end-game",
+  "version": "12.0.0",
+  "source": "e8af2e30809053f1d67f0d57476cde5969c34f24",
+  "files": {
+    "index.html": "b680fc62ccc8d0180e1550c3f467dab1d9117ca6bd1be16b87e94b5808b86573",
+    "main.js": "0b0f6918a9b1b3cacea47150b467efd4270020c745f5800bfefd17916e92b3f4",
+    "quality.js": "6a24e4240df8d62b386a8b5f95e3fef30a210bab612e554fdda4e4dc5f790117",
+    "style.css": "dc3e7ac7a94b4d2576e294ef5a1f1c05e8698adccb1384a538abb4f153e76d27",
+    "cover.png": "49ff994de7263c799ef8b3e36a3b15f86fb26a43222094ecccdc2a255d8586e8",
+    "prologue.mp4": "ca6fe16a50fb3dd305fb2d49f53573da19af2c850dfb1814ca86bfe4d75a7741",
+    "ambience.wav": "09eda9da41f6750c0d30c9a7dbf4b16d0b96bc00e72dbe783c2f9d77466174b1",
+    "dialogue.js": "2abdc4a2d726d715bed4b7f19d8761669f614fea3581ff81518b291b110a7625",
+    "warden-movement.wav": "9c86ca56c8194dff57937cc551fe92fb345a4868d3f914ad2f4455939e240ad4",
+    "warden-unlocking.wav": "e3acdbeb63de89a89a715c1fb1279b61b914727324102abdb78545d55121b1cb",
+    "warden-sword.wav": "5af7895a73da17c473b8e02513f1dc8543bb8820562ff25eb6c9f1a32f7e6777",
+    "warden-death.wav": "e93e577b78a3ff170514d749ab98107a3bd4e1a6e8c39d35b339e91ead264fb8",
+    "castle-audio.js": "8e3b7f0ab890486cdd44971b67964f43020e8a825e4f88baa7b57f5e01c9e613",
+    "castle-ui.js": "531b57f5e980f87b1e2d35c5e7ec75f7ce78969175c77ac418002e61fc8dc98b",
+    "voice-lines.js": "ce4560695a99636ff685bf85865590194b94b4cd6e5610a568c74d8e3069b588",
+    "boss-intro.wav": "55fccc7e726afcd85177129ff14361bdaffdc6eaf1b30922d424bb74941f33a6",
+    "boss-phase2.wav": "d20da29b6df2ffc4c3d7404c398511acbb575fac7d2b4b3dcb3d7a4f86be5702",
+    "boss-defeat.wav": "3e249da6c1c69df278457fe2fdc15d37124825d535b0b0e189374f40e6368ded",
+    "escape-clue.wav": "9c6fa39296a81b88a3f6d309eaebad2d2f076a26baac89a876d875d11c523cae",
+    "escape-ending.wav": "ef56698d5e13d17fb0135a4628fd44d7657348f7a9a4eb3f67c72a21a4a148c2",
+    "castle-ambience.wav": "c1e88f0f4f57801a5cb53dc4b875b7bdad041494460ea9b007de2e56dd90891a",
+    "pkg/end_game.js": "f16298d3fc70e214ed13334ac0255c83ecbde11a1d12b6a1f3d40d617df06a94",
+    "pkg/end_game_bg.wasm": "f4c48bf1906c732a08216efc144ea0c8c27c70adfc34c441055b1a67bb312939"
+  }
+}
