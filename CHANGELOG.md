@@ -496,15 +496,15 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ## End Game
 
-### v12 — In preparation
+### v12 — 2026-09-09
 
-no proto · stamp — · source not recorded · no tag
+no proto · stamp — · source `e8af2e30809053f1d67f0d57476cde5969c34f24` · no tag · published `bce6ca2b6850ec82bf769f2845fc6ab69223997a` (release stamp)
 
-Parry and Impact gives the guard a timed answer. Tapping guard opens a 120 ms window; a strike arriving inside it is deflected rather than blocked, costs 22 stamina instead of the weapon's 22–38, wounds nothing and staggers the attacker. A guard already raised when the blade lands still blocks at the weapon's own cost, so holding and tapping are different answers to the same strike. A deflection locks the guard for 500 ms, which is what stops the parry from replacing the block. The warden's knife and every castle weapon route through the same window.
+Parry and Impact gives the guard a timed answer. Pressing guard opens a 120 ms window, tap or hold; a strike arriving inside it is deflected rather than blocked, costs 22 stamina instead of the weapon's 22–38, wounds nothing and staggers the attacker. A guard already raised when the blade lands still blocks at the weapon's own cost, so holding and tapping are different answers to the same strike. A deflection locks the guard for 500 ms, which is what stops the parry from replacing the block. The warden's knife and every castle weapon route through the same window.
 
 Sword soldiers and the One-Eyed Castellan turn a player's cut aside while their own blade is winding up, once every 1.2 seconds; spear soldiers and hollow axe knights cannot. A deflected cut draws no blood and spends the swing the attacker was winding up. The HUD names the open window, the deflection and the remaining cooldown beside the existing guard state, with a brighter ring than a block, and the shortcut line teaches tap-to-parry. The castle collision layout gains rotated cover bounds and box-to-box overlap as available primitives.
 
-The parry is wired into play and covered by tests on both halves of the exchange. What the v12 commit's own message claimed but this release does not carry: there are no ceramic or bone impact materials and no new particle effects, because those names appear nowhere in the engine, and the rotated cover bounds are defined but called from nowhere, so no castle geometry uses them yet. Browser gameplay, physical controls, audible playback, vibration and measured frame pacing remain unverified.
+The parry is wired into play and covered by tests on both halves of the exchange: 126 core, 67 client and 38 JavaScript tests pass, up from 119, 66 and 36. The published WASM is 35,565,943 bytes. What the v12 commit's own message claimed but this release does not carry: there are no ceramic or bone impact materials and no new particle effects, because those names appear nowhere in the engine, and the rotated cover bounds are defined but called from nowhere, so no castle geometry uses them yet. Browser gameplay, physical controls, audible playback, vibration and measured frame pacing remain unverified.
 
 ### v11 — 2026-09-08
 
