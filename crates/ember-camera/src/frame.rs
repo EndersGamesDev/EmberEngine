@@ -41,7 +41,50 @@ const CORDIC_ATAN_TURNS: [u32; 31] = [
 /// Exact binary64 bits of the 31-step CORDIC inverse gain.
 const CORDIC_INVERSE_GAIN_BITS: u64 = 0x3fe3_6e9d_b508_6bcc;
 
+const QUARTER_TURN: Turn = Turn::from_bits(1_u32 << (u32::BITS - 2));
 const HALF_TURN: Turn = Turn::from_bits(1_u32 << (u32::BITS - 1));
+
+/// Quantises a complete floating-point frame into the canonical integer orientation.
+///
+/// Each supplied basis bit pattern enters fixed precision once. Successive fixed-point CORDIC
+/// vectorings then recover the row-major Givens factors without a platform transcendental call.
+/// This constructor is for application-boundary frame conventions; exact navigation continues to
+/// rebuild its basis from the returned integer record.
+///
+/// # Errors
+///
+/// Returns a typed refusal for a frame smaller than two dimensions, a non-finite component, a
+/// degenerate axis, or checked fixed-point arithmetic failure.
+pub fn orientation_from_frame<const N: usize, const LIMBS: usize>(
+    frame: &[[f64; N]; N],
+) -> Result<Orientation<N>, CameraError> {
+    if N < 2 {
+        return Err(CameraError::DimensionTooSmall);
+    }
+    if !frame
+        .iter()
+        .flatten()
+        .all(|component| component.is_finite())
+    {
+        return Err(CameraError::NonFinite);
+    }
+    let mut angles = [[Turn::ZERO; N]; N];
+    for (first, candidate) in frame.iter().enumerate().take(N.saturating_sub(1)) {
+        let partial = Orientation::new(angles)?;
+        let basis = rebuild_basis(&partial)?;
+        let coefficients = projected_coefficients::<N, LIMBS>(candidate, &basis, first)?;
+        let mut radius = coefficients[first];
+        for (second, component) in coefficients.iter().enumerate().skip(first + 1) {
+            let (next_radius, angle) = vectoring_turn(&radius, component)?;
+            angles[first][second] = angle;
+            radius = next_radius;
+        }
+        if radius.is_zero() {
+            return Err(CameraError::DegenerateFrame);
+        }
+    }
+    Orientation::new(angles)
+}
 
 /// Reconstructs an orientation whose first axis follows an exact segment.
 ///
@@ -72,19 +115,19 @@ pub fn orientation_for_segment<const N: usize, const LIMBS: usize>(
     let partial_orientation = Orientation::new(angles)?;
     let previous_basis = rebuild_basis(&view.orientation)?;
     let partial_basis = rebuild_basis(&partial_orientation)?;
-    let mut coefficients = projected_coefficients(&previous_basis.v, &partial_basis)?;
+    let mut coefficients = projected_coefficients(&previous_basis.v, &partial_basis, 1)?;
     if coefficients.iter().skip(1).all(Fixed::is_zero) {
         coefficients = 'fallback: {
             for candidate_index in 2..N {
                 let candidate = previous_basis
                     .vector(candidate_index)
                     .ok_or(CameraError::DegenerateFrame)?;
-                let projected = projected_coefficients(candidate, &partial_basis)?;
+                let projected = projected_coefficients(candidate, &partial_basis, 1)?;
                 if projected.iter().skip(1).any(|value| !value.is_zero()) {
                     break 'fallback projected;
                 }
             }
-            projected_coefficients(&previous_basis.u, &partial_basis)?
+            projected_coefficients(&previous_basis.u, &partial_basis, 1)?
         };
     }
     if coefficients.iter().skip(1).all(Fixed::is_zero) {
@@ -102,13 +145,14 @@ pub fn orientation_for_segment<const N: usize, const LIMBS: usize>(
 fn projected_coefficients<const N: usize, const LIMBS: usize>(
     candidate: &[f64; N],
     basis: &Basis<N>,
+    first_axis: usize,
 ) -> Result<[Fixed<LIMBS>; N], CameraError> {
     let mut fixed_candidate = [Fixed::ZERO; N];
     for (output, component) in fixed_candidate.iter_mut().zip(candidate) {
         *output = Fixed::from_f64(*component)?;
     }
     let mut coefficients = [Fixed::ZERO; N];
-    for (axis_index, coefficient) in coefficients.iter_mut().enumerate().skip(1) {
+    for (axis_index, coefficient) in coefficients.iter_mut().enumerate().skip(first_axis) {
         let axis = basis
             .vector(axis_index)
             .ok_or(CameraError::DegenerateFrame)?;
@@ -130,6 +174,15 @@ fn vectoring_turn<const LIMBS: usize>(
         } else {
             Ok((*horizontal, Turn::ZERO))
         };
+    }
+    if horizontal.is_zero() {
+        let radius = vertical.abs_checked()?;
+        let angle = if vertical.is_negative() {
+            QUARTER_TURN.inverse()
+        } else {
+            QUARTER_TURN
+        };
+        return Ok((radius, angle));
     }
     let mut horizontal_work = *horizontal;
     let mut vertical_work = *vertical;
@@ -160,8 +213,8 @@ fn vectoring_turn<const LIMBS: usize>(
 
 #[cfg(test)]
 mod tests {
-    use super::orientation_for_segment;
-    use crate::{CameraError, Exponent, Fixed, Orientation, View, rebuild_basis};
+    use super::{QUARTER_TURN, orientation_for_segment, orientation_from_frame};
+    use crate::{CameraError, Exponent, Fixed, Orientation, Turn, View, rebuild_basis};
 
     /// Two Turn quanta plus deterministic CORDIC and basis-polynomial error.
     const ALIGNMENT_TOLERANCE: f64 = 2.0e-8;
@@ -190,6 +243,60 @@ mod tests {
             .map(|(horizontal, vertical)| horizontal * vertical)
             .sum();
         assert!(orthogonality.abs() <= ALIGNMENT_TOLERANCE);
+        Ok(())
+    }
+
+    #[test]
+    fn frame_constructor_preserves_exact_coordinate_axes() -> Result<(), CameraError> {
+        let frame = [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0, 0.0],
+        ];
+        let orientation = orientation_from_frame::<4, 8>(&frame)?;
+        assert_eq!(orientation.angle(0, 1), Some(Turn::ZERO));
+        assert_eq!(orientation.angle(0, 2), Some(QUARTER_TURN));
+        assert_eq!(orientation.angle(0, 3), Some(Turn::ZERO));
+        assert_eq!(orientation.angle(1, 2), Some(Turn::ZERO));
+        assert_eq!(orientation.angle(1, 3), Some(QUARTER_TURN));
+        assert_eq!(orientation.angle(2, 3), Some(Turn::ZERO));
+        let basis = rebuild_basis(&orientation)?;
+        assert_eq!(basis.u, frame[0]);
+        assert_eq!(basis.v, frame[1]);
+        assert_eq!(basis.remaining[2], frame[2]);
+        assert_eq!(basis.remaining[3], frame[3]);
+        Ok(())
+    }
+
+    #[test]
+    fn frame_constructor_rebuilds_a_general_reordered_frame() -> Result<(), CameraError> {
+        let mut angles = [[Turn::ZERO; 4]; 4];
+        angles[0][1] = Turn::from_bits(0x0826_135f);
+        angles[0][2] = Turn::from_bits(0xefb3_d942);
+        angles[0][3] = Turn::from_bits(0x0413_09b0);
+        angles[1][2] = Turn::from_bits(0x0a2f_9837);
+        angles[1][3] = Turn::from_bits(0xf3c6_e2f1);
+        angles[2][3] = Turn::from_bits(0x061c_8e87);
+        let source = rebuild_basis(&Orientation::new(angles)?)?;
+        let frame = [
+            source.remaining[2],
+            source.remaining[3],
+            source.u.map(|component| -component),
+            source.v.map(|component| -component),
+        ];
+        let rebuilt = rebuild_basis(&orientation_from_frame::<4, 8>(&frame)?)?;
+        let actual = [
+            rebuilt.u,
+            rebuilt.v,
+            rebuilt.remaining[2],
+            rebuilt.remaining[3],
+        ];
+        for (actual_axis, expected_axis) in actual.iter().zip(frame) {
+            for (actual, expected) in actual_axis.iter().zip(expected_axis) {
+                assert!((*actual - expected).abs() <= ALIGNMENT_TOLERANCE);
+            }
+        }
         Ok(())
     }
 }
