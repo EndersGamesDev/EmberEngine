@@ -3,8 +3,15 @@ name = "ember-shader"
 edition.workspace = true
 version.workspace = true
 
+[features]
+template-debug = ["minijinja/debug"]
+
 [dependencies]
 bytemuck.workspace = true
+minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "deserialization", "macros", "multi_template", "adjacent_loop_items", "std_collections", "serde", "loop_controls"] }
+
+[dev-dependencies]
+minijinja = { version = "=2.24.0", default-features = false, features = ["debug"] }
 
 [lints]
 workspace = true

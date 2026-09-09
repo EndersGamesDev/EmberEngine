@@ -4,6 +4,8 @@
 
 Julibrot's `ember-julibrot-shader` crate remains the upstream design source and stays independent of this crate. Mechanism changes originate there and are copied here; this shared implementation does not diverge without the corresponding upstream change.
 
-Its metadata describes host-shareable Rust types and enum discriminants from the same layouts and values that pipeline owners use. Runtime rendering, validation, and anti-drift auditing mirror the proven Julibrot mechanism under repository-neutral names as later structural steps land.
+Its metadata describes host-shareable Rust types and enum discriminants from the same layouts and values that pipeline owners use. A strict, feature-full Minijinja environment renders embedded templates from those types, values, binding numbers, and named constants without a global cache or mutable static state.
+
+The pipeline owner retains the exact rendered source and its stable hash beside the pipeline. Native validation and anti-drift auditing join the same render path as later structural steps land; template debug diagnostics are test- or feature-only and do not enter a default release build.
 
 Repository shader policy and migration evidence live in [`../../docs/shaders.md`](../../docs/shaders.md).
