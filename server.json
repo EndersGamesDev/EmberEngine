@@ -1,6 +1,6 @@
 {
-  "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
-  "v": "1788894046",
+  "ws": "wss://organization-festivals-inspired-architecture.trycloudflare.com",
+  "v": "1788961534",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://python-firefox-marine-atmospheric.trycloudflare.com",
+      "ws": "wss://organization-festivals-inspired-architecture.trycloudflare.com",
       "proto": 24,
       "version": "r1511",
       "commit": "05aeea2b",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-08T19:00:34Z",
+      "updated": "2026-09-09T13:45:34Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
