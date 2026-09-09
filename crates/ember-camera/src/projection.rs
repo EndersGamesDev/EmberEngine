@@ -117,11 +117,13 @@ pub fn project<const N: usize, const LIMBS: usize>(
 /// Returns the current centre's render-grid displacement from a reference centre.
 ///
 /// This per-frame renderer quantity performs N exact subtractions and a fixed-point Gram solve,
-/// then rounds only each final rational pixel quotient to binary64.
+/// then rounds only each final rational pixel quotient to binary64. Unlike a pointer coordinate,
+/// the displacement from a stale reference may span more than the complete screen-input range at
+/// deep zoom; only a non-finite final readout is refused.
 ///
 /// # Errors
 ///
-/// Returns a typed refusal for invalid geometry, an out-of-range result, or checked arithmetic
+/// Returns a typed refusal for invalid geometry, a non-finite result, or checked arithmetic
 /// failure.
 pub fn reference_displacement<const N: usize, const LIMBS: usize>(
     view: &View<N, LIMBS>,
@@ -133,10 +135,7 @@ pub fn reference_displacement<const N: usize, const LIMBS: usize>(
         *output = centre.sub(reference)?;
     }
     let projected = project_delta(view, screen, &delta)?;
-    if projected
-        .iter()
-        .all(|component| component.is_finite() && component.abs() <= PROJECT_READOUT_LIMIT_PIXELS)
-    {
+    if projected.iter().all(|component| component.is_finite()) {
         Ok(projected)
     } else {
         Err(CameraError::ScreenCoordinateOutOfRange)
@@ -674,6 +673,23 @@ mod tests {
         let displacement = reference_displacement(&view, &reference, screen)?;
         assert!((displacement[0] + 13.0).abs() <= PROJECT_PIXEL_TOLERANCE_PIXELS);
         assert!((displacement[1] - 9.0).abs() <= PROJECT_PIXEL_TOLERANCE_PIXELS);
+        Ok(())
+    }
+
+    #[test]
+    fn reference_displacement_is_not_a_pointer_coordinate() -> Result<(), CameraError> {
+        let screen = Screen::new(960, 540)?;
+        let reference = [Fixed::<8>::ZERO; 5];
+        let mut centre = reference;
+        centre[0] = Fixed::from_i64(1)?;
+        let view = View::new(
+            centre,
+            Exponent::new(24 * EXPONENT_QUANTA_PER_OCTAVE)?,
+            Orientation::IDENTITY,
+        );
+        let displacement = reference_displacement(&view, &reference, screen)?;
+        assert_eq!(displacement, [4_026_531_840.0, 0.0]);
+        assert!(displacement[0] > PROJECT_READOUT_LIMIT_PIXELS);
         Ok(())
     }
 
