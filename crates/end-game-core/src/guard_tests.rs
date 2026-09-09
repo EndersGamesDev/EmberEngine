@@ -1,5 +1,5 @@
 use crate::{
-    Controls, Dungeon, Guard, STEP, WardenPhase, guard::BLOCK_COST, warden::KNIFE_CONTACT,
+    Controls, Dungeon, Guard, STEP, WardenPhase, guard::{BLOCK_COST, PARRY_WINDOW}, warden::KNIFE_CONTACT,
 };
 use glam::{Vec2, Vec3};
 
@@ -168,4 +168,66 @@ fn impact_freezes_guard_motion_and_respawn_clears_old_feedback() {
     game.tick(Controls::default());
     assert_eq!(game.guard, Guard::default());
     assert_eq!(game.stage, 0);
+}
+
+#[test]
+fn parry_window_allows_deflection_with_stamina_cost() {
+    let mut guard = Guard::default();
+    guard.amount = 1.0;
+    let mut stamina = 100.0;
+    
+    guard.parry_window_left = PARRY_WINDOW;
+    let contact = guard.try_parry(&mut stamina, Vec3::X, 22.0);
+    assert_eq!(contact, crate::GuardContact::Parried);
+    assert_eq!(stamina, 78.0);
+    assert_eq!(guard.parry_event, 1);
+    assert_eq!(guard.parry_cooldown, 0.50);
+    assert!(guard.parry_window_left < 0.001);
+}
+
+#[test]
+fn parry_fails_without_window_or_stamina() {
+    let mut guard = Guard::default();
+    guard.amount = 1.0;
+    let mut stamina = 100.0;
+    
+    guard.parry_window_left = 0.0;
+    let contact = guard.try_parry(&mut stamina, Vec3::X, 22.0);
+    assert_eq!(contact, crate::GuardContact::Blocked);
+    assert_eq!(stamina, 78.0);
+    
+    guard.parry_window_left = PARRY_WINDOW;
+    guard.parry_cooldown = 0.50;
+    guard.amount = 1.0;
+    let contact = guard.try_parry(&mut stamina, Vec3::X, 22.0);
+    assert_eq!(contact, crate::GuardContact::Blocked);
+    assert!(stamina <= 56.0);
+    assert!(stamina >= 55.0);
+}
+
+#[test]
+fn parry_cooldown_prevents_immediate_parrys() {
+    let mut guard = Guard::default();
+    guard.amount = 1.0;
+    let mut stamina = 100.0;
+    
+    guard.parry_window_left = PARRY_WINDOW;
+    let contact = guard.try_parry(&mut stamina, Vec3::X, 22.0);
+    assert_eq!(contact, crate::GuardContact::Parried);
+    assert_eq!(stamina, 78.0);
+    assert_eq!(guard.parry_cooldown, 0.50);
+    assert_eq!(guard.parry_event, 1);
+    
+    for _ in 0..20 {
+        guard.tick(false, true);
+    }
+    assert!(guard.parry_cooldown > 0.0);
+    
+    guard.parry_window_left = PARRY_WINDOW;
+    guard.amount = 1.0;
+    let contact = guard.try_parry(&mut stamina, Vec3::X, 22.0);
+    assert_eq!(contact, crate::GuardContact::Blocked);
+    assert!(stamina <= 56.0);
+    assert!(stamina >= 55.0);
+    assert_eq!(guard.parry_event, 1);
 }
