@@ -174,17 +174,19 @@ macro_rules! impl_wgsl_struct {
 
 #[cfg(test)]
 mod tests {
-    use super::{F32Vec2, F32Vec4, I32Vec3, U32Vec4, WgslType, WgslTypeDescription};
+    use super::{F32Vec2, F32Vec3, F32Vec4, I32Vec3, U32Vec4, WgslType, WgslTypeDescription};
     use bytemuck::{Pod, Zeroable};
 
     #[derive(Clone, Copy, Pod, Zeroable)]
     #[repr(C, align(16))]
     struct TestUniform {
+        direction: F32Vec3,
         point: F32Vec4,
         flags: U32Vec4,
     }
 
     crate::impl_wgsl_struct!(TestUniform, "TestUniform", {
+        direction: F32Vec3,
         point: F32Vec4,
         flags: U32Vec4,
     });
@@ -231,17 +233,20 @@ mod tests {
                 member_size: None,
             },
         );
+        assert_eq!(F32Vec3::new([1.0, 2.0, 3.0]).into_array(), [1.0, 2.0, 3.0]);
     }
 
     #[test]
     fn struct_macro_reads_field_offsets_and_layout_from_rust() {
         let description = TestUniform::DESCRIPTION;
         assert_eq!(description.name, "TestUniform");
-        assert_eq!(description.size, 32);
+        assert_eq!(description.size, 48);
         assert_eq!(description.alignment, 16);
-        assert_eq!(description.fields[0].name, "point");
-        assert_eq!(description.fields[0].wgsl_type, "vec4<f32>");
+        assert_eq!(description.fields[0].name, "direction");
+        assert_eq!(description.fields[0].wgsl_type, "vec3<f32>");
         assert_eq!(description.fields[0].offset, 0);
+        assert_eq!(description.fields[0].member_size, Some(16));
         assert_eq!(description.fields[1].offset, 16);
+        assert_eq!(description.fields[2].offset, 32);
     }
 }

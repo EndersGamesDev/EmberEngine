@@ -1321,6 +1321,9 @@ dependencies = [
 [[package]]
 name = "ember-shader"
 version = "1.0.1"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "end-game"

@@ -3,5 +3,8 @@ name = "ember-shader"
 edition.workspace = true
 version.workspace = true
 
+[dependencies]
+bytemuck.workspace = true
+
 [lints]
 workspace = true
