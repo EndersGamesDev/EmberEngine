@@ -139,6 +139,35 @@ pub struct NavigationConfig {
     pub grid_width: u32,
 }
 
+/// One publication snapshot already derived from an external navigation authority.
+///
+/// The owner copies these values into its HOT, MAIN, and worker-submission records without
+/// recalculating a centre, scale, basis, or displacement. This is the publication boundary used
+/// by exact camera consumers while the worker protocol retains its canonical dyadic centre.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NavigationSnapshot {
+    /// Desired centre encoded in the worker protocol's bignum shape.
+    pub centre: BigCentre,
+    /// Centre of the accepted reference orbit in the same shape.
+    pub reference_centre: BigCentre,
+    /// Presentation plane derived from the authoritative orientation.
+    pub plane: Plane,
+    /// Render-grid width used by the authoritative camera calculation.
+    pub grid_width: u32,
+    /// Display zoom derived from the authoritative integer exponent.
+    pub zoom_log2: f64,
+    /// Desired centre minus accepted reference in current render-grid pixels.
+    pub centre_from_reference_px: [f64; 2],
+    /// Non-authoritative binary64 centre mirror.
+    pub centre_f64: [f64; 4],
+}
+
+impl From<&Self> for NavigationSnapshot {
+    fn from(snapshot: &Self) -> Self {
+        snapshot.clone()
+    }
+}
+
 /// One latest-wins reference submission released by the owner.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NavigationSubmission {
@@ -201,6 +230,116 @@ impl ViewerOwner {
             navigation: None,
             navigation_error: None,
         }
+    }
+
+    /// Installs a publication snapshot without scheduling worker work.
+    ///
+    /// This is used when a newly accepted reference changes the displacement context of an
+    /// already requested view. All arithmetic has already happened in the external authority.
+    pub fn configure_navigation_snapshot(&mut self, snapshot: &NavigationSnapshot) {
+        let precision_policy = self
+            .navigation
+            .as_ref()
+            .and_then(|navigation| navigation.precision_policy);
+        let mut hot = self.staged_hot.get();
+        hot.zoom_log2 = snapshot.zoom_log2;
+        hot.centre_from_reference_px = snapshot.centre_from_reference_px;
+        self.staged_hot.set(hot);
+        let mut main = self.staged_main.get();
+        main.centre_f64 = snapshot.centre_f64;
+        self.staged_main.set(main);
+        self.navigation = Some(NavigationState {
+            centre: snapshot.centre.clone(),
+            reference_centre: snapshot.reference_centre.clone(),
+            plane: snapshot.plane,
+            grid_width: snapshot.grid_width,
+            pending_generation: None,
+            in_flight_generation: None,
+            precision_policy,
+        });
+        self.navigation_error = None;
+    }
+
+    /// Publishes one externally calculated navigation snapshot and schedules its latest generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when a monotonic generation or centre revision is exhausted. The
+    /// snapshot and counters remain unchanged on refusal.
+    pub fn stage_navigation_snapshot(
+        &mut self,
+        snapshot: &NavigationSnapshot,
+    ) -> Result<u32, OwnerError> {
+        let staged = self.staged_snapshot();
+        self.replace_and_stage_navigation_snapshot(snapshot, &staged.hot, &staged.main)
+    }
+
+    /// Atomically replaces externally calculated navigation and schedules its publication.
+    ///
+    /// The candidate HOT and MAIN records let an app stage camera-derived fields together with
+    /// control aliases that describe the same requested view. Generation and centre revision are
+    /// both preflighted before any owner field changes. This is an in-process ownership boundary:
+    /// worker submissions, centre encoding, and the kernel protocol retain their existing shapes.
+    /// An owned snapshot transfers its bignum allocations into the owner instead of cloning them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when a monotonic generation or centre revision is exhausted. Every
+    /// owner field remains bit-identical on refusal.
+    pub fn replace_and_stage_navigation_snapshot(
+        &mut self,
+        snapshot: impl Into<NavigationSnapshot>,
+        candidate_hot: &HotState,
+        candidate_main: &MainState,
+    ) -> Result<u32, OwnerError> {
+        let generation = self
+            .latest_requested_generation
+            .get()
+            .checked_add(1)
+            .ok_or(OwnerError::GenerationExhausted)?;
+        let centre_revision = self
+            .staged_main
+            .get()
+            .centre_revision
+            .checked_add(1)
+            .ok_or(OwnerError::CentreRevisionExhausted)?;
+        let NavigationSnapshot {
+            centre,
+            reference_centre,
+            plane,
+            grid_width,
+            zoom_log2,
+            centre_from_reference_px,
+            centre_f64,
+        } = snapshot.into();
+        let mut hot = *candidate_hot;
+        hot.zoom_log2 = zoom_log2;
+        hot.centre_from_reference_px = centre_from_reference_px;
+        let mut main = *candidate_main;
+        main.centre_revision = centre_revision;
+        main.centre_f64 = centre_f64;
+        if let Some(navigation) = self.navigation.as_mut() {
+            navigation.centre = centre;
+            navigation.reference_centre = reference_centre;
+            navigation.plane = plane;
+            navigation.grid_width = grid_width;
+            navigation.pending_generation = Some(generation);
+        } else {
+            self.navigation = Some(NavigationState {
+                centre,
+                reference_centre,
+                plane,
+                grid_width,
+                pending_generation: Some(generation),
+                in_flight_generation: None,
+                precision_policy: None,
+            });
+        }
+        self.staged_hot.set(hot);
+        self.staged_main.set(main);
+        self.latest_requested_generation.set(generation);
+        self.navigation_error = None;
+        Ok(generation)
     }
 
     /// Installs the authoritative centre and its math-produced projection context.
@@ -627,6 +766,16 @@ impl ViewerOwner {
         self.published.get()
     }
 
+    /// Returns the coherent records a later owner mutation would extend, without publishing them.
+    #[must_use]
+    pub const fn staged_snapshot(&self) -> ViewerState {
+        ViewerState {
+            epoch: self.published.get().epoch,
+            hot: self.staged_hot.get(),
+            main: self.staged_main.get(),
+        }
+    }
+
     /// Reports whether checked epoch advancement has frozen publication.
     #[must_use]
     pub const fn epoch_exhausted(&self) -> bool {
@@ -658,8 +807,8 @@ mod tests {
     };
 
     use super::{
-        HotState, MainState, NavigationConfig, NavigationSubmission, OrbitDisposition, OrbitHandle,
-        OwnerError, ViewerOwner, ViewerState,
+        HotState, MainState, NavigationConfig, NavigationSnapshot, NavigationSubmission,
+        OrbitDisposition, OrbitHandle, OwnerError, ViewerOwner, ViewerState,
     };
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, ReferenceOrbitRecord,
@@ -787,6 +936,142 @@ mod tests {
 
     fn navigation_owner() -> Result<ViewerOwner, OwnerError> {
         navigation_owner_at(384, 0.0)
+    }
+
+    #[test]
+    fn externally_derived_navigation_is_published_verbatim() -> Result<(), OwnerError> {
+        let plane = construct_plane(PlaneAngles {
+            theta_1: 0.0,
+            theta_2: 0.0,
+        })?;
+        let centre = BigCentre::from_f64([0.25, -0.125, -0.5, 0.5], 512)?;
+        let reference_centre = BigCentre::from_f64([0.0; 4], 512)?;
+        let snapshot = NavigationSnapshot {
+            centre: centre.clone(),
+            reference_centre: reference_centre.clone(),
+            plane,
+            grid_width: 1_024,
+            zoom_log2: 2.5,
+            centre_from_reference_px: [17.0, -9.0],
+            centre_f64: [0.25, -0.125, -0.5, 0.5],
+        };
+        let mut owner = ViewerOwner::new(ViewerState::default());
+        let hot = HotState {
+            plane_theta_1: 0.25,
+            plane_theta_2: -0.5,
+            ..HotState::default()
+        };
+        let main = MainState {
+            requested_iter_cap: 768,
+            palette_id: 2,
+            ..MainState::default()
+        };
+        let generation = owner.replace_and_stage_navigation_snapshot(snapshot, &hot, &main)?;
+        assert_eq!(owner.navigation_centre(), Some(centre.clone()));
+        assert_eq!(owner.reference_centre(), Some(reference_centre));
+        assert_eq!(owner.navigation_plane(), Some(plane));
+        assert_eq!(generation, 1);
+        let staged = owner.staged_snapshot();
+        assert_eq!(staged.hot.centre_from_reference_px, [17.0, -9.0]);
+        assert_eq!(staged.hot.plane_theta_1.to_bits(), 0.25_f64.to_bits());
+        assert_eq!(staged.main.requested_iter_cap, 768);
+        assert_eq!(staged.main.palette_id, 2);
+        let submission = owner
+            .take_navigation_submission()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        assert_eq!(submission.centre, centre);
+        assert_eq!(submission.zoom_log2.to_bits(), 2.5_f64.to_bits());
+        assert_eq!(submission.centre_revision, 1);
+        Ok(())
+    }
+
+    struct ExternalReplacement {
+        owner: ViewerOwner,
+        snapshot: NavigationSnapshot,
+        hot: HotState,
+        main: MainState,
+    }
+
+    fn external_replacement() -> Result<ExternalReplacement, OwnerError> {
+        let plane = construct_plane(PlaneAngles {
+            theta_1: 0.0,
+            theta_2: 0.0,
+        })?;
+        let initial_centre = BigCentre::from_f64([0.25, -0.125, -0.5, 0.5], 512)?;
+        let initial = NavigationSnapshot {
+            centre: initial_centre.clone(),
+            reference_centre: initial_centre,
+            plane,
+            grid_width: 1_024,
+            zoom_log2: 2.5,
+            centre_from_reference_px: [0.0; 2],
+            centre_f64: [0.25, -0.125, -0.5, 0.5],
+        };
+        let mut owner = ViewerOwner::new(ViewerState::default());
+        owner.stage_navigation_snapshot(&initial)?;
+        let snapshot = NavigationSnapshot {
+            centre: BigCentre::from_f64([0.5, -0.25, 0.125, -0.0625], 512)?,
+            reference_centre: BigCentre::from_f64([0.125; 4], 512)?,
+            plane,
+            grid_width: 2_048,
+            zoom_log2: 54.0,
+            centre_from_reference_px: [71.0, -37.0],
+            centre_f64: [0.5, -0.25, 0.125, -0.0625],
+        };
+        let hot = HotState {
+            zoom_log2: 54.0,
+            plane_theta_1: 0.375,
+            plane_theta_2: -0.625,
+            centre_from_reference_px: [71.0, -37.0],
+        };
+        let main = MainState {
+            requested_iter_cap: 4_096,
+            palette_id: 3,
+            plane_origin_f64: [0.5, -0.25, 0.125, -0.0625],
+            ..owner.staged_snapshot().main
+        };
+        Ok(ExternalReplacement {
+            owner,
+            snapshot,
+            hot,
+            main,
+        })
+    }
+
+    #[test]
+    fn generation_refusal_preserves_every_external_publication_field() -> Result<(), OwnerError> {
+        let mut fixture = external_replacement()?;
+        fixture.owner.note_requested_generation(u32::MAX);
+        let owner = &fixture.owner;
+        let before = format!("{owner:#?}");
+        let error = fixture
+            .owner
+            .replace_and_stage_navigation_snapshot(&fixture.snapshot, &fixture.hot, &fixture.main)
+            .expect_err("an exhausted generation refuses the complete replacement");
+        assert_eq!(error, OwnerError::GenerationExhausted);
+        let owner = &fixture.owner;
+        assert_eq!(format!("{owner:#?}").as_bytes(), before.as_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn centre_revision_refusal_preserves_every_external_publication_field() -> Result<(), OwnerError>
+    {
+        let mut fixture = external_replacement()?;
+        fixture.owner.stage_main(MainState {
+            centre_revision: u32::MAX,
+            ..fixture.owner.staged_snapshot().main
+        });
+        let owner = &fixture.owner;
+        let before = format!("{owner:#?}");
+        let error = fixture
+            .owner
+            .replace_and_stage_navigation_snapshot(&fixture.snapshot, &fixture.hot, &fixture.main)
+            .expect_err("an exhausted centre revision refuses the complete replacement");
+        assert_eq!(error, OwnerError::CentreRevisionExhausted);
+        let owner = &fixture.owner;
+        assert_eq!(format!("{owner:#?}").as_bytes(), before.as_bytes());
+        Ok(())
     }
 
     fn run_navigation_edits(
