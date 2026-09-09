@@ -686,7 +686,7 @@ impl CastleScene {
                         self.leaf,
                         p,
                         Vec3::splat(0.5 + hash(seed + 7) * 0.7),
-                        Quat::from_rotation_y(hash(seed + 9) * 6.28),
+                        Quat::from_rotation_y(hash(seed + 9) * core::f32::consts::TAU),
                         color,
                         Zone::Garden,
                         true,

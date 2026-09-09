@@ -280,7 +280,7 @@
       "versions": [
         {
           "v": "v11",
-          "version": "11.0.0",
+          "version": "11.0.1",
           "path": "games/end-game/v11/",
           "live": true,
           "note": "Weight and Impact — aimed sword combos, jumping heavy attacks and visible impacts"

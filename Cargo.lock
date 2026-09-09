@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "end-game"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "ember-engine",
  "end-game-core",
@@ -1331,7 +1331,7 @@ dependencies = [
 
 [[package]]
 name = "end-game-core"
-version = "11.0.0"
+version = "11.0.1"
 dependencies = [
  "glam",
 ]

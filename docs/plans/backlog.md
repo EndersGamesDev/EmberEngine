@@ -335,6 +335,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## end-game
 
+- `crates/end-game-core` and `crates/end-game` do not inherit `[workspace.lints]`; enabling it will promote the current warnings: 13 collapsible `if`s, 7 constant-size `chunks_exact` uses, 5 post-initializer field assignments, 5 over-argument functions, 2 items after test modules, unused `wasm-bindgen` and `ember-net`, a `-1` multiplication, an indexed loop and a manual `is_multiple_of`.
 - Replace End Game's unrigged imported heroes and spatial material zones with an authored skeleton, per-part physical material IDs, cape cloth and a continuous wolf-to-werewolf morph; the v1 camera sequence currently swaps meshes.
 - Add calibrated indoor light transport, shadowed local lights and normal/roughness texture maps before claiming photorealistic surfaces; v1 uses base color, scalar materials and unshadowed local torch lights.
 - Extend End Game with authored dragon combat; the dragon sequence currently exists in the prerecorded prologue only.

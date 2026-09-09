@@ -129,9 +129,11 @@ mod tests {
         assert_eq!(first.len(), RECENT_VOICE_EVENTS);
         assert_eq!(first.first().unwrap().id, 5);
         assert_eq!(first.last().unwrap().id, 12);
-        assert!(first
-            .windows(2)
-            .all(|p| p[0].id < p[1].id && p[0].time < p[1].time));
+        assert!(
+            first
+                .windows(2)
+                .all(|p| p[0].id < p[1].id && p[0].time < p[1].time)
+        );
         assert_eq!(dialogue.events().copied().collect::<Vec<_>>(), first);
         assert_eq!(dialogue.life, 7);
     }
