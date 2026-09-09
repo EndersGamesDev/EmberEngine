@@ -43,7 +43,7 @@ fn orientation_from_object(angles: &ObjectAngles) -> Result<Orientation<4>, AppE
         basis.u.map(|component| -component),
         basis.v.map(|component| -component),
     ];
-    orientation_from_frame::<4, CAMERA_LIMBS>(&frame).map_err(camera_error)
+    orientation_from_frame::<4>(&frame).map_err(camera_error)
 }
 
 /// Reconstructs the canonical saved object-angle row from an exact camera orientation.
@@ -55,7 +55,7 @@ fn object_from_orientation(orientation: &Orientation<4>) -> Result<ObjectAngles,
         basis.u,
         basis.v,
     ];
-    let legacy = orientation_from_frame::<4, CAMERA_LIMBS>(&legacy_frame).map_err(camera_error)?;
+    let legacy = orientation_from_frame::<4>(&legacy_frame).map_err(camera_error)?;
     let values = OBJECT_PLANES
         .map(|(first, second)| legacy.angle(first, second).map_or(0.0, turn_to_radians));
     Ok(ObjectAngles {
