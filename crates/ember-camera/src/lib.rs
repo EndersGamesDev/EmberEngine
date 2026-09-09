@@ -6,7 +6,7 @@
 extern crate std;
 
 pub(crate) mod basis;
-mod fixed;
+pub(crate) mod fixed;
 mod frame;
 mod navigation;
 mod projection;
@@ -18,7 +18,7 @@ pub use fixed::{CameraError, FIXED_INTEGER_BITS, Fixed};
 pub use frame::{orientation_from_frame, same_image_plane};
 pub use navigation::{
     EXPONENT_QUANTUM_EDGE_TOLERANCE, MAX_SCREEN_COORDINATE_PIXELS, click, frame_points, pan,
-    rotate_about, select_box, zoom_about,
+    rotate_about, select_box, zoom_about, zoom_about_point,
 };
 pub use projection::{
     PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS, PROJECT_PIXEL_TOLERANCE_PIXELS, PROJECT_RANGE_PIXELS,
