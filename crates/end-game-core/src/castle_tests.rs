@@ -278,6 +278,8 @@ fn boss_alternates_patterns_enters_phase_two_once_and_drops_the_crown() {
     assert_eq!(boss.attack, EnemyAttack::Slam);
     s.enemies.push(boss);
     s.enemies[0].health = 181.;
+    // Past its windup, so the cut lands rather than being turned aside.
+    s.enemies[0].elapsed = EnemyAttack::Slam.windup_time();
     s.strike_contact(StrikeKind::Cut);
     assert!(s.enemies[0].phase_two);
     let phase_events = s
@@ -659,4 +661,72 @@ fn shrine_does_not_steal_committed_sword_motion_and_checkpoint_handles_a_later_v
     assert_eq!(s.position, quest::CHECKPOINT);
     assert_eq!(s.quest.healing_left(), 2);
     assert_eq!(s.stage, 5);
+}
+
+#[test]
+fn tapping_guard_as_a_castle_weapon_lands_deflects_it_and_staggers_the_attacker() {
+    let mut s = with_enemy(EnemyKind::SwordSoldier, EnemyAttack::Slash);
+    while s.enemies[0].elapsed + STEP + 0.00001 < EnemyAttack::Slash.contact_time() {
+        s.tick(Controls::default());
+    }
+    // The next tick is the one the blade lands on: tap guard into it.
+    s.tick(Controls {
+        block: true,
+        ..Controls::default()
+    });
+    assert!(s.enemies[0].contact_done);
+    assert_eq!(s.guard.parry_event, 1);
+    assert_eq!(s.guard.block_event, 0);
+    assert_eq!(s.health, 100.);
+    assert!((s.stamina - (100. - guard::PARRY_STAMINA_COST)).abs() < 0.01);
+    assert_eq!(s.enemies[0].phase, EnemyPhase::Staggered);
+}
+
+#[test]
+fn a_sword_soldier_turns_a_cut_aside_only_during_its_windup() {
+    let mut e = Enemy::new(0, EnemyKind::SwordSoldier, Vec3::ZERO);
+    e.start_attack(Vec3::new(0., 0., 2.));
+    assert!(e.can_parry());
+    e.elapsed = EnemyAttack::Slash.windup_time();
+    assert!(!e.can_parry(), "a committed swing cannot also parry");
+    e.elapsed = 0.;
+    e.parry_player();
+    assert_eq!(e.parry_event, 1);
+    assert_eq!(e.phase, EnemyPhase::Hunting);
+    assert!(!e.can_parry(), "one deflection buys the player a window");
+}
+
+#[test]
+fn a_spear_soldier_and_a_hollow_knight_never_parry() {
+    for kind in [EnemyKind::SpearSoldier, EnemyKind::HollowAxeKnight] {
+        let mut e = Enemy::new(0, kind, Vec3::ZERO);
+        e.start_attack(Vec3::new(0., 0., 2.));
+        assert!(!e.can_parry(), "{kind:?} has no blade to turn a cut with");
+    }
+}
+
+#[test]
+fn a_cut_into_a_sword_soldiers_windup_is_deflected_without_a_wound() {
+    let mut s = with_enemy(EnemyKind::SwordSoldier, EnemyAttack::Slash);
+    let health = s.enemies[0].health;
+    let reaction = HitReaction {
+        id: 1,
+        time: 0.,
+        zone: HitZone::LeftTorso,
+        point: Vec3::ZERO,
+        direction: Vec3::Z,
+        strength: 1.,
+        elapsed: 0.,
+        origin: [Vec3::ZERO; 5],
+    };
+    assert!(s.enemies[0].can_parry());
+    s.apply_enemy_sword_hit(0, StrikeKind::Cut, Vec3::ZERO, reaction);
+    assert_eq!(s.enemies[0].health, health, "a parried cut draws no blood");
+    assert_eq!(s.enemies[0].parry_event, 1);
+    assert_eq!(s.enemies[0].hit_event, 0);
+    assert!(
+        s.castle_events
+            .events()
+            .any(|e| e.kind == CastleEventKind::EnemyParry)
+    );
 }

@@ -279,10 +279,17 @@
       "desc": "Escape a dark fantasy castle: claim a greatsword, battle armed soldiers and hollow knights, defeat the cyclops Castellan, and follow ancient clues to break the last seal. Generated 3D characters and voices, heavy sword combos, blocking, adaptive resolution, and controller, keyboard and touch controls.",
       "versions": [
         {
+          "v": "v12",
+          "version": "12.0.0",
+          "path": "games/end-game/v12/",
+          "live": true,
+          "note": "Parry and Impact — tap guard to deflect a strike inside a 120 ms window; sword soldiers and the Castellan turn a cut aside during their own windup"
+        },
+        {
           "v": "v11",
           "version": "11.0.1",
           "path": "games/end-game/v11/",
-          "live": true,
+          "live": false,
           "note": "Weight and Impact — aimed sword combos, jumping heavy attacks and visible impacts"
         },
         {

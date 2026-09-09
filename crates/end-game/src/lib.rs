@@ -767,9 +767,13 @@ mod tests {
             g.sim.position = glam::Vec3::new(-2.9, 0.0, -2.55);
             g.sim.guard.amount = 1.0;
             g.sim.stamina = stamina;
+            UI.with(|u| u.borrow_mut().held = 4);
+            // Hold past the window first: this test is about a block.
+            for _ in 0..11 {
+                g.update(&InputState::default(), STEP);
+            }
             g.sim.warden_ai.phase = WardenPhase::Attacking;
             g.sim.warden_ai.elapsed = KNIFE_CONTACT - STEP;
-            UI.with(|u| u.borrow_mut().held = 4);
             g.update(&InputState::default(), STEP);
             let snapshot: serde_json::Value =
                 HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
@@ -781,6 +785,29 @@ mod tests {
             assert_eq!(feedback.rumbles[0].strong > 0.5, broken);
             assert_eq!(feedback.rumbles[0].ms > 180, broken);
         }
+    }
+
+    #[test]
+    fn a_guard_pressed_on_the_contact_frame_reaches_the_hud_as_a_parry() {
+        use end_game_core::warden::{KNIFE_CONTACT, WardenPhase};
+        let mut g = game();
+        g.sim.stage = 4;
+        g.sim.position = glam::Vec3::new(-2.9, 0.0, -2.55);
+        g.sim.warden_ai.phase = WardenPhase::Attacking;
+        g.sim.warden_ai.elapsed = KNIFE_CONTACT - STEP;
+        // Guard down: the press on the contact frame is the deflection.
+        UI.with(|u| u.borrow_mut().held = 4);
+        g.update(&InputState::default(), STEP);
+        let snapshot: serde_json::Value =
+            HUD.with(|hud| serde_json::from_str(&hud.borrow()).unwrap());
+        assert_eq!(snapshot["guard"]["parryEvent"], 1);
+        assert_eq!(snapshot["guard"]["blockEvent"], 0);
+        assert_eq!(snapshot["guard"]["breakEvent"], 0);
+        assert_eq!(g.sim.health, 100.0);
+        assert_eq!(g.sim.stamina, 78.0);
+        let feedback = g.feedback();
+        assert!(!feedback.rumbles.is_empty());
+        assert_eq!(feedback.rumbles[0].ms, 140);
     }
 }
 
@@ -1236,6 +1263,7 @@ impl EmberGame for Game {
                 .map(|e| e.id);
             let old_block = self.sim.guard.block_event;
             let old_break = self.sim.guard.break_event;
+            let old_parry = self.sim.guard.parry_event;
             while self.accumulated >= STEP {
                 self.sim.tick(Controls {
                     movement: Vec2::new(
@@ -1267,7 +1295,11 @@ impl EmberGame for Game {
             if attack_presses > 0 {
                 UI.with(|u| u.borrow_mut().attacks = attack_presses);
             }
-            if self.sim.guard.break_event != old_break {
+            if self.sim.guard.parry_event != old_parry {
+                // Sharper and shorter than a break, stronger than a block, so
+                // the three read apart through the pad alone.
+                self.feedback.rumble(0.55, 0.30, 140);
+            } else if self.sim.guard.break_event != old_break {
                 self.feedback.rumble(0.85, 0.65, 260);
             } else if self.sim.guard.block_event != old_block {
                 self.feedback.rumble(0.22, 0.42, 100);
@@ -1305,7 +1337,9 @@ impl EmberGame for Game {
             use end_game_core::enemies::{EnemyKind, EnemyPhase};
             let telegraph =
                 enemy.phase == EnemyPhase::Attacking && enemy.elapsed < enemy.attack.contact_time();
-            let cue = if telegraph {
+            let cue = if enemy.can_parry() {
+                "Blade up — it can turn a cut aside; strike after the swing"
+            } else if telegraph {
                 if enemy.attack.guardable() {
                     "Weapon raised — face it and guard, or dodge"
                 } else {
@@ -1381,7 +1415,12 @@ impl EmberGame for Game {
             "guard": {
                 "amount": self.sim.guard.amount, "ready": self.sim.guard.ready(),
                 "brokenLeft": self.sim.guard.broken_left, "impactLeft": self.sim.guard.impact_left,
-                "blockEvent": self.sim.guard.block_event, "breakEvent": self.sim.guard.break_event
+                "blockEvent": self.sim.guard.block_event, "breakEvent": self.sim.guard.break_event,
+                "parryWindowLeft": self.sim.guard.parry_window_left,
+                "parryCooldown": self.sim.guard.parry_cooldown,
+                "parryEvent": self.sim.guard.parry_event,
+                "parryWindow": end_game_core::guard::PARRY_WINDOW,
+                "parryCost": end_game_core::guard::PARRY_STAMINA_COST
             },
             "dialogue": {
                 "life": self.sim.dialogue.life, "sequence": self.sim.dialogue.sequence,

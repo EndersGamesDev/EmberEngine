@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {CastleDialogue} from '../../web/games/end-game/v11/castle-audio.js';
-import {castleView} from '../../web/games/end-game/v11/castle-ui.js';
-import {CASTLE_LINES} from '../../web/games/end-game/v11/voice-lines.js';
+import {CastleDialogue} from '../../web/games/end-game/v12/castle-audio.js';
+import {castleView} from '../../web/games/end-game/v12/castle-ui.js';
+import {CASTLE_LINES} from '../../web/games/end-game/v12/voice-lines.js';
 
 const lines = Object.fromEntries(['boss_intro','boss_phase2','boss_defeat','escape_clue','escape_ending'].map(k => [k,{duration:1,text:k,speaker:'Castellan'}]));
 function fixture(ready=true) {
@@ -48,7 +48,7 @@ test('HUD exposes discovered clues and distinguishes unblockable boss warnings',
 test('every shipped castle voice matches its caption duration and generated source bytes',()=>{
   assert.deepEqual(Object.keys(CASTLE_LINES).sort(),Object.keys(lines).sort());
   for(const line of Object.values(CASTLE_LINES)) {
-    const file=readFileSync(new URL(`../../web/games/end-game/v11/${line.file}`,import.meta.url));
+    const file=readFileSync(new URL(`../../web/games/end-game/v12/${line.file}`,import.meta.url));
     const source=readFileSync(new URL(`../../assets/end-game/v10/${line.file}`,import.meta.url));
     assert.ok(file.equals(source),line.file);
     assert.equal(file.toString('ascii',0,4),'RIFF');

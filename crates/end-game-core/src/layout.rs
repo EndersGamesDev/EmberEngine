@@ -71,8 +71,16 @@ impl RotatedAabb {
         let dx = self.half_extents[0] * cos.abs() + self.half_extents[2] * sin.abs();
         let dz = self.half_extents[0] * sin.abs() + self.half_extents[2] * cos.abs();
         Aabb::new(
-            [self.center[0] - dx, self.center[1] - self.half_extents[1], self.center[2] - dz],
-            [self.center[0] + dx, self.center[1] + self.half_extents[1], self.center[2] + dz],
+            [
+                self.center[0] - dx,
+                self.center[1] - self.half_extents[1],
+                self.center[2] - dz,
+            ],
+            [
+                self.center[0] + dx,
+                self.center[1] + self.half_extents[1],
+                self.center[2] + dz,
+            ],
         )
     }
 }

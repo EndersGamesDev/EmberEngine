@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {CastleDialogue} from '../../web/games/end-game/v11/castle-audio.js';
-import {renderCastle} from '../../web/games/end-game/v11/castle-ui.js';
+import {CastleDialogue} from '../../web/games/end-game/v12/castle-audio.js';
+import {renderCastle} from '../../web/games/end-game/v12/castle-ui.js';
 
 // Execute the actual shell with passive DOM/API doubles. No browser, display,
 // workstation input or audio playback is driven by these input regressions.
-const source=readFileSync(new URL('../../web/games/end-game/v11/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
-const html=readFileSync(new URL('../../web/games/end-game/v11/index.html',import.meta.url),'utf8');
+const source=readFileSync(new URL('../../web/games/end-game/v12/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
+const html=readFileSync(new URL('../../web/games/end-game/v12/index.html',import.meta.url),'utf8');
 function fixture() {
   const nodes=new Map(), calls=[], audio=[];
   class Element {
@@ -265,4 +265,32 @@ test('offscreen or invalid blade projection hides aim rather than clamping the r
   }
   const unarmed=shellState({aimProjection:null});unarmed.stage=2;frame(f,unarmed,102);
   assert.equal(reticle.hidden,false);assert.equal(reticle.style.left,'50%');assert.equal(reticle.style.top,'50%');
+});
+
+test('the open parry window and its cooldown read differently from a block',()=>{
+  const base={amount:1,ready:true,impactLeft:0,brokenLeft:0,blockEvent:0,breakEvent:0,parryEvent:0,parryWindowLeft:0,parryCooldown:0,parryWindow:.12,parryCost:22};
+  const show=guard=>{
+    const f=fixture();
+    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify({version:'12.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,guard:${JSON.stringify(guard)}});loop(100);`);
+    return {label:f.get('guard-label').textContent,cue:f.get('guard-cue').textContent,state:f.get('guard-status').dataset.state};
+  };
+  const open=show({...base,parryWindowLeft:.09});
+  assert.match(open.label,/Parry window open/);
+  assert.match(open.cue,/22 stamina/);
+  assert.equal(open.state,'parry');
+  const cooling=show({...base,parryCooldown:.4});
+  assert.match(cooling.cue,/Parry spent/);
+  assert.notEqual(cooling.state,'parry');
+  const blocked=show({...base,impactLeft:.2});
+  assert.match(blocked.label,/Strike blocked/);
+  assert.notEqual(blocked.state,'parry');
+  assert.match(show(base).cue,/tap|Tap/);
+});
+
+test('a deflection rings and flashes differently from a block',()=>{
+  const f=fixture();
+  f.run('guardSound=broken=>__calls.push(["metal",!!broken]);parrySound=()=>__calls.push(["parry"]);lastHudAt=100;api.state_json=()=>JSON.stringify({time:1,guard:{amount:1,ready:true,impactLeft:.24,brokenLeft:0,blockEvent:0,breakEvent:0,parryEvent:1,parryWindowLeft:0,parryCooldown:.5,parryWindow:.12,parryCost:22}});loop(110);loop(111);');
+  assert.equal(f.calls.filter(c=>c[0]==='parry').length,1);
+  assert.deepEqual(f.calls.filter(c=>c[0]==='metal'),[]);
+  assert.equal(f.get('guard-flash').dataset.parry,'true');
 });

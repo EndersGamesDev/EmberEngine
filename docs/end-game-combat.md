@@ -1,6 +1,6 @@
 # End Game sword motion, contact and guard
 
-V11, Weight and Impact, builds on V8's historical cutting references with shared sword choreography, swept contact, five anatomical target zones and material feedback. End Game uses an oversized fantasy sword and authored motion, timing and stamina rules; the references guide readable movement rather than biomechanical or historical reconstruction.
+V12, Parry and Impact, builds on V8's historical cutting references with shared sword choreography, swept contact, five anatomical target zones and material feedback. End Game uses an oversized fantasy sword and authored motion, timing and stamina rules; the references guide readable movement rather than biomechanical or historical reconstruction.
 
 ## Reference and application
 
@@ -16,7 +16,9 @@ R, middle click, controller R2 or touch Heavy supplies a separate heavy request.
 
 Hold right mouse, F, controller L2 or touch Guard after equipping the sword. The guard takes 0.18 seconds to raise and 0.12 seconds to lower. Existing committed attacks finish first; holding guard rejects new normal and heavy requests. Guarding slows movement, prevents sprinting and pauses stamina regeneration. Releasing it restores movement and regeneration.
 
-A raised guard covers a 120-degree view cone. Enemy contact must first pass its normal range, obstruction, dodge and height checks. A knife block costs 28 stamina; castle weapons cost 22–38. Insufficient stamina breaks the guard for 0.90 seconds and permits damage. The Castellan's warned crushing slam requires a dodge. There is no timed-parry bonus, and guard is unavailable before sword pickup, while airborne, during interactions or during a dodge.
+A raised guard covers a 120-degree view cone. Enemy contact must first pass its normal range, obstruction, dodge and height checks. A knife block costs 28 stamina; castle weapons cost 22–38. Insufficient stamina breaks the guard for 0.90 seconds and permits damage. The Castellan's warned crushing slam requires a dodge. Guard is unavailable before sword pickup, while airborne, during interactions or during a dodge.
+
+Pressing guard opens a 0.12-second parry window, whether that press becomes a tap or a hold; what differs is only what happens once the window shuts. A guardable contact arriving inside that window is deflected: it costs 22 stamina instead of the weapon's own block cost, deals no damage and staggers the attacker, and it works from a guard still rising. The deflection locks the guard for 0.50 seconds, so a parry cannot simply replace a block. A guard already raised when the strike lands blocks at the weapon's cost as before. Sword soldiers and the Castellan turn a player's cut aside during their own windup, at most once every 1.2 seconds; spear soldiers and hollow axe knights do not.
 
 ## Shared contact and feedback
 

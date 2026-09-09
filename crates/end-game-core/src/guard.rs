@@ -37,12 +37,19 @@ impl Guard {
         self.amount >= 1.0 - 0.00001 && self.broken_left == 0.0
     }
 
-    pub fn tick(&mut self, held: bool, available: bool) {
+    /// `pressed` is the rising edge of the guard input, and every press opens the
+    /// parry window — tap or hold. Holding differs only in what happens once the
+    /// window shuts: the blade finishes rising into a normal block.
+    pub fn tick(&mut self, held: bool, pressed: bool, available: bool) {
         self.impact_left = (self.impact_left - STEP).max(0.0);
         self.broken_left = (self.broken_left - STEP).max(0.0);
         self.parry_window_left = (self.parry_window_left - STEP).max(0.0);
         self.parry_cooldown = (self.parry_cooldown - STEP).max(0.0);
-        let raising = held && available && self.broken_left == 0.0 && self.parry_cooldown == 0.0;
+        let usable = available && self.broken_left == 0.0 && self.parry_cooldown == 0.0;
+        if pressed && usable {
+            self.parry_window_left = PARRY_WINDOW;
+        }
+        let raising = held && usable;
         self.amount = (self.amount
             + if raising {
                 STEP / RAISE_TIME
@@ -78,16 +85,18 @@ impl Guard {
 
     /// Parry: attempt to deflect an incoming attack during the parry window.
     /// Returns Parried if successful, Blocked if the parry failed but guard is up.
-    pub fn try_parry(&mut self, stamina: &mut f32, point: Vec3, parry_cost: f32) -> GuardContact {
+    /// A deflection costs PARRY_STAMINA_COST; `block_cost` is the weapon's own
+    /// block price, paid only when the window is shut and the guard holds.
+    pub fn try_parry(&mut self, stamina: &mut f32, point: Vec3, block_cost: f32) -> GuardContact {
         if self.parry_cooldown > 0.0 {
             return if self.ready() {
-                self.receive_cost(stamina, point, parry_cost)
+                self.receive_cost(stamina, point, block_cost)
             } else {
                 GuardContact::Open
             };
         }
-        if self.parry_window_left > 0.0 && *stamina >= parry_cost {
-            *stamina -= parry_cost;
+        if self.parry_window_left > 0.0 && *stamina >= PARRY_STAMINA_COST {
+            *stamina -= PARRY_STAMINA_COST;
             self.parry_window_left = 0.0;
             self.parry_cooldown = PARRY_COOLDOWN;
             self.parry_event = self.parry_event.wrapping_add(1);
@@ -95,7 +104,7 @@ impl Guard {
             self.impact_left = IMPACT_TIME;
             GuardContact::Parried
         } else if self.ready() {
-            self.receive_cost(stamina, point, parry_cost)
+            self.receive_cost(stamina, point, block_cost)
         } else {
             GuardContact::Open
         }

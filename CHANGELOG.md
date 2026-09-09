@@ -20,10 +20,6 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 The new dependency-free `ember-camera` shared engine crate is part of the `ember` workspace series and owns checked 512-bit-ready fixed arithmetic, integer camera records, deterministic basis and scale rebuilds, all nine exact navigation and projection calculations, reversible-history invariants, transport bytes, and a release timing ceiling without adopting it into an existing game or lab (`65c8383a`, `abfd9f99`, `f77fa0ac`, `2da1c287`, `2835291f`, `dd13ac7a`, `52d7b675`, `fd519a60`, `50c319b6`, `2598d3df`, `64037571`, `7a5ccf12`, `2343336e`). Across five fixed-evaluation samples, edit measured 28,149–42,129 ns, reference displacement 355,220–435,949 ns, and combined 383,369–478,078 ns. Earlier floating-evaluation samples measured 3,580–7,960 ns for reference displacement and 24,920–63,170 ns combined; the roughly 47-fold row-9 regression remains within the 1,000,000 ns release ceiling.
 
-### End Game v12
-
-Parry and Impact enhances combat with a 120 ms windowed parry that deflects incoming attacks and adds visual feedback through screen flash and rumble. The parry consumes 22 stamina with a 500 ms cooldown, and parries against enemies use the same window and cost. The collision system gains support for rotated cover boxes and dynamic obstacle bounds, while maintaining backward compatibility with existing castle geometry. The surface impact system expands with material-specific feedback for ceramic and bone contacts, plus enhanced particle effects for sparks and splinters. Enemy encounters now include parry mechanics: sword soldiers can parry blade attacks during their active windup window, and the Castellan's parry deflection triggers a stagger reaction. The shared blade choreography retains its 16-substep swept collision with anatomical target zones, and hitstop preserves rhythm buffering through parry deflections. The HUD exposes parry intent, window availability, cooldown status, and impact feedback. Browser gameplay, physical devices, audible playback, vibration and 5K frame pacing remain unverified.
-
 ### End Game v11
 
 Weight and Impact connects an upper-right-to-lower-left cut, horizontal backhand and steeper finishing diagonal through shared edge-leading sword poses. Sixteen subdivisions per 60 Hz contact tick sweep the blade and player frame against five anatomical zones and castle surfaces. Actual contact drives directional reactions, hitstop and rebound; missed cuts create no impact. Separate heavy input selects an overhead strike on the ground or a downward airborne cut that holds through landing without extra landing damage. The projected aim marker and confirmed hit label distinguish intent from contact (`9ab4fcec`).
@@ -499,6 +495,16 @@ The original local game — the pong classic. Two players, one keyboard, first t
 The page itself is older than its arena path: it entered as `web/games/pong/v2/index.html` with the games hub at `b4a9ad1e` and was renamed under `web/games/arena/v0/` at `11d6ab2d`, "rename: move pong lineage under arena paths". That rename is also why the launcher has no arena v2: the number belonged to the pong lineage and was not re-used. v0 is not frozen — the paddle simulation ships inside the arena bundle, so every hub deploy rebuilds this page too. Twenty-five publications, the newest with an on-`main` stamp being r1469 `f28a145f`, which is what serves.
 
 ## End Game
+
+### v12 — In preparation
+
+no proto · stamp — · source not recorded · no tag
+
+Parry and Impact gives the guard a timed answer. Tapping guard opens a 120 ms window; a strike arriving inside it is deflected rather than blocked, costs 22 stamina instead of the weapon's 22–38, wounds nothing and staggers the attacker. A guard already raised when the blade lands still blocks at the weapon's own cost, so holding and tapping are different answers to the same strike. A deflection locks the guard for 500 ms, which is what stops the parry from replacing the block. The warden's knife and every castle weapon route through the same window.
+
+Sword soldiers and the One-Eyed Castellan turn a player's cut aside while their own blade is winding up, once every 1.2 seconds; spear soldiers and hollow axe knights cannot. A deflected cut draws no blood and spends the swing the attacker was winding up. The HUD names the open window, the deflection and the remaining cooldown beside the existing guard state, with a brighter ring than a block, and the shortcut line teaches tap-to-parry. The castle collision layout gains rotated cover bounds and box-to-box overlap as available primitives.
+
+The parry is wired into play and covered by tests on both halves of the exchange. What the v12 commit's own message claimed but this release does not carry: there are no ceramic or bone impact materials and no new particle effects, because those names appear nowhere in the engine, and the rotated cover bounds are defined but called from nowhere, so no castle geometry uses them yet. Browser gameplay, physical controls, audible playback, vibration and measured frame pacing remain unverified.
 
 ### v11 — 2026-09-08
 

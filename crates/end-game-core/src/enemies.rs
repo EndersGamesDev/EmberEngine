@@ -3,6 +3,11 @@ use crate::{Dungeon, GuardContact, ImpactKind, STEP, StrikeKind, layout};
 use glam::{Vec2, Vec3};
 use std::collections::VecDeque;
 
+/// How long an attacker holds the deflecting pose after turning a cut aside.
+pub const ENEMY_PARRY_POSE: f32 = 0.22;
+/// Breathing room between one attacker's parries, so a duel stays winnable.
+pub const ENEMY_PARRY_COOLDOWN: f32 = 1.2;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnemyKind {
     SwordSoldier,
@@ -80,7 +85,7 @@ impl EnemyAttack {
             Self::Chop => 0.72,
             Self::Sweep => 0.80,
             Self::Slam => 1.10,
-            Self::Parry => 0.0,
+            Self::Parry => 0.06,
         }
     }
     pub fn contact_time(self) -> f32 {
@@ -90,7 +95,7 @@ impl EnemyAttack {
             Self::Chop => 0.87,
             Self::Sweep => 0.98,
             Self::Slam => 1.28,
-            Self::Parry => 0.0,
+            Self::Parry => 0.10,
         }
     }
     pub fn follow_end(self) -> f32 {
@@ -100,7 +105,7 @@ impl EnemyAttack {
             Self::Chop => 1.06,
             Self::Sweep => 1.18,
             Self::Slam => 1.50,
-            Self::Parry => 0.0,
+            Self::Parry => 0.16,
         }
     }
     pub fn duration(self) -> f32 {
@@ -110,7 +115,7 @@ impl EnemyAttack {
             Self::Chop => 2.10,
             Self::Sweep => 2.30,
             Self::Slam => 2.85,
-            Self::Parry => 0.0,
+            Self::Parry => ENEMY_PARRY_POSE,
         }
     }
     pub fn range(self) -> f32 {
@@ -196,6 +201,9 @@ pub struct Enemy {
     pub cooldown: f32,
     pub contact_done: bool,
     pub alerted: bool,
+    pub parry_event: u32,
+    pub parry_left: f32,
+    pub parry_cooldown: f32,
 }
 impl Enemy {
     pub fn new(id: usize, kind: EnemyKind, position: Vec3) -> Self {
@@ -228,6 +236,9 @@ impl Enemy {
             cooldown: 0.6,
             contact_done: false,
             alerted: false,
+            parry_event: 0,
+            parry_left: 0.,
+            parry_cooldown: 0.,
         }
     }
     pub fn alive(&self) -> bool {
@@ -253,6 +264,9 @@ impl Enemy {
         self.flinch_left = 0.22;
     }
     pub fn attack_pose(&self) -> Option<(EnemyAttack, f32, f32)> {
+        if self.parry_left > 0. {
+            return Some((EnemyAttack::Parry, ENEMY_PARRY_POSE - self.parry_left, 1.));
+        }
         if self.phase == EnemyPhase::Attacking {
             return Some((self.attack, self.elapsed, 1.));
         }
@@ -296,6 +310,40 @@ impl Enemy {
         self.contact_done = false;
         self.interrupted = None;
         self.attack_event = self.attack_event.wrapping_add(1);
+    }
+    /// A sword soldier or the Castellan can turn a cut aside while its own
+    /// blade is already up: during its windup, before the strike commits.
+    pub fn can_parry(&self) -> bool {
+        self.alive()
+            && self.parry_cooldown <= 0.
+            && self.phase == EnemyPhase::Attacking
+            && self.elapsed < self.attack.windup_time()
+            && matches!(self.kind, EnemyKind::SwordSoldier | EnemyKind::Cyclops)
+    }
+    /// Turn the player's cut aside: no wound, and the attacker spends the
+    /// swing it was winding up rather than landing it for free.
+    pub fn parry_player(&mut self) {
+        self.parry_event = self.parry_event.wrapping_add(1);
+        self.parry_left = ENEMY_PARRY_POSE;
+        self.parry_cooldown = ENEMY_PARRY_COOLDOWN;
+        self.phase = EnemyPhase::Hunting;
+        self.elapsed = 0.;
+        self.contact_done = true;
+        self.interrupted = None;
+        self.cooldown = 0.6;
+        self.alerted = true;
+    }
+    /// The player deflected this attacker's strike: it reels without a wound.
+    pub fn deflected(&mut self) {
+        if !self.alive() {
+            return;
+        }
+        let pose = self.snapshot();
+        self.flinch();
+        self.interrupted = Some(pose);
+        self.phase = EnemyPhase::Staggered;
+        self.elapsed = 0.;
+        self.cooldown = 0.55;
     }
     pub fn take_hit(&mut self, damage: f32, heavy: bool) {
         if !self.alive() {
@@ -353,6 +401,7 @@ pub fn authored_enemies() -> Vec<Enemy> {
 pub enum CastleEventKind {
     EnemyAttack,
     EnemyHit,
+    EnemyParry,
     EnemyDeath,
     BossAwaken,
     BossPhaseTwo,
@@ -378,6 +427,7 @@ impl CastleEventKind {
             Self::Escaped => "escape_ending",
             Self::EnemyAttack => "enemy_attack",
             Self::EnemyHit => "enemy_hit",
+            Self::EnemyParry => "enemy_parry",
             Self::EnemyDeath => "enemy_death",
             Self::PlayerHit => "player_hit",
             Self::Seal => "seal",
@@ -496,6 +546,16 @@ impl Dungeon {
         reaction: crate::HitReaction,
     ) {
         let e = &mut self.enemies[i];
+        if e.can_parry() {
+            e.parry_player();
+            let deflected = e.position + Vec3::Y * 1.2;
+            self.combat.hitstop_left = 4. * STEP;
+            self.combat.impact(strike, ImpactKind::Enemy, deflected);
+            self.castle_events
+                .emit(CastleEventKind::EnemyParry, self.time, deflected);
+            self.say("Your cut is turned aside. Break the guard or strike between swings.");
+            return;
+        }
         let was_phase_two = e.phase_two;
         e.reaction = Some(reaction);
         e.take_hit(
@@ -564,6 +624,8 @@ impl Dungeon {
             e.elapsed += STEP;
             e.flinch_left = (e.flinch_left - STEP).max(0.);
             e.cooldown = (e.cooldown - STEP).max(0.);
+            e.parry_left = (e.parry_left - STEP).max(0.);
+            e.parry_cooldown = (e.parry_cooldown - STEP).max(0.);
             e.walk_blend = (e.walk_blend - STEP * 5.).max(0.);
             if !e.alive() {
                 continue;
@@ -608,11 +670,14 @@ impl Dungeon {
                             && look.dot(incoming) >= 0.5
                         {
                             self.guard
-                                .receive_cost(&mut self.stamina, point, e.attack.block_cost())
+                                .try_parry(&mut self.stamina, point, e.attack.block_cost())
                         } else {
                             GuardContact::Open
                         };
-                        if result == GuardContact::Blocked {
+                        if result == GuardContact::Parried {
+                            self.combat.hitstop_left = 5. * STEP;
+                            e.deflected();
+                        } else if result == GuardContact::Blocked {
                             self.combat.hitstop_left = 3. * STEP;
                             e.flinch();
                         } else {

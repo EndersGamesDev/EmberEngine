@@ -316,6 +316,8 @@ pub struct Dungeon {
     step_distance: f32,
     dodge_time: f32,
     hit_cooldown: f32,
+    /// Last frame's guard input, so a tap is distinguishable from a hold.
+    block_held: bool,
 }
 
 impl Default for Dungeon {
@@ -360,6 +362,7 @@ impl Default for Dungeon {
             step_distance: 0.0,
             dodge_time: 0.0,
             hit_cooldown: 0.0,
+            block_held: false,
             body: Body {
                 position: Vec3::new(1.8, 0.55, 3.4),
                 velocity: Vec3::ZERO,
@@ -629,12 +632,21 @@ impl Dungeon {
             let incoming =
                 (Vec3::new(self.warden.x, 1.25, self.warden.y) - eye).normalize_or_zero();
             let result = if look.dot(incoming) >= 0.5 && self.grounded {
-                self.guard
-                    .receive(&mut self.stamina, eye + look * 0.65 - Vec3::Y * 0.22)
+                self.guard.try_parry(
+                    &mut self.stamina,
+                    eye + look * 0.65 - Vec3::Y * 0.22,
+                    guard::BLOCK_COST,
+                )
             } else {
                 GuardContact::Open
             };
-            if result == GuardContact::Blocked {
+            if result == GuardContact::Parried {
+                // A deflection is worth more than a block: it staggers him and
+                // opens a counter a plain block never gives.
+                self.combat.hitstop_left = 5.0 * STEP;
+                self.warden_ai.on_sword_hit(true, false);
+                self.say("You turn the knife aside. He reels — strike now.");
+            } else if result == GuardContact::Blocked {
                 self.combat.hitstop_left = 3.0 * STEP;
                 self.warden_ai.on_sword_hit(false, false);
                 self.say("Steel catches the knife. Keep your guard toward him.");
@@ -683,6 +695,9 @@ impl Dungeon {
         if self.finished() {
             return;
         }
+        // Read before an interaction wipes the controls below, so a guard held
+        // through one cannot read as a fresh press on the tick it ends.
+        let guard_input = input.block;
         self.grounded = self.on_surface();
         if input.interact && self.interaction.is_none() {
             self.interact();
@@ -761,8 +776,11 @@ impl Dungeon {
         if self.stage >= 5 && self.warden_health <= 0.0 {
             self.exit_open = (self.exit_open + STEP / EXIT_OPEN_TIME).min(1.0);
         }
+        let block_pressed = input.block && !self.block_held;
+        self.block_held = guard_input;
         self.guard.tick(
             input.block,
+            block_pressed,
             self.stage >= 4
                 && !was_interacting
                 && self.grounded
