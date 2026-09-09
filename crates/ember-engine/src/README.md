@@ -6,4 +6,4 @@
 
 `rig.rs` supplies jointed characters and arm solving, `puppet.rs` retains the simpler articulated-part path, `input.rs` normalizes keyboard, pointer, and gamepad state, and `overlay.rs` provides the native timing diagnostic composed in the presenter.
 
-The ordinary tests pin data sanitization, input focus and pause behavior, texture mip generation, environment packing, asset and rig geometry, occlusion, and feedback. `renderer_gpu_test.rs` is the explicit ignored gate that renders the shipping pipelines offscreen; its required invocation and capture evidence live in [`../../../docs/environment-weather.md`](../../../docs/environment-weather.md).
+The ordinary tests pin data sanitization, input focus and pause behavior, texture mip generation, environment packing, asset and rig geometry, occlusion, and feedback. `renderer_gpu_test.rs` contains ordinary native readback and local-light proofs that exercise the shipping pipelines offscreen, plus the explicitly ignored broader environment gate whose required invocation and capture evidence live in [`../../../docs/environment-weather.md`](../../../docs/environment-weather.md).

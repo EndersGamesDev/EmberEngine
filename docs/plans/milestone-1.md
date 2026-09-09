@@ -2,7 +2,7 @@ NOTE 2026-08-29: written against the v6-era tree; superseded in part by upstream
 
 **Status at v7 (`c48d72b`): that re-framing has landed, and the presenter and input designs are no longer maintained here.** `docs/presenter-architecture.md` is the plan of record for §2.1, §2.2, §2.10 and bite 0; `docs/input-latch.md` is the plan of record for §2.6, §2.7, bite 3 and bite 4. Both restate their design against the v7 renderer rather than the v6-era one, and both carry the coordination items where the v6 shape does not fit v7 — read them before sizing any of those sections. What remains live here and nowhere else: bites 1, 2, 5, 7 and 9, and the verification lane in §5.
 
-**Three prerequisites were met upstream rather than by a bite**, and are marked at their bites below: per-mesh textures and UVs landed (`README.md:95-97`), retiring bite 8 outright; the egui overlay landed with a scene-Hz throttle and a frame-age readout (`README.md:105-108`), meeting bite 6's observability rationale without its ring; and WGSL hot-reload landed in the same roadmap item, which is new surface area the split has to re-home (`docs/presenter-architecture.md` §8.1).
+**Three prerequisites were met upstream rather than by a bite**, and are marked at their bites below: per-mesh textures and UVs landed (`README.md:95-97`), retiring bite 8 outright; the egui overlay landed with a scene-Hz throttle and a frame-age readout (`README.md:105-108`), meeting bite 6's observability rationale without its ring; and the former WGSL raw-file reload was later retired by runtime template rendering, so it no longer adds work to the presenter split (`docs/presenter-architecture.md` §8.1).
 
 **Two citations in this plan are stale against v7 and must not be used to size work.** `crates/arena/src/online.rs:114-131`, cited in §2.3 and in bite 1's oracle as the shooter's cursor unprojection, is now lobby-join message construction; no cursor unprojection exists anywhere in the workspace, and the shooter aims with relative mouse deltas (`crates/arena/src/online.rs:644-653`). `crates/arena/src/online.rs:357`, cited in §2.6 as the fire button, is now `crates/arena/src/online.rs:667`. The design conclusions drawn from both still hold; only their evidence moved. Those two are left in place on purpose, as the record of what the argument was built on.
 
@@ -12,7 +12,7 @@ NOTE 2026-08-29: written against the v6-era tree; superseded in part by upstream
 
 Roadmap item 1 reads "first triangle → textured cube → fly camera (WASD + mouse; fly camera lands as rotation-only warp, ATW stage B)". The adoption survey (`docs/plans/adoption-survey.md`) establishes two facts that shape the whole plan:
 
-- The triangle and the cube already exist. Instanced, depth-tested boxes have shipped since 0.5 — the scene pass clears a depth attachment and issues one instanced draw per mesh (`crates/ember-engine/src/renderer.rs:682-720`), shaded with a Blinn-Phong-and-sheen model in `shader.wgsl:70-74`. **Texturing is no longer the missing part**: at v7 `MeshVertex` carries a `uv`, the vertex layout binds it at location 2, and each mesh has a texture bind group (`renderer.rs:942`, `renderer.rs:291-415`). See the mark on bite 8, which is dead for this reason.
+- The triangle and the cube already exist. Instanced, depth-tested boxes have shipped since 0.5 — the scene pass clears a depth attachment and issues one instanced draw per mesh (`crates/ember-engine/src/renderer.rs:682-720`), shaded with a Blinn-Phong-and-sheen model in `crates/ember-shader/templates/engine-scene.wgsl.jinja:251-264`. **Texturing is no longer the missing part**: at v7 `MeshVertex` carries a `uv`, the vertex layout binds it at location 2, and each mesh has a texture bind group (`renderer.rs:942`, `renderer.rs:291-415`). See the mark on bite 8, which is dead for this reason.
 - Stage A is complete as a rendering topology and incomplete as an architecture. There is no `SceneFrame` type, no `Presenter` type, the renderer owns and presents the swapchain, there is no ring, no warp uniform, no guard band, no input latch, and no view-camera read point. Every one of those is a prerequisite for stage B.
 
 So the milestone is really: **make the presenter split real, then land rotation-only warp with a fly camera on top of it, and pick up texturing along the way.** The plan opens with a bite-zero refactor for exactly that reason.
@@ -83,7 +83,7 @@ Alternative considered and rejected: keep `eye`/`target` and derive the quaterni
 
 ### 2.4 One warp shader, with stage A as its degenerate case
 
-`present.wgsl` becomes `warp.wgsl` and its fragment stage does the full rotation-only reprojection rather than a bare sample. For each output pixel: build the view-space ray implied by the *display* frustum, rotate it into the scene's view space by the stored delta, then project it with the *scene* frustum's tangents to get the texture coordinate.
+`engine-present.wgsl.jinja` becomes `engine-warp.wgsl.jinja` and its fragment stage does the full rotation-only reprojection rather than a bare sample. For each output pixel: build the view-space ray implied by the *display* frustum, rotate it into the scene's view space by the stored delta, then project it with the *scene* frustum's tangents to get the texture coordinate.
 
 ```wgsl
 struct Warp {
@@ -170,7 +170,7 @@ A ring of two slots is enough for this: the presenter reads the last published s
 
 `Vertex` gains a `uv: [f32; 2]`. `cube_vertices` already computes per-face tangent vectors (`renderer.rs:1058-1066`), so the four corners map to (0,0), (1,0), (1,1), (0,1) with no new maths.
 
-One layout constraint arrived with the shooter: shader locations are global across vertex buffers. **The numbers in this paragraph were superseded by the upstream implementation and are corrected here so nobody plans against them.** As shipped at v7 the vertex buffer holds 0, 1 and 2 — position, normal, and the `uv` this bite proposed — and the instance buffer runs 3 through 6, with `yaw` at location 6 (`renderer.rs:942`, `renderer.rs:947`). The plan's expectation that `uv` would have to take `@location(6)` behind an instance buffer at 2–5 is therefore historical. `yaw` still works alongside it: the scene shader rotates position and normal with the same yaw (`shader.wgsl:31-39` and `shader.wgsl:43-47`), and UVs are per-face constants that rotation does not touch, so the two features compose without interacting.
+One layout constraint arrived with the shooter: shader locations are global across vertex buffers. **The numbers in this paragraph were superseded by the upstream implementation and are corrected here so nobody plans against them.** As shipped at v7 the vertex buffer holds 0, 1 and 2 — position, normal, and the `uv` this bite proposed — and the instance buffer runs 3 through 6, with `yaw` at location 6 (`renderer.rs:942`, `renderer.rs:947`). The plan's expectation that `uv` would have to take `@location(6)` behind an instance buffer at 2–5 is therefore historical. `yaw` still works alongside it: the scene shader rotates position and normal with the same rotation (`crates/ember-shader/templates/engine-scene.wgsl.jinja:64-75`), and UVs are per-face constants that rotation does not touch, so the two features compose without interacting.
 
 The texture itself is generated procedurally at startup — a checker or grid pattern written into an `Rgba8UnormSrgb` texture — and modulated by the per-instance colour, so both shipped games keep their palettes and simply gain surface detail.
 
@@ -219,9 +219,9 @@ Replace `Camera { eye, target, fov_y_deg }` with `Camera { eye, rot, fov_y_deg }
 
 ### Bite 2 — warp uniform and unified warp shader
 
-Rename `present.wgsl` to `warp.wgsl`, replace its fragment body with the ray-unproject / rotate / reproject math, add the `Warp` uniform buffer and its bind-group entry, and have the presenter fill it. Stage A is expressed as identity rotation with equal tangents.
+Rename the embedded `engine-present.wgsl.jinja` template to `engine-warp.wgsl.jinja`, replace its fragment body with the ray-unproject / rotate / reproject math, add the `Warp` uniform buffer and its bind-group entry, and have the presenter fill it. Stage A is expressed as identity rotation with equal tangents.
 
-- Files: `crates/ember-engine/src/present.wgsl` → `warp.wgsl`, `crates/ember-engine/src/presenter.rs`.
+- Files: `crates/ember-shader/templates/engine-present.wgsl.jinja` → `engine-warp.wgsl.jinja`, `crates/ember-engine/src/shader_templates.rs`, `crates/ember-engine/src/presenter.rs`.
 - New: `WarpUniform` (Pod), `Presenter::write_warp`, explicit `ClampToEdge` on the sampler.
 - Diff scale: roughly +150 / −45.
 - Oracle: build; unit test that the uniform derived from equal poses and equal projections is the identity case. Visual: output unchanged from bite 1.
@@ -279,7 +279,7 @@ A new minimal crate implementing `EmberGame` with WASD plus mouse: `update` adva
 
 Add `uv` to `Vertex` at `@location(6)` (locations 2–5 belong to the instance buffer since `yaw` took 5), generate a procedural checker texture, add its bind group to the scene pass, and sample it modulated by the instance colour.
 
-- Files: `crates/ember-engine/src/renderer.rs`, `shader.wgsl`.
+- Files: `crates/ember-engine/src/renderer.rs`, `crates/ember-shader/templates/engine-scene.wgsl.jinja`.
 - New: `create_checker_texture`, a second scene bind group.
 - Diff scale: roughly +150 / −30.
 - Oracle: build; visual: `flycam`, local `arena`, the arena shooter, and `game` all show surface detail with their existing colours preserved, and yawed instances (the shooter's guns) show the texture rotating with the box rather than sliding across it.
@@ -341,6 +341,6 @@ Landing this milestone makes three README statements true that are currently not
 - The layering line (`README.md:44`) predates the adopted ATW document and omits the presenter stage; it should be restated as game → sim → scene renderer → presenter → platform.
 - Item 1 as this plan found it read "first triangle → textured cube → fly camera" and described work that was largely done at 0.5. **Resolved upstream at v7**, which is why that wording is no longer in the README: the item was rewritten and split into a checked textures half and an open fly-camera half (`README.md:95-97`), exactly the reconciliation this line asked for. Nothing remains to do here; the entry is kept as the record of a resolved item.
 
-Roadmap item 5 also went from planned to checked upstream (`README.md:105-108`), which changes what §2.8 and bite 6 are for — see the mark on bite 6. Its second half, hot-reloadable WGSL, is not anticipated anywhere in this plan and is the one piece of new upstream surface area that makes the presenter split harder rather than easier (`docs/presenter-architecture.md` §8.1).
+Roadmap item 5 also went from planned to checked upstream (`README.md:105-108`), which changes what §2.8 and bite 6 are for — see the mark on bite 6. Its former raw-file WGSL reload was later retired when runtime template rendering made declaration provenance and the anti-drift oracle mandatory, so it no longer complicates the presenter split (`docs/presenter-architecture.md` §8.1).
 
 A fourth README problem appeared with the upstream commits and is *not* fixed by this milestone: the "## Arena v0: the pong classic" section (`README.md:150-158`) still describes online play as two-player paddle pong with a flipped camera and names `crates/arena-core/src/sim.rs` as the server-side sim, when online play is now the arena shooter over `arena-core/src/shooter.rs`. Nothing in this plan touches it, and it should not be folded into a milestone-1 push — it belongs to whoever reconciles the shooter's own documentation. It is recorded here so the next person to edit this README does not assume the section was reviewed and found correct.
