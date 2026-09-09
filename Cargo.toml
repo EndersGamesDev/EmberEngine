@@ -10,6 +10,7 @@ members = [
     "crates/ember-legacy",
     "crates/ember-net",
     "crates/ember-server",
+    "crates/ember-shader",
     "crates/fire",
     "crates/fire-core",
     "crates/fire-server",
