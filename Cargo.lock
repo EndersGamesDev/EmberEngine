@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-app"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "ember-camera",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-kernels"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "ember-julibrot-math",
@@ -1200,7 +1200,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-math"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "astro-float",
  "thiserror 2.0.20",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-present"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "ember-julibrot-kernels",
@@ -1224,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-shader"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "bytemuck",
  "minijinja",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "ember-julibrot-worker"
-version = "1.0.7"
+version = "1.1.0"
 dependencies = [
  "ember-julibrot-math",
  "ember-lab-heap",
