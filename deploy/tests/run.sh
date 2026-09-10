@@ -26,12 +26,13 @@
 #   changelog     CHANGELOG.md against web/games.json, the object store and
 #                 the tags — instant; tag checks skip on a tagless checkout
 #   workflows     workflow YAML and the branch/tag contract — instant
+#   rulesets      repository-ruleset JSON payloads and policy — instant
 #
 # Nothing here contacts a host, a tunnel or a network.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax changelog workflows pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
+SUITES="${*:-syntax changelog workflows rulesets pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
 
 T0="$(date +%s)"
 failed=""

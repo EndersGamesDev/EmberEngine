@@ -25,13 +25,13 @@ Only merge commits are enabled; squash and rebase merges are disabled because th
 
 The pull-request branch is up to date with `develop` before merging. Strict status checks then prove the current candidate rather than an older tree, and the merge commit carries the same content as that gated candidate.
 
-The required status checks are `ci / cores + servers`, `ci / deploy scripts` and `ci / workspace`. Required approvals start at `0`: CI is the mechanical pull-request gate, while the adversarial review and its conclusions are recorded in the pull-request body so the reasoning remains auditable without turning one human's availability into an integration lock.
+The required status-check contexts are the literal CI job names `cores + servers`, `deploy scripts` and `workspace`, and each is bound to GitHub Actions integration id `15368`. Required approvals start at `0`: CI is the mechanical pull-request gate, while the adversarial review and its conclusions are recorded in the pull-request body so the reasoning remains auditable without turning one human's availability into an integration lock.
 
 Each merge to `develop` advances the patch grade of every series it changes. The pending changelog entry cites the source commit because the eventual pull-request merge commit does not exist while the candidate is being prepared.
 
 ## Release tags
 
-The release workflow is triggered by the literal GitHub Actions tag pattern `*-*.*.*`. It then fails unless the final version suffix has the exact numeric form `MAJOR.MINOR.PATCH`, with each component either `0` or a non-zero digit followed by digits, and the prefix is `ember`, an exact game `id` in `web/games.json`, or an exact lab directory id under `web/labs/`. Bare versions and `v`-prefixed versions are invalid because every tag belongs unambiguously to one versioned series.
+The release namespace uses the ruleset ref pattern `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`, while the workflow trigger omits the `refs/tags/` prefix and uses `*-[0-9]*.[0-9]*.[0-9]*`. GitHub evaluates these as fnmatch patterns, so they are deliberately coarser than the workflow's exact runtime regex; the workflow re-validates every candidate and fails unless the final version suffix has the exact numeric form `MAJOR.MINOR.PATCH`, with each component either `0` or a non-zero digit followed by digits, and the prefix is `ember`, an exact game `id` in `web/games.json`, or an exact lab directory id under `web/labs/`. Bare versions and `v`-prefixed versions are invalid because every tag belongs unambiguously to one versioned series.
 
 Release tags are annotated and signed. Their signatures verify against an armored public key committed under `deploy/keys/`, which makes the allowed signing material reviewable in the same history as the release policy.
 
@@ -52,39 +52,51 @@ Quarantine fetches and integration comparisons use `develop`; a candidate is pus
 
 ## GitHub repository rulesets
 
-The rule names below use GitHub's repository-ruleset labels exactly. Each ruleset is active, and the target patterns are disjoint so their effects are explicit rather than accidental.
+The files under `deploy/rulesets/` are complete request bodies for GitHub's repository-ruleset REST API. The rule names below use GitHub's repository-ruleset labels exactly, every payload has `enforcement` set to `active`, and authorization is split from integrity wherever a bypass is required so no bypass actor can delete, rewrite or evade signature protection. `bash deploy/tests/test-rulesets.sh` checks the payloads against this contract and the CI workflow.
 
-### `develop`
+### `develop.json`
 
-This branch ruleset targets only `develop` and has no bypass actors.
+This branch ruleset targets only `refs/heads/develop` and has no bypass actors. It replaces live ruleset `22736795`, whose deletion and non-fast-forward rules are retained while the complete integration policy is added.
 
 - `Restrict deletions` preserves the integration history.
 - `Block force pushes` prevents an integrated commit from changing identity.
-- `Require a pull request before merging` is configured for merge commits only and `0` required approvals; repository merge settings disable squash and rebase methods.
-- `Require status checks to pass` requires `ci / cores + servers`, `ci / deploy scripts` and `ci / workspace`, with `Require branches to be up to date before merging` enabled so the checks cover the candidate that lands.
+- `Require a pull request before merging` allows only the merge-commit method, dismisses stale reviews after new pushes and requires `0` approving reviews for now; code-owner review, last-push approval and resolved review threads are not mechanical merge requirements.
+- `Require status checks to pass` requires the literal contexts `cores + servers`, `deploy scripts` and `workspace`, each from GitHub Actions integration id `15368`, with `Require branches to be up to date before merging` enabled and creation not exempted.
 - `Require signed commits` preserves attributable source history; GitHub's signed merge commit closes the pull request.
 
-### `main`
+### `main-integrity.json`
 
-This branch ruleset targets only `main`. The release workflow deploy key is its single bypass actor with bypass mode set to always; no person or general-purpose automation bypasses the live-line policy.
+This branch ruleset targets only `refs/heads/main` and has no bypass actors.
+
+- `Restrict deletions` prevents removal of the live-line reference.
+- `Block force pushes` makes every promotion a fast-forward in addition to the workflow's plain-push check.
+- `Require signed commits` verifies commits introduced by non-bypassed updates after activation; history already present when the rule is activated is not rechecked.
+
+### `main-authorization.json`
+
+This branch ruleset targets only `refs/heads/main`. Its single bypass actor is the GitHub `DeployKey` category with bypass mode `always`, which GitHub represents without an actor id. It replaces live ruleset `22736890` after `main` exists, preserving the creation restriction while adding update authorization.
 
 - `Restrict creations` permits the workflow deploy key to create the branch after the migration setup and blocks later recreation by other actors.
 - `Restrict updates` permits only the workflow deploy key to advance the branch.
-- `Restrict deletions` prevents removal of the live-line reference.
-- `Block force pushes` makes every promotion a fast-forward in addition to the workflow's plain-push check.
-- `Require signed commits` admits only the signed history already integrated through `develop`.
 
-### Release tags
+### `release-tags-authorization.json`
 
-This tag ruleset targets `*-*.*.*`. The repository owner and loop account are its only bypass actors because they are the release-tag signers; signature allow-list enforcement remains in the release workflow.
+This tag ruleset targets `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`. User `322515484` (`wildskymaker`) and user `196965598` (`enderPeer`) are its only bypass actors, each with bypass mode `always`, because they are the two identified release-tag creators.
 
 - `Restrict creations` limits matching tag creation to the two release actors.
+
+The workflow separately verifies a tag signature against the armored public keys actually present in `deploy/keys/`. Only the Wild Sky Maker key is present now, so a tag from the second creator cannot pass release validation until that creator's public key is added through the repository history.
+
+### `release-tags-integrity.json`
+
+This tag ruleset targets the same `refs/tags/*-[0-9]*.[0-9]*.[0-9]*` pattern and has no bypass actors.
+
 - `Restrict updates` makes an existing release tag immutable.
 - `Restrict deletions` preserves the name-to-commit provenance of every release.
 
-### All other tags
+### `other-tags.json`
 
-This tag ruleset targets every tag not matched by `*-*.*.*` and has no bypass actors.
+This tag ruleset includes `~ALL`, excludes `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`, and has no bypass actors.
 
 - `Restrict creations` prevents tags outside the release namespace, eliminating names that would bypass the series and semantic-version checks.
 
@@ -102,7 +114,7 @@ There is no promotion job in CI. Passing integration CI proves `develop`; it doe
 
 ### Release
 
-`.github/workflows/release.yml` runs for pushes of tags matching `*-*.*.*` in the serial `release` concurrency group, with cancellation disabled so one release cannot interrupt another. Job permissions are read-only by default, and `contents: write` exists only where GitHub release publication requires it.
+`.github/workflows/release.yml` runs for pushes of tags matching `*-[0-9]*.[0-9]*.[0-9]*` in the serial `release` concurrency group, with cancellation disabled so one release cannot interrupt another. Job permissions are read-only by default, and `contents: write` exists only where GitHub release publication requires it.
 
 Each validation fails the run immediately: the tag shape and allowed series are checked; the tag is annotated; its signature verifies after the armored keys in `deploy/keys/*.asc` are imported into a temporary `GNUPGHOME`; its target is an ancestor of `origin/develop`; the REST API reports the `ci` check run at that SHA concluded `success`; the series manifest version equals the tag; `bash deploy/tests/test-changelog.sh` passes at the target; and `origin/main` is either absent or an ancestor of the target.
 

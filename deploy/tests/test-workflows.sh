@@ -87,13 +87,13 @@ else
     ok "workflows reference neither retired integration state nor heartbeat"
 fi
 
-TAG_PATTERN='*-*.*.*'
+TAG_PATTERN='*-[0-9]*.[0-9]*.[0-9]*'
 if grep -Fq -- "- '$TAG_PATTERN'" .github/workflows/release.yml; then
     ok "release.yml uses the documented $TAG_PATTERN tag trigger"
 else
     bad "release.yml does not use the documented $TAG_PATTERN tag trigger"
 fi
-if grep -Fq -- "literal GitHub Actions tag pattern \`$TAG_PATTERN\`" docs/branching.md; then
+if grep -Fq -- "workflow trigger omits the \`refs/tags/\` prefix and uses \`$TAG_PATTERN\`" docs/branching.md; then
     ok "branching.md states the same $TAG_PATTERN tag trigger"
 else
     bad "branching.md does not state the $TAG_PATTERN tag trigger"

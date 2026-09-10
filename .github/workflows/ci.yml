@@ -63,8 +63,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: syntax, workflows, publish-host, host-pids, host-kings, host-prebuilt, ship-host, host-timer, republish-host, pages, ssh-deploys, watchdog
-        run: bash deploy/tests/run.sh syntax workflows publish-host host-pids host-kings host-prebuilt ship-host host-timer republish-host pages ssh-deploys watchdog
+      - name: syntax, workflows, rulesets, publish-host, host-pids, host-kings, host-prebuilt, ship-host, host-timer, republish-host, pages, ssh-deploys, watchdog
+        run: bash deploy/tests/run.sh syntax workflows rulesets publish-host host-pids host-kings host-prebuilt ship-host host-timer republish-host pages ssh-deploys watchdog
       - name: repository policy suites
         if: github.event_name == 'pull_request'
         run: |
