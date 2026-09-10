@@ -626,11 +626,11 @@ Verified at the source: 47 core tests and all-target core Clippy, all twenty abi
 
 ### v2 — 2026-09-05
 
-proto 2 (launcher says proto 1) · stamp — · source not in repository (`86086a2`) · no tag · published `80cf00ef` (message)
+proto 2 (launcher says proto 1) · stamp — · source `86086a2` (not on main) · no tag · published `80cf00ef` (message)
 
 GT Circuit V2: three vehicles, tactical items, contact physics, garage and rematches.
 
-That is the release the published branch serves, and the note its own published catalogue carries. It was cut at `80cf00ef`, whose message names `86086a2` — a commit `git cat-file -t` does not resolve here — so the bytes now serving cannot be tied to any commit in this repository, and there is no `fire-v2` tag because a tag would have to point at something this repository does not have. Recovering the source needs the checkout that build was made from, or a push of its history here. Two later publications, `917847ce` and `708d7265`, preserved those bytes rather than rebuilding them: a peer-preservation fix and an exact-LF retention fix, each carrying the root stamp of the hub deploy beside it.
+That is the release the published branch serves, and the note its own published catalogue carries. It was cut at `80cf00ef`, whose message names `86086a2` — a commit present in this object store but outside the integration history — so the bytes now serving can be tied to their source without making that source eligible for a release tag. There is no `fire-v2` tag because the integration line cannot reach its target. Two later publications, `917847ce` and `708d7265`, preserved those bytes rather than rebuilding them: a peer-preservation fix and an exact-LF retention fix, each carrying the root stamp of the hub deploy beside it.
 
 **The launcher and the published release disagree.** `web/games.json` on `main` still describes fire v2 as protocol 1, "castle circuit, drift + boost, online lobbies" — the earlier v2, first published on 2026-08-31 at `15b066e9` from r121 `671d187c`, with the 920 m gothic-bailey circuit, the handbrake that breaks traction to drift and three boost charges. The published catalogue at `80cf00ef` moved the entry to protocol 2 with the GT Circuit note; `main`'s copy did not follow. This entry states the published truth and names the launcher's value beside it, so the two can be told apart; correcting `web/games.json` is outside this ledger's scope and is recorded in `docs/plans/backlog.md`.
 

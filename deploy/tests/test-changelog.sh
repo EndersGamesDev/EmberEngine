@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# CHANGELOG.md against the launcher, the object store, the published branch
-# and the tags.
+# CHANGELOG.md against the launcher, the object store, the legacy published
+# history and the tags.
 #
 #   bash deploy/tests/test-changelog.sh
 #   bash deploy/tests/test-changelog.sh --self-test
@@ -429,9 +429,9 @@ echo "== the named publication is the one the rule selects =="
 # previous suite by moving v22 back to its FIRST publication: source, stamp,
 # tag, protocol and ancestry all agreed, and only the existence of a later
 # byte-changing publication made the row wrong. So a named publication must
-# clear three bars. It must be reachable from the published branch, because a
-# commit that never reached gh-pages published nothing. It must appear in the
-# history of that entry's served path — the launcher's own `path`, so a lab
+# clear three bars. It must be reachable from the retired Pages history,
+# because a commit absent from that history was never served. It must appear
+# in the history of that entry's served path — the launcher's own `path`, so a lab
 # under labs/ is found where it actually lives — because a publication that
 # left the page untouched did not cut the release. And it must be the newest
 # such publication whose applicable stamp names an ancestor of HEAD, the
@@ -443,7 +443,7 @@ echo "== the named publication is the one the rule selects =="
 sel_checked=0
 sel_skipped=0
 
-PAGES="refs/remotes/pages/gh-pages"
+PAGES="refs/remotes/origin/gh-pages"
 if [ -n "$IN_GIT" ] && git -C "$REPO" rev-parse -q --verify "$PAGES" >/dev/null 2>&1; then
     HAVE_PAGES=1
 else
