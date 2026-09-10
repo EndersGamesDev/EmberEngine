@@ -74,6 +74,10 @@ use ember_lab_heap::{GpuKernelExecutor, GpuKernelExecutorConfig, HeapPresentReso
 /// Poll budget and wall the version-three present configuration refuses at.
 const SCENE_POLLS: u32 = 4_096;
 const SCENE_DEADLINE_MS: f64 = 30_000.0;
+/// Wall budget sized for a software adapter sharing a hosted runner.
+const GPU_SCENE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// A short pause leaves software-adapter workers CPU time between observations.
+const GPU_SCENE_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// Pins fix (1): a boundary reference buys exactly one correction and skips the levels below.
 ///
@@ -3358,6 +3362,7 @@ fn cpu_packed_s1_round_trips_through_descriptor_path() {
     assert_eq!(reconstructed.value, value);
 }
 
+// Poison recovery keeps one GPU test failure from masking a later test's own result.
 static PAIRED_GPU_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn wait_for_gpu_future<F: Future>(future: F) -> F::Output {
@@ -3929,7 +3934,7 @@ fn paired_gpu_dispatch_matches_legacy_s0_and_mapped_s1_reconstructs() {
 
     let _guard = PAIRED_GPU_TEST_MUTEX
         .lock()
-        .expect("the paired GPU test mutex is available");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (device, queue) = paired_gpu_test_device();
     let source = paired_gpu_source_pose();
     let render =
@@ -8074,17 +8079,24 @@ const fn anchor_present_hot(pose: &Pose) -> PresentHot {
 }
 
 fn wait_for_anchor_scene(presenter: &mut Presenter, scene_id: u64) -> SceneFrame {
-    for poll in 0..SCENE_POLLS {
-        for event in presenter.poll_fixed(f64::from(poll)) {
+    let started = Instant::now();
+    let deadline = started + GPU_SCENE_WAIT_TIMEOUT;
+    let mut polls = 0_u64;
+    while Instant::now() < deadline {
+        let elapsed = started.elapsed();
+        polls = polls.saturating_add(1);
+        // `poll_fixed` observes fences on the app's monotonic millisecond timeline.
+        for event in presenter.poll_fixed(elapsed.as_secs_f64() * 1_000.0) {
             if let PresentEvent::SceneCompleted { frame, .. } = event
                 && frame.scene_id == scene_id
             {
                 return frame;
             }
         }
-        std::thread::yield_now();
+        std::thread::sleep(GPU_SCENE_POLL_INTERVAL);
     }
-    panic!("anchor presenter scene {scene_id} did not complete")
+    let elapsed = started.elapsed();
+    panic!("anchor presenter scene {scene_id} did not complete after {polls} polls in {elapsed:?}")
 }
 
 fn anchor_trace_scene(
@@ -8784,7 +8796,7 @@ fn cursor_anchor_placement_across_shallow_perturbation_and_binary64_depths() {
     );
     let _guard = PAIRED_GPU_TEST_MUTEX
         .lock()
-        .expect("the native GPU test mutex is not poisoned");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (device, queue) = paired_gpu_test_device();
     let runs = [
         drive_anchor_zoom_trace("shallow", SHALLOW_ZOOM_LOG2, false, &device, &queue),

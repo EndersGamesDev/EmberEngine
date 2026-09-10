@@ -106,6 +106,8 @@ Validation covered six simulation tests, three client input tests, three resolut
 
 ### Julibrot rounds two and three
 
+Native Julibrot GPU scene waits now use a 120-second wall deadline with one-millisecond cooperative sleeps, allowing shared software Vulkan adapters time to complete while preserving scene assertions and reporting scene, poll and elapsed-time diagnostics; poisoned GPU test mutexes recover so an earlier failure cannot mask a later test's result (`d5503c16`, `5f23617f`).
+
 Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
 
 Julibrot now renders its first production WGSL template while creating the shade pipeline, deriving the real palette layout, enum values, binding slots, status sentinels and diagnostic colours from CPU-side Rust metadata and validating the result with Naga (`a5d81b2a`).
