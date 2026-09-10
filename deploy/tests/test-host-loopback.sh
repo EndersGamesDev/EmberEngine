@@ -13,8 +13,10 @@
 # `git clone` cannot read the checkout directly (a git worktree whose .git
 # file names a path this git cannot follow, which is the case when the tests
 # run inside WSL against a Windows checkout). Without it the test makes its
-# own bare clone, and skips if that fails.
-# EMBER_TEST_REF  — the ref to deploy; defaults to the current HEAD.
+# own bare clone, and skips if that fails. That fixture models GitHub
+# checkout's detached HEAD, then publishes the tested commit as a real default
+# branch because deployed hosts track branches.
+# EMBER_TEST_REF  — the ref to deploy; defaults to the source's default branch.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -47,16 +49,30 @@ cleanup() {
 trap cleanup EXIT
 
 SRC_REPO="${EMBER_TEST_REPO:-}"
+FIXTURE_COMMIT=""
 if [ -z "$SRC_REPO" ]; then
     if git clone -q --bare "$ROOT" "$TMP/src.git" 2>/dev/null; then
         SRC_REPO="$TMP/src.git"
+        FIXTURE_COMMIT="$(git -C "$ROOT" rev-parse 'HEAD^{commit}')"
+        # Git 2.43 preserves a detached source HEAD as an object id in this
+        # bare clone. Force that CI shape on every Git version before creating
+        # the branch that a deployment remote must publish.
+        git --git-dir="$SRC_REPO" update-ref --no-deref HEAD "$FIXTURE_COMMIT"
+        git --git-dir="$SRC_REPO" update-ref refs/heads/main "$FIXTURE_COMMIT"
+        git --git-dir="$SRC_REPO" symbolic-ref HEAD refs/heads/main
     fi
 fi
 if [ -z "$SRC_REPO" ]; then
     echo "SKIP: no repository to deploy from; set EMBER_TEST_REPO to a bare clone"
     exit 0
 fi
-REF="${EMBER_TEST_REF:-$(git --git-dir="$SRC_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)}"
+REF="${EMBER_TEST_REF:-$(git --git-dir="$SRC_REPO" symbolic-ref --short HEAD 2>/dev/null || echo HEAD)}"
+
+if [ -n "$FIXTURE_COMMIT" ]; then
+    echo "== detached CI source becomes a tracked host branch =="
+    is "$(git --git-dir="$SRC_REPO" symbolic-ref HEAD)" "refs/heads/main" "source fixture publishes a default branch"
+    is "$(git --git-dir="$SRC_REPO" rev-parse 'refs/heads/main^{commit}')" "$FIXTURE_COMMIT" "source branch points at the detached checkout commit"
+fi
 
 PAGES="$TMP/pages.git"
 git init -q --bare "$PAGES"

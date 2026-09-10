@@ -5,7 +5,9 @@
 #
 # This pins the historical arena/fire argv beside Kings' port, explicit name,
 # commit-aware probes, pid/url files, local host.json and exact six-process
-# shutdown contract.
+# shutdown contract. The source fixture models CI's detached checkout before
+# publishing the tested commit as a branch, because deployed hosts track a
+# branch rather than a bare HEAD.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -25,7 +27,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+SOURCE_COMMIT="$(git -C "$ROOT" rev-parse 'HEAD^{commit}')"
 git clone -q --bare "$ROOT" "$TMP/source.git"
+# GitHub checkout and the detached pod gate can leave a bare clone's HEAD as
+# an object id. Reproduce that shape on every Git version, then give the host
+# fixture the real default branch that a deployment remote must publish.
+git --git-dir="$TMP/source.git" update-ref --no-deref HEAD "$SOURCE_COMMIT"
+git --git-dir="$TMP/source.git" update-ref refs/heads/main "$SOURCE_COMMIT"
+git --git-dir="$TMP/source.git" symbolic-ref HEAD refs/heads/main
 mkdir -p "$TMP/bin"
 cp "$HERE/shims/cargo" "$TMP/bin/cargo"
 cp "$HERE/shims/cloudflared-stub.sh" "$TMP/bin/cloudflared"
@@ -44,12 +53,16 @@ export EMBER_NAME_FILE="$TMP/conf/host-name"
 export EMBER_HOST_NAME="quiet-egret"
 export EMBER_HOME="$TMP/home"
 export EMBER_REPO="$TMP/source.git"
-export EMBER_REF=HEAD
+export EMBER_REF=main
 export EMBER_PUBLISH="$PAGES#host-book"
 export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
 export EMBER_ARENA_PORT=17780
 export EMBER_FIRE_PORT=17781
 export EMBER_KINGS_PORT=17782
+
+echo "== detached CI source becomes a tracked host branch =="
+is "$(git --git-dir="$TMP/source.git" symbolic-ref HEAD)" "refs/heads/main" "source fixture publishes a default branch"
+is "$(git --git-dir="$TMP/source.git" rev-parse 'refs/heads/main^{commit}')" "$SOURCE_COMMIT" "source branch points at the detached checkout commit"
 
 echo "== fake host up =="
 if bash "$DEPLOY/host.sh" up > "$TMP/up.log" 2>&1; then
@@ -91,6 +104,23 @@ bash "$DEPLOY/host.sh" update > "$TMP/update.log" 2>&1 || bad "unchanged update 
 contains "$(cat "$TMP/update.log")" "all three servers are running" "update requires all three servers"
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$BEFORE" "unchanged update did not restart Kings"
 if [ -s "$LOCAL" ]; then ok "unchanged update left host.json current"; else bad "unchanged update lost host.json"; fi
+
+echo "== a missing remote main never falls back to stale local main =="
+DEPLOYED_BEFORE="$(cat "$EMBER_HOME/run/deployed")"
+SERVER_BEFORE="$(pidof_file "$EMBER_HOME/run/server-kings.pid")"
+STALE="$(git -C "$EMBER_HOME/src" rev-parse HEAD^)"
+git -C "$EMBER_HOME/src" branch -f main "$STALE"
+git --git-dir="$TMP/source.git" update-ref -d refs/heads/main
+export EMBER_REF=main
+if bash "$DEPLOY/host.sh" update > "$TMP/stale-main.log" 2>&1; then
+    bad "update accepted stale local main after origin/main disappeared"
+else
+    ok "update fails when origin/main is absent"
+fi
+contains "$(cat "$TMP/stale-main.log")" "EMBER_REF='main' names no commit" "the missing remote branch is named"
+is "$(cat "$EMBER_HOME/run/deployed")" "$DEPLOYED_BEFORE" "the deployed marker is untouched after ref resolution fails"
+is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$SERVER_BEFORE" "the last server remains live after ref resolution fails"
+export EMBER_REF=main
 
 echo "== down stops exactly the three pairs =="
 PIDS=()

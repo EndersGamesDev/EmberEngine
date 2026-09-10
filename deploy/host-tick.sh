@@ -111,7 +111,7 @@ if [ -n "$dead_servers" ]; then
     rc=$?
     if [ "$rc" -eq 0 ]; then tlog "up done"; else tlog "up finished with rc $rc"; fi
     [ -n "$nomint" ] || note_result "$rc"
-    exit 0
+    case "$rc" in 0|3) exit 0 ;; *) exit "$rc" ;; esac
 fi
 
 if [ -n "$dead_tunnels" ]; then
@@ -142,4 +142,4 @@ case "$out" in
         [ -n "$nomint" ] || note_result "$rc"
         ;;
 esac
-exit 0
+case "$rc" in 0|3) exit 0 ;; *) exit "$rc" ;; esac

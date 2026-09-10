@@ -664,15 +664,37 @@ sync_source() {
 
 # The commit EMBER_REF names right now.
 #
-# `origin/<ref>` is tried FIRST and the bare ref second, which looks backwards
-# and is not: `git clone` leaves a local branch behind, `git fetch` never
-# moves it, and resolving `main` to that stale local branch would make
-# `update` report "up to date" forever while origin/main ran away. A sha or a
-# tag has no origin/ form and falls through to the second attempt.
+# Branch-shaped names resolve only under refs/remotes/origin after the pruning
+# fetch. A missing remote branch therefore fails closed instead of selecting a
+# stale local branch left by clone or an earlier checkout. Only an explicit
+# refs/tags name or a full object id may resolve directly, because each names
+# an immutable object rather than a branch that can disappear upstream.
 resolve_ref() {
-    git -C "$SRC" rev-parse --verify -q "origin/${EMBER_REF}^{commit}" \
-        || git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}" \
-        || return 1
+    local branch
+    case "$EMBER_REF" in
+        refs/tags/*)
+            git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}"
+            ;;
+        refs/heads/*)
+            branch="${EMBER_REF#refs/heads/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        refs/remotes/origin/*)
+            branch="${EMBER_REF#refs/remotes/origin/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        origin/*)
+            branch="${EMBER_REF#origin/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        *)
+            if [[ "$EMBER_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}"
+            else
+                git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${EMBER_REF}^{commit}"
+            fi
+            ;;
+    esac
 }
 
 # --- commands --------------------------------------------------------------
