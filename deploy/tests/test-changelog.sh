@@ -118,14 +118,80 @@ tag_entry_fixture_passes() {
     check_requested_tag "$1" "$2"
 }
 
+check_published_stamp_source() {
+    local kind="$1" recorded="$2" got="$3" label="${4:-the published stamp}"
+    local objects a b
+
+    if [ "$kind" = "absent" ]; then
+        bad "$label names $got while the source is marked absent"
+        return
+    fi
+    if [ "$kind" = "offmain" ]; then
+        objects="$(git -C "$REPO" rev-parse --disambiguate="$recorded" 2>/dev/null)" || {
+            bad "$label could not query object presence for $recorded"
+            return
+        }
+        if [ -z "$objects" ]; then
+            if [ "$got" = "$recorded" ]; then
+                ok "$label names the recorded off-main source $recorded and this checkout does not carry the object"
+            else
+                bad "$label names $got, entry says $recorded"
+            fi
+            return
+        fi
+        if ! git -C "$REPO" rev-parse --verify "$recorded^{commit}" >/dev/null 2>&1; then
+            bad "$label has recorded name $recorded, which is present but does not name a unique commit (ambiguous, or not a commit)"
+            return
+        fi
+    fi
+    a="$(git -C "$REPO" rev-parse "$got^{commit}" 2>/dev/null || echo A)"
+    b="$(git -C "$REPO" rev-parse "$recorded^{commit}" 2>/dev/null || echo B)"
+    if [ "$a" = "$b" ]; then
+        ok "$label names $recorded"
+    else
+        bad "$label names $got, entry says $recorded"
+    fi
+}
+
+published_stamp_fixture_passes() {
+    local repo="$1"
+    shift
+    TESTS_RUN=0
+    TESTS_FAILED=0
+    REPO="$repo"
+    check_published_stamp_source "$@" "the fixture stamp"
+    [ "$TESTS_FAILED" -eq 0 ]
+}
+
+check_published_stamp_fixture() {
+    local expected="$1" repo="$2" kind="$3" recorded="$4" got="$5"
+    local needle="$6" label="$7" output actual="reject"
+
+    if output="$(published_stamp_fixture_passes "$repo" "$kind" "$recorded" "$got" 2>&1)"; then
+        actual="accept"
+    fi
+    case "$output" in
+        *"$needle"*) ;;
+        *) actual="$actual with the wrong report" ;;
+    esac
+    if [ "$actual" = "$expected" ]; then
+        ok "$label"
+    else
+        bad "$label — expected $expected with '$needle', got $actual: $output"
+    fi
+}
+
 self_test() {
-    local started tmp commit rows output
+    local started tmp commit other rows output missing other_missing blob not_repo
+    local collision prefix first second first_hash second_hash failures_before
     started="$(date +%s)"
+    failures_before="$TESTS_FAILED"
     tmp="$(mktemp -d -t ember-changelogtest-XXXXXX)"
     CHANGELOG_TEST_TMP="$tmp"
     trap '[ -z "${CHANGELOG_TEST_TMP:-}" ] || rm -rf "$CHANGELOG_TEST_TMP"' EXIT
 
-    git -C "$tmp" init -q
+    # The ledger grammar uses 40-character object names, so the fixture repository is SHA-1 regardless of Git's configured default.
+    git -C "$tmp" init -q --object-format=sha1
     git -C "$tmp" config user.name Fixture
     git -C "$tmp" config user.email fixture@example.invalid
     git -C "$tmp" config commit.gpgsign false
@@ -138,61 +204,126 @@ self_test() {
 
     git -C "$tmp" tag -a arena-20.0.0 -m 'fixture tag' "$commit"
     if ! output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
-        echo "SELF-TEST FAIL: an exact annotated tag was rejected: $output" >&2
+        bad "SELF-TEST FAIL: an exact annotated tag was rejected: $output"
         return 1
     fi
 
     git -C "$tmp" tag -d arena-20.0.0 >/dev/null
     git -C "$tmp" tag v20 "$commit"
     if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
-        echo "SELF-TEST FAIL: a legacy-only tag was accepted: $output" >&2
+        bad "SELF-TEST FAIL: a legacy-only tag was accepted: $output"
         return 1
     fi
     case "$output" in
         *"tag arena-20.0.0 does not exist"*) ;;
-        *) echo "SELF-TEST FAIL: wrong legacy-only report: $output" >&2; return 1 ;;
+        *) bad "SELF-TEST FAIL: wrong legacy-only report: $output"; return 1 ;;
     esac
 
     git -C "$tmp" tag -d v20 >/dev/null
     if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
-        echo "SELF-TEST FAIL: an absent named tag was accepted: $output" >&2
+        bad "SELF-TEST FAIL: an absent named tag was accepted: $output"
         return 1
     fi
     case "$output" in
         *"tag arena-20.0.0 does not exist"*) ;;
-        *) echo "SELF-TEST FAIL: wrong absent-tag report: $output" >&2; return 1 ;;
+        *) bad "SELF-TEST FAIL: wrong absent-tag report: $output"; return 1 ;;
     esac
 
     git -C "$tmp" tag arena-20.0.0 "$commit"
     if output="$(tag_fixture_passes "$tmp" "$rows" 2>&1)"; then
-        echo "SELF-TEST FAIL: a lightweight named tag was accepted: $output" >&2
+        bad "SELF-TEST FAIL: a lightweight named tag was accepted: $output"
         return 1
     fi
     case "$output" in
         *"not an annotated tag object"*) ;;
-        *) echo "SELF-TEST FAIL: wrong lightweight-tag report: $output" >&2; return 1 ;;
+        *) bad "SELF-TEST FAIL: wrong lightweight-tag report: $output"; return 1 ;;
     esac
 
     if ! output="$(tag_entry_fixture_passes "$rows" arena-20.0.0 2>&1)"; then
-        echo "SELF-TEST FAIL: an exact changelog tag entry was rejected: $output" >&2
+        bad "SELF-TEST FAIL: an exact changelog tag entry was rejected: $output"
         return 1
     fi
     if output="$(tag_entry_fixture_passes "$rows" arena-21.0.0 2>&1)"; then
-        echo "SELF-TEST FAIL: an entry-less tag was accepted: $output" >&2
+        bad "SELF-TEST FAIL: an entry-less tag was accepted: $output"
         return 1
     fi
     case "$output" in
         *"no accepted entry for tag arena-21.0.0"*) ;;
-        *) echo "SELF-TEST FAIL: wrong entry-less tag report: $output" >&2; return 1 ;;
+        *) bad "SELF-TEST FAIL: wrong entry-less tag report: $output"; return 1 ;;
     esac
 
-    echo "SELF-TEST PASS: exact annotated tag and changelog entry accepted; legacy-only, absent, lightweight, and entry-less tags rejected, $(( $(date +%s) - started ))s"
+    git -C "$tmp" commit --allow-empty -qm 'fixture other commit'
+    other="$(git -C "$tmp" rev-parse HEAD)"
+    missing="ffffffffffffffffffffffffffffffffffffffff"
+    other_missing="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    blob="$(printf 'fixture blob\n' | git -C "$tmp" hash-object -w --stdin)"
+    collision="$("$PY" -c 'import hashlib
+seen = {}
+for n in range(1000000):
+    data = f"ambiguous-{n}\n".encode()
+    digest = hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+    prefix = digest[:7]
+    if prefix in seen:
+        print(prefix, seen[prefix], n)
+        break
+    seen[prefix] = n
+else:
+    raise SystemExit(1)')"
+    read -r prefix first second <<< "$collision"
+    first_hash="$(printf 'ambiguous-%s\n' "$first" | git -C "$tmp" hash-object -w --stdin)"
+    second_hash="$(printf 'ambiguous-%s\n' "$second" | git -C "$tmp" hash-object -w --stdin)"
+    [ "$first_hash" != "$second_hash" ] \
+        && [ "${first_hash:0:7}" = "$prefix" ] \
+        && [ "${second_hash:0:7}" = "$prefix" ] \
+        || { bad "SELF-TEST FAIL: ambiguous-object fixture did not produce two objects at $prefix"; return 1; }
+
+    check_published_stamp_fixture accept "$tmp" offmain "$missing" "$missing" \
+        "this checkout does not carry the object" \
+        "self-test accepts an identical stamp for an unavailable off-main source"
+    check_published_stamp_fixture reject "$tmp" offmain "$missing" "$other_missing" \
+        "entry says $missing" \
+        "self-test rejects a different stamp for an unavailable off-main source"
+    check_published_stamp_fixture reject "$tmp" absent "$missing" "$missing" \
+        "source is marked absent" \
+        "self-test rejects every stamp for a source marked absent"
+    check_published_stamp_fixture accept "$tmp" offmain "$commit" "${commit:0:12}" \
+        "names $commit" \
+        "self-test accepts an abbreviated stamp for the same present commit"
+    check_published_stamp_fixture reject "$tmp" offmain "$commit" "$other" \
+        "entry says $commit" \
+        "self-test rejects a stamp for a different present commit"
+    check_published_stamp_fixture reject "$tmp" offmain "$prefix" "$prefix" \
+        "present but does not name a unique commit" \
+        "self-test rejects an ambiguous present object prefix"
+    check_published_stamp_fixture reject "$tmp" offmain "$blob" "$blob" \
+        "present but does not name a unique commit" \
+        "self-test rejects a present blob as an off-main commit"
+    not_repo="$tmp/not-a-repository"
+    check_published_stamp_fixture reject "$not_repo" offmain "$missing" "$missing" \
+        "could not query object presence for $missing" \
+        "self-test rejects the unavailable-object fallback when the repository query fails"
+
+    rm -rf "$tmp"
+    CHANGELOG_TEST_TMP=""
+    trap - EXIT
+    if [ "$TESTS_FAILED" -eq "$failures_before" ]; then
+        echo "SELF-TEST PASS: exact annotated tag and changelog entry accepted; legacy-only, absent, lightweight, and entry-less tags rejected; published-stamp identity cases passed, $(( $(date +%s) - started ))s"
+        return 0
+    fi
+    echo "SELF-TEST FAIL: one or more published-stamp identity cases failed, $(( $(date +%s) - started ))s" >&2
+    return 1
 }
 
 if [ "${1:-}" = "--self-test" ]; then
     [ "$#" -eq 1 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test | --tag TAG]" >&2; exit 2; }
     self_test
-    exit $?
+    self_test_status=$?
+    summary "changelog self-test"
+    self_test_summary_status=$?
+    if [ "$self_test_status" -ne 0 ]; then
+        exit "$self_test_status"
+    fi
+    exit "$self_test_summary_status"
 fi
 REQUIRED_TAG=""
 if [ "${1:-}" = "--tag" ]; then
@@ -201,6 +332,8 @@ if [ "${1:-}" = "--tag" ]; then
 else
     [ "$#" -eq 0 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test | --tag TAG]" >&2; exit 2; }
 fi
+
+self_test || exit $?
 
 CHANGELOG="$REPO/CHANGELOG.md"
 GAMES="$REPO/web/games.json"
@@ -629,16 +762,9 @@ try: stamp = json.load(sys.stdin); print(stamp.get("commit") or stamp.get("sourc
 except Exception: print("")')"
                 if [ -z "$got" ]; then
                     bad "$section $version: publication $pubsha has no readable $path"
-                elif [ "$kind" = "absent" ]; then
-                    bad "$section $version: source is marked absent but $path names $got"
                 else
-                    a="$(git -C "$REPO" rev-parse "$got^{commit}" 2>/dev/null || echo A)"
-                    b="$(git -C "$REPO" rev-parse "$sha^{commit}" 2>/dev/null || echo B)"
-                    if [ "$a" = "$b" ]; then
-                        ok "$section $version: $path at $pubsha names $sha"
-                    else
-                        bad "$section $version: $path at $pubsha names $got, entry says $sha"
-                    fi
+                    check_published_stamp_source "$kind" "$sha" "$got" \
+                        "$section $version: the $path stamp at $pubsha"
                 fi
                 ;;
             message)
