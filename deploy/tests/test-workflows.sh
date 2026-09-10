@@ -99,16 +99,21 @@ else
     bad "branching.md does not state the $TAG_PATTERN tag trigger"
 fi
 
-PAGES_BRANCH=main
-if grep -Fq "branches: [$PAGES_BRANCH]" .github/workflows/pages.yml; then
-    ok "pages.yml uses the documented $PAGES_BRANCH branch"
+if grep -Fq "workflows: [release]" .github/workflows/pages.yml \
+  && grep -Fq "types: [completed]" .github/workflows/pages.yml; then
+    ok "pages.yml waits for the release workflow to complete"
 else
-    bad "pages.yml does not use the documented $PAGES_BRANCH branch"
+    bad "pages.yml is not triggered by release workflow completion"
 fi
-if grep -Fq "\`.github/workflows/pages.yml\` runs only when \`$PAGES_BRANCH\` advances" docs/branching.md; then
-    ok "branching.md states the same $PAGES_BRANCH Pages branch"
+if grep -Fq "ref: main" .github/workflows/pages.yml; then
+    ok "pages.yml checks out main after release success"
 else
-    bad "branching.md does not state the $PAGES_BRANCH Pages branch"
+    bad "pages.yml does not check out main"
+fi
+if grep -Fq "\`.github/workflows/pages.yml\` runs after the \`release\` workflow completes successfully" docs/branching.md; then
+    ok "branching.md states the release-completion Pages trigger"
+else
+    bad "branching.md does not state the release-completion Pages trigger"
 fi
 
 summary workflows

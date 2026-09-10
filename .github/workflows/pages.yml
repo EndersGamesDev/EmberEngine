@@ -1,11 +1,12 @@
-# pages: deploy the immutable release asset selected when main fast-forwards.
-# This workflow never rebuilds source, so the bytes served by Pages are the
-# bytes attached to the validated tag's GitHub release.
+# pages: after a successful release workflow, deploy the published immutable
+# asset at main HEAD. Waiting for release success prevents the main push from
+# racing the draft-to-published transition. This workflow never rebuilds source.
 name: pages
 
 on:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [release]
+    types: [completed]
 
 concurrency:
   group: pages
@@ -17,6 +18,7 @@ permissions:
 jobs:
   deploy:
     name: deploy release asset
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           fetch-tags: true
       - name: select a release tag at main HEAD
@@ -43,14 +46,18 @@ jobs:
           fi
           TAG=""
           for candidate in "${tags[@]}"; do
-            if asset_count="$(gh release view "$candidate" --json assets --jq '[.assets[] | select(.name == "ember-pages.tar.gz")] | length' 2>/dev/null)" \
-              && [ "$asset_count" = 1 ]; then
+            if details="$(gh release view "$candidate" --json isDraft,publishedAt,assets --jq '[.isDraft, (.publishedAt // ""), ([.assets[] | select(.name == "ember-pages.tar.gz")] | length)] | @tsv' 2>/dev/null)"; then
+              IFS=$'\t' read -r is_draft published_at asset_count <<< "$details"
+            else
+              continue
+            fi
+            if [ "$is_draft" = false ] && [ -n "$published_at" ] && [ "$asset_count" = 1 ]; then
               TAG="$candidate"
               break
             fi
           done
           if [ -z "$TAG" ]; then
-            echo "pages: no tag at main HEAD has exactly one ember-pages.tar.gz release asset" >&2
+            echo "pages: no tag at main HEAD has a published release with exactly one ember-pages.tar.gz asset" >&2
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"

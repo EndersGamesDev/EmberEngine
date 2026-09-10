@@ -1,5 +1,5 @@
 # release: validate one signed series tag, build its Pages release archive,
-# publish that tag's GitHub release, then fast-forward main to the tag commit.
+# attach that archive to a draft, fast-forward main, then publish the release.
 # Every validation fails closed so a release name, source, CI evidence, version,
 # changelog and artifact cannot describe different commits.
 #
@@ -259,8 +259,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  publish:
-    name: publish release
+  draft:
+    name: prepare release draft
     needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
@@ -275,20 +275,31 @@ jobs:
         with:
           name: pages-release-${{ needs.validate.outputs.sha }}
           path: ${{ runner.temp }}/release-asset
-      - name: create or update this GitHub release
+      - name: create or update this GitHub release as a draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
-        run: bash deploy/github-releases.sh --apply --tag "$TAG"
-      - name: upload the Pages release asset
+        run: bash deploy/github-releases.sh --apply --tag "$TAG" --draft
+      - name: attach the Pages release asset
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
         run: gh release upload "$TAG" "$RUNNER_TEMP/release-asset/ember-pages.tar.gz" --clobber
+      - name: require one attached asset on the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "$TAG" --json isDraft,assets --jq '[.isDraft, ([.assets[] | select(.name == "ember-pages.tar.gz")] | length)] | @tsv')"
+          if [ "$state" != $'true\t1' ]; then
+            echo "release: $TAG must remain a draft with exactly one ember-pages.tar.gz asset, got '$state'" >&2
+            exit 1
+          fi
 
   promote:
     name: fast-forward main
-    needs: [validate, publish]
+    needs: [validate, draft]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -314,3 +325,48 @@ jobs:
           git remote add release-main "git@github.com:$REPOSITORY.git"
           GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/release-ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/release-ssh/known_hosts" \
             git push release-main "$TAG^{commit}:refs/heads/main"
+
+  discard-failed-draft:
+    name: discard draft after failed promotion
+    needs: [validate, draft, promote]
+    if: ${{ always() && needs.draft.result == 'success' && needs.promote.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: delete the unpublished release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != true ]; then
+            echo "release: refusing to delete $TAG because it is not a draft" >&2
+            exit 1
+          fi
+          gh release delete "$TAG" --yes
+
+  publish:
+    name: publish promoted release
+    needs: [validate, promote]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
+      - name: require the published release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "$TAG" --json isDraft,publishedAt,assets --jq '[.isDraft, (.publishedAt // ""), ([.assets[] | select(.name == "ember-pages.tar.gz")] | length)] | @tsv')"
+          IFS=$'\t' read -r is_draft published_at asset_count <<< "$state"
+          if [ "$is_draft" != false ] || [ -z "$published_at" ] || [ "$asset_count" != 1 ]; then
+            echo "release: $TAG is not a published release with exactly one ember-pages.tar.gz asset" >&2
+            exit 1
+          fi
