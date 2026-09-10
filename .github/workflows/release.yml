@@ -19,12 +19,14 @@ concurrency:
 
 permissions:
   contents: read
-  checks: read
 
 jobs:
   validate:
     name: validate tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       series: ${{ steps.tag.outputs.series }}
