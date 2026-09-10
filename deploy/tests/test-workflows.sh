@@ -206,6 +206,98 @@ PY
     fi
 }
 
+workspace_native_packages_match_contract() {
+    local file="$1"
+    if [ -n "$HAVE_PYYAML" ]; then
+        python3 - "$file" <<'PY'
+import pathlib
+import shlex
+import sys
+import yaml
+
+document = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+steps = document.get("jobs", {}).get("workspace", {}).get("steps")
+if not isinstance(steps, list):
+    raise SystemExit(1)
+
+native = [(index, step) for index, step in enumerate(steps) if step.get("name") == "native build packages"]
+toolchain = [(index, step) for index, step in enumerate(steps) if step.get("name") == "toolchain (pinned by rust-toolchain.toml)"]
+if len(native) != 1 or len(toolchain) != 1 or native[0][0] >= toolchain[0][0]:
+    raise SystemExit(1)
+
+run = native[0][1].get("run")
+if not isinstance(run, str):
+    raise SystemExit(1)
+commands = [shlex.split(line) for line in run.splitlines() if line.strip()]
+if ["sudo", "apt-get", "update"] not in commands:
+    raise SystemExit(1)
+prefix = ["sudo", "apt-get", "install", "-y", "--no-install-recommends"]
+installs = [command for command in commands if command[:len(prefix)] == prefix]
+required = {"pkg-config", "libudev-dev", "libasound2-dev"}
+if len(installs) != 1 or not required.issubset(installs[0][len(prefix):]):
+    raise SystemExit(1)
+PY
+    else
+        awk '
+            function trim(value) {
+                sub(/^[[:space:]]+/, "", value)
+                sub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            /^[[:space:]]*($|#)/ { next }
+            {
+                match($0, /^ */)
+                indent = RLENGTH
+                text = substr($0, indent + 1)
+                if (indent == 0 && text == "jobs:") {
+                    inside_jobs = 1
+                    next
+                }
+                if (inside_jobs && indent == 0) {
+                    inside_jobs = 0
+                    inside_workspace = 0
+                }
+                if (inside_jobs && indent == 2 && text ~ /:$/) {
+                    job = text
+                    sub(/:$/, "", job)
+                    inside_workspace = job == "workspace"
+                    next
+                }
+                if (!inside_workspace) next
+                if (indent == 6 && text ~ /^- /) {
+                    step++
+                    step_name = ""
+                    sub(/^- /, "", text)
+                    if (text ~ /^name:/) {
+                        sub(/^name:[[:space:]]*/, "", text)
+                        step_name = trim(text)
+                    }
+                    if (step_name == "native build packages") {
+                        native_count++
+                        native_step = step
+                    }
+                    if (step_name == "toolchain (pinned by rust-toolchain.toml)") {
+                        toolchain_count++
+                        toolchain_step = step
+                    }
+                }
+                if (step_name == "native build packages") {
+                    native_text = native_text " " trim(text)
+                }
+            }
+            END {
+                padded = " " native_text " "
+                if (native_count != 1 || toolchain_count != 1 || native_step >= toolchain_step) exit 1
+                if (index(padded, " sudo apt-get update ") == 0) exit 1
+                if (index(padded, " sudo apt-get install -y --no-install-recommends ") == 0) exit 1
+                if (index(padded, " pkg-config ") == 0) exit 1
+                if (index(padded, " libudev-dev ") == 0) exit 1
+                if (index(padded, " libasound2-dev ") == 0) exit 1
+            }
+        ' "$file"
+    fi
+}
+
 release_order_matches_contract() {
     local file="$1"
     if [ -n "$HAVE_PYYAML" ]; then
@@ -326,12 +418,19 @@ jobs:
 YAML
 }
 
+write_missing_native_package_fixture() {
+    local source="$1" file="$2"
+    sed 's/ libasound2-dev//' "$source" > "$file"
+}
+
 TEST_WORK="$(mktemp -d "${TMPDIR:?}/ember-workflow-test.XXXXXX")"
 trap 'rm -r -- "$TEST_WORK"' EXIT
 QUOTED_PROMOTE="$TEST_WORK/quoted-promote.yml"
 PERMISSIVE_REGEX="$TEST_WORK/permissive-regex.yml"
+MISSING_NATIVE_PACKAGE="$TEST_WORK/missing-native-package.yml"
 write_quoted_promote_fixture "$QUOTED_PROMOTE"
 write_permissive_regex_fixture "$PERMISSIVE_REGEX"
+write_missing_native_package_fixture .github/workflows/ci.yml "$MISSING_NATIVE_PACKAGE"
 
 echo "== workflow YAML =="
 if [ "${#WORKFLOWS[@]}" -eq 0 ]; then
@@ -385,6 +484,16 @@ if ci_trigger_matches_contract .github/workflows/ci.yml; then
     ok "ci.yml gates pull requests and every push to develop"
 else
     bad "ci.yml does not provide exact-SHA develop gates"
+fi
+if workspace_native_packages_match_contract .github/workflows/ci.yml; then
+    ok "ci.yml installs the workspace native packages before the toolchain"
+else
+    bad "ci.yml does not install the workspace native packages before the toolchain"
+fi
+if workspace_native_packages_match_contract "$MISSING_NATIVE_PACKAGE"; then
+    bad "the workspace native-package check accepted a fixture with one package removed"
+else
+    ok "the workspace native-package check rejects a fixture with one package removed"
 fi
 
 TAG_PATTERN='*-[0-9]*.[0-9]*.[0-9]*'
