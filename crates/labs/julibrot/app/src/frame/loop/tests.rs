@@ -8096,9 +8096,7 @@ fn wait_for_anchor_scene(presenter: &mut Presenter, scene_id: u64) -> SceneFrame
         std::thread::sleep(GPU_SCENE_POLL_INTERVAL);
     }
     let elapsed = started.elapsed();
-    panic!(
-        "anchor presenter scene {scene_id} did not complete after {polls} polls in {elapsed:?}"
-    )
+    panic!("anchor presenter scene {scene_id} did not complete after {polls} polls in {elapsed:?}")
 }
 
 fn anchor_trace_scene(
