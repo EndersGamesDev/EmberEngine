@@ -28,7 +28,7 @@
             "sign": 0
           }
         ],
-        "precision_bits": 1024
+        "precision_bits": 512
       },
       "centre_f64": [
         0,
@@ -96,7 +96,7 @@
             "sign": 0
           }
         ],
-        "precision_bits": 1024
+        "precision_bits": 512
       },
       "zoom_log2": 0
     }
@@ -127,11 +127,11 @@
     "requested_precision_bits": 47,
     "delivered_precision_bits": null,
     "orbit_length": null,
-    "orbit_generation": 2,
+    "orbit_generation": 1,
     "reference_verification": null,
     "consumed_word_error_ulps": null,
     "reference_precision_escalations": null,
-    "centre_revision": 2,
+    "centre_revision": 1,
     "centre_from_reference_px": [
       0,
       0
@@ -294,12 +294,12 @@
     "warp_precision_mode": "PictureFast",
     "level_timings": [
       {
-        "edit": 2,
+        "edit": 1,
         "level": "Preview",
         "discarded": false
       },
       {
-        "edit": 2,
+        "edit": 1,
         "level": "Final",
         "discarded": false
       }
@@ -315,7 +315,7 @@
   },
   "load_dependent": {
     "reason": "app_refresh() both polls GPU fences and runs presentation turns, so GPU completion timing determines owner_epoch, presentation_ledger, capture_count, scene_polls, warp_polls and second_frame_policy; that policy is decided from the measured PolicyProbe wall, and all remain reported evidence until R2-04d adds a poll-only production boundary",
-    "owner_epoch": 18,
+    "owner_epoch": 14,
     "presentation_ledger": [
       {
         "scene_id": null,
@@ -369,22 +369,9 @@
           0,
           0
         ]
-      },
-      {
-        "scene_id": 2,
-        "level": "Final",
-        "warp_kind": "AnchorHomography",
-        "requested_centre_px": [
-          480,
-          270
-        ],
-        "anchor_px": [
-          0,
-          0
-        ]
       }
     ],
-    "capture_count": 2,
+    "capture_count": 1,
     "scene_polls": 2,
     "warp_polls": 2,
     "second_frame_policy": "SingleFrameOnDemand"

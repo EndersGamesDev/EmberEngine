@@ -1793,7 +1793,9 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use ember_julibrot_math::{ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{
+        ObjectAngles, PICTURE_FAST_EDIT_BUDGET, PlaneAngles, PoseMap, PrecisionMode, ViewControls,
+    };
     use ember_julibrot_present::PaletteId;
     use ember_julibrot_worker::{
         EncodedCentre, HotState, MainState, ORBIT_BUDGET_US_PER_SECOND, OrbitDisposition,
@@ -3385,6 +3387,68 @@ mod tests {
             submission.reason.bits() & OrbitReason::PRECISION_MODE_CHANGE.bits(),
             0
         );
+    }
+
+    #[test]
+    fn legacy_width_row_zero_reuses_the_exact_boot_publication() {
+        const LEGACY_SAVED_WIDTH_BITS: u32 = 1_024;
+
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .configure_navigation_precision(PrecisionMode::PictureFast, PICTURE_FAST_EDIT_BUDGET)
+            .expect("the boot precision marker is valid");
+        let initial = viewer
+            .take_reference_submission()
+            .expect("boot publishes generation one");
+        viewer.clear_crosshair();
+        let camera_before = viewer.camera;
+        let revision_before = viewer.owner.staged_snapshot().main.centre_revision;
+
+        let mut row = SavedView::from_preset(PRESET_ROWS[0]).expect("row zero is valid");
+        row.centre.precision_bits = LEGACY_SAVED_WIDTH_BITS;
+        row.target
+            .as_mut()
+            .expect("row zero carries the boot target")
+            .precision_bits = LEGACY_SAVED_WIDTH_BITS;
+        viewer
+            .apply_saved_view(&row)
+            .expect("the legacy-width row is the boot view");
+
+        assert_eq!(viewer.camera, camera_before);
+        assert_eq!(
+            viewer.latest_requested_generation(),
+            initial.navigation.generation
+        );
+        assert_eq!(
+            viewer.owner.staged_snapshot().main.centre_revision,
+            revision_before
+        );
+        assert_eq!(viewer.navigation_pending_depth(), 0);
+        assert!(viewer.accept_navigation_without_orbit(
+            initial.navigation.generation,
+            initial.navigation.centre_revision,
+        ));
+
+        viewer.pan_px([1.0, 0.0]).expect("one real edit");
+        let moved = viewer
+            .take_reference_submission()
+            .expect("the real edit publishes once");
+        assert_eq!(
+            moved.navigation.generation,
+            initial.navigation.generation + 1
+        );
+        assert_eq!(
+            moved.navigation.centre_revision,
+            initial.navigation.centre_revision + 1
+        );
+        assert!(!viewer.accept_navigation_without_orbit(
+            initial.navigation.generation,
+            initial.navigation.centre_revision,
+        ));
+        assert!(viewer.accept_navigation_without_orbit(
+            moved.navigation.generation,
+            moved.navigation.centre_revision,
+        ));
     }
 
     #[test]
