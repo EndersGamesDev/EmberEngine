@@ -10,8 +10,8 @@
 #
 # Called by deploy-pages.sh before assembly. SOURCE_DATE_EPOCH makes a clean
 # rebuild carry the release commit's timestamp for byte-identity verification.
-# Safe to run by hand: it only writes web/version.json, which is committed so
-# the file always exists even when a page is served from an unbuilt checkout.
+# Safe to run by hand: it writes only the ignored web/version.json that the
+# assembler copies into the release tree.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
