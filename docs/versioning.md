@@ -14,11 +14,13 @@ Each independently released game or lab owns a series. Its application, core, se
 | `league` | `league`, `league-core`, `league-server` | `2.0.0` |
 | `end-game` | `end-game`, `end-game-core` | `1.0.0` |
 | `what-is-this` | `what-is-this` | `1.0.0` |
-| `julibrot` | `ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-worker` | `1.0.0` |
+| `julibrot` | `ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-shader`, `ember-julibrot-worker` | `1.0.0` |
 | `heap` | `ember-lab-heap` | `0.1.0` |
 | `layer` | `ember-lab-layer` | `0.1.0` |
 
 A lab with no historical release tag begins at `0.1.0`; a lab with a historical tag begins at that tag's major in `.0.0` form.
+
+The backticked crate list in this table is the complete manifest set for each dedicated series. Release validation reads that mapping and requires every named package manifest to declare the tag version, because checking only an application manifest can publish a series whose core, server, worker, presentation or shader crate still identifies different source.
 
 Frozen game crates under `games/` carry the three-grade form of the major represented by their directory, such as `games/arena/v012` at `12.0.0`. They remain buildable history rather than inheriting a current series version.
 

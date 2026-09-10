@@ -181,29 +181,66 @@ jobs:
           set -euo pipefail
           python3 - "$SERIES" "$VERSION" <<'PY'
           import pathlib
+          import re
           import sys
           import tomllib
 
           series, expected = sys.argv[1:]
+          root = pathlib.Path(".")
+
+          rows = {}
+          for line in pathlib.Path("docs/versioning.md").read_text(encoding="utf-8").splitlines():
+              cells = [cell.strip() for cell in line.split("|")]
+              if len(cells) < 4 or not re.fullmatch(r"`[^`]+`", cells[1]):
+                  continue
+              row_series = cells[1][1:-1]
+              packages = re.findall(r"`([^`]+)`", cells[2])
+              if packages:
+                  if row_series in rows:
+                      raise SystemExit("release: docs/versioning.md repeats series %r" % row_series)
+                  rows[row_series] = packages
+
+          manifests = {}
+          for manifest in sorted(root.rglob("Cargo.toml")):
+              if ".git" in manifest.parts or "target" in manifest.parts:
+                  continue
+              with manifest.open("rb") as stream:
+                  package = tomllib.load(stream).get("package")
+              if not package:
+                  continue
+              name = package.get("name")
+              if name in manifests:
+                  raise SystemExit("release: package %r has multiple manifests" % name)
+              manifests[name] = (manifest, package.get("version"))
+
+          dedicated = {package for packages in rows.values() for package in packages}
           if series == "ember":
-              manifest = pathlib.Path("Cargo.toml")
+              manifest = root / "Cargo.toml"
               with manifest.open("rb") as stream:
                   actual = tomllib.load(stream)["workspace"]["package"]["version"]
+              if actual != expected:
+                  raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
+              checked = [str(manifest)]
+              for name, (path, value) in sorted(manifests.items()):
+                  if path.parts[0] not in {"crates", "tools"} or name in dedicated:
+                      continue
+                  if value != {"workspace": True}:
+                      raise SystemExit("release: Ember crate %s does not inherit the workspace version" % path)
+                  checked.append(str(path))
           else:
-              candidates = [
-                  pathlib.Path("crates") / series / "Cargo.toml",
-                  pathlib.Path("crates/labs") / series / "Cargo.toml",
-                  pathlib.Path("crates/labs") / series / "app/Cargo.toml",
-              ]
-              manifests = [path for path in candidates if path.is_file()]
-              if len(manifests) != 1:
-                  raise SystemExit("release: series %r resolves to %d primary manifests" % (series, len(manifests)))
-              manifest = manifests[0]
-              with manifest.open("rb") as stream:
-                  actual = tomllib.load(stream)["package"]["version"]
-          if actual != expected:
-              raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
-          print("release: %s matches %s" % (manifest, expected))
+              packages = rows.get(series)
+              if not packages:
+                  raise SystemExit("release: docs/versioning.md has no dedicated crate set for series %r" % series)
+              checked = []
+              for package in packages:
+                  item = manifests.get(package)
+                  if item is None:
+                      raise SystemExit("release: documented crate %r has no manifest" % package)
+                  manifest, actual = item
+                  if actual != expected:
+                      raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
+                  checked.append(str(manifest))
+          print("release: %s matches %s across %d manifest(s)" % (series, expected, len(checked)))
           PY
       - name: require changelog consistency
         env:
@@ -241,16 +278,15 @@ jobs:
           PY
           )"
           cargo install wasm-bindgen-cli --version "$version" --locked
-      - name: build the series bundle and assembled hub
+      - name: build the whole Pages site archive
         env:
           EMBER_PAGES_ARCHIVE: ${{ runner.temp }}/release-asset/ember-pages.tar.gz
-          RELEASE_SERIES: ${{ needs.validate.outputs.series }}
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$EMBER_PAGES_ARCHIVE")"
           SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
           export SOURCE_DATE_EPOCH
-          echo "release: assembling $RELEASE_SERIES with the shared Pages build"
+          echo "release: assembling the whole Pages site with the shared build"
           bash deploy/deploy-pages.sh
       - uses: actions/upload-artifact@v4
         with:
