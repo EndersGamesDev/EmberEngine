@@ -3,19 +3,16 @@
 # repository and deployment contracts, and the workspace job proves formatting,
 # linting and all remaining packages before a commit can integrate.
 #
-# A green run establishes evidence for the exact develop commit; it does not
-# publish or promote that commit. Hosts track main, which advances only after
-# the release workflow validates a signed tag, so deployed servers and Pages
-# clients remain on the same tagged source.
+# A pull request gates its synthetic merge commit, while every develop push
+# establishes evidence for the exact integrated commit that may later receive
+# a release tag. Neither run publishes or promotes its commit. Hosts track main,
+# which advances only after the release workflow validates a signed tag, so
+# deployed servers and Pages clients remain on the same tagged source.
 name: ci
 
 on:
   push:
     branches: [develop]
-    paths-ignore:
-      - 'docs/**'
-      - 'marketing/**'
-      - '**.md'
   pull_request:
     branches: [develop]
   workflow_dispatch:

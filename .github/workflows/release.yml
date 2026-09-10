@@ -143,10 +143,13 @@ jobs:
           payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
           candidates = [
               run for run in payload.get("workflow_runs", [])
-              if run.get("path") == ".github/workflows/ci.yml" and run.get("conclusion") == "success"
+              if run.get("path") == ".github/workflows/ci.yml"
+              and run.get("event") == "push"
+              and run.get("head_branch") == "develop"
+              and run.get("conclusion") == "success"
           ]
           if not candidates:
-              raise SystemExit("release: no successful completed .github/workflows/ci.yml run exists at the tag commit")
+              raise SystemExit("release: no successful completed develop push run of .github/workflows/ci.yml exists at the tag commit")
           newest = max(candidates, key=lambda run: (run.get("run_started_at") or run.get("created_at") or "", run.get("id") or 0))
           print(newest["id"])
           PY
