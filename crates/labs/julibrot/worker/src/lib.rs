@@ -40,8 +40,8 @@ pub use ember_julibrot_math::{
 };
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
-    HotDrain, HotState, MainDrain, MainState, NavigationConfig, NavigationSubmission,
-    OrbitDisposition, OrbitHandle, OwnerError, ViewerOwner, ViewerState,
+    HotDrain, HotState, MainDrain, MainState, NavigationConfig, NavigationSnapshot,
+    NavigationSubmission, OrbitDisposition, OrbitHandle, OwnerError, ViewerOwner, ViewerState,
 };
 pub use registry::{OrbitRegistry, RegistryError};
 pub use wire::{

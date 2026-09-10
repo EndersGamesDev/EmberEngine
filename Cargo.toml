@@ -58,7 +58,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 # Development runs on the pinned nightly; rust-version records the stable floor.
 rust-version = "1.98"
-version = "1.0.2"
+version = "1.0.3"
 
 [workspace.lints.rust]
 deprecated_safe = { level = "deny", priority = -1 }

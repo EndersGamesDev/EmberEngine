@@ -1,7 +1,7 @@
 [package]
 name = "ember-julibrot-app"
 edition.workspace = true
-version = "1.0.6"
+version = "1.0.7"
 
 [lib]
 name = "ember_lab_julibrot"
@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+ember-camera = { path = "../../../ember-camera" }
 ember-julibrot-kernels = { path = "../kernels" }
 ember-julibrot-math = { path = "../math" }
 ember-julibrot-present = { path = "../present" }

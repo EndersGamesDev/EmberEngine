@@ -142,25 +142,25 @@ impl WorkerAcceptance<ember_julibrot_worker::OrbitResponseView> for BrowserWorke
             .accepted_reference
             .as_ref()
             .map_or(Ok([0.0; 2]), |old| {
-                let old = old.with_precision(submitted.reference_centre.precision_bits)?;
-                reference_shift_px(
-                    &old,
+                viewer.reference_shift_px(
+                    old,
                     &submitted.reference_centre,
-                    &submitted.plane,
-                    submitted.zoom_log2,
-                    frame_loop.plan.requested_extent.width,
+                    [
+                        frame_loop.plan.requested_extent.width,
+                        frame_loop.plan.requested_extent.height,
+                    ],
                 )
             }) {
             Ok(shift) => shift,
             Err(error) => {
                 frame_loop.remove_orbit(handle)?;
-                return Err(math_error(error));
+                return Err(error);
             }
         };
         let accepted_view_centre = submitted.view_centre.clone();
         if let Err(error) = viewer.configure_navigation_context(
-            submitted.view_centre,
-            submitted.reference_centre.clone(),
+            &submitted.view_centre,
+            &submitted.reference_centre,
             submitted.plane,
         ) {
             frame_loop.remove_orbit(handle)?;

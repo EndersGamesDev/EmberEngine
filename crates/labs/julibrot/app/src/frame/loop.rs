@@ -2038,7 +2038,7 @@ mod browser {
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,
-        precision_for, reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
+        precision_for, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FenceRefusal, FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvents,

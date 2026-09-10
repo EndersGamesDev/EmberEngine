@@ -183,7 +183,7 @@ impl SavedView {
             distance_five: requested.view.distance_five,
             distance_four: requested.view.distance_four,
             zoom_log2: requested.zoom_log2,
-            target: viewer.crosshair().map(encode_centre).transpose()?,
+            target: viewer.crosshair().as_ref().map(encode_centre).transpose()?,
             centre_f64: centre.to_f64_mirror(),
             centre: encode_centre(&centre)?,
         })
@@ -444,11 +444,11 @@ mod tests {
         loaded
             .set_crosshair([-91.0, 48.0])
             .expect("replacement target");
-        assert_ne!(loaded.crosshair(), Some(&saved_target));
+        assert_ne!(loaded.crosshair(), Some(saved_target.clone()));
 
         loaded.apply_saved_view(&saved).expect("load saved row");
 
-        assert_eq!(loaded.crosshair(), Some(&saved_target));
+        assert_eq!(loaded.crosshair(), Some(saved_target));
     }
 
     /// A row's target is part of the picture it saved, so a row that saved none loads none.
@@ -631,7 +631,7 @@ mod tests {
         viewer
             .set_plane_origin(viewer.requested().plane_origin)
             .expect("equal origin");
-        viewer.set_centre(centre).expect("equal centre");
+        viewer.set_centre(&centre).expect("equal centre");
 
         assert_eq!(viewer.main_state_rebuild_count(), 0);
         assert_eq!(viewer.requested_revision(), 0);
@@ -647,7 +647,7 @@ mod tests {
         let centre = viewer.navigation_centre().expect("configured centre");
         assert_ne!(viewer.reference_centre(), Some(centre.clone()));
 
-        viewer.set_centre(centre.clone()).expect("centre repair");
+        viewer.set_centre(&centre).expect("centre repair");
 
         assert_eq!(viewer.navigation_centre(), Some(centre.clone()));
         assert_eq!(viewer.reference_centre(), Some(centre));

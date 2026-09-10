@@ -1,5 +1,6 @@
 //! Integration runtime and page contract for the Julibrot laboratory.
 
+mod camera;
 mod error;
 #[cfg(target_arch = "wasm32")]
 mod facts;
@@ -411,8 +412,7 @@ mod wasm_entry {
 
     use crate::{
         App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, SceneMode, anchor_px_up,
-        box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
-        preset_row,
+        css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
     };
 
     thread_local! {
@@ -639,24 +639,27 @@ mod wasm_entry {
                 (end_css_x - start_css_x).abs(),
                 (end_css_y_down - start_css_y_down).abs(),
             ];
-            let anchor = anchor_px_up(
-                [
-                    f64::midpoint(start_css_x, end_css_x),
-                    f64::midpoint(start_css_y_down, end_css_y_down),
-                ],
-                rect,
-                grid,
-            )
-            .map_err(app_js_error)?;
-            app.viewer_mut()
-                .set_crosshair(anchor)
-                .map_err(app_js_error)?;
             if !is_box_selection(extent) {
+                let anchor = anchor_px_up(
+                    [
+                        f64::midpoint(start_css_x, end_css_x),
+                        f64::midpoint(start_css_y_down, end_css_y_down),
+                    ],
+                    rect,
+                    grid,
+                )
+                .map_err(app_js_error)?;
+                app.viewer_mut()
+                    .set_crosshair(anchor)
+                    .map_err(app_js_error)?;
                 return Ok(());
             }
-            let delta_log2 = box_zoom_delta_log2(extent, rect).map_err(app_js_error)?;
+            let first =
+                anchor_px_up([start_css_x, start_css_y_down], rect, grid).map_err(app_js_error)?;
+            let second =
+                anchor_px_up([end_css_x, end_css_y_down], rect, grid).map_err(app_js_error)?;
             app.viewer_mut()
-                .zoom_about_crosshair(delta_log2)
+                .zoom_box(first, second)
                 .map(|_| ())
                 .map_err(app_js_error)
         })
@@ -846,7 +849,7 @@ mod wasm_entry {
         let centre: SavedCentre = serde_json::from_str(&centre_json)
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let decoded = centre.decode().map_err(app_js_error)?;
-        with_app_mut(|app| app.viewer_mut().set_centre(decoded).map_err(app_js_error))
+        with_app_mut(|app| app.viewer_mut().set_centre(&decoded).map_err(app_js_error))
     }
 
     /// Returns the row `t` of the way from one stored row to another.

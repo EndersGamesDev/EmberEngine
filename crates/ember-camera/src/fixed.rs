@@ -366,6 +366,55 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
         Self::from_magnitude(magnitude, self.is_negative() != other.is_negative())
     }
 
+    /// Multiplies by one fixed value and divides by another with one nearest-even rounding.
+    ///
+    /// The complete double-width product is divided as an integer before the result is narrowed,
+    /// so no intermediate fixed multiplication rounding enters the ratio.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero divisor, an invalid width, or a rounded result outside the
+    /// signed fixed range.
+    pub fn mul_ratio_round_even(
+        &self,
+        multiplier: &Self,
+        divisor: &Self,
+    ) -> Result<Self, CameraError> {
+        let divisor = RatioDivisor::new(divisor)?;
+        self.mul_prepared_ratio_round_even(multiplier, &divisor)
+    }
+
+    /// Applies one exact ratio to an array while sharing its normalized divisor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero divisor, an invalid width, or any rounded component outside
+    /// the signed fixed range.
+    pub(crate) fn mul_ratio_components_round_even<const N: usize>(
+        values: &[Self; N],
+        multiplier: &Self,
+        divisor: &Self,
+    ) -> Result<[Self; N], CameraError> {
+        let divisor = RatioDivisor::new(divisor)?;
+        let mut output = [Self::ZERO; N];
+        for (result, value) in output.iter_mut().zip(values) {
+            *result = value.mul_prepared_ratio_round_even(multiplier, &divisor)?;
+        }
+        Ok(output)
+    }
+
+    fn mul_prepared_ratio_round_even(
+        &self,
+        multiplier: &Self,
+        divisor: &RatioDivisor<LIMBS>,
+    ) -> Result<Self, CameraError> {
+        let product = multiply_signed_wide::<LIMBS, 1, 1, 2>(
+            &fixed_as_wide(self),
+            &fixed_as_wide(multiplier),
+        )?;
+        divide_product_to_fixed(&product, divisor)
+    }
+
     /// Shifts left by a bit count, refusing any signed overflow.
     ///
     /// # Errors
@@ -563,6 +612,35 @@ impl<const LIMBS: usize> Fixed<LIMBS> {
 struct SignedWide<const LIMBS: usize, const PARTS: usize> {
     magnitude: [[u64; LIMBS]; PARTS],
     negative: bool,
+}
+
+#[derive(Clone, Copy)]
+struct RatioDivisor<const LIMBS: usize> {
+    magnitude: [u64; LIMBS],
+    significant_limbs: usize,
+    normalization_shift: u32,
+    negative: bool,
+}
+
+impl<const LIMBS: usize> RatioDivisor<LIMBS> {
+    fn new(divisor: &Fixed<LIMBS>) -> Result<Self, CameraError> {
+        Fixed::<LIMBS>::validate_width()?;
+        let magnitude = divisor.magnitude();
+        let significant_limbs = magnitude
+            .iter()
+            .rposition(|limb| *limb != 0)
+            .map_or(0, |index| index + 1);
+        if significant_limbs == 0 {
+            return Err(CameraError::Overflow);
+        }
+        let normalization_shift = magnitude[significant_limbs - 1].leading_zeros();
+        Ok(Self {
+            magnitude: normalize_magnitude(&magnitude, normalization_shift),
+            significant_limbs,
+            normalization_shift,
+            negative: divisor.is_negative(),
+        })
+    }
 }
 
 impl<const LIMBS: usize, const PARTS: usize> SignedWide<LIMBS, PARTS> {
@@ -1018,6 +1096,256 @@ fn divide_wide_to_f64<const LIMBS: usize, const PARTS: usize>(
     }
 }
 
+fn divide_product_to_fixed<const LIMBS: usize>(
+    numerator: &SignedWide<LIMBS, 2>,
+    denominator: &RatioDivisor<LIMBS>,
+) -> Result<Fixed<LIMBS>, CameraError> {
+    if numerator.is_zero() {
+        return Ok(Fixed::ZERO);
+    }
+    let (mut dividend, numerator_limbs) =
+        normalize_product(&numerator.magnitude, denominator.normalization_shift)?;
+    let divisor_limbs = denominator.significant_limbs;
+    let mut quotient = [0; LIMBS];
+    // A normalized high divisor limb makes each trial a base-2^64 quotient digit. This replaces
+    // the prior quotient-bit walk while retaining the complete product and remainder for the one
+    // nearest-even rounding below.
+    if numerator_limbs >= divisor_limbs {
+        let mut quotient_index = numerator_limbs - divisor_limbs + 1;
+        while quotient_index != 0 {
+            quotient_index -= 1;
+            let mut digit = trial_quotient(&dividend, quotient_index, denominator)?;
+            if subtract_quotient_digit(&mut dividend, quotient_index, denominator, digit)? {
+                digit = digit.checked_sub(1).ok_or(CameraError::Overflow)?;
+                add_divisor_back(&mut dividend, quotient_index, denominator);
+            }
+            if quotient_index < LIMBS {
+                quotient[quotient_index] = digit;
+            } else if digit != 0 {
+                return Err(CameraError::Overflow);
+            }
+        }
+    }
+    let remainder_order = compare_twice_remainder(&dividend, denominator);
+    let rounds_up = remainder_order == Ordering::Greater
+        || (remainder_order == Ordering::Equal && quotient[0] & 1 != 0);
+    if rounds_up && increment(&mut quotient) {
+        return Err(CameraError::Overflow);
+    }
+    Fixed::from_magnitude(quotient, numerator.negative != denominator.negative)
+}
+
+fn normalize_magnitude<const LIMBS: usize>(input: &[u64; LIMBS], shift: u32) -> [u64; LIMBS] {
+    if shift == 0 {
+        return *input;
+    }
+    let mut output = [0; LIMBS];
+    let mut carry = 0;
+    for (result, limb) in output.iter_mut().zip(input) {
+        *result = (*limb << shift) | carry;
+        carry = *limb >> (u64::BITS - shift);
+    }
+    debug_assert_eq!(carry, 0);
+    output
+}
+
+fn normalize_product<const LIMBS: usize>(
+    input: &[[u64; LIMBS]; 2],
+    shift: u32,
+) -> Result<([[u64; LIMBS]; 4], usize), CameraError> {
+    let input_limbs = LIMBS.checked_mul(2).ok_or(CameraError::InvalidWidth)?;
+    let mut output = [[0; LIMBS]; 4];
+    let mut carry = 0;
+    let mut index = 0;
+    while index < input_limbs {
+        let limb = wide_limb_value(input, index);
+        let shifted = if shift == 0 {
+            limb
+        } else {
+            (limb << shift) | carry
+        };
+        set_wide_limb_value(&mut output, index, shifted);
+        carry = if shift == 0 {
+            0
+        } else {
+            limb >> (u64::BITS - shift)
+        };
+        index += 1;
+    }
+    if carry != 0 {
+        set_wide_limb_value(&mut output, input_limbs, carry);
+    }
+    let capacity = LIMBS.checked_mul(4).ok_or(CameraError::InvalidWidth)?;
+    let mut significant_limbs = capacity;
+    while significant_limbs != 0 && wide_limb_value(&output, significant_limbs - 1) == 0 {
+        significant_limbs -= 1;
+    }
+    Ok((output, significant_limbs))
+}
+
+fn trial_quotient<const LIMBS: usize>(
+    dividend: &[[u64; LIMBS]; 4],
+    quotient_index: usize,
+    denominator: &RatioDivisor<LIMBS>,
+) -> Result<u64, CameraError> {
+    let divisor_limbs = denominator.significant_limbs;
+    let divisor_high = denominator.magnitude[divisor_limbs - 1];
+    let dividend_high = wide_limb_value(dividend, quotient_index + divisor_limbs);
+    let dividend_next = wide_limb_value(dividend, quotient_index + divisor_limbs - 1);
+    if dividend_high > divisor_high {
+        return Err(CameraError::Overflow);
+    }
+    let (mut trial, mut remainder, mut remainder_overflow) = if dividend_high == divisor_high {
+        let (remainder, overflow) = dividend_next.overflowing_add(divisor_high);
+        (u64::MAX, remainder, overflow)
+    } else {
+        let pair = (u128::from(dividend_high) << u64::BITS) | u128::from(dividend_next);
+        (
+            u64::try_from(pair / u128::from(divisor_high)).map_err(|_| CameraError::Overflow)?,
+            u64::try_from(pair % u128::from(divisor_high)).map_err(|_| CameraError::Overflow)?,
+            false,
+        )
+    };
+    if divisor_limbs == 1 {
+        return Ok(trial);
+    }
+    let dividend_low = wide_limb_value(dividend, quotient_index + divisor_limbs - 2);
+    let divisor_next = denominator.magnitude[divisor_limbs - 2];
+    while !remainder_overflow
+        && u128::from(trial) * u128::from(divisor_next)
+            > ((u128::from(remainder) << u64::BITS) | u128::from(dividend_low))
+    {
+        trial = trial.checked_sub(1).ok_or(CameraError::Overflow)?;
+        (remainder, remainder_overflow) = remainder.overflowing_add(divisor_high);
+    }
+    Ok(trial)
+}
+
+fn subtract_quotient_digit<const LIMBS: usize>(
+    dividend: &mut [[u64; LIMBS]; 4],
+    quotient_index: usize,
+    denominator: &RatioDivisor<LIMBS>,
+    quotient_digit: u64,
+) -> Result<bool, CameraError> {
+    let mut borrow = 0_u64;
+    for (index, divisor_limb) in denominator.magnitude[..denominator.significant_limbs]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let product = u128::from(quotient_digit) * u128::from(divisor_limb) + u128::from(borrow);
+        let product_low = low_u64(product)?;
+        let product_high =
+            u64::try_from(product >> u64::BITS).map_err(|_| CameraError::Overflow)?;
+        let position = quotient_index + index;
+        let current = wide_limb_value(dividend, position);
+        let (difference, underflow) = current.overflowing_sub(product_low);
+        set_wide_limb_value(dividend, position, difference);
+        borrow = product_high
+            .checked_add(u64::from(underflow))
+            .ok_or(CameraError::Overflow)?;
+    }
+    let high_position = quotient_index + denominator.significant_limbs;
+    let high = wide_limb_value(dividend, high_position);
+    let (difference, underflow) = high.overflowing_sub(borrow);
+    set_wide_limb_value(dividend, high_position, difference);
+    Ok(underflow)
+}
+
+fn add_divisor_back<const LIMBS: usize>(
+    dividend: &mut [[u64; LIMBS]; 4],
+    quotient_index: usize,
+    denominator: &RatioDivisor<LIMBS>,
+) {
+    let mut carry = false;
+    for (index, divisor_limb) in denominator.magnitude[..denominator.significant_limbs]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let position = quotient_index + index;
+        let current = wide_limb_value(dividend, position);
+        let (partial, first_carry) = current.overflowing_add(divisor_limb);
+        let (sum, second_carry) = partial.overflowing_add(u64::from(carry));
+        set_wide_limb_value(dividend, position, sum);
+        carry = first_carry || second_carry;
+    }
+    let high_position = quotient_index + denominator.significant_limbs;
+    let high = wide_limb_value(dividend, high_position);
+    set_wide_limb_value(dividend, high_position, high.wrapping_add(u64::from(carry)));
+}
+
+fn compare_twice_remainder<const LIMBS: usize>(
+    dividend: &[[u64; LIMBS]; 4],
+    denominator: &RatioDivisor<LIMBS>,
+) -> Ordering {
+    let mut doubled = [0; LIMBS];
+    let mut carry = 0;
+    for (index, output) in doubled[..denominator.significant_limbs]
+        .iter_mut()
+        .enumerate()
+    {
+        let remainder = wide_limb_value(dividend, index);
+        *output = (remainder << 1) | carry;
+        carry = remainder >> (u64::BITS - 1);
+    }
+    if carry != 0 {
+        return Ordering::Greater;
+    }
+    for (left, right) in doubled[..denominator.significant_limbs]
+        .iter()
+        .zip(&denominator.magnitude[..denominator.significant_limbs])
+        .rev()
+    {
+        if left != right {
+            return left.cmp(right);
+        }
+    }
+    Ordering::Equal
+}
+
+#[cfg(test)]
+fn divide_wide_to_fixed_bitwise<const LIMBS: usize, const PARTS: usize>(
+    numerator: &SignedWide<LIMBS, PARTS>,
+    denominator: &SignedWide<LIMBS, PARTS>,
+) -> Result<Fixed<LIMBS>, CameraError> {
+    if denominator.is_zero() {
+        return Err(CameraError::DegenerateFrame);
+    }
+    if numerator.is_zero() {
+        return Ok(Fixed::ZERO);
+    }
+    let numerator_high = highest_wide_bit(&numerator.magnitude).ok_or(CameraError::Overflow)?;
+    let quotient_bits = LIMBS
+        .checked_mul(LIMB_BITS)
+        .ok_or(CameraError::InvalidWidth)?;
+    let mut remainder = [[0; LIMBS]; PARTS];
+    let mut quotient = [0; LIMBS];
+    let mut position = numerator_high;
+    loop {
+        let input_bit = wide_magnitude_bit(&numerator.magnitude, position);
+        let quotient_bit =
+            wide_ratio_quotient_bit(&mut remainder, input_bit, &denominator.magnitude);
+        if quotient_bit != 0 {
+            if position >= quotient_bits {
+                return Err(CameraError::Overflow);
+            }
+            quotient[position / LIMB_BITS] |= 1_u64 << (position % LIMB_BITS);
+        }
+        if position == 0 {
+            break;
+        }
+        position -= 1;
+    }
+    let above_or_at_half = wide_ratio_quotient_bit(&mut remainder, 0, &denominator.magnitude) != 0;
+    let above_half = above_or_at_half && remainder.iter().flatten().any(|limb| *limb != 0);
+    let tie_rounds_up = above_or_at_half && !above_half && quotient[0] & 1 != 0;
+    if (above_half || tie_rounds_up) && increment(&mut quotient) {
+        return Err(CameraError::Overflow);
+    }
+    Fixed::from_magnitude(quotient, numerator.negative != denominator.negative)
+}
+
 fn encode_f64_ratio(
     sign: u64,
     binary_exponent: Option<i64>,
@@ -1215,7 +1543,10 @@ fn increment<const LIMBS: usize>(limbs: &mut [u64; LIMBS]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CameraError, Fixed, divide_wide_to_f64, fixed_as_wide};
+    use super::{
+        CameraError, Fixed, divide_wide_to_f64, divide_wide_to_fixed_bitwise, fixed_as_wide,
+        multiply_signed_wide, shift_wide_words,
+    };
     use core::cmp::Ordering;
 
     type TestFixed = Fixed<2>;
@@ -1226,6 +1557,20 @@ mod tests {
 
     fn ratio(left: &TestFixed, right: &TestFixed) -> Result<f64, CameraError> {
         divide_wide_to_f64(&fixed_as_wide(left), &fixed_as_wide(right))
+    }
+
+    fn bitwise_mul_ratio(
+        value: &TestFixed,
+        multiplier: &TestFixed,
+        divisor: &TestFixed,
+    ) -> Result<TestFixed, CameraError> {
+        if divisor.is_zero() {
+            return Err(CameraError::Overflow);
+        }
+        let product =
+            multiply_signed_wide::<2, 1, 1, 2>(&fixed_as_wide(value), &fixed_as_wide(multiplier))?;
+        let denominator = shift_wide_words::<2, 1, 2>(&fixed_as_wide(divisor), 0)?;
+        divide_wide_to_fixed_bitwise(&product, &denominator)
     }
 
     #[test]
@@ -1306,6 +1651,68 @@ mod tests {
             ratio(&TestFixed::from_i64(1)?, &TestFixed::ZERO),
             Err(CameraError::DegenerateFrame)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ratio_multiplication_rounds_once_with_even_ties() -> Result<(), CameraError> {
+        let lowest_bit = raw(1, 0);
+        let three_lowest_bits = raw(3, 0);
+        let one = TestFixed::from_i64(1)?;
+        let two = TestFixed::from_i64(2)?;
+        assert_eq!(
+            lowest_bit.mul_ratio_round_even(&one, &two)?,
+            TestFixed::ZERO
+        );
+        assert_eq!(
+            three_lowest_bits.mul_ratio_round_even(&one, &two)?,
+            raw(2, 0)
+        );
+        assert_eq!(
+            raw(5, 0).mul_ratio_round_even(&raw(3, 0), &raw(2, 0))?,
+            raw(8, 0)
+        );
+        assert_eq!(
+            TestFixed::from_f64(-1.5)?.mul_ratio_round_even(&two, &one)?,
+            TestFixed::from_i64(-3)?
+        );
+        assert_eq!(
+            one.mul_ratio_round_even(&one, &TestFixed::ZERO),
+            Err(CameraError::Overflow)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn word_division_matches_the_bitwise_ratio_oracle() -> Result<(), CameraError> {
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        for _ in 0..2_048 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let mut value = raw(state, state.rotate_left(17) & 0xf);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let mut multiplier = raw(state, (state.rotate_left(29) & 0x3) + 1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let mut divisor = raw(state, (state.rotate_left(41) & 0x7) + 1);
+            if state & 1 != 0 {
+                value = value.neg()?;
+            }
+            if state & 2 != 0 {
+                multiplier = multiplier.neg()?;
+            }
+            if state & 4 != 0 {
+                divisor = divisor.neg()?;
+            }
+            assert_eq!(
+                value.mul_ratio_round_even(&multiplier, &divisor),
+                bitwise_mul_ratio(&value, &multiplier, &divisor)
+            );
+        }
         Ok(())
     }
 

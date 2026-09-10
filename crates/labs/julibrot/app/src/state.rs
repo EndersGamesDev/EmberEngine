@@ -4,24 +4,33 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 
+use ember_camera::{
+    Orientation, Screen, Turn, click, invert_perspective, pan, project, reference_displacement,
+    rotate_about, same_image_plane, select_box, zoom_about, zoom_about_point,
+};
 use ember_julibrot_math::{
-    Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
-    Pose, PoseMap, PrecisionMode, SEED_AXES, SceneFootprint, ViewControls, construct_plane,
-    navigation_delta, pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint,
+    Axis4, BigCentre, Homography, MathError, ObjectAngles, Plane, PlaneAngles, Pose, PoseMap,
+    PrecisionMode, SEED_AXES, SceneFootprint, ViewControls, plane_to_screen, scene_footprint,
     screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
-    HotState, MIN_MAX_ITER, MainState, NavigationConfig, NavigationSubmission, OrbitDisposition,
+    HotState, MIN_MAX_ITER, MainState, NavigationSnapshot, NavigationSubmission, OrbitDisposition,
     OrbitHandle, OrbitReason, OrbitResponseView, ViewerOwner, ViewerState,
 };
 
+use crate::camera::{
+    CAMERA_PRECISION_BITS, ExactCentre, ExactView, big_centre_from_fixed, centre_to_f64,
+    fixed_centre_from_big, fixed_centre_from_f64, object_from_orientation, observer_from_view,
+    orientation_from_object, plane_from_orientation, quantize_zoom_delta_quanta,
+    quantize_zoom_log2, zoom_log2_from_exponent,
+};
 use crate::{AppError, SavedView};
 
 /// Initial requested iteration cap; it is a policy, not a delivered fact.
 pub const INITIAL_ITERATION_CAP: u32 = 512;
 
-pub const NAVIGATION_PRECISION_BITS: u32 = 1_024;
+pub const NAVIGATION_PRECISION_BITS: u32 = CAMERA_PRECISION_BITS;
 
 /// The boundary point a fresh whole-set view marks as its zoom target.
 pub const SEAHORSE_VALLEY_TARGET: [f64; 4] =
@@ -31,7 +40,7 @@ pub const SEAHORSE_VALLEY_TARGET: [f64; 4] =
 ///
 /// The lower end is a step out from the whole chart rather than zero, so the picture can be
 /// pulled back off the edges; the upper end is far past where binary64 gives out, which is the
-/// point of holding the centre in bignum.
+/// point of holding the centre in the fixed 512-bit camera record.
 pub const SCALE_RANGE_LOG2: [f64; 2] = [-2.0, 120.0];
 
 /// A drag whose shorter side is under this many CSS pixels is a click, not a box.
@@ -186,7 +195,7 @@ fn css_to_grid_scale(rect_css: [f64; 2], grid: [u32; 2]) -> Result<[f64; 2], App
 }
 
 /// Converts a canvas-relative DOM pointer position in CSS pixels into the canvas-centred
-/// render-grid pixels with positive y upward that `NavigationDelta` requires.
+/// render-grid pixels with positive y upward that the exact camera requires.
 ///
 /// # Errors
 ///
@@ -317,7 +326,7 @@ pub enum NavigationEdit {
     },
 }
 
-/// Result of the mandatory HOT drain and math plane construction.
+/// Result of the mandatory HOT drain and camera-derived plane publication.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HotFrame {
     /// Coherent worker publication.
@@ -403,13 +412,15 @@ pub struct ReferenceSubmission {
     pub reason: OrbitReason,
 }
 
-/// App-facing controller whose storage authority remains the worker-owned records.
+/// App-facing controller whose navigation authority is its exact camera record.
 ///
 /// Its exact three-entry map and footprint caches use FIFO with promote-on-hit, preserving
 /// recently reused refresh keys across a fourth insertion.
 #[derive(Debug)]
 pub struct ViewerController {
     owner: ViewerOwner,
+    camera: ExactView,
+    reference_centre: ExactCentre,
     requested: RequestedControls,
     requested_revision: u64,
     checked_plane: Plane,
@@ -423,13 +434,15 @@ pub struct ViewerController {
     map_constructions: Cell<u64>,
     #[cfg(test)]
     footprint_constructions: Cell<u64>,
+    #[cfg(test)]
+    reference_displacement_calculations: Cell<u64>,
     navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
     pending_reference_centre: Option<(u32, BigCentre)>,
     grid_width: u32,
-    crosshair: Option<BigCentre>,
+    crosshair: Option<ExactCentre>,
     grid_extent: [u32; 2],
 }
 
@@ -462,10 +475,16 @@ impl ViewerController {
         let grid_width = grid_extent[0];
         let requested = RequestedControls::default();
         let origin = requested.plane_origin;
-        let plane = construct_plane(requested.object_angles).map_err(math_error)?;
-        let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
-        let target = BigCentre::from_f64(SEAHORSE_VALLEY_TARGET, NAVIGATION_PRECISION_BITS)
-            .map_err(math_error)?;
+        let centre = fixed_centre_from_f64(origin)?;
+        let target = fixed_centre_from_f64(SEAHORSE_VALLEY_TARGET)?;
+        let orientation = orientation_from_object(&requested.object_angles)?;
+        let plane = plane_from_orientation(&orientation)?;
+        let camera = ExactView::new(
+            centre,
+            quantize_zoom_log2(requested.zoom_log2)?,
+            orientation,
+        );
+        let reference_centre = centre;
         let initial = ViewerState {
             epoch: 0,
             hot: HotState {
@@ -486,21 +505,16 @@ impl ViewerController {
             },
         };
         let mut owner = ViewerOwner::new(initial);
-        owner
-            .configure_navigation(NavigationConfig {
-                centre: centre.clone(),
-                reference_centre: centre,
-                plane,
-                grid_width,
-            })
+        let snapshot = navigation_snapshot(&camera, &reference_centre, plane, grid_extent)?;
+        let generation = owner
+            .replace_and_stage_navigation_snapshot(snapshot, &initial.hot, &initial.main)
             .map_err(owner_error)?;
-        let generation = owner.navigate(NavigationDelta::default());
-        if let Some(error) = owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
+        let staged = owner.staged_snapshot();
         debug_assert_eq!(generation, 1);
         Ok(Self {
             owner,
+            camera,
+            reference_centre,
             requested,
             requested_revision: 0,
             checked_plane: plane,
@@ -514,9 +528,11 @@ impl ViewerController {
             map_constructions: Cell::new(0),
             #[cfg(test)]
             footprint_constructions: Cell::new(0),
+            #[cfg(test)]
+            reference_displacement_calculations: Cell::new(1),
             navigation_centre_f64: origin,
-            staged_hot: initial.hot,
-            staged_main: initial.main,
+            staged_hot: staged.hot,
+            staged_main: staged.main,
             pending_reason: Some(OrbitReason::INITIAL),
             pending_reference_centre: None,
             grid_width,
@@ -543,26 +559,28 @@ impl ViewerController {
         self.checked_plane
     }
 
-    /// Returns the worker record adapter for the deferred facts-reader migration.
+    /// Returns the downstream worker publisher for the facts reader.
     #[cfg(target_arch = "wasm32")]
     #[must_use]
     pub(crate) const fn owner(&self) -> &ViewerOwner {
         &self.owner
     }
 
-    /// Applies the centre-width policy and returns the generation already naming the view.
+    /// Retains the precision marker as a downstream worker concern at constant camera width.
     ///
     /// # Errors
     ///
-    /// Returns a worker failure for missing navigation state, an invalid budget, or bignum work.
+    /// Returns a refusal for a zero edit budget.
     pub fn configure_navigation_precision(
         &mut self,
-        mode: PrecisionMode,
+        _mode: PrecisionMode,
         edit_budget: u32,
     ) -> Result<u32, AppError> {
-        self.owner
-            .configure_precision_mode(mode, edit_budget)
-            .map_err(owner_error)?;
+        if edit_budget == 0 {
+            return Err(AppError::Math(
+                "navigation edit budget must be nonzero".to_string(),
+            ));
+        }
         Ok(self.owner.latest_requested_generation())
     }
 
@@ -581,19 +599,19 @@ impl ViewerController {
     /// Returns the desired authoritative centre without consuming a pending submission.
     #[must_use]
     pub fn navigation_centre(&self) -> Option<BigCentre> {
-        self.owner.navigation_centre()
+        big_centre_from_fixed(&self.camera.centre).ok()
     }
 
     /// Returns the plane basis used by authoritative navigation.
     #[must_use]
     pub fn navigation_plane(&self) -> Option<Plane> {
-        self.owner.navigation_plane()
+        plane_from_orientation(&self.camera.orientation).ok()
     }
 
     /// Returns the centre against which the current HOT displacement is expressed.
     #[must_use]
     pub fn reference_centre(&self) -> Option<BigCentre> {
-        self.owner.reference_centre()
+        big_centre_from_fixed(&self.reference_centre).ok()
     }
 
     /// Returns the last published MAIN record without advancing its epoch.
@@ -649,43 +667,7 @@ impl ViewerController {
             .accept_orbit(response, handle, reference_shift_px)
     }
 
-    /// Stages a pointer-anchored zoom immediately and returns the edit for bignum navigation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a math failure for non-finite input or result.
-    pub(crate) fn wheel_zoom(
-        &mut self,
-        delta_log2: f64,
-        anchor_px_up: [f64; 2],
-    ) -> Result<NavigationEdit, AppError> {
-        if !delta_log2.is_finite() || !anchor_px_up.iter().all(|component| component.is_finite()) {
-            return Err(AppError::Math("wheel input is not finite".to_string()));
-        }
-        let zoom_log2 = self.requested.zoom_log2 + delta_log2;
-        if !zoom_log2.is_finite() {
-            return Err(AppError::Math(
-                "wheel zoom exceeded finite range".to_string(),
-            ));
-        }
-        let map = self.mapped_screen_map(self.grid_extent)?;
-        let delta =
-            navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up).map_err(math_error)?;
-        self.owner.navigate(delta);
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
-        self.refresh_navigation_centre_mirror();
-        self.requested.zoom_log2 = zoom_log2;
-        self.note_requested_change();
-        self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
-        Ok(NavigationEdit::Zoom {
-            delta_log2,
-            anchor_px_up,
-        })
-    }
-
-    /// Converts DOM-down drag input through the inverse screen map and stages it immediately.
+    /// Converts DOM-down drag input through the camera observer and stages it immediately.
     ///
     /// # Errors
     ///
@@ -694,24 +676,24 @@ impl ViewerController {
         if !delta_dom.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
-        let map = self.mapped_screen_map(self.grid_extent)?;
-        let delta = navigation_delta(&map, delta_dom, 0.0, [0.0; 2]).map_err(math_error)?;
-        self.owner.navigate(delta);
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
-        self.refresh_navigation_centre_mirror();
+        let screen = self.camera_screen()?;
+        let origin = self.base_plane_pixel_on(screen, [0.0; 2])?;
+        let dragged = self.base_plane_pixel_on(screen, [delta_dom[0], -delta_dom[1]])?;
+        let mut next = self.camera;
+        pan(&mut next, screen, dragged[0], dragged[1]).map_err(AppError::from)?;
+        pan(&mut next, screen, -origin[0], -origin[1]).map_err(AppError::from)?;
+        self.stage_camera_view(&next)?;
         self.note_requested_change();
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
-        let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
+        let centre_delta_px = [-delta_dom[0], delta_dom[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
     }
 
     /// Stores one screen point as a point on the slice, without moving the picture.
     ///
     /// A click is not a navigation edit. The point under the pointer is converted once, through
-    /// the very plane basis and pixel scale the owner's own navigation arithmetic uses, into the
-    /// bignum point of the slice it names; the picture does not move and no reference orbit is
+    /// the camera observer and exact view, into the fixed-width point of the slice it names; the
+    /// picture does not move and no reference orbit is
     /// asked for. Everything else about the crosshair follows from that one conversion: it is
     /// re-projected for drawing, it rides along under a pan because the point did not move, and it
     /// is the anchor every later zoom is taken about.
@@ -723,32 +705,15 @@ impl ViewerController {
         if !anchor_px_up.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("crosshair input is not finite".to_string()));
         }
-        let map = self.mapped_screen_map(self.grid_extent)?;
-        let plane_offset = navigation_delta(&map, [0.0; 2], 0.0, anchor_px_up)
-            .map_err(math_error)?
-            .anchor_canvas_px;
-        let (centre, plane, grid_width) = self.navigation_frame()?;
-        let zoom_log2 = self.requested.zoom_log2;
-        let mut point = centre;
-        point
-            .apply_navigation(
-                &NavigationDelta {
-                    pan_canvas_px: [-plane_offset[0], -plane_offset[1]],
-                    zoom_delta_log2: 0.0,
-                    anchor_canvas_px: [0.0; 2],
-                },
-                &plane,
-                zoom_log2,
-                zoom_log2,
-                grid_width,
-            )
-            .map_err(math_error)?;
-        self.crosshair = Some(point);
+        let base_plane_px = self.base_plane_pixel(anchor_px_up)?;
+        self.crosshair = Some(
+            click(&self.camera, self.camera_screen()?, base_plane_px).map_err(AppError::from)?,
+        );
         Ok(())
     }
 
     /// Forgets the stored point, so later zooms are taken about the screen centre again.
-    pub fn clear_crosshair(&mut self) {
+    pub const fn clear_crosshair(&mut self) {
         self.crosshair = None;
     }
 
@@ -760,32 +725,27 @@ impl ViewerController {
     #[must_use]
     pub fn crosshair_plane_px(&self) -> Option<[f64; 2]> {
         let target = self.crosshair.as_ref()?;
-        let (centre, plane, grid_width) = self.navigation_frame().ok()?;
-        let scale = pixel_scale(self.requested.zoom_log2, grid_width).ok()?;
-        let bits = target.precision_bits.max(centre.precision_bits);
-        let target = target.with_precision(bits).ok()?;
-        let centre = centre.with_precision(bits).ok()?;
-        let plane_offset = target.displacement_px(&centre, &plane, scale).ok()?;
+        let plane_offset = project(&self.camera, self.camera_screen().ok()?, target)
+            .ok()
+            .flatten()?;
         let map = self.mapped_screen_map(self.grid_extent).ok()?;
         plane_to_screen(&map, plane_offset).ok()
     }
 
-    /// Returns the Astro-float precision the stored point is held at.
+    /// Returns the fixed camera width used to hold the stored point.
     #[must_use]
     pub fn crosshair_precision_bits(&self) -> Option<u32> {
-        self.crosshair.as_ref().map(|point| point.precision_bits)
+        self.crosshair.as_ref().map(|_| CAMERA_PRECISION_BITS)
     }
 
     /// Returns the finite mirror of the stored point, for the facts overlay only.
     #[must_use]
     pub fn crosshair_centre_f64(&self) -> Option<[f64; 4]> {
-        self.crosshair
-            .as_ref()
-            .map(ember_julibrot_math::BigCentre::to_f64_mirror)
+        centre_to_f64(self.crosshair.as_ref()?).ok()
     }
 
-    pub(crate) const fn crosshair(&self) -> Option<&BigCentre> {
-        self.crosshair.as_ref()
+    pub(crate) fn crosshair(&self) -> Option<BigCentre> {
+        big_centre_from_fixed(self.crosshair.as_ref()?).ok()
     }
 
     /// Translates the picture by a DOM drag displacement, leaving the stored point where it is.
@@ -803,32 +763,47 @@ impl ViewerController {
     ///
     /// Returns a math failure for non-finite input or result, or a typed owner refusal.
     pub fn zoom_about_crosshair(&mut self, delta_log2: f64) -> Result<NavigationEdit, AppError> {
-        let anchor = self.crosshair_plane_px().unwrap_or([0.0; 2]);
-        self.wheel_zoom(delta_log2, anchor)
+        let anchor_px_up = self.crosshair_plane_px().unwrap_or([0.0; 2]);
+        let target = self.crosshair;
+        let delta_quanta = quantize_zoom_delta_quanta(delta_log2)?;
+        let delta_log2 = self.apply_zoom_quanta(delta_quanta, target.as_ref())?;
+        Ok(NavigationEdit::Zoom {
+            delta_log2,
+            anchor_px_up,
+        })
     }
 
-    /// Returns the centre, plane basis and grid width one conversion needs, or a typed refusal.
-    fn navigation_frame(&self) -> Result<(BigCentre, Plane, u32), AppError> {
-        let centre = self
-            .owner
-            .navigation_centre()
-            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
-        let plane = self
-            .owner
-            .navigation_plane()
-            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
-        let grid_width = self
-            .owner
-            .navigation_grid_width()
-            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
-        Ok((centre, plane, grid_width))
+    /// Fits two centred render-grid box corners with the camera's quantised containing exponent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed camera or publication refusal for invalid corners or an empty selection.
+    pub fn zoom_box(
+        &mut self,
+        first_corner_px: [f64; 2],
+        second_corner_px: [f64; 2],
+    ) -> Result<NavigationEdit, AppError> {
+        let first = self.base_plane_pixel(first_corner_px)?;
+        let second = self.base_plane_pixel(second_corner_px)?;
+        let mut next = self.camera;
+        select_box(&mut next, first, second, self.camera_screen()?).map_err(AppError::from)?;
+        self.stage_camera_view(&next)?;
+        self.crosshair = Some(next.centre);
+        let zoom_log2 = zoom_log2_from_exponent(next.exponent);
+        let delta_log2 = zoom_log2 - self.requested.zoom_log2;
+        self.requested.zoom_log2 = zoom_log2;
+        self.note_requested_change();
+        self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
+        Ok(NavigationEdit::Target {
+            anchor_px_up: [
+                f64::midpoint(first_corner_px[0], second_corner_px[0]),
+                f64::midpoint(first_corner_px[1], second_corner_px[1]),
+            ],
+            delta_log2,
+        })
     }
 
     /// Moves the `scale` control to an absolute zoom exponent, about the stored point.
-    ///
-    /// The worker's centre update needs the scale before and the scale after, so an absolute
-    /// slider reaches it as the difference; the accumulated sum equals the slider's own number to
-    /// within one unit in its last place, which no readout in the lab resolves.
     ///
     /// # Errors
     ///
@@ -842,7 +817,18 @@ impl ViewerController {
                 "scale {zoom_log2} is outside the control range"
             )));
         }
-        self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)
+        let exponent = quantize_zoom_log2(zoom_log2)?;
+        let delta_quanta = exponent
+            .quanta()
+            .checked_sub(self.camera.exponent.quanta())
+            .ok_or_else(|| AppError::Math("scale delta exceeded integer range".to_string()))?;
+        let anchor_px_up = self.crosshair_plane_px().unwrap_or([0.0; 2]);
+        let target = self.crosshair;
+        let delta_log2 = self.apply_zoom_quanta(delta_quanta, target.as_ref())?;
+        Ok(NavigationEdit::Zoom {
+            delta_log2,
+            anchor_px_up,
+        })
     }
 
     /// Requests a new reference at one deterministic pixel of a completed refinement level.
@@ -852,8 +838,8 @@ impl ViewerController {
     ///
     /// # Errors
     ///
-    /// Returns a typed refusal for an invalid extent/index, an uncertified screen map, bignum
-    /// arithmetic failure, or generation exhaustion.
+    /// Returns a typed refusal for an invalid extent/index, observer inversion, fixed arithmetic,
+    /// or generation exhaustion.
     pub fn request_reference_for_pixel(
         &mut self,
         index: u32,
@@ -873,34 +859,11 @@ impl ViewerController {
             0.5f64.mul_add(-f64::from(width), f64::from(column) + 0.5),
             0.5f64.mul_add(-f64::from(height), f64::from(row) + 0.5),
         ];
-        let map = self.screen_map(grid_extent)?;
-        let PoseMap::Mapped(map) = map else {
-            return Err(AppError::Math(
-                "an edge-on view has no reference sample".to_string(),
-            ));
-        };
-        let plane_offset = navigation_delta(&map, [0.0; 2], 0.0, anchor)
-            .map_err(math_error)?
-            .anchor_canvas_px;
-        let (mut point, plane, _) = self.navigation_frame()?;
-        point
-            .apply_navigation(
-                &NavigationDelta {
-                    pan_canvas_px: [-plane_offset[0], -plane_offset[1]],
-                    zoom_delta_log2: 0.0,
-                    anchor_canvas_px: [0.0; 2],
-                },
-                &plane,
-                self.requested.zoom_log2,
-                self.requested.zoom_log2,
-                width,
-            )
-            .map_err(math_error)?;
-        let generation = self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
-        self.pending_reference_centre = Some((generation, point));
+        let screen = Screen::new(width, height).map_err(AppError::from)?;
+        let base_plane_px = self.base_plane_pixel_on(screen, anchor)?;
+        let point = click(&self.camera, screen, base_plane_px).map_err(AppError::from)?;
+        let generation = self.stage_camera_navigation()?;
+        self.pending_reference_centre = Some((generation, big_centre_from_fixed(&point)?));
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         Ok(generation)
     }
@@ -914,46 +877,37 @@ impl ViewerController {
         if !angles.is_valid() {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
-        // Requested controls are bit keys, so signed zero remains a distinct requested edit.
-        if f64_bits_eq(angles.as_array(), self.requested.object_angles.as_array()) {
+        let orientation = orientation_from_object(&angles)?;
+        if orientation == self.camera.orientation {
             return Ok(());
         }
-        self.synchronize_shadow()?;
-        let checked_plane = construct_plane(angles).map_err(math_error)?;
-        let plane_preserving = plane_chart_relation(self.checked_plane, checked_plane).is_some();
-        let rotated_displacement = if plane_preserving {
-            Some(
-                self.owner
-                    .reorient_navigation_plane(checked_plane)
-                    .map_err(owner_error)?,
-            )
+        let canonical_angles = object_from_orientation(&orientation)?;
+        let checked_plane = plane_from_orientation(&orientation)?;
+        let plane_preserving =
+            same_image_plane(&self.camera.orientation, &orientation).map_err(AppError::from)?;
+        let deltas = orientation_delta(&self.camera.orientation, &orientation)?;
+        let mut next = self.camera;
+        // Julibrot rotates its object chart about the view centre. The downstream screen map
+        // accounts for an in-plane chart turn; anchoring here at a target would move the picture.
+        rotate_about(&mut next, self.camera_screen()?, [0.0; 2], &deltas)
+            .map_err(AppError::from)?;
+        let next_crosshair = if plane_preserving {
+            self.crosshair
         } else {
             None
         };
-        if !plane_preserving {
-            self.clear_crosshair();
-        }
-        self.requested.object_angles = angles;
-        self.checked_plane = checked_plane;
+        let mut candidate = self.owner.staged_snapshot();
+        candidate.hot.plane_theta_1 = canonical_angles.rho_13;
+        candidate.hot.plane_theta_2 = canonical_angles.rho_24;
+        self.stage_camera_view_with_publication(&next, checked_plane, &candidate)?;
+
+        self.crosshair = next_crosshair;
+        self.requested.object_angles = canonical_angles;
         #[cfg(test)]
         {
             self.plane_constructions = self.plane_constructions.saturating_add(1);
         }
-        let mut hot = self.staged_hot;
-        hot.plane_theta_1 = angles.rho_13;
-        hot.plane_theta_2 = angles.rho_24;
-        if let Some(displacement) = rotated_displacement {
-            hot.centre_from_reference_px = displacement;
-        }
-        self.staged_hot = hot;
-        self.owner.stage_hot(hot);
-        if !plane_preserving {
-            self.owner.navigate(NavigationDelta::default());
-            if let Some(error) = self.owner.take_navigation_error() {
-                return Err(owner_error(error));
-            }
-            self.add_reason(OrbitReason::CENTRE_THRESHOLD);
-        }
+        self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         self.note_requested_change();
         Ok(())
     }
@@ -987,19 +941,20 @@ impl ViewerController {
         if f64_bits_eq(origin, self.requested.plane_origin) {
             return Ok(());
         }
-        self.synchronize_shadow()?;
-        self.requested.plane_origin = origin;
-        self.requested.zoom_log2 = 0.0;
-        let angles = self.requested.object_angles;
+        let mut requested = self.requested;
+        requested.plane_origin = origin;
+        requested.zoom_log2 = 0.0;
+        let angles = requested.object_angles;
         let hot = HotState {
             zoom_log2: 0.0,
             plane_theta_1: angles.rho_13,
             plane_theta_2: angles.rho_24,
             centre_from_reference_px: [0.0; 2],
         };
+        let staged = self.owner.staged_snapshot();
         let main = MainState {
             generation_applied: 0,
-            centre_revision: self.staged_main.centre_revision,
+            centre_revision: staged.main.centre_revision,
             centre_f64: origin,
             plane_axis_a: SEED_AXES[0] as u32,
             plane_axis_b: SEED_AXES[1] as u32,
@@ -1008,33 +963,25 @@ impl ViewerController {
             orbit_id: 0,
             precision_bits: 0,
             reference_shift_px: [0.0; 2],
-            ..self.staged_main
+            ..staged.main
         };
-        self.staged_hot = hot;
-        self.staged_main = main;
+        let plane = self.checked_plane;
+        let centre = fixed_centre_from_f64(origin)?;
+        let next = ExactView::new(centre, quantize_zoom_log2(0.0)?, self.camera.orientation);
+        let candidate = ViewerState {
+            hot,
+            main,
+            ..staged
+        };
+        self.replace_camera_context_with_publication(&next, &centre, plane, &candidate)?;
+
+        self.requested = requested;
         #[cfg(test)]
         {
             self.main_state_rebuilds = self.main_state_rebuilds.saturating_add(1);
         }
-        let plane = self.checked_plane;
-        let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
-        self.owner.stage_hot(hot);
-        self.owner.stage_main(main);
-        self.owner
-            .configure_navigation(NavigationConfig {
-                centre: centre.clone(),
-                reference_centre: centre,
-                plane,
-                grid_width: self.grid_width,
-            })
-            .map_err(owner_error)?;
-        self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
         self.pending_reason = Some(OrbitReason::INITIAL);
         self.pending_reference_centre = None;
-        self.navigation_centre_f64 = origin;
         self.note_requested_change();
         Ok(())
     }
@@ -1048,28 +995,14 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
-    pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
-        if self.owner.navigation_centre().as_ref() == Some(&centre)
-            && self.owner.reference_centre().as_ref() == Some(&centre)
-        {
+    pub fn set_centre(&mut self, centre: &BigCentre) -> Result<(), AppError> {
+        let centre = fixed_centre_from_big(centre)?;
+        if self.camera.centre == centre && self.reference_centre == centre {
             return Ok(());
         }
-        self.synchronize_shadow()?;
         let plane = self.checked_plane;
-        let centre_f64 = centre.to_f64_mirror();
-        self.owner
-            .configure_navigation(NavigationConfig {
-                centre: centre.clone(),
-                reference_centre: centre,
-                plane,
-                grid_width: self.grid_extent[0],
-            })
-            .map_err(owner_error)?;
-        self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
-        self.navigation_centre_f64 = centre_f64;
+        let next = ExactView::new(centre, self.camera.exponent, self.camera.orientation);
+        self.replace_camera_context(&next, &centre, plane)?;
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         self.note_requested_change();
         Ok(())
@@ -1089,14 +1022,11 @@ impl ViewerController {
         reason = "validation, bit comparison, staging, and the single navigation decision stay one transaction"
     )]
     pub fn apply_saved_view(&mut self, row: &SavedView) -> Result<(), AppError> {
-        let object = row.object_angles();
+        let requested_object = row.object_angles();
         let origin = row.origin;
         let view = row.view();
-        let zoom_log2 = row.zoom_log2;
-        let centre = row.centre()?;
-        let target = row.target()?;
-        let centre_f64 = centre.to_f64_mirror();
-        if !object.is_valid() {
+        let requested_zoom_log2 = row.zoom_log2;
+        if !requested_object.is_valid() {
             return Err(AppError::Math(
                 "saved object angles are not valid".to_string(),
             ));
@@ -1111,23 +1041,31 @@ impl ViewerController {
                 "saved VIEW controls are not valid".to_string(),
             ));
         }
-        if !zoom_log2.is_finite()
-            || zoom_log2 < SCALE_RANGE_LOG2[0]
-            || zoom_log2 > SCALE_RANGE_LOG2[1]
+        if !requested_zoom_log2.is_finite()
+            || requested_zoom_log2 < SCALE_RANGE_LOG2[0]
+            || requested_zoom_log2 > SCALE_RANGE_LOG2[1]
         {
             return Err(AppError::Math(format!(
-                "saved scale {zoom_log2} is outside the control range"
+                "saved scale {requested_zoom_log2} is outside the control range"
             )));
         }
+        let orientation = orientation_from_object(&requested_object)?;
+        let object = object_from_orientation(&orientation)?;
+        let exponent = quantize_zoom_log2(requested_zoom_log2)?;
+        let zoom_log2 = zoom_log2_from_exponent(exponent);
+        let centre = fixed_centre_from_big(&row.centre()?)?;
+        let target = row
+            .target()?
+            .as_ref()
+            .map(fixed_centre_from_big)
+            .transpose()?;
 
-        let object_changed =
-            !f64_bits_eq(object.as_array(), self.requested.object_angles.as_array());
+        let object_changed = orientation != self.camera.orientation;
         let origin_changed = !f64_bits_eq(origin, self.requested.plane_origin);
         let view_changed = !f64_bits_eq(view.as_array(), self.requested.view.as_array());
-        let zoom_changed = zoom_log2.to_bits() != self.requested.zoom_log2.to_bits();
-        let centre_changed = self.owner.navigation_centre().as_ref() != Some(&centre)
-            || self.owner.reference_centre().as_ref() != Some(&centre);
-        let target_changed = self.crosshair.as_ref() != target.as_ref();
+        let zoom_changed = exponent != self.camera.exponent;
+        let centre_changed = self.camera.centre != centre || self.reference_centre != centre;
+        let target_changed = self.crosshair != target;
         if !object_changed
             && !origin_changed
             && !view_changed
@@ -1139,100 +1077,61 @@ impl ViewerController {
         }
 
         let checked_plane = if object_changed {
-            construct_plane(object).map_err(math_error)?
+            plane_from_orientation(&orientation)?
         } else {
             self.checked_plane
         };
-        let plane_preserving = plane_chart_relation(self.checked_plane, checked_plane).is_some();
-        let slice_changed = !plane_preserving
-            || (origin_changed
-                && !origins_share_slice(
-                    self.requested.plane_origin,
-                    origin,
-                    checked_plane,
-                    zoom_log2,
-                    self.grid_width,
-                ));
-        let navigation_changed = slice_changed || centre_changed || zoom_changed;
+        let plane_preserving =
+            same_image_plane(&self.camera.orientation, &orientation).map_err(AppError::from)?;
+        // Plane origin is fractal-domain state rather than part of `View`. Treat every changed
+        // origin as a new slice so no rounded chart calculation can govern the exact record.
+        let slice_changed = !plane_preserving || origin_changed;
+        let navigation_changed = slice_changed || centre_changed || zoom_changed || object_changed;
 
-        if object_changed || origin_changed || navigation_changed {
-            self.synchronize_shadow()?;
-        }
-        let reoriented_displacement = if object_changed && plane_preserving && !navigation_changed {
-            Some(
-                self.owner
-                    .reorient_navigation_plane(checked_plane)
-                    .map_err(owner_error)?,
-            )
-        } else {
-            None
-        };
-
+        let mut requested = self.requested;
         if object_changed {
-            self.requested.object_angles = object;
-            self.checked_plane = checked_plane;
-            #[cfg(test)]
-            {
-                self.plane_constructions = self.plane_constructions.saturating_add(1);
-            }
+            requested.object_angles = object;
         }
         if origin_changed {
-            self.requested.plane_origin = origin;
+            requested.plane_origin = origin;
         }
         if view_changed {
-            self.requested.view = view;
+            requested.view = view;
         }
         if zoom_changed {
-            self.requested.zoom_log2 = zoom_log2;
+            requested.zoom_log2 = zoom_log2;
         }
-        if object_changed || zoom_changed || reoriented_displacement.is_some() {
-            let mut hot = self.staged_hot;
+
+        let mut candidate = self.owner.staged_snapshot();
+        if object_changed || zoom_changed {
             if zoom_changed {
-                hot.zoom_log2 = zoom_log2;
+                candidate.hot.zoom_log2 = zoom_log2;
             }
             if object_changed {
-                hot.plane_theta_1 = object.rho_13;
-                hot.plane_theta_2 = object.rho_24;
+                candidate.hot.plane_theta_1 = object.rho_13;
+                candidate.hot.plane_theta_2 = object.rho_24;
             }
-            if let Some(displacement) = reoriented_displacement {
-                hot.centre_from_reference_px = displacement;
-            }
-            self.staged_hot = hot;
-            self.owner.stage_hot(hot);
         }
 
         if origin_changed || slice_changed {
-            let mut main = self.staged_main;
-            main.plane_origin_f64 = origin;
+            candidate.main.plane_origin_f64 = origin;
             if slice_changed {
-                main.generation_applied = 0;
-                main.orbit_length = 0;
-                main.orbit_id = 0;
-                main.precision_bits = 0;
-                main.reference_shift_px = [0.0; 2];
-                #[cfg(test)]
-                {
-                    self.main_state_rebuilds = self.main_state_rebuilds.saturating_add(1);
-                }
+                candidate.main.generation_applied = 0;
+                candidate.main.orbit_length = 0;
+                candidate.main.orbit_id = 0;
+                candidate.main.precision_bits = 0;
+                candidate.main.reference_shift_px = [0.0; 2];
             }
-            self.staged_main = main;
-            self.owner.stage_main(main);
         }
 
         if navigation_changed {
-            self.owner
-                .configure_navigation(NavigationConfig {
-                    centre: centre.clone(),
-                    reference_centre: centre,
-                    plane: checked_plane,
-                    grid_width: self.grid_width,
-                })
-                .map_err(owner_error)?;
-            self.owner.navigate(NavigationDelta::default());
-            if let Some(error) = self.owner.take_navigation_error() {
-                return Err(owner_error(error));
-            }
-            self.navigation_centre_f64 = centre_f64;
+            let next = ExactView::new(centre, exponent, orientation);
+            self.replace_camera_context_with_publication(
+                &next,
+                &centre,
+                checked_plane,
+                &candidate,
+            )?;
             self.pending_reference_centre = None;
             self.pending_reason = Some(if slice_changed {
                 OrbitReason::INITIAL
@@ -1242,7 +1141,17 @@ impl ViewerController {
                 OrbitReason::ZOOM_THRESHOLD
             });
         }
+        self.requested = requested;
         self.crosshair = target;
+        #[cfg(test)]
+        {
+            if object_changed {
+                self.plane_constructions = self.plane_constructions.saturating_add(1);
+            }
+            if slice_changed {
+                self.main_state_rebuilds = self.main_state_rebuilds.saturating_add(1);
+            }
+        }
         if object_changed || origin_changed || view_changed || navigation_changed {
             self.note_requested_change();
         }
@@ -1263,16 +1172,13 @@ impl ViewerController {
         if self.requested.iteration_cap == max_iter {
             return Ok(());
         }
-        self.synchronize_shadow()?;
-        self.requested.iteration_cap = max_iter;
-        let mut main = self.staged_main;
-        main.requested_iter_cap = max_iter;
-        self.staged_main = main;
-        self.owner.stage_main(main);
-        self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
+        let mut requested = self.requested;
+        requested.iteration_cap = max_iter;
+        let mut candidate = self.owner.staged_snapshot();
+        candidate.main.requested_iter_cap = max_iter;
+        self.stage_camera_navigation_with_publication(&candidate)?;
+
+        self.requested = requested;
         self.add_reason(OrbitReason::MAX_ITER_CHANGE);
         self.note_requested_change();
         Ok(())
@@ -1287,16 +1193,13 @@ impl ViewerController {
         if self.requested.precision_mode == precision_mode {
             return Ok(());
         }
-        self.synchronize_shadow()?;
-        self.requested.precision_mode = precision_mode;
-        let mut main = self.staged_main;
-        main.precision_mode = precision_mode as u32;
-        self.staged_main = main;
-        self.owner.stage_main(main);
-        self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
-        }
+        let mut requested = self.requested;
+        requested.precision_mode = precision_mode;
+        let mut candidate = self.owner.staged_snapshot();
+        candidate.main.precision_mode = precision_mode as u32;
+        self.stage_camera_navigation_with_publication(&candidate)?;
+
+        self.requested = requested;
         self.add_reason(OrbitReason::PRECISION_MODE_CHANGE);
         self.note_requested_change();
         Ok(())
@@ -1445,28 +1348,56 @@ impl ViewerController {
         self.owner.finish_navigation_submission(generation)
     }
 
-    /// Replaces the owner's projection context after accepting the exact matching reference.
+    /// Publishes the camera's projection context after accepting the exact matching reference.
     ///
     /// # Errors
     ///
     /// Returns a typed math refusal for an incompatible centre, plane, scale, or extent.
     pub fn configure_navigation_context(
         &mut self,
-        centre: BigCentre,
-        reference_centre: BigCentre,
+        centre: &BigCentre,
+        reference_centre: &BigCentre,
         plane: Plane,
     ) -> Result<(), AppError> {
-        let centre_f64 = centre.to_f64_mirror();
-        self.owner
-            .configure_navigation(NavigationConfig {
-                centre,
-                reference_centre,
-                plane,
-                grid_width: self.grid_width,
-            })
-            .map_err(owner_error)?;
-        self.navigation_centre_f64 = centre_f64;
+        let centre = fixed_centre_from_big(centre)?;
+        let reference_centre = fixed_centre_from_big(reference_centre)?;
+        let next = ExactView::new(centre, self.camera.exponent, self.camera.orientation);
+        let camera_plane = plane_from_orientation(&next.orientation)?;
+        if plane != camera_plane {
+            return Err(AppError::Math(
+                "accepted worker plane disagrees with the exact camera record".to_string(),
+            ));
+        }
+        let snapshot = self.navigation_snapshot(&next, &reference_centre, camera_plane)?;
+        self.owner.configure_navigation_snapshot(&snapshot);
+        let staged = self.owner.staged_snapshot();
+        self.camera = next;
+        self.reference_centre = reference_centre;
+        self.checked_plane = camera_plane;
+        self.navigation_centre_f64 = snapshot.centre_f64;
+        self.staged_hot = staged.hot;
+        self.staged_main = staged.main;
         Ok(())
+    }
+
+    /// Projects a new accepted reference from the preceding reference through the camera record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed-width conversion, screen, or exact projection refusal.
+    pub fn reference_shift_px(
+        &self,
+        old_reference: &BigCentre,
+        new_reference: &BigCentre,
+        grid_extent: [u32; 2],
+    ) -> Result<[f64; 2], AppError> {
+        let old_reference = fixed_centre_from_big(old_reference)?;
+        let new_reference = fixed_centre_from_big(new_reference)?;
+        let view = ExactView::new(new_reference, self.camera.exponent, self.camera.orientation);
+        let screen = Screen::new(grid_extent[0], grid_extent[1]).map_err(AppError::from)?;
+        #[cfg(test)]
+        self.note_reference_displacement_calculation();
+        reference_displacement(&view, &old_reference, screen).map_err(AppError::from)
     }
 
     /// Returns the cached finite navigation-centre mirror for allocation-free page facts.
@@ -1587,6 +1518,11 @@ impl ViewerController {
         self.main_state_rebuilds
     }
 
+    #[cfg(test)]
+    pub(crate) const fn reference_displacement_calculation_count(&self) -> u64 {
+        self.reference_displacement_calculations.get()
+    }
+
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
         match self.screen_map(grid_extent)? {
             PoseMap::Mapped(map) => Ok(map),
@@ -1605,6 +1541,150 @@ impl ViewerController {
         Ok(())
     }
 
+    fn camera_screen(&self) -> Result<Screen, AppError> {
+        Screen::new(self.grid_extent[0], self.grid_extent[1]).map_err(AppError::from)
+    }
+
+    fn base_plane_pixel(&self, screen_px: [f64; 2]) -> Result<[f64; 2], AppError> {
+        self.base_plane_pixel_on(self.camera_screen()?, screen_px)
+    }
+
+    fn base_plane_pixel_on(
+        &self,
+        screen: Screen,
+        screen_px: [f64; 2],
+    ) -> Result<[f64; 2], AppError> {
+        let observer = observer_from_view(&self.camera, &self.requested.view)?;
+        invert_perspective(&observer, screen, screen_px).ok_or_else(|| {
+            AppError::Math("the presentation ray does not meet the base plane".to_string())
+        })
+    }
+
+    fn apply_zoom_quanta(
+        &mut self,
+        delta_quanta: i32,
+        target: Option<&ExactCentre>,
+    ) -> Result<f64, AppError> {
+        if delta_quanta == 0 {
+            return Ok(0.0);
+        }
+        let mut next = self.camera;
+        let screen = self.camera_screen()?;
+        if let Some(target) = target {
+            zoom_about_point(&mut next, screen, target, delta_quanta).map_err(AppError::from)?;
+        } else {
+            zoom_about(&mut next, screen, [0.0; 2], delta_quanta).map_err(AppError::from)?;
+        }
+        self.stage_camera_view(&next)?;
+        let zoom_log2 = zoom_log2_from_exponent(next.exponent);
+        let applied_delta_log2 = zoom_log2 - self.requested.zoom_log2;
+        self.requested.zoom_log2 = zoom_log2;
+        self.note_requested_change();
+        self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
+        Ok(applied_delta_log2)
+    }
+
+    fn navigation_snapshot(
+        &self,
+        camera: &ExactView,
+        reference_centre: &ExactCentre,
+        plane: Plane,
+    ) -> Result<NavigationSnapshot, AppError> {
+        #[cfg(test)]
+        self.note_reference_displacement_calculation();
+        navigation_snapshot(camera, reference_centre, plane, self.grid_extent)
+    }
+
+    #[cfg(test)]
+    fn note_reference_displacement_calculation(&self) {
+        // Test instrumentation mutates this cell at runtime, so this is not a constant expression.
+        self.reference_displacement_calculations.set(
+            self.reference_displacement_calculations
+                .get()
+                .saturating_add(1),
+        );
+    }
+
+    fn stage_camera_navigation(&mut self) -> Result<u32, AppError> {
+        let candidate = self.owner.staged_snapshot();
+        self.stage_camera_navigation_with_publication(&candidate)
+    }
+
+    fn stage_camera_navigation_with_publication(
+        &mut self,
+        candidate: &ViewerState,
+    ) -> Result<u32, AppError> {
+        let camera = self.camera;
+        let reference_centre = self.reference_centre;
+        self.commit_camera_context(&camera, &reference_centre, self.checked_plane, candidate)
+    }
+
+    fn stage_camera_view(&mut self, next: &ExactView) -> Result<u32, AppError> {
+        self.stage_camera_view_with_plane(next, self.checked_plane)
+    }
+
+    fn stage_camera_view_with_plane(
+        &mut self,
+        next: &ExactView,
+        plane: Plane,
+    ) -> Result<u32, AppError> {
+        let candidate = self.owner.staged_snapshot();
+        self.stage_camera_view_with_publication(next, plane, &candidate)
+    }
+
+    fn stage_camera_view_with_publication(
+        &mut self,
+        next: &ExactView,
+        plane: Plane,
+        candidate: &ViewerState,
+    ) -> Result<u32, AppError> {
+        let reference_centre = self.reference_centre;
+        self.commit_camera_context(next, &reference_centre, plane, candidate)
+    }
+
+    fn replace_camera_context(
+        &mut self,
+        next: &ExactView,
+        reference_centre: &ExactCentre,
+        plane: Plane,
+    ) -> Result<u32, AppError> {
+        let candidate = self.owner.staged_snapshot();
+        self.replace_camera_context_with_publication(next, reference_centre, plane, &candidate)
+    }
+
+    fn replace_camera_context_with_publication(
+        &mut self,
+        next: &ExactView,
+        reference_centre: &ExactCentre,
+        plane: Plane,
+        candidate: &ViewerState,
+    ) -> Result<u32, AppError> {
+        self.commit_camera_context(next, reference_centre, plane, candidate)
+    }
+
+    fn commit_camera_context(
+        &mut self,
+        next: &ExactView,
+        reference_centre: &ExactCentre,
+        plane: Plane,
+        candidate: &ViewerState,
+    ) -> Result<u32, AppError> {
+        let snapshot = self.navigation_snapshot(next, reference_centre, plane)?;
+        let centre_f64 = snapshot.centre_f64;
+        let generation = self
+            .owner
+            .replace_and_stage_navigation_snapshot(snapshot, &candidate.hot, &candidate.main)
+            .map_err(owner_error)?;
+        let staged = self.owner.staged_snapshot();
+        self.camera = *next;
+        self.reference_centre = *reference_centre;
+        self.checked_plane = plane;
+        self.navigation_centre_f64 = centre_f64;
+        self.staged_hot = staged.hot;
+        self.staged_main = staged.main;
+        Ok(generation)
+    }
+
     fn add_reason(&mut self, reason: OrbitReason) {
         self.pending_reason = Some(
             self.pending_reason
@@ -1612,15 +1692,49 @@ impl ViewerController {
         );
     }
 
-    fn refresh_navigation_centre_mirror(&mut self) {
-        if let Some(centre) = self.owner.navigation_centre() {
-            self.navigation_centre_f64 = centre.to_f64_mirror();
-        }
-    }
-
     const fn note_requested_change(&mut self) {
         self.requested_revision = self.requested_revision.saturating_add(1);
     }
+}
+
+fn navigation_snapshot(
+    camera: &ExactView,
+    reference_centre: &ExactCentre,
+    plane: Plane,
+    grid_extent: [u32; 2],
+) -> Result<NavigationSnapshot, AppError> {
+    let screen = Screen::new(grid_extent[0], grid_extent[1]).map_err(AppError::from)?;
+    Ok(NavigationSnapshot {
+        centre: big_centre_from_fixed(&camera.centre)?,
+        reference_centre: big_centre_from_fixed(reference_centre)?,
+        plane,
+        grid_width: grid_extent[0],
+        zoom_log2: zoom_log2_from_exponent(camera.exponent),
+        centre_from_reference_px: reference_displacement(camera, reference_centre, screen)
+            .map_err(AppError::from)?,
+        centre_f64: centre_to_f64(&camera.centre)?,
+    })
+}
+
+fn orientation_delta(
+    current: &Orientation<4>,
+    target: &Orientation<4>,
+) -> Result<Orientation<4>, AppError> {
+    let mut deltas = [[Turn::ZERO; 4]; 4];
+    for (first, (output, (current_row, target_row))) in deltas
+        .iter_mut()
+        .zip(current.angles().iter().zip(target.angles()))
+        .enumerate()
+    {
+        for (delta, (current, target)) in output
+            .iter_mut()
+            .zip(current_row.iter().zip(target_row))
+            .skip(first + 1)
+        {
+            *delta = current.inverse().wrapping_add(*target);
+        }
+    }
+    Orientation::new(deltas).map_err(AppError::from)
 }
 
 fn f64_bits_eq<const N: usize>(first: [f64; N], second: [f64; N]) -> bool {
@@ -1628,43 +1742,6 @@ fn f64_bits_eq<const N: usize>(first: [f64; N], second: [f64; N]) -> bool {
         .into_iter()
         .zip(second)
         .all(|(first, second)| first.to_bits() == second.to_bits())
-}
-
-fn origins_share_slice(
-    first: [f64; 4],
-    second: [f64; 4],
-    plane: Plane,
-    zoom_log2: f64,
-    grid_width: u32,
-) -> bool {
-    let delta: [f64; 4] = core::array::from_fn(|axis| second[axis] - first[axis]);
-    let projection = [
-        dot_plane_axis(plane.basis_u, delta),
-        dot_plane_axis(plane.basis_v, delta),
-    ];
-    let residual: [f64; 4] = core::array::from_fn(|axis| {
-        delta[axis]
-            - f64::from(plane.basis_u[axis]).mul_add(
-                projection[0],
-                f64::from(plane.basis_v[axis]) * projection[1],
-            )
-    });
-    let pixels_per_chart = 0.25 * f64::from(grid_width) * zoom_log2.exp2();
-    residual
-        .into_iter()
-        .map(|value| value * value)
-        .sum::<f64>()
-        .sqrt()
-        * pixels_per_chart
-        <= 0.5
-}
-
-fn dot_plane_axis(axis: [f32; 4], vector: [f64; 4]) -> f64 {
-    axis.into_iter()
-        .zip(vector)
-        .fold(0.0, |sum, (axis, value)| {
-            f64::from(axis).mul_add(value, sum)
-        })
 }
 
 fn map_for(
@@ -1717,33 +1794,202 @@ mod tests {
     };
 
     use ember_julibrot_math::{
-        ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls, pixel_scale,
-        reference_shift_px,
+        ObjectAngles, PICTURE_FAST_EDIT_BUDGET, PlaneAngles, PoseMap, PrecisionMode, ViewControls,
     };
     use ember_julibrot_present::PaletteId;
     use ember_julibrot_worker::{
-        EncodedCentre, HotState, ORBIT_BUDGET_US_PER_SECOND, OrbitDisposition, OrbitHandle,
-        OrbitReason, OrbitRegistry, OrbitRequest, ReferenceOrbitRecord, SubmitOutcome, ViewerState,
-        WorkerChannel, WorkerConfig, WorkerMode,
+        EncodedCentre, HotState, MainState, ORBIT_BUDGET_US_PER_SECOND, OrbitDisposition,
+        OrbitHandle, OrbitReason, OrbitRegistry, OrbitRequest, ReferenceOrbitRecord, SubmitOutcome,
+        ViewerState, WorkerChannel, WorkerConfig, WorkerMode,
     };
 
+    use crate::{AppError, SavedView};
+
     use super::{
-        BOX_CLICK_THRESHOLD_PX, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
-        SCALE_RANGE_LOG2, SEAHORSE_VALLEY_TARGET, ViewerController, anchor_px_up,
-        box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
-        preset_row,
+        BOX_CLICK_THRESHOLD_PX, ExactCentre, ExactView, INITIAL_ITERATION_CAP,
+        NAVIGATION_PRECISION_BITS, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2,
+        SEAHORSE_VALLEY_TARGET, ViewerController, anchor_px_up, box_zoom_delta_log2,
+        css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
     };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
-    /// Covers the measured 1.3e-5-pixel F32 scale residual while remaining imperceptible.
+    /// Covers the downstream presentation boundary while remaining imperceptible.
     const ROUND_TRIP_ANCHOR_TOLERANCE_PX: f64 = 1.0e-3;
-    /// Ceiling over the 1224.859904134-pixel zoom-54 residual measured at `e594c637`.
-    const ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX: f64 = 1_225.0;
     const ROUND_TRIP_SAMPLE_INDEX: u32 = 405 * REFERENCE_GRID[0] + 720;
-    /// The best of five full-precision edits must beat one millisecond despite transient load.
-    const MAXIMUM_VIEW_EDIT_WALL: Duration = Duration::from_millis(1);
+    /// The best of five full-width edits must stay inside the audited 0.392 ms/edit envelope.
+    const MAXIMUM_VIEW_EDIT_WALL: Duration = Duration::from_micros(392);
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct HotBits([u64; 5]);
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct MainBits {
+        words: [u32; 11],
+        centre: [u64; 4],
+        origin: [u64; 4],
+        reference_shift: [u64; 2],
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct ViewerBits {
+        epoch: u64,
+        hot: HotBits,
+        main: MainBits,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct RequestedBits {
+        plane_origin: [u64; 4],
+        zoom_log2: u64,
+        object: [u64; 6],
+        iteration_cap: u32,
+        precision_mode: u32,
+        palette: u32,
+        view: [u64; 20],
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct NavigationTransactionState {
+        camera: ExactView,
+        reference_centre: ExactCentre,
+        owner_published: ViewerBits,
+        owner_staged: ViewerBits,
+        owner_centre: Option<ember_julibrot_math::BigCentre>,
+        owner_reference: Option<ember_julibrot_math::BigCentre>,
+        owner_plane: Option<[u32; 8]>,
+        owner_grid_width: Option<u32>,
+        owner_pending_depth: u32,
+        owner_generation: u32,
+        requested: RequestedBits,
+        requested_revision: u64,
+        crosshair: Option<ExactCentre>,
+        app_hot: HotBits,
+        app_main: MainBits,
+        checked_plane: [u32; 8],
+        navigation_centre_f64: [u64; 4],
+        pending_reason: Option<OrbitReason>,
+        pending_reference_centre: Option<(u32, ember_julibrot_math::BigCentre)>,
+    }
+
+    const fn hot_bits(hot: HotState) -> HotBits {
+        HotBits([
+            hot.zoom_log2.to_bits(),
+            hot.plane_theta_1.to_bits(),
+            hot.plane_theta_2.to_bits(),
+            hot.centre_from_reference_px[0].to_bits(),
+            hot.centre_from_reference_px[1].to_bits(),
+        ])
+    }
+
+    const fn main_bits(main: MainState) -> MainBits {
+        MainBits {
+            words: [
+                main.generation_applied,
+                main.centre_revision,
+                main.requested_iter_cap,
+                main.delivered_iter_cap,
+                main.precision_bits,
+                main.orbit_length,
+                main.palette_id,
+                main.orbit_id,
+                main.plane_axis_a,
+                main.plane_axis_b,
+                main.precision_mode,
+            ],
+            centre: [
+                main.centre_f64[0].to_bits(),
+                main.centre_f64[1].to_bits(),
+                main.centre_f64[2].to_bits(),
+                main.centre_f64[3].to_bits(),
+            ],
+            origin: [
+                main.plane_origin_f64[0].to_bits(),
+                main.plane_origin_f64[1].to_bits(),
+                main.plane_origin_f64[2].to_bits(),
+                main.plane_origin_f64[3].to_bits(),
+            ],
+            reference_shift: [
+                main.reference_shift_px[0].to_bits(),
+                main.reference_shift_px[1].to_bits(),
+            ],
+        }
+    }
+
+    const fn viewer_bits(state: ViewerState) -> ViewerBits {
+        ViewerBits {
+            epoch: state.epoch,
+            hot: hot_bits(state.hot),
+            main: main_bits(state.main),
+        }
+    }
+
+    const fn plane_bits(plane: ember_julibrot_math::Plane) -> [u32; 8] {
+        [
+            plane.basis_u[0].to_bits(),
+            plane.basis_u[1].to_bits(),
+            plane.basis_u[2].to_bits(),
+            plane.basis_u[3].to_bits(),
+            plane.basis_v[0].to_bits(),
+            plane.basis_v[1].to_bits(),
+            plane.basis_v[2].to_bits(),
+            plane.basis_v[3].to_bits(),
+        ]
+    }
+
+    fn requested_bits(requested: &super::RequestedControls) -> RequestedBits {
+        RequestedBits {
+            plane_origin: requested.plane_origin.map(f64::to_bits),
+            zoom_log2: requested.zoom_log2.to_bits(),
+            object: requested.object_angles.as_array().map(f64::to_bits),
+            iteration_cap: requested.iteration_cap,
+            precision_mode: requested.precision_mode as u32,
+            palette: requested.palette as u32,
+            view: requested.view.as_array().map(f64::to_bits),
+        }
+    }
+
+    fn navigation_transaction_state(viewer: &ViewerController) -> NavigationTransactionState {
+        NavigationTransactionState {
+            camera: viewer.camera,
+            reference_centre: viewer.reference_centre,
+            owner_published: viewer_bits(viewer.owner.snapshot()),
+            owner_staged: viewer_bits(viewer.owner.staged_snapshot()),
+            owner_centre: viewer.owner.navigation_centre(),
+            owner_reference: viewer.owner.reference_centre(),
+            owner_plane: viewer.owner.navigation_plane().map(plane_bits),
+            owner_grid_width: viewer.owner.navigation_grid_width(),
+            owner_pending_depth: viewer.owner.navigation_pending_depth(),
+            owner_generation: viewer.owner.latest_requested_generation(),
+            requested: requested_bits(&viewer.requested),
+            requested_revision: viewer.requested_revision,
+            crosshair: viewer.crosshair,
+            app_hot: hot_bits(viewer.staged_hot),
+            app_main: main_bits(viewer.staged_main),
+            checked_plane: plane_bits(viewer.checked_plane),
+            navigation_centre_f64: viewer.navigation_centre_f64.map(f64::to_bits),
+            pending_reason: viewer.pending_reason,
+            pending_reference_centre: viewer.pending_reference_centre.clone(),
+        }
+    }
+
+    fn apply_anchored_zoom(
+        viewer: &mut ViewerController,
+        delta_log2: f64,
+        anchor_px_up: [f64; 2],
+    ) -> NavigationEdit {
+        let retained_crosshair = viewer.crosshair;
+        viewer
+            .set_crosshair(anchor_px_up)
+            .expect("finite zoom anchor");
+        let edit = viewer
+            .zoom_about_crosshair(delta_log2)
+            .expect("finite anchored zoom");
+        // The retired direct wheel entry used a transient pointer anchor, not a new saved target.
+        viewer.crosshair = retained_crosshair;
+        edit
+    }
 
     fn set_close_measured_row(viewer: &mut ViewerController) {
         viewer
@@ -1969,27 +2215,19 @@ mod tests {
         let plane = viewer
             .navigation_plane()
             .expect("round-trip navigation plane");
-        let old_reference = viewer
-            .reference_centre()
-            .expect("round-trip old reference")
-            .with_precision(sampled.reference_centre.precision_bits)
-            .expect("round-trip old reference widens");
+        let old_reference = viewer.reference_centre().expect("round-trip old reference");
         let before_hot = viewer.published_hot();
-        let shift = reference_shift_px(
-            &old_reference,
-            &sampled.reference_centre,
-            &plane,
-            sampled.navigation.zoom_log2,
-            REFERENCE_GRID[0],
+        let shift = viewer
+            .reference_shift_px(&old_reference, &sampled.reference_centre, REFERENCE_GRID)
+            .expect("sampled round-trip shift projects");
+        let sampled_reference = super::fixed_centre_from_big(&sampled.reference_centre)
+            .expect("sampled reference is the camera width");
+        let expected_displacement = ember_camera::reference_displacement(
+            &viewer.camera,
+            &sampled_reference,
+            viewer.camera_screen().expect("round-trip screen"),
         )
-        .expect("sampled round-trip shift projects");
-        let scale = pixel_scale(sampled.navigation.zoom_log2, REFERENCE_GRID[0])
-            .expect("sampled round-trip scale");
-        let expected_displacement = sampled
-            .navigation
-            .centre
-            .displacement_px(&sampled.reference_centre, &plane, scale)
-            .expect("sampled round-trip displacement projects");
+        .expect("sampled round-trip displacement projects");
         RoundTripReferenceRequest {
             before_hot,
             expected_displacement,
@@ -2057,8 +2295,8 @@ mod tests {
         let response_length = response.length();
         let response_precision_bits = response.precision_bits();
         let configured = viewer.configure_navigation_context(
-            sampled.navigation.centre,
-            sampled.reference_centre,
+            &sampled.navigation.centre,
+            &sampled.reference_centre,
             plane,
         );
         let disposition = if configured.is_ok() {
@@ -2194,20 +2432,18 @@ mod tests {
         );
     }
 
-    /// Pins the current zoom-54 residual without assigning it to centre narrowing.
+    /// The exact record returns the zoom-54 target within its one-readout projection budget.
     ///
-    /// This controller starts with a 1,024-bit centre and navigation only widens it. The trip
-    /// accepts a sampled reference, verifies its coordinate frame, and publishes its nonzero shift;
-    /// the presenter regression separately proves consumption. The trip does not isolate the
-    /// residual's cause. The current edit path still projects through F32 plane and scale values;
-    /// `ember-camera` must replace this ceiling with the sub-pixel tolerance.
+    /// The former bignum edit path returned 1,224.859904134 pixels away. Every edit in this trip
+    /// now changes integer camera fields, and the only remaining comparison is the crate's final
+    /// binary64 projection boundary.
     #[test]
-    fn zoom_fifty_four_rotation_round_trip_pins_the_camera_residual() {
+    fn zoom_fifty_four_rotation_round_trip_meets_the_camera_bound() {
         let residual = deep_zoom_rotation_round_trip_residual(54.0);
-        report_round_trip(54.0, residual, ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX);
+        report_round_trip(54.0, residual, ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS);
         assert!(
-            residual <= ROUND_TRIP_ANCHOR_RESIDUAL_LIMIT_PX,
-            "zoom 54 returned {residual:.9} px, above the pinned camera residual"
+            residual <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS,
+            "zoom 54 returned {residual:.9} px, above the exact camera projection bound"
         );
     }
 
@@ -2217,6 +2453,7 @@ mod tests {
         viewer
             .set_zoom_log2(SCALE_RANGE_LOG2[1])
             .expect("highest supported precision");
+        let displacement_count_before = viewer.reference_displacement_calculation_count();
         let mut samples = [Duration::ZERO; 5];
         for measurement in &mut samples {
             let started = Instant::now();
@@ -2228,10 +2465,14 @@ mod tests {
             .into_iter()
             .min()
             .expect("five timing samples have a minimum");
+        let displacement_count = viewer
+            .reference_displacement_calculation_count()
+            .saturating_sub(displacement_count_before);
+        assert_eq!(displacement_count, 5);
         let mut report = String::new();
         let _written = writeln!(
             report,
-            "TIMING highest-precision-view-edit zoom_log2={:.1} wall_us={walls_us:?} best_us={} release_bound_us={}",
+            "TIMING highest-precision-view-edit zoom_log2={:.1} wall_us={walls_us:?} best_us={} displacement_calls={displacement_count} release_bound_us={}",
             SCALE_RANGE_LOG2[1],
             best.as_micros(),
             MAXIMUM_VIEW_EDIT_WALL.as_micros()
@@ -2243,6 +2484,107 @@ mod tests {
             best < MAXIMUM_VIEW_EDIT_WALL,
             "best highest-precision edit took {best:?}, above {MAXIMUM_VIEW_EDIT_WALL:?}"
         );
+
+        viewer
+            .set_crosshair([173.0, -91.0])
+            .expect("non-origin exact target");
+        assert_ne!(viewer.crosshair, Some(viewer.camera.centre));
+        let quantum = 1.0 / f64::from(ember_camera::EXPONENT_QUANTA_PER_OCTAVE);
+        let displacement_count_before = viewer.reference_displacement_calculation_count();
+        let mut target_samples = [Duration::ZERO; 5];
+        for (index, measurement) in target_samples.iter_mut().enumerate() {
+            let started = Instant::now();
+            if index % 2 == 0 {
+                viewer
+                    .zoom_about_crosshair(-quantum)
+                    .expect("one exact target quantum down");
+            } else {
+                viewer
+                    .set_zoom_log2(SCALE_RANGE_LOG2[1])
+                    .expect("one exact target quantum up");
+            }
+            *measurement = started.elapsed();
+        }
+        let target_walls_us = target_samples.map(|duration| duration.as_micros());
+        let target_best = target_samples
+            .into_iter()
+            .min()
+            .expect("five target timing samples have a minimum");
+        let target_displacement_count = viewer
+            .reference_displacement_calculation_count()
+            .saturating_sub(displacement_count_before);
+        assert_eq!(target_displacement_count, 5);
+        let mut target_report = String::new();
+        let _written = writeln!(
+            target_report,
+            "TIMING highest-precision-target-zoom zoom_log2={:.1} wall_us={target_walls_us:?} best_us={} displacement_calls={target_displacement_count} release_bound_us={}",
+            SCALE_RANGE_LOG2[1],
+            target_best.as_micros(),
+            MAXIMUM_VIEW_EDIT_WALL.as_micros()
+        );
+        std::io::Write::write_all(&mut std::io::stdout().lock(), target_report.as_bytes())
+            .expect("target-zoom timing writes to test output");
+        #[cfg(not(debug_assertions))]
+        assert!(
+            target_best < MAXIMUM_VIEW_EDIT_WALL,
+            "best highest-precision target zoom took {target_best:?}, above {MAXIMUM_VIEW_EDIT_WALL:?}"
+        );
+    }
+
+    #[test]
+    fn steady_frames_do_not_recompute_reference_displacement() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let before = viewer.reference_displacement_calculation_count();
+        for _ in 0..8 {
+            viewer.drain_hot(REFERENCE_GRID).expect("steady frame");
+        }
+        assert_eq!(viewer.reference_displacement_calculation_count(), before);
+        viewer.pan_px([1.0, -1.0]).expect("one exact edit");
+        assert_eq!(
+            viewer.reference_displacement_calculation_count(),
+            before + 1
+        );
+    }
+
+    #[test]
+    fn generation_refusal_leaves_the_complete_camera_publication_transaction_unchanged() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer.owner.note_requested_generation(u32::MAX);
+        let before = navigation_transaction_state(&viewer);
+        let error = viewer
+            .set_object_angles(ObjectAngles {
+                rho_13: 0.125,
+                ..ObjectAngles::IDENTITY
+            })
+            .expect_err("the exhausted generation refuses an object turn");
+        assert_eq!(
+            error,
+            AppError::Worker("owner generation is exhausted".to_string())
+        );
+        assert_eq!(navigation_transaction_state(&viewer), before);
+    }
+
+    #[test]
+    fn centre_revision_refusal_leaves_the_complete_saved_view_transaction_unchanged() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let mut saved = SavedView::capture(&viewer).expect("canonical row");
+        saved.object[1] = 0.25;
+        saved.origin = [0.125, -0.25, 0.375, -0.5];
+        saved.zoom_log2 = 1.0;
+        saved.target = None;
+        viewer.owner.stage_main(MainState {
+            centre_revision: u32::MAX,
+            ..viewer.owner.staged_snapshot().main
+        });
+        let before = navigation_transaction_state(&viewer);
+        let error = viewer
+            .apply_saved_view(&saved)
+            .expect_err("the exhausted centre revision refuses a saved row");
+        assert_eq!(
+            error,
+            AppError::Worker("owner centre revision is exhausted".to_string())
+        );
+        assert_eq!(navigation_transaction_state(&viewer), before);
     }
 
     /// A translation moves the picture and the crosshair together, because the point does not move.
@@ -2281,15 +2623,16 @@ mod tests {
         viewer
             .set_object_angles(object)
             .expect("valid in-plane object turn");
-        let centre = viewer.navigation_centre().expect("navigation has a centre");
-        let plane = viewer.navigation_plane().expect("navigation has a plane");
-        let scale = pixel_scale(viewer.requested().zoom_log2, 960).expect("valid scale");
-        let rotated_chart = viewer
-            .crosshair
-            .as_ref()
-            .expect("crosshair survives the in-plane turn")
-            .displacement_px(&centre, &plane, scale)
-            .expect("stored point has new chart coordinates");
+        let rotated_chart = ember_camera::project(
+            &viewer.camera,
+            viewer.camera_screen().expect("valid screen"),
+            viewer
+                .crosshair
+                .as_ref()
+                .expect("crosshair survives the in-plane turn"),
+        )
+        .expect("exact projection")
+        .expect("stored point has new chart coordinates");
         assert!((rotated_chart[0] - 51.409_785_214_309_565).abs() <= 1.0e-3);
         assert!((rotated_chart[1] + 36.837_942_182_192_49).abs() <= 1.0e-3);
         let projected = viewer
@@ -2299,7 +2642,10 @@ mod tests {
         assert!((projected[1] + 20.0).abs() <= 1.0e-3);
         assert_eq!(viewer.crosshair_centre_f64(), Some(point));
         assert_eq!(viewer.navigation_plane(), Some(viewer.checked_plane()));
-        assert!(viewer.take_reference_submission().is_none());
+        let rotation = viewer
+            .take_reference_submission()
+            .expect("the exact anchored rotation publishes its changed centre");
+        assert!(viewer.finish_reference_submission(rotation.navigation.generation));
 
         let mut tilted = viewer.requested().object_angles;
         tilted.rho_13 += 0.3;
@@ -2326,6 +2672,24 @@ mod tests {
         assert!((wide - 1.0).abs() < 1.0e-12);
         assert!(box_zoom_delta_log2([0.0, 10.0], REFERENCE_RECT).is_err());
         assert!(box_zoom_delta_log2([10.0, f64::NAN], REFERENCE_RECT).is_err());
+    }
+
+    #[test]
+    fn an_exact_selection_box_uses_the_deepest_containing_quantum() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer.clear_crosshair();
+        let edit = viewer
+            .zoom_box([-240.0, -135.0], [240.0, 135.0])
+            .expect("half-grid selection");
+        assert_eq!(
+            edit,
+            NavigationEdit::Target {
+                anchor_px_up: [0.0; 2],
+                delta_log2: 1.0,
+            }
+        );
+        assert_eq!(viewer.requested().zoom_log2, 1.0);
+        assert_eq!(viewer.crosshair_plane_px(), Some([0.0; 2]));
     }
 
     /// Under four pixels on either side there is no box, so the gesture is the click it looked like.
@@ -2481,19 +2845,56 @@ mod tests {
     #[test]
     fn pointer_zoom_and_dom_drag_stage_smooth_hot_state() {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
-        assert_eq!(
-            viewer.wheel_zoom(1.0, [20.0, -10.0]).expect("finite wheel"),
-            NavigationEdit::Zoom {
-                delta_log2: 1.0,
-                anchor_px_up: [20.0, -10.0]
-            }
+        let NavigationEdit::Zoom {
+            delta_log2,
+            anchor_px_up,
+        } = apply_anchored_zoom(&mut viewer, 1.0, [20.0, -10.0])
+        else {
+            panic!("anchored zoom returned a non-zoom edit");
+        };
+        assert_eq!(delta_log2, 1.0);
+        assert!(
+            (anchor_px_up[0] - 20.0).abs() <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
+                && (anchor_px_up[1] + 10.0).abs() <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
         );
         viewer.drag_pan([5.0, 7.0]).expect("finite drag");
         let hot = viewer.drain_hot([960, 540]).expect("valid pose");
         assert_eq!(hot.state.hot.zoom_log2, 1.0);
-        assert_eq!(hot.state.hot.centre_from_reference_px, [15.0, -3.0]);
+        assert!(
+            (hot.state.hot.centre_from_reference_px[0] - 15.0).abs()
+                <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
+                && (hot.state.hot.centre_from_reference_px[1] + 3.0).abs()
+                    <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
+        );
         // A drain reads the controls; it has no time argument and cannot invent an angle.
         assert_eq!(hot.pose.view, ViewControls::MANDELBROT_FLAT);
+    }
+
+    #[test]
+    fn a_sub_half_quantum_wheel_delta_leaves_the_camera_record_untouched() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let camera_before = viewer.camera;
+        let requested_before = viewer.requested();
+        let displacement_count_before = viewer.reference_displacement_calculation_count();
+        let delta_log2 = 0.49 / f64::from(ember_camera::EXPONENT_QUANTA_PER_OCTAVE);
+        let NavigationEdit::Zoom {
+            delta_log2,
+            anchor_px_up,
+        } = apply_anchored_zoom(&mut viewer, delta_log2, [137.0, -64.0])
+        else {
+            panic!("sub-half-quantum input returned a non-zoom edit");
+        };
+        assert_eq!(delta_log2, 0.0);
+        assert!(
+            (anchor_px_up[0] - 137.0).abs() <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
+                && (anchor_px_up[1] + 64.0).abs() <= ember_camera::PROJECT_PIXEL_TOLERANCE_PIXELS
+        );
+        assert_eq!(viewer.camera, camera_before);
+        assert_eq!(viewer.requested(), requested_before);
+        assert_eq!(
+            viewer.reference_displacement_calculation_count(),
+            displacement_count_before
+        );
     }
 
     #[test]
@@ -2546,7 +2947,7 @@ mod tests {
         viewer.drain_hot(REFERENCE_GRID).expect("changed VIEW map");
         assert_eq!(viewer.map_constructions.get(), 2);
 
-        viewer.wheel_zoom(1.0, [0.0; 2]).expect("changed zoom map");
+        apply_anchored_zoom(&mut viewer, 1.0, [0.0; 2]);
         viewer
             .drain_hot(REFERENCE_GRID)
             .expect("changed zoom frame");
@@ -2613,9 +3014,7 @@ mod tests {
         }
         assert_eq!(viewer.footprint_construction_count(), 1);
 
-        viewer
-            .wheel_zoom(1.0, [0.0; 2])
-            .expect("zoom is outside the footprint key");
+        apply_anchored_zoom(&mut viewer, 1.0, [0.0; 2]);
         assert_eq!(
             viewer
                 .scene_footprint(REFERENCE_GRID)
@@ -2853,9 +3252,7 @@ mod tests {
     #[test]
     fn drained_hot_pose_zoom_matches_the_requested_zoom() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        viewer
-            .wheel_zoom(3.25, [11.0, -7.0])
-            .expect("finite zoom edit");
+        apply_anchored_zoom(&mut viewer, 3.25, [11.0, -7.0]);
         let frame = viewer.drain_hot(REFERENCE_GRID).expect("zoomed HOT frame");
         assert_eq!(
             frame.pose.zoom_log2.to_bits(),
@@ -2897,9 +3294,7 @@ mod tests {
                 .to_f64_mirror()
         );
 
-        viewer
-            .wheel_zoom(1.0, [37.0, -19.0])
-            .expect("finite anchored zoom");
+        apply_anchored_zoom(&mut viewer, 1.0, [37.0, -19.0]);
         viewer.drag_pan([8.0, -5.0]).expect("finite pan");
         assert_eq!(
             viewer.navigation_centre_f64(),
@@ -2912,7 +3307,7 @@ mod tests {
         let accepted = viewer.navigation_centre().expect("configured centre");
         let plane = viewer.checked_plane;
         viewer
-            .configure_navigation_context(accepted.clone(), accepted, plane)
+            .configure_navigation_context(&accepted, &accepted, plane)
             .expect("accepted context");
         assert_eq!(
             viewer.navigation_centre_f64(),
@@ -2977,10 +3372,83 @@ mod tests {
             .take_reference_submission()
             .expect("mode change requests a reference");
         assert_eq!(submission.navigation.precision_mode, 0);
+        assert_eq!(
+            submission.navigation.centre.precision_bits,
+            NAVIGATION_PRECISION_BITS
+        );
+        assert_eq!(
+            viewer
+                .reference_centre()
+                .expect("fixed-width reference")
+                .precision_bits,
+            NAVIGATION_PRECISION_BITS
+        );
         assert_ne!(
             submission.reason.bits() & OrbitReason::PRECISION_MODE_CHANGE.bits(),
             0
         );
+    }
+
+    #[test]
+    fn legacy_width_row_zero_reuses_the_exact_boot_publication() {
+        const LEGACY_SAVED_WIDTH_BITS: u32 = 1_024;
+
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .configure_navigation_precision(PrecisionMode::PictureFast, PICTURE_FAST_EDIT_BUDGET)
+            .expect("the boot precision marker is valid");
+        let initial = viewer
+            .take_reference_submission()
+            .expect("boot publishes generation one");
+        viewer.clear_crosshair();
+        let camera_before = viewer.camera;
+        let revision_before = viewer.owner.staged_snapshot().main.centre_revision;
+
+        let mut row = SavedView::from_preset(PRESET_ROWS[0]).expect("row zero is valid");
+        row.centre.precision_bits = LEGACY_SAVED_WIDTH_BITS;
+        row.target
+            .as_mut()
+            .expect("row zero carries the boot target")
+            .precision_bits = LEGACY_SAVED_WIDTH_BITS;
+        viewer
+            .apply_saved_view(&row)
+            .expect("the legacy-width row is the boot view");
+
+        assert_eq!(viewer.camera, camera_before);
+        assert_eq!(
+            viewer.latest_requested_generation(),
+            initial.navigation.generation
+        );
+        assert_eq!(
+            viewer.owner.staged_snapshot().main.centre_revision,
+            revision_before
+        );
+        assert_eq!(viewer.navigation_pending_depth(), 0);
+        assert!(viewer.accept_navigation_without_orbit(
+            initial.navigation.generation,
+            initial.navigation.centre_revision,
+        ));
+
+        viewer.pan_px([1.0, 0.0]).expect("one real edit");
+        let moved = viewer
+            .take_reference_submission()
+            .expect("the real edit publishes once");
+        assert_eq!(
+            moved.navigation.generation,
+            initial.navigation.generation + 1
+        );
+        assert_eq!(
+            moved.navigation.centre_revision,
+            initial.navigation.centre_revision + 1
+        );
+        assert!(!viewer.accept_navigation_without_orbit(
+            initial.navigation.generation,
+            initial.navigation.centre_revision,
+        ));
+        assert!(viewer.accept_navigation_without_orbit(
+            moved.navigation.generation,
+            moved.navigation.centre_revision,
+        ));
     }
 
     #[test]
@@ -3036,9 +3504,9 @@ mod tests {
     }
 
     #[test]
-    fn partial_controls_preserve_undrained_navigation_fields() {
+    fn partial_controls_publish_coherent_undrained_navigation_fields() {
         let mut viewer = ViewerController::new(800).expect("canonical viewer");
-        viewer.wheel_zoom(2.0, [24.0, -12.0]).expect("finite wheel");
+        apply_anchored_zoom(&mut viewer, 2.0, [24.0, -12.0]);
         viewer.set_palette(PaletteId::Ice).expect("valid palette");
         let navigation_hot = viewer.published_hot();
         viewer
@@ -3047,11 +3515,21 @@ mod tests {
                 theta_2: -0.3,
             })
             .expect("finite angles");
+        let expected_displacement = ember_camera::reference_displacement(
+            &viewer.camera,
+            &viewer.reference_centre,
+            viewer.camera_screen().expect("valid screen"),
+        )
+        .expect("exact displacement");
         viewer.set_iteration_cap(1_024).expect("valid cap");
         let frame = viewer.drain_hot([800, 600]).expect("valid frame");
         assert_eq!(frame.state.hot.zoom_log2, 2.0);
         assert_eq!(
             frame.state.hot.centre_from_reference_px,
+            expected_displacement
+        );
+        assert_ne!(
+            expected_displacement,
             navigation_hot.centre_from_reference_px
         );
         assert_eq!(frame.state.main.palette_id, PaletteId::Ice as u32);

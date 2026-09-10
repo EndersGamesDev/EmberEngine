@@ -92,10 +92,7 @@ fn rotate_rows<const N: usize>(
     frame[second] = rotated_right;
 }
 
-pub fn turn_sin_cos(turn: Turn) -> (f64, f64) {
-    let quadrant = turn.bits() >> QUADRANT_BITS;
-    let offset = turn.bits() & QUADRANT_MASK;
-    let angle = f64::from(offset) * QUADRANT_RADIANS_PER_BIT;
+fn first_quadrant_sin_cos(angle: f64) -> (f64, f64) {
     let squared = angle * angle;
     let mut sine_polynomial = 0.0;
     for coefficient in SINE_COEFFICIENTS {
@@ -106,11 +103,45 @@ pub fn turn_sin_cos(turn: Turn) -> (f64, f64) {
     for coefficient in COSINE_COEFFICIENTS {
         cosine = cosine * squared + coefficient;
     }
+    (sine, cosine)
+}
+
+pub fn turn_sin_cos(turn: Turn) -> (f64, f64) {
+    let quadrant = turn.bits() >> QUADRANT_BITS;
+    let offset = turn.bits() & QUADRANT_MASK;
+    let angle = f64::from(offset) * QUADRANT_RADIANS_PER_BIT;
+    let (sine, cosine) = first_quadrant_sin_cos(angle);
     match quadrant {
         0 => (sine, cosine),
         1 => (cosine, -sine),
         2 => (-sine, -cosine),
         _ => (-cosine, sine),
+    }
+}
+
+/// Evaluates a binary64 angle without relying on a platform math library.
+///
+/// Quadrant reduction keeps the fixed Taylor polynomials on `[0, pi / 2]`. This is a
+/// presentation-only boundary utility: its approximation and the separate core arithmetic in the
+/// observer transform are covered by that transform's named binary64 pixel tolerance.
+pub fn radian_sin_cos(radians: f64) -> (f64, f64) {
+    let remainder = radians % core::f64::consts::TAU;
+    let reduced = if remainder < 0.0 {
+        remainder + core::f64::consts::TAU
+    } else {
+        remainder
+    };
+    if reduced <= core::f64::consts::FRAC_PI_2 {
+        first_quadrant_sin_cos(reduced)
+    } else if reduced <= core::f64::consts::PI {
+        let (sine, cosine) = first_quadrant_sin_cos(core::f64::consts::PI - reduced);
+        (sine, -cosine)
+    } else if reduced <= 3.0 * core::f64::consts::FRAC_PI_2 {
+        let (sine, cosine) = first_quadrant_sin_cos(reduced - core::f64::consts::PI);
+        (-sine, -cosine)
+    } else {
+        let (sine, cosine) = first_quadrant_sin_cos(core::f64::consts::TAU - reduced);
+        (-sine, cosine)
     }
 }
 

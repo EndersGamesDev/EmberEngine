@@ -94,6 +94,42 @@ pub fn zoom_about<const N: usize, const LIMBS: usize>(
     Ok(())
 }
 
+/// Changes the integer exponent while preserving an exact point's projected pixel.
+///
+/// This is the exact-target form of [`zoom_about`]. Because orientation is unchanged by a zoom,
+/// scaling the complete target-minus-centre vector by the exact ratio of the new and old fixed
+/// pixel scales preserves every projected coordinate. Each component uses one double-width
+/// product and one nearest-even integer division; no binary64 readout feeds the edit path.
+///
+/// # Errors
+///
+/// Returns a typed refusal for an exponent outside the named range, invalid geometry, or checked
+/// arithmetic overflow.
+pub fn zoom_about_point<const N: usize, const LIMBS: usize>(
+    view: &mut View<N, LIMBS>,
+    screen: Screen,
+    target: &[Fixed<LIMBS>; N],
+    delta_quanta: i32,
+) -> Result<(), CameraError> {
+    if delta_quanta == 0 {
+        return Ok(());
+    }
+    let old_scale = scale_for::<LIMBS>(view.exponent, screen)?.units_per_pixel();
+    let mut next = *view;
+    next.exponent = view.exponent.checked_add(delta_quanta)?;
+    let new_scale = scale_for::<LIMBS>(next.exponent, screen)?.units_per_pixel();
+    let mut old_offsets = [Fixed::ZERO; N];
+    for ((offset, coordinate), centre) in old_offsets.iter_mut().zip(target).zip(view.centre) {
+        *offset = coordinate.sub(&centre)?;
+    }
+    let new_offsets = Fixed::mul_ratio_components_round_even(&old_offsets, &new_scale, &old_scale)?;
+    for ((output, coordinate), new_offset) in next.centre.iter_mut().zip(target).zip(new_offsets) {
+        *output = coordinate.sub(&new_offset)?;
+    }
+    *view = next;
+    Ok(())
+}
+
 /// Adds integer plane-angle deltas while preserving the point beneath a pixel anchor.
 ///
 /// The full basis is rebuilt before and after the angular change; only its binary64 component bits
@@ -305,9 +341,10 @@ fn deepest_fitting_exponent<const LIMBS: usize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{click, frame_points, pan, rotate_about, select_box, zoom_about};
+    use super::{click, frame_points, pan, rotate_about, select_box, zoom_about, zoom_about_point};
     use crate::{
-        CameraError, Exponent, Fixed, MAX_EXPONENT_QUANTA, MIN_EXPONENT_QUANTA, Orientation,
+        CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, MAX_EXPONENT_QUANTA,
+        MIN_EXPONENT_QUANTA, Orientation, PROJECT_PIXEL_TOLERANCE_PIXELS,
         PROJECT_READOUT_LIMIT_PIXELS, Screen, Turn, View, project,
     };
 
@@ -398,6 +435,42 @@ mod tests {
             .ok_or(CameraError::ScreenCoordinateOutOfRange)?;
         assert!((projected[0] - anchor[0]).abs() <= PIXEL_TOLERANCE);
         assert!((projected[1] - anchor[1]).abs() <= PIXEL_TOLERANCE);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_target_zoom_survives_a_deep_centre_rotation_round_trip() -> Result<(), CameraError> {
+        let screen = Screen::new(960, 540)?;
+        let anchor = [240.0, 135.0];
+        let deep_quanta = 54 * EXPONENT_QUANTA_PER_OCTAVE;
+        let mut camera = view();
+        let target = click(&camera, screen, anchor)?;
+        zoom_about_point(&mut camera, screen, &target, deep_quanta)?;
+        let started =
+            project(&camera, screen, &target)?.ok_or(CameraError::ScreenCoordinateOutOfRange)?;
+
+        let mut angles = [[Turn::ZERO; 5]; 5];
+        angles[0][1] = Turn::from_radians(0.3)?;
+        let rotation = Orientation::new(angles)?;
+        rotate_about(&mut camera, screen, [0.0; 2], &rotation)?;
+        zoom_about_point(
+            &mut camera,
+            screen,
+            &target,
+            MIN_EXPONENT_QUANTA - deep_quanta,
+        )?;
+        rotate_about(&mut camera, screen, [0.0; 2], &rotation.inverse())?;
+        zoom_about_point(
+            &mut camera,
+            screen,
+            &target,
+            deep_quanta - MIN_EXPONENT_QUANTA,
+        )?;
+
+        let returned =
+            project(&camera, screen, &target)?.ok_or(CameraError::ScreenCoordinateOutOfRange)?;
+        let residual = (started[0] - returned[0]).hypot(started[1] - returned[1]);
+        assert!(residual <= PROJECT_PIXEL_TOLERANCE_PIXELS);
         Ok(())
     }
 

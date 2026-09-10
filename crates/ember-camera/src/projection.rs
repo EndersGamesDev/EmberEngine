@@ -1,6 +1,10 @@
-use crate::basis::turn_sin_cos;
+use crate::basis::radian_sin_cos;
 use crate::fixed::solve_two_axis_gram;
-use crate::{CameraError, Fixed, Observer, Screen, Turn, View, rebuild_basis, scale_for};
+use crate::types::ObserverProjection;
+use crate::{
+    CameraError, Fixed, Observer, Screen, TWO_STAGE_FRAME_PLANES, TwoStageProjection, View,
+    rebuild_basis, scale_for,
+};
 
 /// Binary64 encoding of the nominal symmetric projection range.
 const PROJECT_RANGE_BITS: u64 = 0x41e0_0000_0000_0000;
@@ -38,6 +42,47 @@ pub const PROJECT_READOUT_LIMIT_PIXELS: f64 =
 /// Denominator magnitude treated as a perspective ray parallel to the base plane.
 const PERSPECTIVE_RAY_EPSILON: f64 = 1.0e-12;
 
+/// Absolute pixel tolerance for a presentation projection followed by its inverse.
+///
+/// Both operations use the same documented binary64 transform. One billionth of a pixel covers
+/// the final multiply, divide, and ray-intersection rounding at ordinary render extents.
+pub const PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS: f64 = 1.0e-9;
+
+const fn multiply_then_add(left: f64, right: f64, addend: f64) -> f64 {
+    // Exact navigation ends before observer projection. Its named binary64 tolerance includes
+    // these two core operations, so fused evaluation is not part of the boundary contract.
+    left * right + addend
+}
+
+/// Projects a flat base-plane point through the observer into centred render-grid pixels.
+///
+/// For the simple observer, the input pixel is first scaled to the four-unit base plane and
+/// translation is added. The documented forward rotation is `R = P(pitch) * Y(yaw)`. If
+/// `(x, y, z) = R * ([4 * px / width, 4 * py / width, 0] + translation)`, the perspective result
+/// is `width / 4 * [d * x / (d - z), d * y / (d - z)]`. The complete two-stage observer applies
+/// its five-dimensional rotation, translation, five-to-four divide, and the same final transform.
+///
+/// `None` means the observer is invalid, has fewer than three dimensions, the input is non-finite,
+/// or the point lies on or behind a perspective plane.
+#[must_use]
+pub fn project_perspective<const N: usize>(
+    observer: &Observer<N>,
+    screen: Screen,
+    base_point_px: [f64; 2],
+) -> Option<[f64; 2]> {
+    if N < 3 || !base_point_px.iter().all(|component| component.is_finite()) {
+        return None;
+    }
+    match observer.projection {
+        ObserverProjection::Simple => project_simple_perspective(observer, screen, base_point_px),
+        ObserverProjection::TwoStage => {
+            let projection = observer.two_stage?;
+            let forward = two_stage_forward_homography(&projection, screen)?;
+            map_projective(forward, base_point_px)
+        }
+    }
+}
+
 /// Projects an N-dimensional point into centred render-grid pixels.
 ///
 /// The function performs N exact big subtractions first. Rebuilt binary64 basis bits then enter
@@ -72,11 +117,13 @@ pub fn project<const N: usize, const LIMBS: usize>(
 /// Returns the current centre's render-grid displacement from a reference centre.
 ///
 /// This per-frame renderer quantity performs N exact subtractions and a fixed-point Gram solve,
-/// then rounds only each final rational pixel quotient to binary64.
+/// then rounds only each final rational pixel quotient to binary64. Unlike a pointer coordinate,
+/// the displacement from a stale reference may span more than the complete screen-input range at
+/// deep zoom; only a non-finite final readout is refused.
 ///
 /// # Errors
 ///
-/// Returns a typed refusal for invalid geometry, an out-of-range result, or checked arithmetic
+/// Returns a typed refusal for invalid geometry, a non-finite result, or checked arithmetic
 /// failure.
 pub fn reference_displacement<const N: usize, const LIMBS: usize>(
     view: &View<N, LIMBS>,
@@ -88,10 +135,7 @@ pub fn reference_displacement<const N: usize, const LIMBS: usize>(
         *output = centre.sub(reference)?;
     }
     let projected = project_delta(view, screen, &delta)?;
-    if projected
-        .iter()
-        .all(|component| component.is_finite() && component.abs() <= PROJECT_READOUT_LIMIT_PIXELS)
-    {
+    if projected.iter().all(|component| component.is_finite()) {
         Ok(projected)
     } else {
         Err(CameraError::ScreenCoordinateOutOfRange)
@@ -114,38 +158,56 @@ pub fn invert_perspective<const N: usize>(
     screen: Screen,
     screen_px: [f64; 2],
 ) -> Option<[f64; 2]> {
-    if N < 3
-        || !observer.yaw.is_finite()
-        || !observer.pitch.is_finite()
-        || !observer.perspective.is_finite()
-        || observer.perspective <= 0.0
-        || !observer
-            .translation
-            .iter()
-            .all(|component| component.is_finite())
-        || !screen_px.iter().all(|component| component.is_finite())
-    {
+    if N < 3 || !screen_px.iter().all(|component| component.is_finite()) {
         return None;
     }
+    match observer.projection {
+        ObserverProjection::Simple => invert_simple_perspective(observer, screen, screen_px),
+        ObserverProjection::TwoStage => {
+            let projection = observer.two_stage?;
+            invert_two_stage_perspective(&projection, screen, screen_px)
+        }
+    }
+}
+
+fn invert_simple_perspective<const N: usize>(
+    observer: &Observer<N>,
+    screen: Screen,
+    screen_px: [f64; 2],
+) -> Option<[f64; 2]> {
     let units_per_pixel = 4.0 / f64::from(screen.width());
     let horizontal = screen_px[0] * units_per_pixel;
     let vertical = screen_px[1] * units_per_pixel;
-    let (yaw_sine, yaw_cosine) = turn_sin_cos(Turn::from_radians(observer.yaw).ok()?);
-    let (pitch_sine, pitch_cosine) = turn_sin_cos(Turn::from_radians(observer.pitch).ok()?);
-    let yaw_horizontal = yaw_cosine * horizontal - yaw_sine * observer.perspective;
-    let yaw_depth = -yaw_sine * horizontal - yaw_cosine * observer.perspective;
-    let pitched_vertical = pitch_cosine * vertical - pitch_sine * yaw_depth;
-    let pitched_depth = pitch_sine * vertical + pitch_cosine * yaw_depth;
-    if !pitched_depth.is_finite() || pitched_depth >= -PERSPECTIVE_RAY_EPSILON {
+    let (yaw_sine, yaw_cosine) = radian_sin_cos(observer.yaw);
+    let (pitch_sine, pitch_cosine) = radian_sin_cos(observer.pitch);
+    let pole = inverse_observer_rotation(
+        [0.0, 0.0, observer.perspective],
+        yaw_sine,
+        yaw_cosine,
+        pitch_sine,
+        pitch_cosine,
+    );
+    let origin = [
+        pole[0] - observer.translation[0],
+        pole[1] - observer.translation[1],
+        pole[2] - observer.translation[2],
+    ];
+    let ray = inverse_observer_rotation(
+        [horizontal, vertical, -observer.perspective],
+        yaw_sine,
+        yaw_cosine,
+        pitch_sine,
+        pitch_cosine,
+    );
+    if !ray[2].is_finite() || ray[2].abs() <= PERSPECTIVE_RAY_EPSILON {
         return None;
     }
-    let origin_depth = observer.translation[2] + observer.perspective;
-    let distance = -origin_depth / pitched_depth;
+    let distance = -origin[2] / ray[2];
     if !distance.is_finite() || distance < 0.0 {
         return None;
     }
-    let base_horizontal = observer.translation[0] + distance * yaw_horizontal;
-    let base_vertical = observer.translation[1] + distance * pitched_vertical;
+    let base_horizontal = multiply_then_add(distance, ray[0], origin[0]);
+    let base_vertical = multiply_then_add(distance, ray[1], origin[1]);
     let pixels_per_unit = f64::from(screen.width()) / 4.0;
     let result = [
         base_horizontal * pixels_per_unit,
@@ -154,6 +216,266 @@ pub fn invert_perspective<const N: usize>(
     result
         .iter()
         .all(|component| component.is_finite())
+        .then_some(result)
+}
+
+fn project_simple_perspective<const N: usize>(
+    observer: &Observer<N>,
+    screen: Screen,
+    base_point_px: [f64; 2],
+) -> Option<[f64; 2]> {
+    let chart_scale = 4.0 / f64::from(screen.width());
+    let translated = [
+        (base_point_px[0] * chart_scale) + observer.translation[0],
+        (base_point_px[1] * chart_scale) + observer.translation[1],
+        observer.translation[2],
+    ];
+    let (yaw_sine, yaw_cosine) = radian_sin_cos(observer.yaw);
+    let (pitch_sine, pitch_cosine) = radian_sin_cos(observer.pitch);
+    let yawed_horizontal = multiply_then_add(yaw_cosine, translated[0], yaw_sine * translated[2]);
+    let yawed_depth = multiply_then_add(-yaw_sine, translated[0], yaw_cosine * translated[2]);
+    let viewed_vertical = multiply_then_add(pitch_cosine, translated[1], -pitch_sine * yawed_depth);
+    let viewed_depth = multiply_then_add(pitch_sine, translated[1], pitch_cosine * yawed_depth);
+    let denominator = observer.perspective - viewed_depth;
+    if !denominator.is_finite() || denominator <= PERSPECTIVE_RAY_EPSILON {
+        return None;
+    }
+    let pixel_scale = f64::from(screen.width()) * 0.25;
+    let perspective_scale = (pixel_scale * observer.perspective) / denominator;
+    let result = [
+        perspective_scale * yawed_horizontal,
+        perspective_scale * viewed_vertical,
+    ];
+    result
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(result)
+}
+
+fn inverse_observer_rotation(
+    vector: [f64; 3],
+    yaw_sine: f64,
+    yaw_cosine: f64,
+    pitch_sine: f64,
+    pitch_cosine: f64,
+) -> [f64; 3] {
+    let vertical = multiply_then_add(pitch_cosine, vector[1], pitch_sine * vector[2]);
+    let yaw_depth = multiply_then_add(-pitch_sine, vector[1], pitch_cosine * vector[2]);
+    [
+        multiply_then_add(yaw_cosine, vector[0], -yaw_sine * yaw_depth),
+        vertical,
+        multiply_then_add(yaw_sine, vector[0], yaw_cosine * yaw_depth),
+    ]
+}
+
+fn invert_two_stage_perspective(
+    projection: &TwoStageProjection,
+    screen: Screen,
+    screen_px: [f64; 2],
+) -> Option<[f64; 2]> {
+    let forward = two_stage_forward_homography(projection, screen)?;
+    map_projective(invert_projective(forward)?, screen_px)
+}
+
+fn two_stage_forward_homography(
+    projection: &TwoStageProjection,
+    screen: Screen,
+) -> Option<[f64; 9]> {
+    let camera = presentation_matrix(projection.frame_angles);
+    let chart_scale = 4.0 / f64::from(screen.width());
+    let transformed_basis: [[f64; 5]; 2] = projection.image_plane.map(|basis| {
+        core::array::from_fn(|row| {
+            camera[row]
+                .into_iter()
+                .zip(basis)
+                .fold(0.0, |sum, (coefficient, value)| {
+                    multiply_then_add(coefficient, value, sum)
+                })
+        })
+    });
+    let q: [[f64; 3]; 5] = core::array::from_fn(|axis| {
+        [
+            chart_scale * transformed_basis[0][axis],
+            chart_scale * transformed_basis[1][axis],
+            projection.translation[axis],
+        ]
+    });
+    let distance_five = projection.distance_five;
+    let distance_four = projection.distance_four;
+    let perspective_product = distance_four * distance_five;
+    let numerator = [
+        scale_homogeneous_row(q[0], perspective_product),
+        scale_homogeneous_row(q[1], perspective_product),
+        scale_homogeneous_row(q[2], perspective_product),
+    ];
+    let denominator_four = add_homogeneous_rows(
+        add_homogeneous_rows(
+            [0.0, 0.0, perspective_product],
+            scale_homogeneous_row(q[4], -distance_four),
+        ),
+        scale_homogeneous_row(q[3], -distance_five),
+    );
+    let (yaw_sine, yaw_cosine) = radian_sin_cos(projection.yaw);
+    let (pitch_sine, pitch_cosine) = radian_sin_cos(projection.pitch);
+    let yawed_x = add_homogeneous_rows(
+        scale_homogeneous_row(numerator[0], yaw_cosine),
+        scale_homogeneous_row(numerator[2], yaw_sine),
+    );
+    let yawed_z = add_homogeneous_rows(
+        scale_homogeneous_row(numerator[0], -yaw_sine),
+        scale_homogeneous_row(numerator[2], yaw_cosine),
+    );
+    let view_y = add_homogeneous_rows(
+        scale_homogeneous_row(numerator[1], pitch_cosine),
+        scale_homogeneous_row(yawed_z, -pitch_sine),
+    );
+    let clip_w = add_homogeneous_rows(
+        add_homogeneous_rows(
+            scale_homogeneous_row(denominator_four, distance_four),
+            scale_homogeneous_row(numerator[1], -pitch_sine),
+        ),
+        scale_homogeneous_row(yawed_z, -pitch_cosine),
+    );
+    let viewport_scale = f64::from(screen.width()) * distance_four * 0.25;
+    let x = scale_homogeneous_row(yawed_x, viewport_scale);
+    let y = scale_homogeneous_row(view_y, viewport_scale);
+    let normalizer = clip_w[2];
+    if !normalizer.is_finite() || normalizer.abs() < PERSPECTIVE_RAY_EPSILON {
+        return None;
+    }
+    let forward = [
+        x[0] / normalizer,
+        x[1] / normalizer,
+        x[2] / normalizer,
+        y[0] / normalizer,
+        y[1] / normalizer,
+        y[2] / normalizer,
+        clip_w[0] / normalizer,
+        clip_w[1] / normalizer,
+        1.0,
+    ];
+    forward
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(forward)
+}
+
+fn presentation_matrix(angles: [f64; 10]) -> [[f64; 5]; 5] {
+    let columns: [[f64; 5]; 5] = core::array::from_fn(|column| {
+        let mut value = [0.0; 5];
+        value[column] = 1.0;
+        for (factor, (first, second)) in TWO_STAGE_FRAME_PLANES.into_iter().enumerate().rev() {
+            rotate_pair(&mut value, first, second, angles[factor]);
+        }
+        value
+    });
+    core::array::from_fn(|row| core::array::from_fn(|column| columns[column][row]))
+}
+
+fn rotate_pair(value: &mut [f64; 5], first: usize, second: usize, angle: f64) {
+    let (sine, cosine) = radian_sin_cos(angle);
+    let first_value = multiply_then_add(cosine, value[first], -sine * value[second]);
+    let second_value = multiply_then_add(sine, value[first], cosine * value[second]);
+    value[first] = first_value;
+    value[second] = second_value;
+}
+
+const fn scale_homogeneous_row(row: [f64; 3], scale: f64) -> [f64; 3] {
+    [row[0] * scale, row[1] * scale, row[2] * scale]
+}
+
+const fn add_homogeneous_rows(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+fn invert_projective(matrix: [f64; 9]) -> Option<[f64; 9]> {
+    let mut augmented = [[0.0; 6]; 3];
+    let mut row = 0;
+    while row < 3 {
+        let mut column = 0;
+        while column < 3 {
+            augmented[row][column] = matrix[row * 3 + column];
+            column += 1;
+        }
+        augmented[row][row + 3] = 1.0;
+        row += 1;
+    }
+    let mut pivot_column = 0;
+    while pivot_column < 3 {
+        let mut pivot_row = pivot_column;
+        let mut pivot_magnitude = augmented[pivot_row][pivot_column].abs();
+        let mut candidate = pivot_column + 1;
+        while candidate < 3 {
+            let magnitude = augmented[candidate][pivot_column].abs();
+            if magnitude > pivot_magnitude {
+                pivot_row = candidate;
+                pivot_magnitude = magnitude;
+            }
+            candidate += 1;
+        }
+        if !pivot_magnitude.is_finite() || pivot_magnitude < PERSPECTIVE_RAY_EPSILON {
+            return None;
+        }
+        augmented.swap(pivot_column, pivot_row);
+        let pivot = augmented[pivot_column][pivot_column];
+        let mut column = 0;
+        while column < 6 {
+            augmented[pivot_column][column] /= pivot;
+            column += 1;
+        }
+        row = 0;
+        while row < 3 {
+            if row != pivot_column {
+                let factor = augmented[row][pivot_column];
+                column = 0;
+                while column < 6 {
+                    augmented[row][column] = multiply_then_add(
+                        -factor,
+                        augmented[pivot_column][column],
+                        augmented[row][column],
+                    );
+                    column += 1;
+                }
+            }
+            row += 1;
+        }
+        pivot_column += 1;
+    }
+    let inverse = core::array::from_fn(|index| augmented[index / 3][index % 3 + 3]);
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
+}
+
+fn map_projective(matrix: [f64; 9], point: [f64; 2]) -> Option<[f64; 2]> {
+    let homogeneous = [
+        multiply_then_add(
+            matrix[0],
+            point[0],
+            multiply_then_add(matrix[1], point[1], matrix[2]),
+        ),
+        multiply_then_add(
+            matrix[3],
+            point[0],
+            multiply_then_add(matrix[4], point[1], matrix[5]),
+        ),
+        multiply_then_add(
+            matrix[6],
+            point[0],
+            multiply_then_add(matrix[7], point[1], matrix[8]),
+        ),
+    ];
+    if !homogeneous[2].is_finite() || homogeneous[2] <= PERSPECTIVE_RAY_EPSILON {
+        return None;
+    }
+    let result = [
+        homogeneous[0] / homogeneous[2],
+        homogeneous[1] / homogeneous[2],
+    ];
+    result
+        .iter()
+        .all(|value| value.is_finite())
         .then_some(result)
 }
 
@@ -181,12 +503,14 @@ fn project_delta<const N: usize, const LIMBS: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        PROJECT_PIXEL_TOLERANCE_PIXELS, PROJECT_RANGE_PIXELS, PROJECT_READOUT_LIMIT_PIXELS,
-        PROJECT_READOUT_ULPS, invert_perspective, project, reference_displacement,
+        PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS, PROJECT_PIXEL_TOLERANCE_PIXELS,
+        PROJECT_RANGE_PIXELS, PROJECT_READOUT_LIMIT_PIXELS, PROJECT_READOUT_ULPS,
+        invert_perspective, project, project_perspective, reference_displacement,
     };
     use crate::{
         CameraError, EXPONENT_QUANTA_PER_OCTAVE, Exponent, Fixed, MAX_SCREEN_COORDINATE_PIXELS,
-        Observer, Orientation, Screen, Turn, View, click, pan, rebuild_basis, scale_for,
+        Observer, Orientation, Screen, Turn, TwoStageProjection, View, click, pan, rebuild_basis,
+        scale_for,
     };
 
     /// Width exercised by projection invariants because it is the first consumer's fixed budget.
@@ -353,6 +677,23 @@ mod tests {
     }
 
     #[test]
+    fn reference_displacement_is_not_a_pointer_coordinate() -> Result<(), CameraError> {
+        let screen = Screen::new(960, 540)?;
+        let reference = [Fixed::<8>::ZERO; 5];
+        let mut centre = reference;
+        centre[0] = Fixed::from_i64(1)?;
+        let view = View::new(
+            centre,
+            Exponent::new(24 * EXPONENT_QUANTA_PER_OCTAVE)?,
+            Orientation::IDENTITY,
+        );
+        let displacement = reference_displacement(&view, &reference, screen)?;
+        assert_eq!(displacement, [4_026_531_840.0, 0.0]);
+        assert!(displacement[0] > PROJECT_READOUT_LIMIT_PIXELS);
+        Ok(())
+    }
+
+    #[test]
     fn projection_refuses_points_outside_the_named_screen_range() -> Result<(), CameraError> {
         let screen = Screen::new(4, 4)?;
         let view = View::new([Fixed::<8>::ZERO; 5], Exponent::ZERO, Orientation::IDENTITY);
@@ -376,6 +717,72 @@ mod tests {
             invert_perspective(&observer, screen, input).ok_or(CameraError::InvalidPerspective)?;
         assert!((output[0] - input[0]).abs() <= f64::EPSILON * input[0].abs());
         assert!((output[1] - input[1]).abs() <= f64::EPSILON * input[1].abs());
+        Ok(())
+    }
+
+    #[test]
+    fn model_translation_is_inverted_before_the_base_plane_intersection() -> Result<(), CameraError>
+    {
+        let screen = Screen::new(1_024, 512)?;
+        let observer = Observer::new(0.0, 0.0, [0.2, 0.0, 0.0, 0.0], 8.0)?;
+        let output = invert_perspective(&observer, screen, [137.0, 0.0])
+            .ok_or(CameraError::InvalidPerspective)?;
+        assert!((output[0] - 85.8).abs() <= 2.0 * f64::EPSILON * 85.8);
+        assert_eq!(output[1], 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn simple_observer_round_trips_its_documented_transform() -> Result<(), CameraError> {
+        let screen = Screen::new(1_024, 576)?;
+        for observer in [
+            Observer::new(0.17, -0.12, [0.2, -0.1, 0.3, 0.0], 7.0)?,
+            Observer::new(-0.31, 0.23, [-0.15, 0.09, -0.2, 0.0], 11.0)?,
+        ] {
+            for base_point in [[0.0; 2], [91.5, -37.25], [-311.0, 123.0]] {
+                let screen_point = project_perspective(&observer, screen, base_point)
+                    .ok_or(CameraError::InvalidPerspective)?;
+                let restored = invert_perspective(&observer, screen, screen_point)
+                    .ok_or(CameraError::InvalidPerspective)?;
+                assert!(
+                    (restored[0] - base_point[0]).abs() <= PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS
+                );
+                assert!(
+                    (restored[1] - base_point[1]).abs() <= PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn simple_observer_rejects_unmodelled_higher_translation() {
+        assert_eq!(
+            Observer::new(0.0, 0.0, [0.0, 0.0, 0.0, 0.1], 8.0),
+            Err(CameraError::InvalidPerspective)
+        );
+    }
+
+    #[test]
+    fn two_stage_observer_inverts_its_complete_projection() -> Result<(), CameraError> {
+        let screen = Screen::new(1_024, 576)?;
+        let projection = TwoStageProjection {
+            image_plane: [[0.0, 0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0, 0.0]],
+            frame_angles: [0.13, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.21, 0.0],
+            translation: [0.2, -0.1, 0.3, -0.2, 0.15],
+            yaw: 0.17,
+            pitch: -0.12,
+            distance_five: 7.0,
+            distance_four: 8.0,
+        };
+        let observer = Observer::two_stage(projection)?;
+        let plane_pixel = [91.5, -37.25];
+        let screen_pixel = project_perspective(&observer, screen, plane_pixel)
+            .ok_or(CameraError::InvalidPerspective)?;
+        let restored = invert_perspective(&observer, screen, screen_pixel)
+            .ok_or(CameraError::InvalidPerspective)?;
+        assert!((restored[0] - plane_pixel[0]).abs() <= PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS);
+        assert!((restored[1] - plane_pixel[1]).abs() <= PERSPECTIVE_ROUND_TRIP_TOLERANCE_PIXELS);
         Ok(())
     }
 }
