@@ -25,8 +25,8 @@ jobs:
     name: validate tag
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
-      checks: read
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       series: ${{ steps.tag.outputs.series }}
@@ -125,36 +125,50 @@ jobs:
             echo "release: origin/main does not exist yet; the first promotion may create it"
           fi
           echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
-      - name: require successful ci checks at the tag commit
+      - name: require a successful ci workflow run at the tag commit
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TARGET_SHA: ${{ steps.provenance.outputs.sha }}
         run: |
           set -euo pipefail
-          response="$RUNNER_TEMP/check-runs.json"
+          runs="$RUNNER_TEMP/ci-runs.json"
           gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "/repos/$REPOSITORY/commits/$TARGET_SHA/check-runs?filter=latest&per_page=100" > "$response"
-          python3 - "$response" <<'PY'
+            "/repos/$REPOSITORY/actions/runs?head_sha=$TARGET_SHA&status=completed&per_page=100" > "$runs"
+          run_id="$(python3 - "$runs" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          candidates = [
+              run for run in payload.get("workflow_runs", [])
+              if run.get("path") == ".github/workflows/ci.yml" and run.get("conclusion") == "success"
+          ]
+          if not candidates:
+              raise SystemExit("release: no successful completed .github/workflows/ci.yml run exists at the tag commit")
+          newest = max(candidates, key=lambda run: (run.get("run_started_at") or run.get("created_at") or "", run.get("id") or 0))
+          print(newest["id"])
+          PY
+          )"
+          jobs="$RUNNER_TEMP/ci-jobs.json"
+          gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/$REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" > "$jobs"
+          python3 - "$jobs" "$run_id" <<'PY'
           import json
           import pathlib
           import sys
 
           required = {"cores + servers", "deploy scripts", "workspace"}
           payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-          checks = {run.get("name"): run for run in payload.get("check_runs", []) if run.get("name") in required}
-          failed = []
-          for name in sorted(required):
-              run = checks.get(name)
-              if run is None:
-                  failed.append("%s is missing" % name)
-              elif run.get("app", {}).get("slug") != "github-actions":
-                  failed.append("%s was not produced by GitHub Actions" % name)
-              elif run.get("status") != "completed" or run.get("conclusion") != "success":
-                  failed.append("%s is %s/%s" % (name, run.get("status"), run.get("conclusion")))
+          jobs = payload.get("jobs", [])
+          names = [job.get("name") for job in jobs]
+          if len(jobs) != len(required) or set(names) != required:
+              raise SystemExit("release: ci.yml run %s jobs are %r, expected exactly %r" % (sys.argv[2], names, sorted(required)))
+          failed = [job.get("name") for job in jobs if job.get("conclusion") != "success"]
           if failed:
-              raise SystemExit("release: ci checks at the tag commit are not green: " + "; ".join(failed))
-          print("release: all three ci check runs concluded success")
+              raise SystemExit("release: ci.yml run %s has unsuccessful required jobs: %s" % (sys.argv[2], ", ".join(sorted(failed))))
+          print("release: ci.yml run %s has exactly three successful required jobs" % sys.argv[2])
           PY
       - name: require the series manifest version
         env:
