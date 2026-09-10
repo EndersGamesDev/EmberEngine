@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Fetch one host.sh-managed machine's current entry and merge it into the
-# upstream address book from a workstation that already has push rights.
+# Fetch one host.sh-managed machine's current entry and publish it to an
+# explicit address-book mirror from a workstation that has that mirror's key.
 #
-#   bash deploy/republish-host.sh <ssh alias> [--repo <url> --branch <branch>]
+#   bash deploy/republish-host.sh <ssh alias> --repo <url> --branch <branch>
 #
 # The host only needs to serve ~/ember-host/run/host.json over ssh. All Git
 # reads, commits and pushes happen here. Repeating the command with an
@@ -16,8 +16,8 @@ REMOTE="${1:-}"
     || { echo "republish-host: '$REMOTE' is not an ssh alias" >&2; exit 2; }
 shift
 
-REPO="git@github.com:EndersGamesDev/EmberEngine.git"
-BRANCH="gh-pages"
+REPO=""
+BRANCH=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:-}"; shift 2 ;;
@@ -25,8 +25,8 @@ while [ $# -gt 0 ]; do
         *) echo "republish-host: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
-[ -n "$REPO" ] || { echo "republish-host: --repo needs a value" >&2; exit 2; }
-[ -n "$BRANCH" ] || { echo "republish-host: --branch needs a value" >&2; exit 2; }
+[ -n "$REPO" ] || { echo "republish-host: an explicit --repo is required" >&2; exit 2; }
+[ -n "$BRANCH" ] || { echo "republish-host: an explicit --branch is required" >&2; exit 2; }
 
 # Windows puts an App Execution Alias stub named python3 on PATH: it prints
 # "Python was not found" and runs nothing, so the first name `command -v`
@@ -47,7 +47,7 @@ WORK="$(mktemp -d -t ember-republish-XXXXXX)"
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 ENTRY="$WORK/host.json"
-BOOK="$WORK/server.json"
+MIRROR="$WORK/published-host.json"
 
 echo "== fetching host.json from $REMOTE =="
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE" \
@@ -102,17 +102,15 @@ BY="${FIELDS[3]}"
 git init -q "$WORK/book"
 git -C "$WORK/book" remote add origin "$REPO"
 if git -C "$WORK/book" fetch -q --depth 1 origin "$BRANCH" 2>/dev/null \
-        && git -C "$WORK/book" show FETCH_HEAD:server.json > "$BOOK" 2>/dev/null \
-        && "$PY" - "$ENTRY" "$BOOK" <<'PY'
+        && git -C "$WORK/book" show FETCH_HEAD:host.json > "$MIRROR" 2>/dev/null \
+        && "$PY" - "$ENTRY" "$MIRROR" <<'PY'
 import json, sys
 
 with open(sys.argv[1], encoding="utf-8") as fh:
     source = json.load(fh)
 with open(sys.argv[2], encoding="utf-8") as fh:
-    book = json.load(fh)
-current = next((h for h in book.get("hosts", [])
-                if isinstance(h, dict) and h.get("name") == source.get("name")), None)
-if current is None:
+    current = json.load(fh)
+if not isinstance(current, dict) or current.get("name") != source.get("name"):
     raise SystemExit(1)
 keys = [key for key in source if key != "updated"]
 raise SystemExit(0 if all(current.get(key) == source.get(key) for key in keys) else 1)
@@ -133,4 +131,4 @@ done
 
 echo "== merging $NAME into $REPO ($BRANCH) =="
 bash "$SELF_DIR/publish-host.sh" --repo "$REPO" --branch "$BRANCH" \
-    --file server.json --name "$NAME" "${ARGS[@]}"
+    --file host.json --name "$NAME" "${ARGS[@]}"
