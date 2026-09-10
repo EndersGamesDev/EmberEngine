@@ -17,7 +17,7 @@
 #      answering, which republishes the new hostname.
 #   2. NEW COMMITS. When origin/main moves, the running servers are stale.
 #      This redeploys them. Pages deployment is deliberately separate:
-#      pages.yml publishes the release asset when main moves.
+#      pages.yml publishes the release asset after the release workflow succeeds.
 #
 # Deliberately probes the PUBLISHED addresses rather than the servers
 # directly: that is the thing a player actually depends on, and it fails when

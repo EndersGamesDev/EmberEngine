@@ -191,7 +191,7 @@ The on-host units from `install-watchdog.sh` pass the name through `EMBER_HOST_N
 
 ## 11. Pages layout and release assembly
 
-`deploy/deploy-pages.sh` assembles the release site and gives each live catalog version its own directory and bundle: Arena v20 and v0, Fire Racer v2, Four Kings v1, what-is-this v1, and the Julibrot lab at `labs/julibrot/`. Before producing the archive, the build checks every version marked `live` in `web/games.json` and fails closed if that path has no assembled `index.html`, so adding a live catalog link also requires adding its page to the assembly. The release workflow uploads the archive as the tag's asset, and the `main`-triggered Pages workflow deploys those exact bytes.
+`deploy/deploy-pages.sh` assembles the release site and gives every catalog-selected live game or lab its own directory and bundle while retaining frozen historical releases from the read-only seed. Before producing the archive, the build checks every version marked `live` in `web/games.json` and fails closed if that path has no assembled `index.html`, so adding a live catalog link also requires adding its page to the assembly. The release workflow uploads the archive as the tag's asset, and its successful completion triggers the Pages workflow that deploys those exact bytes from the release at `main` HEAD.
 
 Catalog entries without a `kind` are hosted games; `kind: "lab"` means the entry has no host, protocol, or handover fields, opens its live relative path directly from the hub, and is excluded from host discovery and lobby listing.
 
