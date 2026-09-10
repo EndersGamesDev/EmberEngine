@@ -1,4 +1,4 @@
-// Scoped Arena-only Pages publisher. PREPARE ONLY unless --push is explicit.
+// Retained Arena v30 Pages preparation tool. Remote publication is retired.
 // Run after a clean source commit, its Arena build, and server-first proto23 deployment.
 // The client protocol/address transition is atomic with the eight allowed files.
 // Required build attestation: --build-commit=<full SHA> --wasm-sha256=<tested SHA256>.
@@ -16,8 +16,8 @@ const scope = require('./release-scope.cjs');
 const root = process.cwd(), started = Date.now();
 const args = process.argv.slice(2);
 const option = name => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
-const push = args.includes('--push');
-assert(args.every(arg => arg === '--push' || /^--(?:build-commit|wasm-sha256)=/.test(arg)), 'Unknown argument');
+assert(!args.includes('--push'), 'Direct Pages publication is retired; release tags publish through Actions');
+assert(args.every(arg => /^--(?:build-commit|wasm-sha256)=/.test(arg)), 'Unknown argument');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const git = (directory, ...argv) => execFileSync('git', ['-c', 'core.autocrlf=false', '-C', directory, ...argv],
   { windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
@@ -98,16 +98,11 @@ async function main() {
   const report = { prepared: true, pushed: false, sourceCommit: commit, base, tree, worktree, version,
     wasmSha256: sha(wasm), settingsSha256: settingsHash, liveWelcome: live, selectedHost: selected.host.name, changes,
     frozen, buildAttestation: 'Operator-supplied clean-build revision and tested WASM hash; no compiler is run by this publisher.' };
-  if (push) {
-    git(worktree, 'commit', '-m', `Publish Killshot v30 ${version.version} (${version.commit}); preserve peer releases`);
-    git(worktree, 'push', 'origin', 'HEAD:gh-pages');
-    report.pushed = true; report.pagesCommit = text(worktree, 'rev-parse', 'HEAD');
-  }
   report.elapsedSeconds = (Date.now() - started) / 1000;
   const output = path.join(root, 'target', 'killshot-publish'); fs.mkdirSync(output, { recursive: true });
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
-  if (!push) console.log('PREPARED ONLY. Review the staged diff in the reported worktree; rerun with --push to freshly revalidate and publish.');
+  console.log('PREPARED ONLY. Review the staged diff in the reported worktree; release publication belongs to the tag workflow.');
   console.log('Temporary worktree retained for inspection; no recursive cleanup is performed.');
 }
 main().catch(error => { console.error(error); if (worktree) console.error(`Retained worktree: ${worktree}`); process.exitCode = 1; });

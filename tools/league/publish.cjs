@@ -1,4 +1,4 @@
-// Publish one League version and its catalog entry; every other Pages path is frozen.
+// Prepare one historical League Pages version; every peer path remains frozen.
 // Requires clean committed source, tested WASM bytes and an already proven public host.
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
@@ -144,7 +144,8 @@ async function main(){
   const root=process.cwd(),started=Date.now(),args=process.argv.slice(2);
   const arg=name=>args.find(value=>value.startsWith(`--${name}=`))?.slice(name.length+3);
   const names=args.map(value=>value.split('=')[0]);assert.equal(new Set(names).size,names.length,'Duplicate argument');
-  assert(args.every(value=>value==='--push'||/^--(?:build-commit|server-commit|wasm-sha256|game-version)=/.test(value)),'Unknown argument');
+  assert(!args.includes('--push'),'Direct Pages publication is retired; release tags publish through Actions');
+  assert(args.every(value=>/^--(?:build-commit|server-commit|wasm-sha256|game-version)=/.test(value)),'Unknown argument');
   const selected=gameVersion(arg('game-version')),entry=`games/league/${selected}`;
   os.setPriority(0,os.constants.priority.PRIORITY_LOW);
   assert.equal(text(root,'status','--porcelain'),'','Source must be clean');
@@ -194,7 +195,6 @@ async function main(){
   assert.equal(hash(fs.readFileSync(safePath(root,'web/pkg/league.js'))),hash(files.get(`${entry}/pkg/league.js`)),'Generated JS changed while preparing');
   assert.equal(text(root,'ls-remote','origin','refs/heads/gh-pages').split(/\s+/)[0],base,'Concurrent Pages update: prepare again');
   const report={sourceCommit:commit,serverCommit,serverCompatibility,gameVersion:selected,entry,base,worktree,version,host:host.name,liveWelcome:live,...scope,files:[...files].map(([file,bytes])=>({file,sha256:hash(bytes)})),unchangedOutsideRelease:true,pushed:false};
-  if(args.includes('--push')){git(worktree,'commit','-m',`Publish UltimateLegue ${selected} ${commit.slice(0,8)}; preserve frozen versions and other games`);git(worktree,'push','origin','HEAD:gh-pages');report.pagesCommit=text(worktree,'rev-parse','HEAD');report.pushed=true;}
   report.elapsedSeconds=(Date.now()-started)/1000;
   fs.mkdirSync(path.join(root,'target/league-publish'),{recursive:true});fs.writeFileSync(path.join(root,'target/league-publish/results.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
 }

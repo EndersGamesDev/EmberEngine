@@ -1,4 +1,4 @@
-// Read-only CDN proof after publish-landing.cjs --push completes.
+// Read-only CDN proof for a historical successful landing-publication report.
 // Usage: node tools/league/prove-landing.cjs --source-commit=<full clean HEAD>
 // No browser, game socket, build, Git fetch or publication is performed.
 'use strict';

@@ -23,7 +23,7 @@ function fixture(t){
 }
 const baseArgs=['wss://league.example','r1700',stamp];
 test('legacy publisher CLI defaults and explicit protocol 2',()=>{
-  assert.deepEqual(parseArgs(baseArgs),{url:baseArgs[0],version:'r1700',commit:stamp,name:'dusky-osprey',protocol:1,prepare:false});
+  assert.throws(()=>parseArgs(baseArgs),/--prepare is required/);
   assert.equal(parseArgs([...baseArgs,'dusky-osprey','--prepare']).prepare,true);
   assert.equal(parseArgs([...baseArgs,'dusky-osprey-league-v3','--prepare','--protocol=2']).protocol,2);
   for(const args of [['--protocol=0'],['--protocol=-1'],['--protocol=65536'],['--protocol=2','--protocol=1'],['--prepare','--prepare'],['--unknown']])assert.throws(()=>parseArgs([...baseArgs,...args]));
