@@ -39,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mapfile -t tags < <(git for-each-ref --points-at=HEAD --sort=-creatordate --format='%(refname:strip=2)' 'refs/tags/*-*.*.*')
+          mapfile -t tags < <(git for-each-ref --points-at=HEAD --sort=-creatordate --format='%(refname:strip=2)' 'refs/tags/*-[0-9]*.[0-9]*.[0-9]*')
           if [ "${#tags[@]}" -eq 0 ]; then
             echo "pages: no release tag points at main HEAD" >&2
             exit 1

@@ -283,12 +283,15 @@ if checkout_refs != ["main"]:
 runs = "\n".join(step.get("run", "") for step in job.get("steps", []) if isinstance(step.get("run"), str))
 if "isDraft" not in runs or "publishedAt" not in runs or "ember-pages.tar.gz" not in runs:
     raise SystemExit(1)
+if "refs/tags/*-[0-9]*.[0-9]*.[0-9]*" not in runs:
+    raise SystemExit(1)
 PY
     else
         grep -Fq 'workflows: [release]' "$file" \
             && grep -Fq 'types: [completed]' "$file" \
             && grep -Fq 'ref: main' "$file" \
-            && grep -Fq 'publishedAt' "$file"
+            && grep -Fq 'publishedAt' "$file" \
+            && grep -Fq 'refs/tags/*-[0-9]*.[0-9]*.[0-9]*' "$file"
     fi
 }
 
