@@ -1,0 +1,293 @@
+# release: validate one signed series tag, build its Pages release archive,
+# publish that tag's GitHub release, then fast-forward main to the tag commit.
+# Every validation fails closed so a release name, source, CI evidence, version,
+# changelog and artifact cannot describe different commits.
+#
+# The SSH deploy key is main's only ruleset bypass actor. Adding its public half
+# as that actor and storing its private half in RELEASE_DEPLOY_KEY are owner-run
+# credential steps; repository code never contains or distributes the key.
+name: release
+
+on:
+  push:
+    tags:
+      - '*-*.*.*'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  validate:
+    name: validate tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      series: ${{ steps.tag.outputs.series }}
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.provenance.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: validate tag shape and series
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          pattern='^(.+)-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
+          if [[ ! "$TAG" =~ $pattern ]]; then
+            echo "release: tag '$TAG' does not have shape SERIES-MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          SERIES="${BASH_REMATCH[1]}"
+          VERSION="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[5]}"
+          if [ "$PATCH" != 0 ]; then
+            echo "release: patch grades are integration records and are not tagged" >&2
+            exit 1
+          fi
+          python3 - "$SERIES" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          series = sys.argv[1]
+          catalog = json.loads(pathlib.Path("web/games.json").read_text(encoding="utf-8"))
+          games = {game.get("id") for game in catalog.get("games", [])}
+          labs_root = pathlib.Path("web/labs")
+          labs = {path.name for path in labs_root.iterdir() if path.is_dir()}
+          if series != "ember" and series not in games and series not in labs:
+              raise SystemExit("release: series %r is not ember, a catalog game id, or a lab id" % series)
+          PY
+          {
+            echo "tag=$TAG"
+            echo "series=$SERIES"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+      - name: require an annotated tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != tag ]; then
+            echo "release: $TAG is not an annotated tag object" >&2
+            exit 1
+          fi
+      - name: verify the tag against committed release keys
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME
+          GNUPGHOME="$(mktemp -d "$RUNNER_TEMP/release-gnupg.XXXXXX")"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mapfile -t keys < <(find deploy/keys -maxdepth 1 -type f -name '*.asc' -print | sort)
+          if [ "${#keys[@]}" -eq 0 ]; then
+            echo "release: deploy/keys contains no armored public keys" >&2
+            exit 1
+          fi
+          gpg --batch --import "${keys[@]}"
+          git verify-tag "$TAG"
+      - name: verify develop provenance and fast-forward room
+        id: provenance
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TARGET_SHA="$(git rev-parse "$TAG^{commit}")"
+          git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
+          if ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/develop; then
+            echo "release: $TARGET_SHA is not an ancestor of origin/develop" >&2
+            exit 1
+          fi
+          if main_ref="$(git ls-remote --exit-code --heads origin refs/heads/main)"; then
+            [ -n "$main_ref" ] || { echo "release: origin/main lookup returned no ref" >&2; exit 1; }
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if ! git merge-base --is-ancestor refs/remotes/origin/main "$TARGET_SHA"; then
+              echo "release: origin/main cannot fast-forward to $TARGET_SHA" >&2
+              exit 1
+            fi
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "release: origin/main lookup failed with status $status" >&2
+              exit "$status"
+            fi
+            echo "release: origin/main does not exist yet; the first promotion may create it"
+          fi
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: require successful ci checks at the tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ steps.provenance.outputs.sha }}
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/check-runs.json"
+          gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/$REPOSITORY/commits/$TARGET_SHA/check-runs?filter=latest&per_page=100" > "$response"
+          python3 - "$response" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          required = {"cores + servers", "deploy scripts", "workspace"}
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          checks = {run.get("name"): run for run in payload.get("check_runs", []) if run.get("name") in required}
+          failed = []
+          for name in sorted(required):
+              run = checks.get(name)
+              if run is None:
+                  failed.append("%s is missing" % name)
+              elif run.get("app", {}).get("slug") != "github-actions":
+                  failed.append("%s was not produced by GitHub Actions" % name)
+              elif run.get("status") != "completed" or run.get("conclusion") != "success":
+                  failed.append("%s is %s/%s" % (name, run.get("status"), run.get("conclusion")))
+          if failed:
+              raise SystemExit("release: ci checks at the tag commit are not green: " + "; ".join(failed))
+          print("release: all three ci check runs concluded success")
+          PY
+      - name: require the series manifest version
+        env:
+          SERIES: ${{ steps.tag.outputs.series }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$SERIES" "$VERSION" <<'PY'
+          import pathlib
+          import sys
+          import tomllib
+
+          series, expected = sys.argv[1:]
+          if series == "ember":
+              manifest = pathlib.Path("Cargo.toml")
+              with manifest.open("rb") as stream:
+                  actual = tomllib.load(stream)["workspace"]["package"]["version"]
+          else:
+              candidates = [
+                  pathlib.Path("crates") / series / "Cargo.toml",
+                  pathlib.Path("crates/labs") / series / "Cargo.toml",
+                  pathlib.Path("crates/labs") / series / "app/Cargo.toml",
+              ]
+              manifests = [path for path in candidates if path.is_file()]
+              if len(manifests) != 1:
+                  raise SystemExit("release: series %r resolves to %d primary manifests" % (series, len(manifests)))
+              manifest = manifests[0]
+              with manifest.open("rb") as stream:
+                  actual = tomllib.load(stream)["package"]["version"]
+          if actual != expected:
+              raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
+          print("release: %s matches %s" % (manifest, expected))
+          PY
+      - name: require changelog consistency
+        run: bash deploy/tests/test-changelog.sh
+
+  build:
+    name: build release asset
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: install matching wasm-bindgen CLI
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          with pathlib.Path("Cargo.lock").open("rb") as stream:
+              lock = tomllib.load(stream)
+          versions = {package["version"] for package in lock["package"] if package["name"] == "wasm-bindgen"}
+          if len(versions) != 1:
+              raise SystemExit("release: Cargo.lock does not contain exactly one wasm-bindgen version")
+          print(versions.pop())
+          PY
+          )"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: build the series bundle and assembled hub
+        env:
+          EMBER_PAGES_ARCHIVE: ${{ runner.temp }}/release-asset/ember-pages.tar.gz
+          RELEASE_SERIES: ${{ needs.validate.outputs.series }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$EMBER_PAGES_ARCHIVE")"
+          echo "release: assembling $RELEASE_SERIES with the shared Pages build"
+          bash deploy/deploy-pages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages-release-${{ needs.validate.outputs.sha }}
+          path: ${{ runner.temp }}/release-asset/ember-pages.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: publish release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: pages-release-${{ needs.validate.outputs.sha }}
+          path: ${{ runner.temp }}/release-asset
+      - name: create or update this GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: bash deploy/github-releases.sh --apply --tag "$TAG"
+      - name: upload the Pages release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/release-asset/ember-pages.tar.gz" --clobber
+
+  promote:
+    name: fast-forward main
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: configure the release deploy key
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/release-ssh"
+          printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$RUNNER_TEMP/release-ssh/key"
+          chmod 600 "$RUNNER_TEMP/release-ssh/key"
+          ssh-keyscan -t ed25519 github.com > "$RUNNER_TEMP/release-ssh/known_hosts"
+      - name: push the peeled tag commit to main
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add release-main "git@github.com:$REPOSITORY.git"
+          GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/release-ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/release-ssh/known_hosts" \
+            git push release-main "$TAG^{commit}:refs/heads/main"
