@@ -61,6 +61,12 @@ capture_selected_plan() {
         > "$TEST_WORK/selected-plan.out" 2> "$TEST_WORK/selected-plan.err"
 }
 
+capture_selected_draft_plan() {
+    local tag="$1"
+    GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --tag "$tag" --draft \
+        > "$TEST_WORK/selected-draft-plan.out" 2> "$TEST_WORK/selected-draft-plan.err"
+}
+
 derive_repository_releases() {
     local tag notes
     while IFS= read -r tag; do
@@ -255,6 +261,25 @@ if test_timed "single-tag dry-run plan" capture_selected_plan "$selected_tag"; t
 else
     bad "single-tag dry-run failed or invoked gh"
     sed -n '1,20p' "$TEST_WORK/selected-plan.err" >&2
+fi
+
+if test_timed "single-tag draft plan" capture_selected_draft_plan "$selected_tag"; then
+    if grep -Fq -- '--draft=true' "$TEST_WORK/selected-draft-plan.out"; then
+        ok "--draft keeps the selected release unpublished"
+    else
+        bad "--draft did not reach the planned create and edit commands"
+    fi
+else
+    bad "single-tag draft plan failed or invoked gh"
+    sed -n '1,20p' "$TEST_WORK/selected-draft-plan.err" >&2
+fi
+
+if output="$(GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --draft 2>&1)"; then
+    bad "--draft without --tag was accepted"
+elif [[ "$output" == *"--draft requires --tag"* ]]; then
+    ok "--draft is confined to single-tag publication"
+else
+    bad "--draft without --tag returned the wrong error: $output"
 fi
 
 awk '$1 == "github-releases:" && $2 == "plan" && $3 == "release" { print $4 }' \

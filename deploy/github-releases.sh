@@ -6,8 +6,8 @@
 # release workflow's path. Use --replace-drafts only in bulk mode for the
 # superseded v20/v22 drafts.
 #
-#   bash deploy/github-releases.sh [--tag TAG] [--replace-drafts]
-#   bash deploy/github-releases.sh --apply [--tag TAG] [--replace-drafts]
+#   bash deploy/github-releases.sh [--tag TAG] [--draft] [--replace-drafts]
+#   bash deploy/github-releases.sh --apply [--tag TAG] [--draft] [--replace-drafts]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,8 +20,9 @@ LATEST_TAG=""
 GITHUB_RELEASES_WORK=""
 
 usage() {
-    echo "usage: bash deploy/github-releases.sh [--apply] [--tag TAG] [--replace-drafts]"
+    echo "usage: bash deploy/github-releases.sh [--apply] [--tag TAG] [--draft] [--replace-drafts]"
     echo "       --tag requires an exact CHANGELOG.md entry; only bulk backfill uses annotation and series-path fallback"
+    echo "       --draft keeps the selected single-tag release unpublished until a later explicit edit"
 }
 
 die() {
@@ -285,7 +286,8 @@ replace_stale_drafts() {
 }
 
 main() {
-    local started=$SECONDS apply="" replace_drafts="" selected_tag="" tag notes target
+    local started=$SECONDS apply="" draft="" replace_drafts="" selected_tag="" tag notes target
+    local draft_state=false
     local creates=0 updates=0 release_count=0
     local work
     local -a tags create_args edit_args
@@ -293,6 +295,7 @@ main() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --apply) apply=1 ;;
+            --draft) draft=1 ;;
             --replace-drafts) replace_drafts=1 ;;
             --tag)
                 shift
@@ -311,6 +314,8 @@ main() {
     [ -f "$CHANGELOG" ] || die "no CHANGELOG.md at $CHANGELOG"
     [ -f "$GAMES" ] || die "no web/games.json at $GAMES"
     [ -z "$selected_tag" ] || [ -z "$replace_drafts" ] || die "--replace-drafts is available only in bulk mode"
+    [ -z "$draft" ] || [ -n "$selected_tag" ] || die "--draft requires --tag"
+    [ -z "$draft" ] || draft_state=true
     if [ -n "$selected_tag" ]; then
         valid_tag "$selected_tag" || die "tag '$selected_tag' does not match the release tag grammar"
         git -C "$REPO" rev-parse -q --verify "refs/tags/$selected_tag" >/dev/null \
@@ -353,13 +358,13 @@ main() {
         timed "derive $tag" derive_release "$tag" "$notes" "$selected_tag"
         release_count=$((release_count + 1))
         create_args=(release create "$tag" --verify-tag --title "$RELEASE_TITLE" \
-            --notes-file "$notes" --draft=false --prerelease="$RELEASE_PRERELEASE" \
+            --notes-file "$notes" --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" \
             --latest="$RELEASE_LATEST")
         edit_args=(release edit "$tag" --title "$RELEASE_TITLE" --notes-file "$notes" \
-            --draft=false --prerelease="$RELEASE_PRERELEASE" --latest="$RELEASE_LATEST")
+            --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" --latest="$RELEASE_LATEST")
 
         if [ -z "$apply" ]; then
-            echo "github-releases: plan release $tag title='$RELEASE_TITLE' latest=$RELEASE_LATEST prerelease=$RELEASE_PRERELEASE"
+            echo "github-releases: plan release $tag title='$RELEASE_TITLE' draft=$draft_state latest=$RELEASE_LATEST prerelease=$RELEASE_PRERELEASE"
             print_command "inspect $tag" "$GH_BIN" release view "$tag"
             print_command "create $tag if absent" "$GH_BIN" "${create_args[@]}"
             print_command "update $tag if present" "$GH_BIN" "${edit_args[@]}"
