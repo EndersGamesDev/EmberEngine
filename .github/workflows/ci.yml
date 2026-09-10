@@ -1,28 +1,23 @@
-# ci: the server-side test suite on every push to main and every pull
-# request; a green run on main moves the branch pointer `ci-passed` to that
-# commit.
+# ci: the required integration gate for pull requests and pushes to develop.
+# The focused server tests protect the host runtime, the shell suites protect
+# repository and deployment contracts, and the workspace job proves formatting,
+# linting and all remaining packages before a commit can integrate.
 #
-# That pointer is what the hosts deploy. A host runs `deploy/host.sh update`
-# on a timer with EMBER_REF=ci-passed (deploy/install-host-timer.sh): when
-# the pointer moves it rebuilds, restarts, re-proves and republishes; when a
-# run here is red the pointer stays and the host keeps the last good build.
-# Hosts pull, so nothing here needs to reach them and no host needs a token.
-#
-# What is gated: the six crates a host actually runs or probes with (the
-# three deterministic cores and the three servers) and the deploy scripts'
-# own shim-based suites. The client, engine and wasm builds are not built
-# here; they have their own gates in the release process.
+# A green run establishes evidence for the exact develop commit; it does not
+# publish or promote that commit. Hosts track main, which advances only after
+# the release workflow validates a signed tag, so deployed servers and Pages
+# clients remain on the same tagged source.
 name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
     paths-ignore:
       - 'docs/**'
       - 'marketing/**'
       - '**.md'
   pull_request:
-    branches: [main]
+    branches: [develop]
   workflow_dispatch:
 
 concurrency:
@@ -38,7 +33,7 @@ env:
 
 jobs:
   servers:
-    name: cores + servers (cargo test)
+    name: cores + servers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,31 +57,37 @@ jobs:
           cargo build --locked --release -p league-server --example wsprobe
 
   deploy-scripts:
-    name: deploy scripts (shim suites)
+    name: deploy scripts
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: syntax, publish-host, host-pids, host-kings, host-prebuilt, ship-host, host-timer, republish-host, pages, ssh-deploys, watchdog
-        run: bash deploy/tests/run.sh syntax publish-host host-pids host-kings host-prebuilt ship-host host-timer republish-host pages ssh-deploys watchdog
-
-  promote:
-    name: promote to ci-passed
-    needs: [servers, deploy-scripts]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: move ci-passed to this commit
+      - name: syntax, publish-host, host-pids, host-kings, host-prebuilt, ship-host, host-timer, republish-host, pages, ssh-deploys, watchdog
+        run: bash deploy/tests/run.sh syntax publish-host host-pids host-kings host-prebuilt ship-host host-timer republish-host pages ssh-deploys watchdog
+      - name: repository policy suites
+        if: github.event_name == 'pull_request'
         run: |
-          git fetch -q origin +refs/heads/ci-passed:refs/remotes/origin/ci-passed 2>/dev/null || true
-          if git rev-parse -q --verify refs/remotes/origin/ci-passed >/dev/null \
-             && ! git merge-base --is-ancestor refs/remotes/origin/ci-passed HEAD; then
-            echo "ci-passed is not behind this commit; leaving it where it is"
-            exit 0
-          fi
-          git push origin HEAD:refs/heads/ci-passed
-          echo "ci-passed -> $(git rev-parse --short HEAD): $(git log -1 --format=%s)"
+          bash deploy/tests/test-readmes.sh
+          bash deploy/tests/test-done-lists.sh
+          bash deploy/tests/test-changelog.sh
+          bash deploy/tests/test-commit-messages.sh origin/develop
+
+  workspace:
+    name: workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: workspace
+      - name: format
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --locked
+      - name: workspace tests
+        run: cargo test --workspace --locked --exclude linter --exclude ember-julibrot-present
+      - name: presentation tests
+        run: cargo test -p ember-julibrot-present -- --test-threads=1
