@@ -287,7 +287,7 @@ replace_stale_drafts() {
 
 main() {
     local started=$SECONDS apply="" draft="" replace_drafts="" selected_tag="" tag notes target
-    local draft_state=false
+    local draft_state=false release_latest
     local creates=0 updates=0 release_count=0
     local work
     local -a tags create_args edit_args
@@ -357,14 +357,16 @@ main() {
         notes="$work/$tag.md"
         timed "derive $tag" derive_release "$tag" "$notes" "$selected_tag"
         release_count=$((release_count + 1))
+        release_latest="$RELEASE_LATEST"
+        [ "$draft_state" = false ] || release_latest=false
         create_args=(release create "$tag" --verify-tag --title "$RELEASE_TITLE" \
             --notes-file "$notes" --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" \
-            --latest="$RELEASE_LATEST")
+            --latest="$release_latest")
         edit_args=(release edit "$tag" --title "$RELEASE_TITLE" --notes-file "$notes" \
-            --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" --latest="$RELEASE_LATEST")
+            --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" --latest="$release_latest")
 
         if [ -z "$apply" ]; then
-            echo "github-releases: plan release $tag title='$RELEASE_TITLE' draft=$draft_state latest=$RELEASE_LATEST prerelease=$RELEASE_PRERELEASE"
+            echo "github-releases: plan release $tag title='$RELEASE_TITLE' draft=$draft_state latest=$release_latest prerelease=$RELEASE_PRERELEASE"
             print_command "inspect $tag" "$GH_BIN" release view "$tag"
             print_command "create $tag if absent" "$GH_BIN" "${create_args[@]}"
             print_command "update $tag if present" "$GH_BIN" "${edit_args[@]}"

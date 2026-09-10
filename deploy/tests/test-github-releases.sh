@@ -263,11 +263,12 @@ else
     sed -n '1,20p' "$TEST_WORK/selected-plan.err" >&2
 fi
 
-if test_timed "single-tag draft plan" capture_selected_draft_plan "$selected_tag"; then
-    if grep -Fq -- '--draft=true' "$TEST_WORK/selected-draft-plan.out"; then
-        ok "--draft keeps the selected release unpublished"
+if test_timed "latest-tag draft plan" capture_selected_draft_plan "$LATEST_TAG"; then
+    if grep -Fq -- '--draft=true' "$TEST_WORK/selected-draft-plan.out" \
+        && grep -Fq -- '--latest=false' "$TEST_WORK/selected-draft-plan.out"; then
+        ok "--draft keeps the selected release unpublished and not latest"
     else
-        bad "--draft did not reach the planned create and edit commands"
+        bad "--draft did not force unpublished and not-latest create and edit commands"
     fi
 else
     bad "single-tag draft plan failed or invoked gh"

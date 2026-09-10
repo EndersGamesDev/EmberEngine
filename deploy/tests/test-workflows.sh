@@ -244,7 +244,7 @@ if "refs/heads/main" not in runs("promote"):
     raise SystemExit(1)
 if "release delete" not in runs("discard-failed-draft"):
     raise SystemExit(1)
-if "--draft=false" not in runs("publish"):
+if "deploy/github-releases.sh --apply --tag" not in runs("publish") or "--draft" in runs("publish"):
     raise SystemExit(1)
 PY
     else
@@ -257,7 +257,7 @@ PY
             && grep -Fq 'needs: [validate, draft]' "$file" \
             && grep -Fq 'needs: [validate, promote]' "$file" \
             && grep -Fq '  queue: max' "$file" \
-            && grep -Fq -- '--draft=false' "$file"
+            && grep -Fq 'run: bash deploy/github-releases.sh --apply --tag "$TAG"' "$file"
     fi
 }
 

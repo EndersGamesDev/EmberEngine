@@ -385,11 +385,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
       - name: publish the draft
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
-        run: gh release edit "$TAG" --draft=false
+        run: bash deploy/github-releases.sh --apply --tag "$TAG"
       - name: require the published release asset
         env:
           GH_TOKEN: ${{ github.token }}
