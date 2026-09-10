@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge key/value pairs into server.json on gh-pages. Never overwrite.
+"""Merge key/value pairs into a staged server.json. Never overwrite.
 
     python3 deploy/merge-server-json.py <server.json> KEY VALUE [KEY VALUE ...]
 
@@ -23,7 +23,7 @@ Everything else is stored as a string.
 
 A missing or unreadable file starts from an empty object, exactly as the
 inline merges did. Output is compact JSON, the format the other writers
-produce, so a diff on gh-pages shows only the keys that changed.
+produce, so a staged-tree diff shows only the keys that changed.
 """
 
 import json

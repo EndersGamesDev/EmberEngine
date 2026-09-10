@@ -94,7 +94,7 @@ else
 # environment overrides anything set here.
 
 #EMBER_REPO=https://github.com/EndersGamesDev/EmberEngine.git
-#EMBER_REF=origin/main
+#EMBER_REF=main
 #EMBER_HOST_NAME=
 #EMBER_PUBLISH=none
 #EMBER_ARENA_PORT=7780

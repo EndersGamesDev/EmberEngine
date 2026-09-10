@@ -2,7 +2,7 @@ This file is named `CONTENTS.md` because GitHub would render `.github/README.md`
 
 # GitHub configuration
 
-This directory holds GitHub-facing issue forms and Actions workflows for repository intake, continuous integration and the marketing heartbeat.
+This directory holds GitHub-facing issue forms and Actions workflows for repository intake, continuous integration, release promotion and Pages deployment; the former marketing heartbeat workflow remains only in repository history.
 
 GitHub depends on these files to render contributor prompts and run repository automation; local engine and game builds do not read them.
 

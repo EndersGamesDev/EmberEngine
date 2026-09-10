@@ -6,6 +6,12 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 Each line says what is wrong or missing, where it can be seen, and what closes it. A line that cannot be settled from the tree begins its remedy with `needs:` and names the browser, host, device or measurement that would settle it.
 
+## release-governance
+
+- The second identified release signer has no armored public key in `deploy/keys`; a pull request adding that key is required before that signer's tags can pass release validation, while the present key remains the only accepted signing material.
+- Required approvals on `develop` start at 0 because CI is the merge gate and review is recorded in the pull-request body; revisit the count after the process has operating evidence.
+- GitHub repository rulesets are applied outside this repository; `docs/branching.md` is their specification, and drift between the live settings and that specification is checked by hand.
+
 ## engine-renderer
 
 - Before the `62f5c450` point-light rebase, the shared shader renderer added 755,558 bytes (+1.68%) to each engine-backed wasm game bundle on the measured sokol toolchain; remeasure the rebased candidate, then determine whether target-specific Minijinja feature factoring can retain the feature-full dynamic-generation contract while avoiding unreachable wasm machinery.
@@ -59,7 +65,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - The hub's live-lobby showcase resolves only the arena's live path (`web/index.html:332`), so kings lobbies are listed on the kings page alone.
 - The commit a host builds a game from is recorded nowhere the repository carries: the shipper takes it from a deployed `version.json` the tree does not hold (`deploy/ship-host.sh:7`), so a host built off main can serve a game protocol its live page was never checked against, Fire included. Record the built commit per game beside the catalog.
 - `games/hosted.toml:96` still marks arena v12 `latest` and `games/arena/` ends at `v012`; freezing v13 and later into the one-server registry is its own lane, and `crates/ember-server/src/registry.rs:391` pins one latest per game.
-- Main pushes do not build Pages: the only main-push job beyond tests moves the `ci-passed` pointer (`.github/workflows/ci.yml:73`) and `deploy/deploy-pages.sh` is invoked by hand, so every release needs a named publisher, a matched five-bundle rebuild and a server-first rollout.
 - `deploy/tests/run.sh:26` defines ten suites and `.github/workflows/ci.yml:69` runs nine by name; the omitted `host-loopback` is the only suite that drives `host.sh up/status/update/down` for real, and neither file says it is excluded or why.
 - Nothing runs the two JavaScript suites: no gate script, CI job or deploy suite invokes `web/hosts.test.mjs:1` or `tools/v28/settings.test.cjs:2`, so they are commands a person has to remember.
 - `deploy/tests/test-pages.sh:163` hardcodes the fire, kings and arena-v0 live paths while deriving the arena one from `deploy-pages.sh`, so a Fire or Kings version bump changes the script and the catalog together and leaves the test proving the previous path.

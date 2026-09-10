@@ -55,6 +55,18 @@ capture_plan() {
         > "$TEST_WORK/plan.out" 2> "$TEST_WORK/plan.err"
 }
 
+capture_selected_plan() {
+    local tag="$1"
+    GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --tag "$tag" \
+        > "$TEST_WORK/selected-plan.out" 2> "$TEST_WORK/selected-plan.err"
+}
+
+capture_selected_draft_plan() {
+    local tag="$1"
+    GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --tag "$tag" --draft \
+        > "$TEST_WORK/selected-draft-plan.out" 2> "$TEST_WORK/selected-draft-plan.err"
+}
+
 derive_repository_releases() {
     local tag notes
     while IFS= read -r tag; do
@@ -135,6 +147,7 @@ self_test() {
     fixture="$(mktemp -d "${TMPDIR:?}/ember-github-release-fixture.XXXXXX")"
     TEST_WORK="$fixture"
     mkdir -p "$fixture/web" "$fixture/notes"
+    write_forbidden_gh "$fixture/gh-forbidden"
 
     git -C "$fixture" init -q
     git -C "$fixture" config user.name Fixture
@@ -146,6 +159,9 @@ self_test() {
     git -C "$fixture" tag -a fixture-1.0.0 -m 'fixture annotation with changelog' "$commit"
     git -C "$fixture" tag -a fixture-2.0.0 -m 'fixture annotation without changelog' "$commit"
     git -C "$fixture" tag -a fixture-0.1.0 -m 'fixture pre-release annotation' "$commit"
+    git -C "$fixture" tag -a ember-1.0.0 -m 'fixture Ember annotation' "$commit"
+    git -C "$fixture" tag -a heap-0.1.0 -m 'fixture lab annotation' "$commit"
+    mkdir -p "$fixture/web/labs/heap"
     write_fixture_games "$fixture/web/games.json"
     write_fixture_changelog "$fixture/CHANGELOG.md" "$commit"
 
@@ -168,15 +184,41 @@ self_test() {
     grep -Fqx 'fixture annotation without changelog' "$notes" && ok "missing fixture entry names its tag annotation" || bad "missing fixture annotation is absent"
     [ "$RELEASE_PATH" = "games/fixture/v2/" ] && ok "missing fixture entry selects its version path" || bad "missing fixture path is '$RELEASE_PATH'"
 
+    if output="$(derive_release fixture-2.0.0 "$notes" required 2>&1)"; then
+        bad "single-tag derivation accepted a missing changelog entry"
+    elif [[ "$output" == *"fixture-2.0.0 has no matching CHANGELOG.md entry"* ]]; then
+        ok "single-tag derivation rejects a missing changelog entry by name"
+    else
+        bad "single-tag derivation returned the wrong missing-entry error: $output"
+    fi
+
+    if output="$(GITHUB_RELEASES_REPO="$fixture" GH="$fixture/gh-forbidden" bash "$RELEASE_SCRIPT" --apply --tag fixture-2.0.0 2>&1)"; then
+        bad "--apply --tag accepted a missing changelog entry"
+    elif [[ "$output" == *"fixture-2.0.0 has no matching CHANGELOG.md entry"* ]]; then
+        ok "--apply --tag rejects a missing changelog entry before publication"
+    else
+        bad "--apply --tag returned the wrong missing-entry error: $output"
+    fi
+
     notes="$fixture/notes/fixture-0.1.0.md"
     derive_release fixture-0.1.0 "$notes"
     [ "$RELEASE_PRERELEASE" = true ] && ok "fixture 0.x tag is a pre-release" || bad "fixture 0.x tag is not a pre-release"
 
+    notes="$fixture/notes/ember-1.0.0.md"
+    derive_release ember-1.0.0 "$notes"
+    [ "$RELEASE_TITLE" = "Ember 1.0.0" ] && ok "Ember title derives without a launcher row" || bad "Ember title is '$RELEASE_TITLE'"
+    [ "$RELEASE_PATH" = "./" ] && ok "Ember release points at the hub" || bad "Ember path is '$RELEASE_PATH'"
+
+    notes="$fixture/notes/heap-0.1.0.md"
+    derive_release heap-0.1.0 "$notes"
+    [ "$RELEASE_TITLE" = "Heap Lab 0.1.0" ] && ok "lab title derives from its id" || bad "lab title is '$RELEASE_TITLE'"
+    [ "$RELEASE_PATH" = "labs/heap/" ] && ok "lab release path derives from its directory" || bad "lab path is '$RELEASE_PATH'"
+
     if [ "$FAILURES" -eq 0 ]; then
-        echo "SELF-TEST PASS: $CHECKS checks, 3 tags, 0 failures, $((SECONDS - started))s wall"
+        echo "SELF-TEST PASS: $CHECKS checks, 5 tags, 0 failures, $((SECONDS - started))s wall"
         return 0
     fi
-    echo "SELF-TEST FAIL: $CHECKS checks, 3 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
+    echo "SELF-TEST FAIL: $CHECKS checks, 5 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
     return 1
 }
 
@@ -206,6 +248,39 @@ if test_timed "dry-run plan" capture_plan; then
 else
     bad "dry-run failed or invoked gh"
     sed -n '1,20p' "$TEST_WORK/plan.err" >&2
+fi
+
+selected_tag="$(head -n 1 "$TEST_WORK/tags")"
+if test_timed "single-tag dry-run plan" capture_selected_plan "$selected_tag"; then
+    selected_plan="$(awk '$1 == "github-releases:" && $2 == "plan" && $3 == "release" { print $4 }' "$TEST_WORK/selected-plan.out")"
+    if [ "$selected_plan" = "$selected_tag" ]; then
+        ok "--tag plans exactly the selected release"
+    else
+        bad "--tag planned '$selected_plan' instead of '$selected_tag'"
+    fi
+else
+    bad "single-tag dry-run failed or invoked gh"
+    sed -n '1,20p' "$TEST_WORK/selected-plan.err" >&2
+fi
+
+if test_timed "latest-tag draft plan" capture_selected_draft_plan "$LATEST_TAG"; then
+    if grep -Fq -- '--draft=true' "$TEST_WORK/selected-draft-plan.out" \
+        && grep -Fq -- '--latest=false' "$TEST_WORK/selected-draft-plan.out"; then
+        ok "--draft keeps the selected release unpublished and not latest"
+    else
+        bad "--draft did not force unpublished and not-latest create and edit commands"
+    fi
+else
+    bad "single-tag draft plan failed or invoked gh"
+    sed -n '1,20p' "$TEST_WORK/selected-draft-plan.err" >&2
+fi
+
+if output="$(GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --draft 2>&1)"; then
+    bad "--draft without --tag was accepted"
+elif [[ "$output" == *"--draft requires --tag"* ]]; then
+    ok "--draft is confined to single-tag publication"
+else
+    bad "--draft without --tag returned the wrong error: $output"
 fi
 
 awk '$1 == "github-releases:" && $2 == "plan" && $3 == "release" { print $4 }' \

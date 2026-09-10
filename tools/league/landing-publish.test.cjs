@@ -87,10 +87,10 @@ test('uncertain, duplicate or manually altered hub anchors are refused', () => {
 test('CLI is explicit and landing paths cannot reach game versions or peer files', () => {
   const commit = 'a'.repeat(40);
   assert.deepEqual(parseArgs([`--source-commit=${commit}`]), { commit, push: false, gameVersion: 'v3' });
-  assert.deepEqual(parseArgs([`--source-commit=${commit}`, '--push']), { commit, push: true, gameVersion: 'v3' });
+  assert.deepEqual(parseArgs([`--source-commit=${commit}`]), { commit, push: false, gameVersion: 'v3' });
   assert.deepEqual(parseArgs([`--source-commit=${commit}`, '--game-version=v4']), { commit, push: false, gameVersion: 'v4' });
   assert.throws(() => parseArgs([`--source-commit=${commit}`, '--game-version=v2']));
-  for (const args of [[], ['--push'], [`--source-commit=${commit}`, '--push', '--push'], [`--source-commit=${commit}`, '--unknown'], ['--source-commit=short']]) assert.throws(() => parseArgs(args));
+  for (const args of [[], ['--push'], [`--source-commit=${commit}`, '--push'], [`--source-commit=${commit}`, '--unknown'], ['--source-commit=short']]) assert.throws(() => parseArgs(args));
   for (const file of ['games/league/index.html', 'games/league/landing.css', 'games/league/landing.js', 'games/league/story.json', 'games/league/media/nested/trailer.webm']) assert(landingPath(file), file);
   for (const file of ['index.html', 'games.json', 'server.json', 'games/league/v3/index.html', 'games/league/v2/pkg/league.js', 'games/league/media/../v3/x', 'games/league/media/', 'games/league/media2/x', 'games/arena/index.html']) assert(!landingPath(file), file);
 });

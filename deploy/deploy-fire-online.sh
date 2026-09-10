@@ -3,7 +3,8 @@
 #   1. build + (re)start fire-server on the target host
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
-#   3. publish the new domain to server.json on GitHub Pages as "fire_ws"
+#   3. optionally publish the new domain to an explicitly configured address
+#      book as "fire_ws"
 #   4. health-check by SPEAKING THE PROTOCOL through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-fire-online.sh
@@ -44,6 +45,7 @@ cd "$REPO_DIR"
 #
 #     EMBER_REF=v2 bash deploy/deploy-fire-online.sh
 REF="${EMBER_REF:-HEAD}"
+EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 
 # The tarball below is built with `git archive`, so ONLY COMMITTED WORK
 # DEPLOYS. Refuse to run against a dirty tree rather than quietly shipping
@@ -310,17 +312,34 @@ FIRE_PROTO="$(git show "$REF:crates/fire-core/src/proto.rs" \
 # address — the inline python this replaced could not express that, and a
 # second host deploying fire took the first one's entry out of the book.
 #
-# `--repo`, not a gh-pages worktree of this checkout: see the long note in
-# deploy-pong-online.sh. The short version is that the worktree checked out a
-# local gh-pages nothing ever fetches, so another writer's publish made the
-# push fail; and the failure left the worktree registered, which wedged every
-# later deploy of either game and the pages deploy too.
-bash "$REPO_DIR/deploy/publish-host.sh" \
-    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
-    --name "$HOST_NAME" \
-    --game fire --url "$WS_URL" --proto "$FIRE_PROTO" \
-    --version "$VERSION" --commit "$COMMIT" \
-    --by "$(id -un)@$REMOTE"
+# `--repo`, not a publication-branch worktree of this checkout: see the long
+# note in deploy-pong-online.sh. A stale local worktree made concurrent writes
+# fail and then wedged later deploys; publish-host.sh fetches the named branch
+# into an isolated temporary repository instead.
+PUBLISH_ARGS=(--name "$HOST_NAME" --game fire --url "$WS_URL" --proto "$FIRE_PROTO" \
+    --version "$VERSION" --commit "$COMMIT" --by "$(id -un)@$REMOTE")
+case "$EMBER_PUBLISH" in
+    none|"")
+        ENTRY="$(mktemp -t ember-fire-host-XXXXXX.json)"
+        : > "$ENTRY"
+        bash "$REPO_DIR/deploy/publish-host.sh" --book "$ENTRY" --file host.json "${PUBLISH_ARGS[@]}"
+        echo "   EMBER_PUBLISH=none; the entry was not published:"
+        cat "$ENTRY"
+        rm -f "$ENTRY"
+        ;;
+    *#*)
+        PUBLISH_REPO="${EMBER_PUBLISH%#*}"
+        PUBLISH_BRANCH="${EMBER_PUBLISH##*#}"
+        [ -n "$PUBLISH_REPO" ] && [ -n "$PUBLISH_BRANCH" ] \
+            || { echo "FAILED: EMBER_PUBLISH needs <git url>#<branch>." >&2; exit 1; }
+        bash "$REPO_DIR/deploy/publish-host.sh" --repo "$PUBLISH_REPO" --branch "$PUBLISH_BRANCH" \
+            --file server.json "${PUBLISH_ARGS[@]}"
+        ;;
+    *)
+        echo "FAILED: EMBER_PUBLISH must be none or <git url>#<branch>." >&2
+        exit 1
+        ;;
+esac
 
 echo "== ONLINE: $HOST_NAME -> $WS_URL =="
-echo "   the fire page picks it up from server.json on its next load"
+echo "   publication destination: $EMBER_PUBLISH"

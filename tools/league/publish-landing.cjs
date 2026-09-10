@@ -1,6 +1,6 @@
 // Prepare a League landing release after V3. Frozen games, catalog and hostbook
 // remain byte-identical; the only hub edit is one League-only discovery link.
-// Usage: node tools/league/publish-landing.cjs --source-commit=<full HEAD> [--push]
+// Usage: node tools/league/publish-landing.cjs --source-commit=<full HEAD>
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -110,12 +110,13 @@ function landingFiles(root) {
 function parseArgs(args) {
   const names = args.map(value => value.split('=')[0]);
   assert.equal(new Set(names).size, names.length, 'Duplicate argument');
-  assert(args.every(value => value === '--push' || /^--source-commit=[0-9a-f]{40}$/.test(value) || /^--game-version=v[1-9][0-9]{0,5}$/.test(value)), 'Use --source-commit=<full HEAD>, optional --game-version=vN and --push');
+  assert(!args.includes('--push'), 'Direct Pages publication is retired; release tags publish through Actions');
+  assert(args.every(value => /^--source-commit=[0-9a-f]{40}$/.test(value) || /^--game-version=v[1-9][0-9]{0,5}$/.test(value)), 'Use --source-commit=<full HEAD> and optional --game-version=vN');
   const commit = args.find(value => value.startsWith('--source-commit='))?.slice('--source-commit='.length);
   assert(commit, '--source-commit is required');
   const selected = gameVersion(args.find(value => value.startsWith('--game-version='))?.slice('--game-version='.length) || 'v3');
   assert(Number(selected.slice(1)) >= 3, 'The story landing requires V3 or later');
-  return { commit, push: args.includes('--push'), gameVersion: selected };
+  return { commit, push: false, gameVersion: selected };
 }
 
 function main({ root = process.cwd(), args = process.argv.slice(2) } = {}) {
@@ -165,11 +166,6 @@ function main({ root = process.cwd(), args = process.argv.slice(2) } = {}) {
     files: [...files].map(([file, bytes]) => ({ file, bytes: bytes.length, sha256: hash(bytes) })),
     preparedOnly: !options.push, pushed: false, noChanges: scope.changes.length === 0,
   };
-  if (options.push && scope.changes.length) {
-    git(worktree, 'commit', '-m', `Publish League story and trailer ${commit.slice(0, 8)}; freeze game versions and peer pages`);
-    git(worktree, 'push', 'origin', 'HEAD:refs/heads/gh-pages');
-    report.pagesCommit = text(worktree, 'rev-parse', 'HEAD'); report.pushed = true;
-  }
   report.elapsedSeconds = (Date.now() - started) / 1000;
   const reportDirectory = safePath(root, 'target/league-landing-publish');
   fs.mkdirSync(reportDirectory, { recursive: true });

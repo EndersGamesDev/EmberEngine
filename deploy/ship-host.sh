@@ -398,7 +398,7 @@ cmd_deploy() {
     echo
     say "SHIPPED $version · $commit in $(( $(date +%s) - t0 ))s"
     echo "Publishing the entry into the book is a separate, credentialed step:"
-    echo "  bash deploy/republish-host.sh $EMBER_SHIP_HOST --repo <pages repo> --branch gh-pages"
+    echo "  bash deploy/republish-host.sh $EMBER_SHIP_HOST --repo <address-book repo> --branch <branch>"
 }
 
 # --- check ------------------------------------------------------------------

@@ -16,7 +16,8 @@
 #      This probes the PUBLISHED addresses and redeploys when one stops
 #      answering, which republishes the new hostname.
 #   2. NEW COMMITS. When origin/main moves, the running servers are stale.
-#      This redeploys them.
+#      This redeploys them. Pages deployment is deliberately separate:
+#      pages.yml publishes the release asset after the release workflow succeeds.
 #
 # Deliberately probes the PUBLISHED addresses rather than the servers
 # directly: that is the thing a player actually depends on, and it fails when
@@ -134,7 +135,7 @@ raise SystemExit(0 if isinstance(d, dict) else 1)
 }
 
 pass() {
-    git fetch -q origin main gh-pages 2>/dev/null || { log "fetch failed; skipping pass"; return; }
+    git fetch -q origin main 2>/dev/null || { log "fetch failed; skipping pass"; return; }
 
     local head
     head="$(git rev-parse origin/main)"
@@ -151,25 +152,19 @@ pass() {
     # every pass, for as long as the fetch keeps failing. Nothing about the
     # state changes, so it never stops on its own.
     #
-    # `git fetch` above already brought gh-pages down, so a CDN failure has a
-    # second source to fall back on before anything is given up.
     local book="" book_ok=""
     if book="$(curl -fs --max-time 15 "$PAGES_URL/server.json?ts=$(date +%s)" 2>/dev/null)" \
             && book_is_object "$book"; then
         book_ok=1
-    elif book="$(git show origin/gh-pages:server.json 2>/dev/null)" && book_is_object "$book"; then
-        book_ok=1
-        log "no readable book at $PAGES_URL; using origin/gh-pages for this pass"
     else
         book=""
-        log "book unavailable ($PAGES_URL) and unreadable from origin/gh-pages; not treating hosts as unpublished this pass"
+        log "book unavailable ($PAGES_URL); not treating hosts as unpublished this pass"
     fi
 
     # Work out what each host needs before touching anything, so the global
     # refusals below are evaluated once and a host that needs nothing costs
     # one ssh and two probes.
-    local remote name state deployed wants game url todo="" \
-          pages_state pages_deployed want_pages=""
+    local remote name state deployed wants game url todo=""
     for remote in $HOSTS; do
         state="$STATE_DIR/.watchdog-state-$remote"
         deployed="$(cat "$state" 2>/dev/null || echo none)"
@@ -214,11 +209,7 @@ pass() {
         fi
     done
 
-    pages_state="$STATE_DIR/.watchdog-state-pages"
-    pages_deployed="$(cat "$pages_state" 2>/dev/null || echo none)"
-    [ "$head" != "$pages_deployed" ] && want_pages=1
-
-    [ -z "$todo" ] && [ -z "$want_pages" ] && return
+    [ -z "$todo" ] && return
 
     # Only fast-forward. A dirty tree or a diverged branch means a human is
     # mid-change; redeploying over that would ship something nobody tested.
@@ -277,14 +268,6 @@ pass() {
         fi
     done <<< "$todo"
 
-    if [ -n "$want_pages" ]; then
-        log "redeploying pages"
-        if bash deploy/deploy-pages.sh; then
-            echo "$head" > "$pages_state"
-        else
-            log "pages deploy FAILED; not recording ${head:0:7}"
-        fi
-    fi
 }
 
 if [ -n "$ONCE" ]; then

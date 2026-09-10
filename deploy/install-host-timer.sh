@@ -11,9 +11,9 @@
 # ones so nothing depends on linger or a user bus; they still run as this
 # user. Idempotent: re-run after changing ~/.ember/host.env or EMBER_HOME.
 #
-# What the tick does with EMBER_REF=ci-passed: the host follows the branch
-# pointer .github/workflows/ci.yml moves when a main commit's tests pass, and
-# never main itself - a red run keeps the last good build running.
+# What the tick does with EMBER_REF=main: the host follows only the release
+# commits promoted after tag validation, so its servers and the published
+# clients come from the same source.
 # Stopping this timer/service is NOT stopping the game servers: host.sh owns
 # their PID/start-time lifecycle. Use deploy/host.sh down to stop the games.
 set -euo pipefail

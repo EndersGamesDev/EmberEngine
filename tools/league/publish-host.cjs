@@ -1,4 +1,4 @@
-// Use the canonical address-book writer, then prove that only League changed.
+// Prepare a historical address-book change and prove that only League changed.
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),assert=require('node:assert/strict');
 const {execFileSync}=require('node:child_process');
@@ -7,6 +7,7 @@ function parseArgs(args){
   const name=tail.length&&!tail[0].startsWith('--')?tail.shift():'dusky-osprey';
   assert(tail.every(arg=>arg==='--prepare'||/^--protocol=[1-9][0-9]*$/.test(arg)),'Unknown argument');
   assert(tail.filter(arg=>arg==='--prepare').length<=1&&tail.filter(arg=>arg.startsWith('--protocol=')).length<=1,'Duplicate option');
+  assert(tail.includes('--prepare'),'Direct Pages publication is retired; --prepare is required');
   const protocol=Number(tail.find(arg=>arg.startsWith('--protocol='))?.slice(11)||1);
   assert(Number.isSafeInteger(protocol)&&protocol<=65535,'Invalid League protocol');
   assert(/^wss:\/\/[a-z0-9.-]+(?::\d+)?\/?$/.test(url),'Invalid League URL');
@@ -56,11 +57,7 @@ assert.equal(now.league_ws,url);assert.equal(now.league_commit,commit);
 assert.equal(now.league_proto,protocol);assert.equal(now.league_version,version);
 git(wt,'add','server.json');
 const changes=text(wt,'diff','--cached','--name-only');
-if(changes&&!prepare){
-  assert.equal(changes,'server.json');
-  assert.equal(text(root,'ls-remote','origin','refs/heads/gh-pages').split(/\s+/)[0],base,'Concurrent Pages write; rerun against latest');
-  git(wt,'commit','-m',`Publish League host ${name}; preserve other games`);git(wt,'push','origin','HEAD:gh-pages');
-}
+if(changes)assert.equal(changes,'server.json');
 console.log(JSON.stringify({commit:text(wt,'rev-parse','HEAD'),preparedOnly:prepare,url,protocol,elapsedSeconds:(Date.now()-started)/1000,worktree:wt}));
 }
 module.exports={parseArgs,validateTarget};

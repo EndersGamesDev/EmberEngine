@@ -10,7 +10,7 @@
 #   publish-host.sh --name amber-otter --remove --book …/server.json
 #   publish-host.sh --recompute --book …/server.json
 #   publish-host.sh --name amber-otter --game fire … --repo git@…:me/x.git \
-#       --branch gh-pages --file host.json
+#       --branch host-book --file host.json
 #
 # Flags:
 #   --name <host>      the entry's merge key, [a-z0-9-]{3,32}
@@ -137,7 +137,7 @@ fetch_book() {
     # Fetch ONE branch one commit deep, rather than cloning. `git clone` picks
     # the remote's default branch, and `--depth 1` implies `--single-branch`,
     # so a plain shallow clone of the project repository brings back `main`
-    # and no `origin/gh-pages` at all — the book branch would then look
+    # and no remote-tracking ref for the book branch at all — the branch would then look
     # missing, get restarted as an orphan, and the push would be rejected as
     # a non-fast-forward. Asking for the branch by name cannot make that
     # mistake, and a book branch carrying wasm bundles is not something a
@@ -147,8 +147,8 @@ fetch_book() {
     if git -C "$WORK" fetch -q --depth 1 origin "$BRANCH" 2>/dev/null; then
         git -C "$WORK" checkout -q -B "$BRANCH" FETCH_HEAD
     else
-        # The branch legitimately may not exist yet: a fork whose gh-pages
-        # nobody has created is the normal first-run state for a mirror, and
+        # The branch legitimately may not exist yet: a mirror repository with
+        # no book branch is the normal first-run state, and
         # failing here would mean "publish once by hand first", which is the
         # thing this script exists to remove. HEAD is unborn in a repository
         # this script just created, so the branch simply starts empty — no
@@ -269,7 +269,7 @@ if drops and recompute:
 
 # --- load ------------------------------------------------------------------
 # A book that will not parse is NOT overwritten. The old inline publishers
-# started from `{}` on a parse error, which turns one bad byte on gh-pages
+# started from `{}` on a parse error, which turns one bad byte in the book
 # into the silent loss of every other host's entry.
 doc = {}
 if os.path.exists(path):
@@ -448,7 +448,7 @@ if after == before:
 # `v` is the pages' cache-buster, so it moves exactly when the bytes do — not
 # on every invocation, or every no-op publish would make every player
 # re-download the wasm bundles.
-doc["v"] = str(int(time.time()))
+doc["v"] = str(int(os.environ.get("SOURCE_DATE_EPOCH", time.time())))
 write_json(path, doc)
 print("CHANGED")
 PY

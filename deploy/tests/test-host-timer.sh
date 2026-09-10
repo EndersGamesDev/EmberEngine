@@ -89,6 +89,10 @@ mode="$1"
 printf '%s\n' "$mode" >> "$TIMER_SCRATCH/host-calls"
 if { true >&9; } 2>/dev/null; then fd=inherited; else fd=closed; fi
 printf '%s\n' "$fd" > "$TIMER_SCRATCH/fd-$mode"
+if [ "$mode" = update ] && [ "${TIMER_FAIL_UPDATE:-}" = 1 ]; then
+    echo "host.sh: EMBER_REF='main' names no commit" >&2
+    exit 23
+fi
 nohup bash -c '
     if { true >&9; } 2>/dev/null; then fd=inherited; else fd=closed; fi
     printf "%s\n" "$fd" > "$TIMER_SCRATCH/child-fd-$1"
@@ -164,5 +168,13 @@ if [ -n "$REAL_FLOCK" ]; then
 else
     echo "SKIP: three native flock release/exclusion assertions require Linux; no kernel-lock claim is made on Git Bash."
 fi
+
+echo "== an update resolution failure remains a timer failure =="
+if TIMER_FAIL_UPDATE=1 run_tick; then
+    bad "the timer hid host.sh's update failure"
+else
+    is "$?" "23" "the timer returns host.sh's update failure"
+fi
+contains "$(cat "$EMBER_HOME/log/tick.log")" "EMBER_REF='main' names no commit" "the timer log names the failed release ref"
 
 summary host-timer

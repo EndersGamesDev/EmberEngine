@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A fake `git` for deploy/tests/test-pages.sh. It supplies the build stamp,
-# materializes the detached Pages tree, and captures the tree a push would send.
+# materializes the detached legacy seed, and records every attempted command.
 set -euo pipefail
 
 LOG="${SHIM_LOG:-/dev/null}"

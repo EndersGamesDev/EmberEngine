@@ -6,7 +6,7 @@
 #   3. prove it speaks the protocol on loopback, BEFORE exposing it
 #   4. (re)start a Cloudflare quick tunnel in front of it (fresh domain)
 #   5. prove it again through the public address
-#   6. publish this host's entry into the address book on gh-pages
+#   6. optionally publish this host's entry to an explicit address book
 #
 #   bash deploy/deploy-arena-local.sh          # up
 #   bash deploy/deploy-arena-local.sh down     # stop server and tunnel
@@ -14,7 +14,7 @@
 #
 # Needs cargo (this workstation has one), ~/tools/cloudflared.exe (the
 # official Windows build from github.com/cloudflare/cloudflared/releases),
-# python, and push rights to gh-pages.
+# python, and write access to the configured address-book destination.
 #
 # WHY NOT host.sh. host.sh is written for a Linux host (nohup, pid files
 # checked with kill -0, chrt) and clones its own checkout of origin/main.
@@ -36,9 +36,8 @@ CMD="${1:-up}"
 PORT="${EMBER_ARENA_PORT:-7780}"
 BIND="127.0.0.1:$PORT"
 CLOUDFLARED="${EMBER_TUNNEL_BIN:-$HOME/tools/cloudflared.exe}"
-EMBER_REPO="${EMBER_REPO:-https://github.com/EndersGamesDev/EmberEngine.git}"
-# none = print the entry and publish nothing; upstream = write the book.
-EMBER_PUBLISH="${EMBER_PUBLISH:-upstream}"
+# none = print the entry and publish nothing; <git url>#<branch> = write the book.
+EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 RUN="$HOME/.ember/arena-local"
 mkdir -p "$RUN"
 SERVER_LOG="$RUN/arena-server.log"
@@ -205,13 +204,19 @@ case "$EMBER_PUBLISH" in
         tmp="$(mktemp -d)"; : > "$tmp/host.json"
         bash deploy/publish-host.sh --book "$tmp/host.json" --file host.json --name "$NAME" \
             --game arena --url "$WS_URL" --proto "$PROTO" --version "$VERSION" --commit "$COMMIT" --by "$BY" >/dev/null
-        echo "   would publish:"; cat "$tmp/host.json"; echo ;;
-    upstream)
-        bash deploy/publish-host.sh --repo "$EMBER_REPO" --branch gh-pages --name "$NAME" \
-            --game arena --url "$WS_URL" --proto "$PROTO" --version "$VERSION" --commit "$COMMIT" --by "$BY" ;;
-    *) die "EMBER_PUBLISH must be none or upstream here" ;;
+        echo "   would publish:"; cat "$tmp/host.json"; echo
+        rm -rf "$tmp"
+        ;;
+    *#*)
+        publish_repo="${EMBER_PUBLISH%#*}"
+        publish_branch="${EMBER_PUBLISH##*#}"
+        [ -n "$publish_repo" ] && [ -n "$publish_branch" ] || die "EMBER_PUBLISH needs <git url>#<branch>"
+        bash deploy/publish-host.sh --repo "$publish_repo" --branch "$publish_branch" --file server.json --name "$NAME" \
+            --game arena --url "$WS_URL" --proto "$PROTO" --version "$VERSION" --commit "$COMMIT" --by "$BY"
+        ;;
+    *) die "EMBER_PUBLISH must be none or <git url>#<branch>" ;;
 esac
 
 echo
 echo "ONLINE: $NAME serves arena protocol $PROTO at $WS_URL ($VERSION · $COMMIT). Logs in $RUN."
-echo "The live page picks the newest build that speaks its protocol; this host stays in the book until publish-host.sh --remove."
+echo "A configured address book can expose this host to clients that speak its protocol."

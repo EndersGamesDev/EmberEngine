@@ -1,7 +1,7 @@
-"""Publish only End Game and its launcher card; preserve all other live games.
+"""Stage the historical End Game Pages tree while preserving every peer path.
 
-Run after a clean committed build: python tools/end-game/publish.py --publish
-Without --publish, assemble and report the exact scoped diff only.
+Run after a clean committed build to assemble and report the exact scoped diff.
+Remote publication is retired; the release workflow publishes release assets.
 """
 from pathlib import Path
 import argparse
@@ -56,8 +56,7 @@ def assemble(source, destination, commit):
 def main():
     started = time.perf_counter()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--publish', action='store_true')
-    args = parser.parse_args()
+    parser.parse_args()
     if git('status', '--porcelain'):
         raise RuntimeError('Commit the validated source before staging a release')
     commit = git('rev-parse', 'HEAD')
@@ -66,6 +65,8 @@ def main():
             raise RuntimeError(f'Missing built file: {name}')
     if (ROOT / 'web' / SLOT / 'pkg/end_game_bg.wasm').read_bytes()[:4] != b'\0asm':
         raise RuntimeError('Invalid WASM artifact')
+    # The retired branch is a read-only historical base for this old release
+    # assembler. It is never a publication target.
     git('fetch', 'origin', 'gh-pages')
     # Retain the isolated output for inspection; never delete a computed tree.
     stage = Path(tempfile.mkdtemp(prefix='end-game-v12-pages-')) / 'pages'
@@ -74,16 +75,11 @@ def main():
     git('add', '--', str(SLOT), 'games.json', 'index.html', cwd=stage)
     changes = git('diff', '--cached', '--name-only', cwd=stage).splitlines()
     if not changes:
-        print('No changes to publish')
+        print('No changes to stage')
         return
     if any(p not in ['games.json', 'index.html'] and not p.startswith(SLOT.as_posix() + '/') for p in changes):
         raise RuntimeError('Refusing changes outside End Game and its launcher entry')
     print(git('diff', '--cached', '--stat', cwd=stage))
-    if args.publish:
-        git('commit', '-m', f'feat(end-game): publish parry and impact from {commit[:12]}', cwd=stage)
-        # An overlapping publication rejects this normal push; it is never forced.
-        git('push', 'origin', 'HEAD:gh-pages', cwd=stage)
-        print('Published source', commit)
     print('Staging directory:', stage)
     print('Wall seconds:', round(time.perf_counter() - started, 2))
 

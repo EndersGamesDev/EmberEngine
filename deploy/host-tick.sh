@@ -14,9 +14,9 @@
 #
 #   Did EMBER_REF move? `host.sh update` rebuilds, restarts the servers
 #   behind their existing tunnels, re-proves and republishes; "nothing to
-#   do" otherwise. With EMBER_REF=ci-passed that pointer is moved by
-#   .github/workflows/ci.yml only when a main commit's tests are green, so
-#   a red run keeps the host on the last good build.
+#   do" otherwise. With EMBER_REF=main that pointer moves only after a release
+#   tag passes validation and promotion, so the server stays aligned with the
+#   client deployed from the same commit.
 #
 # Minting is rationed. A quick tunnel is a request to Cloudflare, which
 # rate-limits them per public IP (HTTP 429, error 1015) - and every host
@@ -111,7 +111,7 @@ if [ -n "$dead_servers" ]; then
     rc=$?
     if [ "$rc" -eq 0 ]; then tlog "up done"; else tlog "up finished with rc $rc"; fi
     [ -n "$nomint" ] || note_result "$rc"
-    exit 0
+    case "$rc" in 0|3) exit 0 ;; *) exit "$rc" ;; esac
 fi
 
 if [ -n "$dead_tunnels" ]; then
@@ -142,4 +142,4 @@ case "$out" in
         [ -n "$nomint" ] || note_result "$rc"
         ;;
 esac
-exit 0
+case "$rc" in 0|3) exit 0 ;; *) exit "$rc" ;; esac

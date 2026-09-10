@@ -3,8 +3,8 @@
 #
 #   bash deploy/tests/test-pages.sh
 #
-# Nothing here contacts a network, compiles wasm or pushes a branch. The git
-# shim captures the assembled Pages tree where a push would have occurred.
+# Nothing here contacts a network, compiles wasm or pushes a branch. The test
+# extracts the release archive and inspects the exact assembled Pages tree.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -68,7 +68,7 @@ cp "$DEPLOY/../crates/labs/julibrot/app/Cargo.toml" "$REPO/crates/labs/julibrot/
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 text = p.read_text(encoding="utf-8")
-old = 'doc["v"] = str(int(time.time()))'
+old = 'doc["v"] = str(int(os.environ.get("SOURCE_DATE_EPOCH", time.time())))'
 assert text.count(old) == 1
 with open(p, "w", encoding="utf-8", newline="") as fh:
     fh.write(text.replace(old, 'doc["v"] = "recomputed-stamp"'))
@@ -127,15 +127,19 @@ printf 'original end game page\n' > "$SEED/games/end-game/v1/index.html"
 printf 'original end game bundle\n' > "$SEED/games/end-game/v1/pkg/end_game_bg.wasm"
 export SHIM_PAGES_SEED="$SEED"
 
-echo "== ordinary build assembles all five games and the Julibrot lab =="
+echo "== ordinary build assembles all live games and the Julibrot lab =="
 : > "$SHIM_LOG"
 rm -f "$SHIM_GIT_INDEX"
-if (cd "$REPO" && bash deploy/deploy-pages.sh) > "$TMP/build.log" 2>&1; then
-    ok "the shimmed build-and-publish run succeeded"
+ARCHIVE="$TMP/ember-pages.tar.gz"
+if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 EMBER_PAGES_ARCHIVE="$ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/build.log" 2>&1; then
+    ok "the shimmed build-and-archive run succeeded"
 else
-    bad "the shimmed build-and-publish run failed"
+    bad "the shimmed build-and-archive run failed"
     tail -40 "$TMP/build.log" >&2
 fi
+mkdir -p "$SHIM_PUBLISHED"
+tar -xzf "$ARCHIVE" -C "$SHIM_PUBLISHED"
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "the archive build attempted a branch push"; else ok "the archive build attempted no branch push"; fi
 ARGV="$(cat "$SHIM_LOG")"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [what-is-this] [--lib]" "what-is-this is built as a wasm library"
 contains "$ARGV" "release/what_is_this.wasm" "what-is-this is passed to wasm-bindgen"
@@ -227,7 +231,35 @@ done
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/lab.js")" "JULIBROT_WORKER_URL = \"./worker.js?v=$STAMP\"" "the worker bootstrap URL uses the deploy stamp"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "./future.js?v=10" "a future two-digit cache key is not partly rewritten"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "from \"./lab.js?v=$STAMP\"" "the page's static import of the lab module is stamped"
-is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get("kind") == "lab" for v in g["versions"] if v.get("live")][0]')" "labs/julibrot/" "the live Julibrot catalog path was published"
+is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get("kind") == "lab" for v in g["versions"] if v.get("live")][0]')" "labs/julibrot/" "the live Julibrot catalog path was assembled"
+
+echo "== comparison mode proves byte identity without pushing =="
+cp "$REPO/web/version.json" "$TMP/version.before-archive.json"
+: > "$SHIM_LOG"
+if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 EMBER_PAGES_PREBUILT=1 EMBER_PAGES_COMPARE="$ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/archive.log" 2>&1; then
+    ok "the prebuilt comparison run succeeded"
+else
+    bad "the prebuilt comparison run failed"
+    tail -40 "$TMP/archive.log" >&2
+fi
+if grep -q '^git \[push\]' "$SHIM_LOG"; then
+    bad "comparison mode pushed a branch"
+else
+    ok "comparison mode made no branch push"
+fi
+tar -tzf "$ARCHIVE" > "$TMP/archive.list"
+if grep -Fqx './index.html' "$TMP/archive.list" && grep -Fqx "./$ARENA_LIVE/index.html" "$TMP/archive.list"; then
+    ok "the archive contains the hub and live game tree"
+else
+    bad "the archive is missing the hub or live game tree"
+fi
+if grep -Eq '^\./\.git(/|$)' "$TMP/archive.list"; then
+    bad "the release archive contains worktree metadata"
+else
+    ok "the release archive excludes worktree metadata"
+fi
+contains "$(cat "$TMP/archive.log")" "byte-identical to" "comparison mode reports byte identity"
+cp "$TMP/version.before-archive.json" "$REPO/web/version.json"
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
@@ -286,7 +318,7 @@ printf 'shim wasm for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember
 : > "$SHIM_LOG"
 rm -f "$SHIM_GIT_INDEX"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/prebuilt.log" 2>&1; then
-    ok "complete prebuilt mode published"
+    ok "complete prebuilt mode assembled the tree"
 else
     bad "complete prebuilt mode failed"
     tail -40 "$TMP/prebuilt.log" >&2
@@ -350,7 +382,7 @@ PY
 done
 cp "$TMP/catalog.saved" "$REPO/web/games.json"
 
-echo "== a missing League page is refused before any publish =="
+echo "== a missing League page is refused before any archive =="
 mv "$REPO/web/$LEAGUE_LIVE/index.html" "$TMP/league-index.saved"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing-league.log" 2>&1; then
@@ -359,10 +391,10 @@ else
     ok "a missing live League page was refused"
 fi
 contains "$(cat "$TMP/missing-league.log")" "$LEAGUE_LIVE/index.html" "the failure identifies the missing League page"
-if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing League page reached a publish"; else ok "missing League page never reached a publish"; fi
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing League page attempted a branch push"; else ok "missing League page attempted no branch push"; fi
 mv "$TMP/league-index.saved" "$REPO/web/$LEAGUE_LIVE/index.html"
 
-echo "== a missing Arena controls script is refused before any publish =="
+echo "== a missing Arena controls script is refused before any archive =="
 mv "$REPO/web/$ARENA_LIVE/settings.js" "$TMP/settings.js.saved"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing-settings.log" 2>&1; then
@@ -371,7 +403,7 @@ else
     ok "a live Arena page without settings.js was refused"
 fi
 contains "$(cat "$TMP/missing-settings.log")" "settings.js" "the missing-controls failure names settings.js"
-if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing settings.js reached a publish"; else ok "missing settings.js never reached a publish"; fi
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "missing settings.js attempted a branch push"; else ok "missing settings.js attempted no branch push"; fi
 mv "$TMP/settings.js.saved" "$REPO/web/$ARENA_LIVE/settings.js"
 
 echo "== the Arena cache-token contract fails closed =="
@@ -389,7 +421,7 @@ for fixture in missing duplicate two-digit; do
         ok "the $fixture Arena settings cache token was refused"
     fi
     contains "$(cat "$TMP/settings-$fixture.log")" "Arena settings cache key must occur exactly once" "the $fixture cache-token failure explains the contract"
-    if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "$fixture settings cache token reached a publish"; else ok "$fixture settings cache token never reached a publish"; fi
+    if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "$fixture settings cache token attempted a branch push"; else ok "$fixture settings cache token attempted no branch push"; fi
 done
 cp "$TMP/arena-index.saved" "$REPO/web/$ARENA_LIVE/index.html"
 
@@ -432,7 +464,7 @@ else
     ok "newer independently published Fire is protected"
 fi
 contains "$(cat "$TMP/peer-fire.log")" "live Fire is newer than this source" "Fire downgrade refusal identifies the source mismatch"
-if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "Fire downgrade reached a publish"; else ok "Fire downgrade never reached a publish"; fi
+if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "Fire downgrade attempted a branch push"; else ok "Fire downgrade attempted no branch push"; fi
 rm "$SEED/games/fire/v2/release.json"
 
 "$PY" - "$REPO/web/games.json" <<'PY'

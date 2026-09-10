@@ -6,8 +6,8 @@
 # NO HOST IS CONTACTED. `ssh`, `scp`, `cargo` and `sleep` are replaced by the
 # scripts in deploy/tests/shims, which log their argv and answer the few
 # things the deploys read back. The git side is real: the test builds a small
-# repository with a gh-pages branch and a bare `origin`, so `git archive`,
-# `git show <ref>:…`, the gh-pages worktree, the commit and the push are all
+# repository with an address-book branch and a bare `origin`, so `git archive`,
+# `git show <ref>:…`, the branch update, the commit and the push are all
 # the genuine article.
 #
 # What it is here to catch: the arena deploy taking the fire deploy's keys off
@@ -58,20 +58,21 @@ git add -A
 git commit -qm "first"
 OLD_SHA="$(git rev-parse --short HEAD)"
 
-# A gh-pages branch carrying the protocol keys deploy-pages.sh writes, so the
+# An address-book branch carrying the protocol keys deploy-pages.sh writes, so the
 # legacy address keys have something to be computed against.
-git checkout -q --orphan gh-pages
+git checkout -q --orphan host-book
 git rm -rq --cached .
 find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
 printf '{"v": "1", "proto": 12, "fire_proto": 1}\n' > server.json
 git add server.json
 git commit -qm "pages"
 git checkout -q main
-git push -q origin main gh-pages
+git push -q origin main host-book
+export EMBER_PUBLISH="$ORIGIN#host-book"
 
 BOOK_OF() {
-    # The server.json as it now stands on the bare origin's gh-pages.
-    git -C "$ORIGIN" show gh-pages:server.json > "$TMP/book.json"
+    # The server.json as it now stands on the bare origin's address-book branch.
+    git -C "$ORIGIN" show host-book:server.json > "$TMP/book.json"
     echo "$TMP/book.json"
 }
 
@@ -225,29 +226,29 @@ BOOK="$(BOOK_OF)"
 is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="dusky-lynx"][0]["proto"]')" "11" \
     "and publishes the protocol read from crates/pong-core"
 
-echo "== another writer moved gh-pages, and a worktree still holds the local branch =="
+echo "== another writer moved the address-book branch =="
 # The two states that used to make a deploy fail permanently, together, because
-# one caused the other. Nothing here fetches the LOCAL gh-pages, so a second
+# one caused the other. Nothing here fetched the stale local branch, so a second
 # writer's publish left it behind and the push was rejected as a
 # non-fast-forward; and the rejection aborted the script before its
-# `worktree remove`, so gh-pages stayed checked out in a temp directory and
+# `worktree remove`, so the branch stayed checked out in a temp directory and
 # every later deploy — of either game, and the pages deploy — died at its own
 # `worktree add`. Both times the tunnel had already been restarted, so the book
 # was left naming a dead domain.
 OTHER="$TMP/other"
-git clone -q --branch gh-pages "$ORIGIN" "$OTHER"
+git clone -q --branch host-book "$ORIGIN" "$OTHER"
 git -C "$OTHER" config user.name "another writer"
 git -C "$OTHER" config user.email "other@ember.local"
 bash "$REPO/deploy/publish-host.sh" --book "$OTHER/server.json" --name distant-plover \
     --game arena --url wss://distant.example --proto 12 --version r1 >/dev/null
 git -C "$OTHER" commit -qam "another writer publishes"
-git -C "$OTHER" push -q origin gh-pages
+git -C "$OTHER" push -q origin host-book
 : > "$SHIM_LOG"
 if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
         bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/arena5.log" 2>&1; then
-    ok "a deploy publishes over a local gh-pages that is behind origin"
+    ok "a deploy publishes over a stale local address-book branch"
 else
-    bad "the deploy FAILED with the local gh-pages behind origin"
+    bad "the deploy FAILED with a stale local address-book branch"
     tail -30 "$TMP/arena5.log" >&2
 fi
 BOOK="$(BOOK_OF)"
@@ -256,27 +257,38 @@ is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("coral-shrike")')" "1"
 is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("distant-plover")')" "1" \
     "and the other writer's entry was merged, not overwritten"
 case "$(git -C "$REPO" worktree list)" in
-    *ember-pages*) bad "the deploy left a gh-pages worktree registered" ;;
-    *)             ok "and no gh-pages worktree of this checkout was created at all" ;;
+    *ember-pages*) bad "the deploy left an address-book worktree registered" ;;
+    *)             ok "and no address-book worktree of this checkout was created at all" ;;
 esac
 
-echo "== a worktree already holding gh-pages does not wedge a deploy =="
-# The leaked state itself: an earlier failure left gh-pages checked out in a
+echo "== a worktree already holding the address-book branch does not wedge a deploy =="
+# The leaked state itself: an earlier failure left the branch checked out in a
 # temp directory, and from then on every deploy of either game — and the pages
 # deploy — died at its own `worktree add` with "already used by worktree",
 # after restarting the server and minting a fresh tunnel.
-git -C "$REPO" worktree add -q "$TMP/stale-pages" gh-pages
+git -C "$REPO" worktree add -q "$TMP/stale-book" host-book
 : > "$SHIM_LOG"
 if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
         bash "$REPO/deploy/deploy-fire-online.sh" > "$TMP/fire2.log" 2>&1; then
-    ok "the fire deploy runs with gh-pages checked out elsewhere"
+    ok "the fire deploy runs with the address-book branch checked out elsewhere"
 else
-    bad "the fire deploy FAILED with gh-pages checked out elsewhere"
+    bad "the fire deploy FAILED with the address-book branch checked out elsewhere"
     tail -30 "$TMP/fire2.log" >&2
 fi
 BOOK="$(BOOK_OF)"
 is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="coral-shrike"][0]["fire_ws"]')" \
     "wss://coral-fire.trycloudflare.com" "and published fire's address anyway"
-git -C "$REPO" worktree remove --force "$TMP/stale-pages"
+git -C "$REPO" worktree remove --force "$TMP/stale-book"
+
+echo "== publication is opt-in =="
+BEFORE_BOOK="$(git -C "$ORIGIN" rev-parse host-book)"
+if SHIM_HOST_NAME=private-wren SHIM_TUNNEL=private EMBER_HOST=privatebox EMBER_PUBLISH=none \
+        bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/private.log" 2>&1; then
+    ok "an unpublishing deploy still brings the server online"
+else
+    bad "the unpublishing deploy failed"
+fi
+contains "$(cat "$TMP/private.log")" "the entry was not published" "the opt-out is explicit"
+is "$(git -C "$ORIGIN" rev-parse host-book)" "$BEFORE_BOOK" "the address-book branch did not move"
 
 summary ssh-deploys

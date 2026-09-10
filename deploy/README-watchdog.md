@@ -14,11 +14,13 @@ It cannot fix: the published address. A Cloudflare **quick** tunnel mints a new 
 
 Runs on the workstation, where the git credentials already are. Nothing has to put a GitHub token on the game host.
 
-It probes the address the **pages are currently publishing**, not the server directly. That is deliberate: it is the thing a player actually depends on, and it goes red if the server, the tunnel, or `server.json` is wrong — including the address-drift case above. When it goes red the watchdog redeploys, which republishes the new hostname.
+It probes the address the **pages are currently publishing**, not the server directly. That is deliberate: it is the thing a player actually depends on, and it goes red if the server, the tunnel, or `server.json` is wrong — including the address-drift case above. When it goes red the watchdog runs the host deploy; address publication remains a separate deploy concern.
 
-It also watches `origin/main`. When a commit lands, the running servers are stale, so it redeploys them.
+It also watches `origin/main`. When a release promotion advances the branch, the running servers are stale, so it redeploys them from the same source used by the published client.
 
-It refuses to act on a dirty tree or a branch it cannot fast-forward, since either means a human is mid-change and redeploying would ship something nobody tested.
+The watchdog never deploys Pages and never reads a retired publication branch as a fallback. Pages deployment belongs to `.github/workflows/pages.yml`, and an unavailable served book causes address checks to wait rather than turning a fetch failure into a fleet-wide redeploy.
+
+It refuses to act on a dirty tree or a branch it cannot fast-forward, since either state means the checkout is not the clean release line the deploy expects.
 
 ```
 bash deploy/watchdog.sh            # loop, WATCHDOG_INTERVAL=300 by default

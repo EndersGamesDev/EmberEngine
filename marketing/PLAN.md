@@ -24,7 +24,7 @@ A session cannot post to social channels without an account, so the drafts in `p
 - One deep post per week drawn from `docs/` — the address book (`hosts.md`), the asset pipeline, the determinism story, the os-error-997 hunt — the docs are already written; the post is a retelling.
 - Triage every issue within a day; label the small backlog lines `good first issue` (the one-line `Obj::from_kind` editor fix, the `publish-host.sh` mirror-mode guard, the `deploy-pong-online.sh` port-comment drift).
 - A release per arena version, notes taken from the README's section.
-- The heartbeat keeps the lane honest: an idle marker in `heartbeat.log` means the last session ended without closing the board, and the next session starts by asking why.
+- The retired heartbeat made idle intervals visible in `heartbeat.log`; pull requests and CI now provide the integration record, while the closed log remains historical evidence.
 
 ## Constraints, stated once
 

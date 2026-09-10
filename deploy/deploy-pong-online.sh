@@ -3,8 +3,8 @@
 #   1. build + (re)start arena-server on the target host (127.0.0.1:7780)
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
-#   3. publish the new domain to server.json on GitHub Pages so the web
-#      page finds the current server
+#   3. optionally publish the new domain to an explicitly configured address
+#      book after the public probe succeeds
 #   4. health-check through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-pong-online.sh
@@ -45,6 +45,7 @@ cd "$REPO_DIR"
 #
 #     EMBER_REF=v12 bash deploy/deploy-pong-online.sh
 REF="${EMBER_REF:-HEAD}"
+EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 
 # `git archive` below deploys the COMMITTED tree, so refuse a dirty one rather
 # than shipping something other than what is in front of you. Only when the ref
@@ -328,25 +329,38 @@ PROTO="$(git show "$REF:crates/$ARENA_CRATE/src/proto.rs" \
 # from an older commit pointed every frozen page at a protocol they could not
 # join.
 #
-# `--repo`, not a gh-pages worktree of this checkout. Two failures came out of
-# that worktree and both were permanent. It checked out the workstation's LOCAL
-# gh-pages, which nothing ever fetches — `git fetch` moves origin/gh-pages and
-# not the branch — so as soon as any other writer published (a second
-# workstation, a host running `host.sh` with EMBER_PUBLISH=upstream) the push
-# was rejected as a non-fast-forward. And the removal at the end of the block
-# was not a trap, so that rejection also left the worktree registered with
-# gh-pages checked out in a temp directory, which made EVERY later deploy of
-# either game and the pages deploy itself die at their own `worktree add` until
-# a human ran `git worktree remove`. Both times the tunnel had already been
-# restarted, so the book was left naming a domain that no longer existed.
+# `--repo`, not a publication-branch worktree of this checkout. Two failures
+# came out of that worktree and both were permanent. It used a stale local
+# branch, so another writer's publish made the push non-fast-forward; the
+# failure then left the worktree registered and wedged every later deploy that
+# tried to add it. Both times the tunnel had already been restarted, so the
+# book was left naming a domain that no longer existed.
 # publish-host.sh fetches the branch one commit deep into its own temp
 # repository under its own EXIT trap, and retries by refetching if the branch
 # moves under it; nothing it does can touch this checkout's worktree registry.
-bash "$REPO_DIR/deploy/publish-host.sh" \
-    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
-    --name "$HOST_NAME" \
-    --game arena --url "$WS_URL" --proto "$PROTO" \
-    --version "$VERSION" --commit "$COMMIT" \
-    --by "$(id -un)@$REMOTE"
+PUBLISH_ARGS=(--name "$HOST_NAME" --game arena --url "$WS_URL" --proto "$PROTO" \
+    --version "$VERSION" --commit "$COMMIT" --by "$(id -un)@$REMOTE")
+case "$EMBER_PUBLISH" in
+    none|"")
+        ENTRY="$(mktemp -t ember-arena-host-XXXXXX.json)"
+        : > "$ENTRY"
+        bash "$REPO_DIR/deploy/publish-host.sh" --book "$ENTRY" --file host.json "${PUBLISH_ARGS[@]}"
+        echo "   EMBER_PUBLISH=none; the entry was not published:"
+        cat "$ENTRY"
+        rm -f "$ENTRY"
+        ;;
+    *#*)
+        PUBLISH_REPO="${EMBER_PUBLISH%#*}"
+        PUBLISH_BRANCH="${EMBER_PUBLISH##*#}"
+        [ -n "$PUBLISH_REPO" ] && [ -n "$PUBLISH_BRANCH" ] \
+            || { echo "FAILED: EMBER_PUBLISH needs <git url>#<branch>." >&2; exit 1; }
+        bash "$REPO_DIR/deploy/publish-host.sh" --repo "$PUBLISH_REPO" --branch "$PUBLISH_BRANCH" \
+            --file server.json "${PUBLISH_ARGS[@]}"
+        ;;
+    *)
+        echo "FAILED: EMBER_PUBLISH must be none or <git url>#<branch>." >&2
+        exit 1
+        ;;
+esac
 
-echo "== ONLINE: $HOST_NAME -> $WS_URL (the page picks it from server.json) =="
+echo "== ONLINE: $HOST_NAME -> $WS_URL =="

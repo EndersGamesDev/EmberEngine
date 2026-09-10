@@ -11,7 +11,7 @@
 # first run with every setting commented out at its default. A real value in
 # the environment always beats the file, so a one-off run needs no edit:
 #
-#   EMBER_REF=v12 bash deploy/host.sh up
+#   EMBER_REF=main bash deploy/host.sh up
 #
 # Run deploy/bootstrap-host.sh first on a bare host. This script itself needs
 # git, a Rust toolchain, cloudflared and python3. The first build takes minutes;
@@ -46,7 +46,7 @@ if [ ! -f "$CONF" ]; then
 #EMBER_REPO=https://github.com/EndersGamesDev/EmberEngine.git
 # Which commit this host runs. A host may stay on an older one on purpose:
 # it keeps serving the frozen pages that speak its protocol.
-#EMBER_REF=origin/main
+#EMBER_REF=main
 
 # This host's name in the address book. Leave unset to let deploy/host-name.sh
 # generate one and keep it in ~/.ember/host-name.
@@ -54,8 +54,7 @@ if [ ! -f "$CONF" ]; then
 
 # Where the entry is published:
 #   none              print it and publish nothing (the default)
-#   upstream          merge it into the project's own gh-pages (needs push rights)
-#   <git url>#<branch>  write host.json there and list it as a mirror
+#   <git url>#<branch>  write host.json to a separate address-book mirror
 #EMBER_PUBLISH=none
 
 # Loopback ports the three servers bind. The tunnels are what the world sees.
@@ -87,7 +86,7 @@ _PRE_ENV="$(export -p | grep -E '^(declare -x |export )EMBER_' || true)"
 eval "$_PRE_ENV"
 
 EMBER_REPO="${EMBER_REPO:-https://github.com/EndersGamesDev/EmberEngine.git}"
-EMBER_REF="${EMBER_REF:-origin/main}"
+EMBER_REF="${EMBER_REF:-main}"
 EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 EMBER_ARENA_PORT="${EMBER_ARENA_PORT:-7780}"
 EMBER_FIRE_PORT="${EMBER_FIRE_PORT:-7781}"
@@ -598,7 +597,7 @@ publish_current() {  # <name> <version> <commit> [missing game ids...]
 
 # --- the address book ------------------------------------------------------
 # EMBER_PUBLISH decides where the entry goes, and nothing else in this script
-# needs to know which of the three it was.
+# needs to know whether publication is disabled or uses a separate mirror.
 publish_entry() {
     local name="$1"; shift
     local pub="$EMBER_PUBLISH" args=()
@@ -611,24 +610,20 @@ publish_entry() {
             echo "EMBER_PUBLISH=none, so this entry was NOT published:"
             cat "$RUN/host.json"
             ;;
-        upstream)
-            bash "$(helper publish-host.sh)" --repo "$EMBER_REPO" --branch gh-pages \
-                --file server.json "${args[@]}"
-            ;;
         *#*)
             bash "$(helper publish-host.sh)" --repo "${pub%#*}" --branch "${pub##*#}" \
                 --file host.json "${args[@]}"
             ;;
         *)
-            die "EMBER_PUBLISH='$pub' is not none, upstream, or <git url>#<branch>"
+            die "EMBER_PUBLISH='$pub' is not none or <git url>#<branch>"
             ;;
     esac
 }
 
 # Always leave the proven, current entry on the host itself. A workstation
-# with the upstream key can fetch this file and republish it; the host never
-# needs that key. Kept separate from publish_entry so an unchanged `update`
-# can refresh the file without pushing or restarting anything.
+# with an address-book key can fetch this file and republish it; the host
+# never needs that key. Kept separate from publish_entry so an unchanged
+# `update` can refresh the file without pushing or restarting anything.
 write_local_entry() {
     local name="$1"; shift
     bash "$(helper publish-host.sh)" --book "$RUN/host.json" --file host.json \
@@ -640,7 +635,6 @@ write_local_entry() {
 fetch_published() {
     local repo branch file tmp
     case "$EMBER_PUBLISH" in
-        upstream) repo="$EMBER_REPO"; branch=gh-pages; file=server.json ;;
         *#*)      repo="${EMBER_PUBLISH%#*}"; branch="${EMBER_PUBLISH##*#}"; file=host.json ;;
         *)        return 1 ;;
     esac
@@ -670,15 +664,37 @@ sync_source() {
 
 # The commit EMBER_REF names right now.
 #
-# `origin/<ref>` is tried FIRST and the bare ref second, which looks backwards
-# and is not: `git clone` leaves a local branch behind, `git fetch` never
-# moves it, and resolving `main` to that stale local branch would make
-# `update` report "up to date" forever while origin/main ran away. A sha or a
-# tag has no origin/ form and falls through to the second attempt.
+# Branch-shaped names resolve only under refs/remotes/origin after the pruning
+# fetch. A missing remote branch therefore fails closed instead of selecting a
+# stale local branch left by clone or an earlier checkout. Only an explicit
+# refs/tags name or a full object id may resolve directly, because each names
+# an immutable object rather than a branch that can disappear upstream.
 resolve_ref() {
-    git -C "$SRC" rev-parse --verify -q "origin/${EMBER_REF}^{commit}" \
-        || git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}" \
-        || return 1
+    local branch
+    case "$EMBER_REF" in
+        refs/tags/*)
+            git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}"
+            ;;
+        refs/heads/*)
+            branch="${EMBER_REF#refs/heads/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        refs/remotes/origin/*)
+            branch="${EMBER_REF#refs/remotes/origin/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        origin/*)
+            branch="${EMBER_REF#origin/}"
+            git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${branch}^{commit}"
+            ;;
+        *)
+            if [[ "$EMBER_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                git -C "$SRC" rev-parse --verify -q "${EMBER_REF}^{commit}"
+            else
+                git -C "$SRC" rev-parse --verify -q "refs/remotes/origin/${EMBER_REF}^{commit}"
+            fi
+            ;;
+    esac
 }
 
 # --- commands --------------------------------------------------------------

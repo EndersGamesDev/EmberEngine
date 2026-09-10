@@ -1,0 +1,409 @@
+# release: validate one signed series tag, build its Pages release archive,
+# attach that archive to a draft, fast-forward main, then publish the release.
+# Every validation fails closed so a release name, source, CI evidence, version,
+# changelog and artifact cannot describe different commits.
+#
+# The SSH deploy key is main's only ruleset bypass actor. Generating the deploy
+# key and storing RELEASE_DEPLOY_KEY are credential steps performed outside
+# repository history by the repository owner; repository code contains no key.
+name: release
+
+on:
+  push:
+    tags:
+      - '*-[0-9]*.[0-9]*.[0-9]*'
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate tag
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      series: ${{ steps.tag.outputs.series }}
+      version: ${{ steps.tag.outputs.version }}
+      sha: ${{ steps.provenance.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: validate tag shape and series
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          pattern='^(.+)-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0))$'
+          if [[ ! "$TAG" =~ $pattern ]]; then
+            echo "release: tag '$TAG' does not have shape SERIES-MAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          SERIES="${BASH_REMATCH[1]}"
+          VERSION="${BASH_REMATCH[2]}"
+          python3 - "$SERIES" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          series = sys.argv[1]
+          catalog = json.loads(pathlib.Path("web/games.json").read_text(encoding="utf-8"))
+          games = {game.get("id") for game in catalog.get("games", [])}
+          labs_root = pathlib.Path("web/labs")
+          labs = {path.name for path in labs_root.iterdir() if path.is_dir()}
+          if series != "ember" and series not in games and series not in labs:
+              raise SystemExit("release: series %r is not ember, a catalog game id, or a lab id" % series)
+          PY
+          {
+            echo "tag=$TAG"
+            echo "series=$SERIES"
+            echo "version=$VERSION"
+          } >> "$GITHUB_OUTPUT"
+      - name: require an annotated tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$(git cat-file -t "refs/tags/$TAG")" != tag ]; then
+            echo "release: $TAG is not an annotated tag object" >&2
+            exit 1
+          fi
+      - name: verify the tag against committed release keys
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          export GNUPGHOME
+          GNUPGHOME="$(mktemp -d "$RUNNER_TEMP/release-gnupg.XXXXXX")"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mapfile -t keys < <(find deploy/keys -maxdepth 1 -type f -name '*.asc' -print | sort)
+          if [ "${#keys[@]}" -eq 0 ]; then
+            echo "release: deploy/keys contains no armored public keys" >&2
+            exit 1
+          fi
+          gpg --batch --import "${keys[@]}"
+          git verify-tag "$TAG"
+      - name: verify develop provenance and fast-forward room
+        id: provenance
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TARGET_SHA="$(git rev-parse "$TAG^{commit}")"
+          git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
+          if ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/develop; then
+            echo "release: $TARGET_SHA is not an ancestor of origin/develop" >&2
+            exit 1
+          fi
+          if main_ref="$(git ls-remote --exit-code --heads origin refs/heads/main)"; then
+            [ -n "$main_ref" ] || { echo "release: origin/main lookup returned no ref" >&2; exit 1; }
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            if ! git merge-base --is-ancestor refs/remotes/origin/main "$TARGET_SHA"; then
+              echo "release: origin/main cannot fast-forward to $TARGET_SHA" >&2
+              exit 1
+            fi
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "release: origin/main lookup failed with status $status" >&2
+              exit "$status"
+            fi
+            echo "release: origin/main does not exist yet; the first promotion may create it"
+          fi
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: require a successful ci workflow run at the tag commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ steps.provenance.outputs.sha }}
+        run: |
+          set -euo pipefail
+          runs="$RUNNER_TEMP/ci-runs.json"
+          gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/$REPOSITORY/actions/runs?head_sha=$TARGET_SHA&status=completed&per_page=100" > "$runs"
+          run_id="$(python3 - "$runs" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          candidates = [
+              run for run in payload.get("workflow_runs", [])
+              if run.get("path") == ".github/workflows/ci.yml"
+              and run.get("event") == "push"
+              and run.get("head_branch") == "develop"
+              and run.get("conclusion") == "success"
+          ]
+          if not candidates:
+              raise SystemExit("release: no successful completed develop push run of .github/workflows/ci.yml exists at the tag commit")
+          newest = max(candidates, key=lambda run: (run.get("run_started_at") or run.get("created_at") or "", run.get("id") or 0))
+          print(newest["id"])
+          PY
+          )"
+          jobs="$RUNNER_TEMP/ci-jobs.json"
+          gh api -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/$REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100" > "$jobs"
+          python3 - "$jobs" "$run_id" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          required = {"cores + servers", "deploy scripts", "workspace"}
+          payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          jobs = payload.get("jobs", [])
+          names = [job.get("name") for job in jobs]
+          if len(jobs) != len(required) or set(names) != required:
+              raise SystemExit("release: ci.yml run %s jobs are %r, expected exactly %r" % (sys.argv[2], names, sorted(required)))
+          failed = [job.get("name") for job in jobs if job.get("conclusion") != "success"]
+          if failed:
+              raise SystemExit("release: ci.yml run %s has unsuccessful required jobs: %s" % (sys.argv[2], ", ".join(sorted(failed))))
+          print("release: ci.yml run %s has exactly three successful required jobs" % sys.argv[2])
+          PY
+      - name: require the series manifest version
+        env:
+          SERIES: ${{ steps.tag.outputs.series }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 - "$SERIES" "$VERSION" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          series, expected = sys.argv[1:]
+          root = pathlib.Path(".")
+
+          rows = {}
+          for line in pathlib.Path("docs/versioning.md").read_text(encoding="utf-8").splitlines():
+              cells = [cell.strip() for cell in line.split("|")]
+              if len(cells) < 4 or not re.fullmatch(r"`[^`]+`", cells[1]):
+                  continue
+              row_series = cells[1][1:-1]
+              packages = re.findall(r"`([^`]+)`", cells[2])
+              if packages:
+                  if row_series in rows:
+                      raise SystemExit("release: docs/versioning.md repeats series %r" % row_series)
+                  rows[row_series] = packages
+
+          manifests = {}
+          for manifest in sorted(root.rglob("Cargo.toml")):
+              if ".git" in manifest.parts or "target" in manifest.parts:
+                  continue
+              with manifest.open("rb") as stream:
+                  package = tomllib.load(stream).get("package")
+              if not package:
+                  continue
+              name = package.get("name")
+              if name in manifests:
+                  raise SystemExit("release: package %r has multiple manifests" % name)
+              manifests[name] = (manifest, package.get("version"))
+
+          dedicated = {package for packages in rows.values() for package in packages}
+          if series == "ember":
+              manifest = root / "Cargo.toml"
+              with manifest.open("rb") as stream:
+                  actual = tomllib.load(stream)["workspace"]["package"]["version"]
+              if actual != expected:
+                  raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
+              checked = [str(manifest)]
+              for name, (path, value) in sorted(manifests.items()):
+                  if path.parts[0] not in {"crates", "tools"} or name in dedicated:
+                      continue
+                  if value != {"workspace": True}:
+                      raise SystemExit("release: Ember crate %s does not inherit the workspace version" % path)
+                  checked.append(str(path))
+          else:
+              packages = rows.get(series)
+              if not packages:
+                  raise SystemExit("release: docs/versioning.md has no dedicated crate set for series %r" % series)
+              checked = []
+              for package in packages:
+                  item = manifests.get(package)
+                  if item is None:
+                      raise SystemExit("release: documented crate %r has no manifest" % package)
+                  manifest, actual = item
+                  if actual != expected:
+                      raise SystemExit("release: %s declares %s, tag declares %s" % (manifest, actual, expected))
+                  checked.append(str(manifest))
+          print("release: %s matches %s across %d manifest(s)" % (series, expected, len(checked)))
+          PY
+      - name: require changelog consistency
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: bash deploy/tests/test-changelog.sh --tag "$TAG"
+
+  build:
+    name: build release asset
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - name: install matching wasm-bindgen CLI
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          with pathlib.Path("Cargo.lock").open("rb") as stream:
+              lock = tomllib.load(stream)
+          versions = {package["version"] for package in lock["package"] if package["name"] == "wasm-bindgen"}
+          if len(versions) != 1:
+              raise SystemExit("release: Cargo.lock does not contain exactly one wasm-bindgen version")
+          print(versions.pop())
+          PY
+          )"
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: build the whole Pages site archive
+        env:
+          EMBER_PAGES_ARCHIVE: ${{ runner.temp }}/release-asset/ember-pages.tar.gz
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$EMBER_PAGES_ARCHIVE")"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          echo "release: assembling the whole Pages site with the shared build"
+          bash deploy/deploy-pages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages-release-${{ needs.validate.outputs.sha }}
+          path: ${{ runner.temp }}/release-asset/ember-pages.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  draft:
+    name: prepare release draft
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: pages-release-${{ needs.validate.outputs.sha }}
+          path: ${{ runner.temp }}/release-asset
+      - name: create or update this GitHub release as a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: bash deploy/github-releases.sh --apply --tag "$TAG" --draft
+      - name: attach the Pages release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/release-asset/ember-pages.tar.gz" --clobber
+      - name: require one attached asset on the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "$TAG" --json isDraft,assets --jq '[.isDraft, ([.assets[] | select(.name == "ember-pages.tar.gz")] | length)] | @tsv')"
+          if [ "$state" != $'true\t1' ]; then
+            echo "release: $TAG must remain a draft with exactly one ember-pages.tar.gz asset, got '$state'" >&2
+            exit 1
+          fi
+
+  promote:
+    name: fast-forward main
+    needs: [validate, draft]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: configure the release deploy key
+        env:
+          RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/release-ssh"
+          printf '%s\n' "$RELEASE_DEPLOY_KEY" > "$RUNNER_TEMP/release-ssh/key"
+          chmod 600 "$RUNNER_TEMP/release-ssh/key"
+          ssh-keyscan -t ed25519 github.com > "$RUNNER_TEMP/release-ssh/known_hosts"
+      - name: push the peeled tag commit to main
+        env:
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add release-main "git@github.com:$REPOSITORY.git"
+          GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/release-ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/release-ssh/known_hosts" \
+            git push release-main "$TAG^{commit}:refs/heads/main"
+
+  discard-failed-draft:
+    name: discard draft after failed promotion
+    needs: [validate, draft, promote]
+    if: ${{ always() && needs.draft.result == 'success' && needs.promote.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: delete the unpublished release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" != true ]; then
+            echo "release: refusing to delete $TAG because it is not a draft" >&2
+            exit 1
+          fi
+          gh release delete "$TAG" --yes
+
+  publish:
+    name: publish promoted release
+    needs: [validate, promote]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: bash deploy/github-releases.sh --apply --tag "$TAG"
+      - name: require the published release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "$TAG" --json isDraft,publishedAt,assets --jq '[.isDraft, (.publishedAt // ""), ([.assets[] | select(.name == "ember-pages.tar.gz")] | length)] | @tsv')"
+          IFS=$'\t' read -r is_draft published_at asset_count <<< "$state"
+          if [ "$is_draft" != false ] || [ -z "$published_at" ] || [ "$asset_count" != 1 ]; then
+            echo "release: $TAG is not a published release with exactly one ember-pages.tar.gz asset" >&2
+            exit 1
+          fi

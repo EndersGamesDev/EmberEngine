@@ -20,7 +20,7 @@ The test for `CLAUDE.md` is narrow: it is loaded into **every** session in this 
 
 ## 2. Branch and PR shape
 
-- Work lands on a branch, never directly on `main`.
+- Work lands on a branch and enters `develop` through a pull request, never through a direct integration push; `main` advances separately to validated release-tag commits.
 - One topic per commit. Three independent changes are three commits, not one.
 - Commit messages follow `docs/commit-messages.md`: each body explains why the change is shaped that way and states explicitly what was and was not verified.
 - The branch is pushed early, before it is finished, so other workers can see it exists.

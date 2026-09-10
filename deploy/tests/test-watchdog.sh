@@ -7,9 +7,8 @@
 # the shims in deploy/tests/shims, and the two deploy scripts are replaced in
 # the test's own repository by recorders that append a line to a file — what is
 # under test is which redeploys the watchdog DECIDES on, not what a deploy
-# does. The git side is real: a repository with a bare origin carrying main and
-# gh-pages, so the fetch, the state files and the origin/gh-pages fallback are
-# the genuine article.
+# does. The git side is real: a repository with a bare origin carrying main,
+# so the fetch and the state files are the genuine article.
 #
 # What it is here to catch: a book that cannot be read being mistaken for
 # "nothing is published", which answers a CDN blip by redeploying every game on
@@ -37,7 +36,7 @@ export SHIM_LOG="$TMP/argv.log"
 export SHIM_HOST_NAME=amber-otter
 : > "$SHIM_LOG"
 
-# --- a repository with a bare origin, main and gh-pages ---------------------
+# --- a repository with a bare origin and main -------------------------------
 REPO="$TMP/repo"
 ORIGIN="$TMP/origin.git"
 DEPLOYED="$TMP/deployed.log"
@@ -54,7 +53,7 @@ rm -rf "$REPO/deploy/tests"
 # The deploys become recorders. A watchdog test must be able to tell "it
 # decided to redeploy" from "it did not", and running the real scripts here
 # would only re-test them.
-for f in deploy-pong-online.sh deploy-fire-online.sh deploy-pages.sh; do
+for f in deploy-pong-online.sh deploy-fire-online.sh; do
     cat > "$REPO/deploy/$f" <<'REC'
 #!/usr/bin/env bash
 # test recorder; see deploy/tests/test-watchdog.sh
@@ -65,15 +64,6 @@ git add -A
 git commit -qm "first"
 git push -q origin main
 HEAD_SHA="$(git rev-parse HEAD)"
-
-git checkout -q --orphan gh-pages
-git rm -rq --cached .
-find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-printf 'not json at all\n' > server.json
-git add server.json
-git commit -qm "an unreadable book"
-git push -q origin gh-pages
-git checkout -q main
 
 STATE="$TMP/state"
 mkdir -p "$STATE"
@@ -106,15 +96,14 @@ printf '{"v": "1", "proto": 12, "fire_proto": 1, "hosts": []}\n' > "$EMPTY_BOOK"
 # then one --once pass. Everything the watchdog decided is in its log.
 run_pass() {
     echo "$HEAD_SHA" > "$STATE/.watchdog-state-fakehost"
-    echo "$HEAD_SHA" > "$STATE/.watchdog-state-pages"
     : > "$DEPLOYED"
     bash "$REPO/deploy/watchdog.sh" --once > "$TMP/pass.log" 2>&1 || true
     cat "$TMP/pass.log"
 }
 
 echo "== an unreadable book is not 'nothing is published' =="
-# The book 404s and the copy on gh-pages will not parse, so this pass has no
-# book at all. The old code turned that into a fleet-wide redeploy.
+# The book 404s, so this pass has no book at all. The old code turned that into
+# a fleet-wide redeploy.
 SHIM_BOOK=missing OUT="$(SHIM_BOOK=missing run_pass)"
 contains "$OUT" "not treating hosts as unpublished this pass" "the pass says the book is unavailable"
 is "$(wc -l < "$DEPLOYED" | tr -d ' ')" "0" "and nothing was redeployed"
@@ -122,19 +111,6 @@ case "$OUT" in
     *"has no published address"*) bad "an unreadable book was read as an unpublished host" ;;
     *)                            ok "no host was reported as unpublished" ;;
 esac
-
-echo "== the fetched gh-pages is the fallback when the CDN is not =="
-# `git fetch origin main gh-pages` has already brought the book down, so a
-# Pages outage need not cost a pass at all.
-git checkout -q gh-pages
-cp "$GOOD" server.json
-git commit -qam "a readable book"
-git push -q origin gh-pages
-git checkout -q main
-OUT="$(SHIM_BOOK=missing run_pass)"
-contains "$OUT" "using origin/gh-pages for this pass" "it falls back to the fetched branch"
-contains "$OUT" "arena OK" "and probes the address it found there"
-is "$(wc -l < "$DEPLOYED" | tr -d ' ')" "0" "so still nothing was redeployed"
 
 echo "== a published address that answers is left alone =="
 OUT="$(SHIM_BOOK=ok SHIM_BOOK_FILE="$GOOD" run_pass)"
@@ -155,13 +131,13 @@ contains "$OUT" "has no published address; will deploy it" "an unlisted host is 
 contains "$(cat "$DEPLOYED")" "DEPLOYED deploy-pong-online.sh host=fakehost" "and deployed"
 contains "$(cat "$DEPLOYED")" "DEPLOYED deploy-fire-online.sh host=fakehost" "both games"
 
-echo "== a new commit redeploys whatever the book says =="
+echo "== a promoted commit redeploys hosts even when the book is unavailable =="
 : > "$SHIM_LOG"
-echo "$HEAD_SHA" > "$STATE/.watchdog-state-fakehost"
-echo "0000000000000000000000000000000000000000" > "$STATE/.watchdog-state-pages"
+echo "0000000000000000000000000000000000000000" > "$STATE/.watchdog-state-fakehost"
 : > "$DEPLOYED"
-SHIM_BOOK=missing bash "$REPO/deploy/watchdog.sh" --once > "$TMP/pages.log" 2>&1 || true
-contains "$(cat "$TMP/pages.log")" "redeploying pages" "an unreadable book does not block the pages deploy"
-contains "$(cat "$DEPLOYED")" "DEPLOYED deploy-pages.sh" "which ran"
+SHIM_BOOK=missing bash "$REPO/deploy/watchdog.sh" --once > "$TMP/release.log" 2>&1 || true
+contains "$(cat "$TMP/release.log")" "origin/main moved" "the release-line change is detected"
+contains "$(cat "$DEPLOYED")" "DEPLOYED deploy-pong-online.sh host=fakehost" "the arena follows the promoted commit"
+contains "$(cat "$DEPLOYED")" "DEPLOYED deploy-fire-online.sh host=fakehost" "fire follows the promoted commit"
 
 summary watchdog
