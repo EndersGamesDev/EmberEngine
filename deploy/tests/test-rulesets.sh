@@ -49,6 +49,7 @@ ruleset_root = root / "deploy" / "rulesets"
 expected_names = {
     "branch-names.json",
     "develop.json",
+    "gh-pages-frozen.json",
     "main-authorization.json",
     "main-integrity.json",
     "other-tags.json",
@@ -57,7 +58,7 @@ expected_names = {
 }
 paths = sorted(ruleset_root.glob("*.json"))
 if {path.name for path in paths} != expected_names:
-    raise SystemExit("ruleset file set differs from the seven documented payloads")
+    raise SystemExit("ruleset file set differs from the eight documented payloads")
 
 documents = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in paths}
 for name, document in documents.items():
@@ -181,6 +182,19 @@ if branch_name_condition.get("include") != ["~ALL"]:
     raise SystemExit("branch names does not include all branch refs")
 if len(branch_name_condition.get("exclude", [])) != len(expected_branches) or set(branch_name_condition["exclude"]) != documented_branches:
     raise SystemExit("branch-name exclusions differ from the documented branch table")
+
+gh_pages_frozen = documents["gh-pages-frozen.json"]
+if gh_pages_frozen.get("name") != "gh-pages frozen" or gh_pages_frozen.get("target") != "branch":
+    raise SystemExit("gh-pages frozen has the wrong name or target")
+if gh_pages_frozen["bypass_actors"]:
+    raise SystemExit("gh-pages frozen has bypass actors")
+if gh_pages_frozen["conditions"]["ref_name"] != {"include": ["refs/heads/gh-pages"], "exclude": []}:
+    raise SystemExit("gh-pages frozen does not target only gh-pages")
+gh_pages_rules = gh_pages_frozen["rules"]
+if [rule["type"] for rule in gh_pages_rules] != ["update", "deletion"]:
+    raise SystemExit("gh-pages frozen does not contain update and deletion only")
+if gh_pages_rules[0].get("parameters") != {"update_allows_fetch_and_merge": False}:
+    raise SystemExit("gh-pages frozen update permits fetch and merge")
 
 dangerous = {"deletion", "non_fast_forward", "required_signatures"}
 for name, document in documents.items():
