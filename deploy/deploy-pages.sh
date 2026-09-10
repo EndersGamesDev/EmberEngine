@@ -12,6 +12,8 @@
 #   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 # Copy web/pkg from the server into this checkout, then publish without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
+# Assemble the same tree as a release archive without committing or pushing:
+#   EMBER_PAGES_ARCHIVE=ember-pages.tar.gz bash deploy/deploy-pages.sh
 #
 # Layout on gh-pages:
 #   index.html            games hub (lobby showcase + catalog)
@@ -505,6 +507,17 @@ if missing:
         print(f"  {entry}", file=sys.stderr)
     sys.exit(1)
 PY
+
+if [ -n "${EMBER_PAGES_ARCHIVE:-}" ]; then
+    case "$EMBER_PAGES_ARCHIVE" in
+        /*) ARCHIVE_PATH="$EMBER_PAGES_ARCHIVE" ;;
+        *) ARCHIVE_PATH="$REPO_DIR/$EMBER_PAGES_ARCHIVE" ;;
+    esac
+    mkdir -p "$(dirname "$ARCHIVE_PATH")"
+    tar --exclude='./.git' -czf "$ARCHIVE_PATH" -C "$PAGES_DIR" .
+    echo "== assembled release archive at $ARCHIVE_PATH; no branch was published =="
+    exit 0
+fi
 
 (
     cd "$PAGES_DIR"

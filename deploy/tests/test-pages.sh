@@ -229,6 +229,34 @@ contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "./future.js?v=10" "a 
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "from \"./lab.js?v=$STAMP\"" "the page's static import of the lab module is stamped"
 is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get("kind") == "lab" for v in g["versions"] if v.get("live")][0]')" "labs/julibrot/" "the live Julibrot catalog path was published"
 
+echo "== archive mode assembles the publish tree without pushing =="
+ARCHIVE="$TMP/ember-pages.tar.gz"
+cp "$REPO/web/version.json" "$TMP/version.before-archive.json"
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE="$ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/archive.log" 2>&1; then
+    ok "the prebuilt archive run succeeded"
+else
+    bad "the prebuilt archive run failed"
+    tail -40 "$TMP/archive.log" >&2
+fi
+if grep -q '^git \[push\]' "$SHIM_LOG"; then
+    bad "archive mode pushed a branch"
+else
+    ok "archive mode made no branch push"
+fi
+tar -tzf "$ARCHIVE" > "$TMP/archive.list"
+if grep -Fqx './index.html' "$TMP/archive.list" && grep -Fqx "./$ARENA_LIVE/index.html" "$TMP/archive.list"; then
+    ok "the archive contains the hub and live game tree"
+else
+    bad "the archive is missing the hub or live game tree"
+fi
+if grep -Eq '^\./\.git(/|$)' "$TMP/archive.list"; then
+    bad "the release archive contains worktree metadata"
+else
+    ok "the release archive excludes worktree metadata"
+fi
+cp "$TMP/version.before-archive.json" "$REPO/web/version.json"
+
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
 for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
