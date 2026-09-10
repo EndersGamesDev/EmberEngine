@@ -18,6 +18,8 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 ### Integration and release process
 
+The workspace CI job now installs Mesa's lavapipe software Vulkan adapter so Ember's GPU readback tests can run on GitHub-hosted runners without a hardware GPU, and workflow policy tests require the package in both parser modes while rejecting an adapter-free fixture (`9d66b0c6`).
+
 Branch integrity now leaves commit signatures optional on `develop` and `main` while the release workflow keeps allowed-key tag verification, and tracked live ruleset `22770318` permits new `develop`, `main`, `feature/**` and `lane/**` names without a bypass; branch records use the completed `feature/*` renames (`4a78db6d`).
 
 The workspace CI job now installs `pkg-config`, `libudev-dev` and `libasound2-dev` before Rust setup so a clean Ubuntu runner can compile Ember's Linux gamepad and audio backends, the release asset job uses the same setup before compiling its native wasm-bindgen CLI, and workflow policy tests prove the workspace order and package set in both parser modes while rejecting a one-package-short fixture (`c3dc7b1e`).
