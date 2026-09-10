@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Create or update GitHub releases from series-prefixed release tags.
-# Dry-run by default. Bulk apply runs from clean main; --tag applies one tag
-# from a clean checkout at its target, which is the release workflow's path.
-# Use --replace-drafts only in bulk mode for the superseded v20/v22 drafts.
+# Dry-run by default. Bulk apply runs from clean main and may use the historical
+# annotation and series-path fallback; --tag requires an exact CHANGELOG.md
+# entry and applies one tag from a clean checkout at its target, which is the
+# release workflow's path. Use --replace-drafts only in bulk mode for the
+# superseded v20/v22 drafts.
 #
 #   bash deploy/github-releases.sh [--tag TAG] [--replace-drafts]
 #   bash deploy/github-releases.sh --apply [--tag TAG] [--replace-drafts]
@@ -10,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO="$DEFAULT_REPO"
+REPO="${GITHUB_RELEASES_REPO:-$DEFAULT_REPO}"
 CHANGELOG="$REPO/CHANGELOG.md"
 GAMES="$REPO/web/games.json"
 GH_BIN="${GH:-gh}"
@@ -19,6 +21,7 @@ GITHUB_RELEASES_WORK=""
 
 usage() {
     echo "usage: bash deploy/github-releases.sh [--apply] [--tag TAG] [--replace-drafts]"
+    echo "       --tag requires an exact CHANGELOG.md entry; only bulk backfill uses annotation and series-path fallback"
 }
 
 die() {
@@ -179,7 +182,7 @@ tag_annotation_for() {
 }
 
 derive_release() {
-    local tag="$1" notes="$2"
+    local tag="$1" notes="$2" require_entry="${3:-}"
     local series version entry slot source_commit annotation tag_commit title
 
     valid_tag "$tag" || die "tag '$tag' does not match the release tag grammar"
@@ -215,6 +218,7 @@ derive_release() {
             printf 'Launcher path: `%s`\n' "$RELEASE_PATH"
         } > "$notes"
     else
+        [ -z "$require_entry" ] || die "$tag has no matching CHANGELOG.md entry; single-tag mode refuses annotation and series-path fallback"
         tag_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
         RELEASE_PATH="$(launcher_path_for_version "$series" "$version")"
         [ -n "$RELEASE_PATH" ] || RELEASE_PATH="$(series_path_for "$series")"
@@ -307,6 +311,13 @@ main() {
     [ -f "$CHANGELOG" ] || die "no CHANGELOG.md at $CHANGELOG"
     [ -f "$GAMES" ] || die "no web/games.json at $GAMES"
     [ -z "$selected_tag" ] || [ -z "$replace_drafts" ] || die "--replace-drafts is available only in bulk mode"
+    if [ -n "$selected_tag" ]; then
+        valid_tag "$selected_tag" || die "tag '$selected_tag' does not match the release tag grammar"
+        git -C "$REPO" rev-parse -q --verify "refs/tags/$selected_tag" >/dev/null \
+            || die "tag '$selected_tag' does not exist"
+        [ -n "$(changelog_entry_for "$selected_tag")" ] \
+            || die "$selected_tag has no matching CHANGELOG.md entry; single-tag mode refuses annotation and series-path fallback"
+    fi
     if [ -n "$apply" ]; then
         [ -z "$(git -C "$REPO" status --porcelain)" ] || die "--apply requires a clean checkout"
         if [ -n "$selected_tag" ]; then
@@ -319,9 +330,6 @@ main() {
     fi
 
     if [ -n "$selected_tag" ]; then
-        valid_tag "$selected_tag" || die "tag '$selected_tag' does not match the release tag grammar"
-        git -C "$REPO" rev-parse -q --verify "refs/tags/$selected_tag" >/dev/null \
-            || die "tag '$selected_tag' does not exist"
         tags=("$selected_tag")
     else
         mapfile -t tags < <(release_tags)
@@ -342,7 +350,7 @@ main() {
 
     for tag in "${tags[@]}"; do
         notes="$work/$tag.md"
-        timed "derive $tag" derive_release "$tag" "$notes"
+        timed "derive $tag" derive_release "$tag" "$notes" "$selected_tag"
         release_count=$((release_count + 1))
         create_args=(release create "$tag" --verify-tag --title "$RELEASE_TITLE" \
             --notes-file "$notes" --draft=false --prerelease="$RELEASE_PRERELEASE" \

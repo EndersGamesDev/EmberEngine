@@ -8,6 +8,8 @@ Deployment scripts depend on these tests to prove behavior without contacting a 
 
 `test-rulesets.sh` parses every tracked repository-ruleset payload with Python's standard JSON support, derives the required check contexts from the CI job names, and proves the branch, actor, integrity and coarse-tag-pattern boundaries documented in [`../../docs/branching.md`](../../docs/branching.md).
 
+`test-changelog.sh --tag TAG` runs the complete ledger validation and additionally requires exactly one accepted row for that release tag, so a release cannot substitute an annotation for missing release notes.
+
 Each suite documents its invocation and isolation contract in its header; follow the timing and verification rules in [`CLAUDE.md`](../../CLAUDE.md), and keep a changed deploy contract paired with the focused suite that demonstrates it.
 
 `test-shaders.sh` reads `julibrot-shader-allowlist.txt`, rejects new `.wgsl` files and inline WGSL under the Julibrot crates, and permits only the closed migration debt linked to [`../../docs/julibrot/shaders.md`](../../docs/julibrot/shaders.md). Test fixtures do not bypass that boundary; WGSL used by shader-crate tests lives in its test-only template registry.

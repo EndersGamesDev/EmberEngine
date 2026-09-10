@@ -189,7 +189,9 @@ jobs:
           print("release: %s matches %s" % (manifest, expected))
           PY
       - name: require changelog consistency
-        run: bash deploy/tests/test-changelog.sh
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: bash deploy/tests/test-changelog.sh --tag "$TAG"
 
   build:
     name: build release asset

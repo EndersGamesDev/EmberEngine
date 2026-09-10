@@ -141,6 +141,7 @@ self_test() {
     fixture="$(mktemp -d "${TMPDIR:?}/ember-github-release-fixture.XXXXXX")"
     TEST_WORK="$fixture"
     mkdir -p "$fixture/web" "$fixture/notes"
+    write_forbidden_gh "$fixture/gh-forbidden"
 
     git -C "$fixture" init -q
     git -C "$fixture" config user.name Fixture
@@ -176,6 +177,22 @@ self_test() {
     grep -Fqx 'No matching `CHANGELOG.md` entry exists for `fixture-2.0.0`.' "$notes" && ok "missing fixture entry is stated" || bad "missing fixture entry is not stated"
     grep -Fqx 'fixture annotation without changelog' "$notes" && ok "missing fixture entry names its tag annotation" || bad "missing fixture annotation is absent"
     [ "$RELEASE_PATH" = "games/fixture/v2/" ] && ok "missing fixture entry selects its version path" || bad "missing fixture path is '$RELEASE_PATH'"
+
+    if output="$(derive_release fixture-2.0.0 "$notes" required 2>&1)"; then
+        bad "single-tag derivation accepted a missing changelog entry"
+    elif [[ "$output" == *"fixture-2.0.0 has no matching CHANGELOG.md entry"* ]]; then
+        ok "single-tag derivation rejects a missing changelog entry by name"
+    else
+        bad "single-tag derivation returned the wrong missing-entry error: $output"
+    fi
+
+    if output="$(GITHUB_RELEASES_REPO="$fixture" GH="$fixture/gh-forbidden" bash "$RELEASE_SCRIPT" --apply --tag fixture-2.0.0 2>&1)"; then
+        bad "--apply --tag accepted a missing changelog entry"
+    elif [[ "$output" == *"fixture-2.0.0 has no matching CHANGELOG.md entry"* ]]; then
+        ok "--apply --tag rejects a missing changelog entry before publication"
+    else
+        bad "--apply --tag returned the wrong missing-entry error: $output"
+    fi
 
     notes="$fixture/notes/fixture-0.1.0.md"
     derive_release fixture-0.1.0 "$notes"

@@ -3,6 +3,7 @@
 # history and the tags.
 #
 #   bash deploy/tests/test-changelog.sh
+#   bash deploy/tests/test-changelog.sh --tag arena-31.0.0
 #   bash deploy/tests/test-changelog.sh --self-test
 #
 # The changelog is a claim about history, and a claim about history rots
@@ -98,6 +99,25 @@ tag_fixture_passes() {
     check_named_tags "$1" "$2"
 }
 
+check_requested_tag() {
+    local parsed="$1" tag="$2" count
+    count="$(awk -F '\t' -v wanted="$tag" '$1 == "ROW" && $9 == wanted { found++ } END { print found + 0 }' "$parsed")"
+    if [ "$count" -eq 1 ]; then
+        ok "CHANGELOG.md has exactly one accepted entry for tag $tag"
+    elif [ "$count" -eq 0 ]; then
+        bad "CHANGELOG.md has no accepted entry for tag $tag"
+    else
+        bad "CHANGELOG.md has $count accepted entries for tag $tag, expected one"
+    fi
+    [ "$count" -eq 1 ]
+}
+
+tag_entry_fixture_passes() {
+    TESTS_RUN=0
+    TESTS_FAILED=0
+    check_requested_tag "$1" "$2"
+}
+
 self_test() {
     local started tmp commit rows output
     started="$(date +%s)"
@@ -153,15 +173,34 @@ self_test() {
         *) echo "SELF-TEST FAIL: wrong lightweight-tag report: $output" >&2; return 1 ;;
     esac
 
-    echo "SELF-TEST PASS: exact annotated tag accepted; legacy-only, absent, and lightweight tags rejected, $(( $(date +%s) - started ))s"
+    if ! output="$(tag_entry_fixture_passes "$rows" arena-20.0.0 2>&1)"; then
+        echo "SELF-TEST FAIL: an exact changelog tag entry was rejected: $output" >&2
+        return 1
+    fi
+    if output="$(tag_entry_fixture_passes "$rows" arena-21.0.0 2>&1)"; then
+        echo "SELF-TEST FAIL: an entry-less tag was accepted: $output" >&2
+        return 1
+    fi
+    case "$output" in
+        *"no accepted entry for tag arena-21.0.0"*) ;;
+        *) echo "SELF-TEST FAIL: wrong entry-less tag report: $output" >&2; return 1 ;;
+    esac
+
+    echo "SELF-TEST PASS: exact annotated tag and changelog entry accepted; legacy-only, absent, lightweight, and entry-less tags rejected, $(( $(date +%s) - started ))s"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
-    [ "$#" -eq 1 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test]" >&2; exit 2; }
+    [ "$#" -eq 1 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test | --tag TAG]" >&2; exit 2; }
     self_test
     exit $?
 fi
-[ "$#" -eq 0 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test]" >&2; exit 2; }
+REQUIRED_TAG=""
+if [ "${1:-}" = "--tag" ]; then
+    [ "$#" -eq 2 ] && [ -n "${2:-}" ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test | --tag TAG]" >&2; exit 2; }
+    REQUIRED_TAG="$2"
+else
+    [ "$#" -eq 0 ] || { echo "usage: bash deploy/tests/test-changelog.sh [--self-test | --tag TAG]" >&2; exit 2; }
+fi
 
 CHANGELOG="$REPO/CHANGELOG.md"
 GAMES="$REPO/web/games.json"
@@ -302,6 +341,9 @@ if [ "${entries:-0}" -gt 0 ]; then
     ok "$entries entries found"
 else
     bad "no entries found in CHANGELOG.md"
+fi
+if [ -n "$REQUIRED_TAG" ]; then
+    check_requested_tag "$PARSED" "$REQUIRED_TAG"
 fi
 
 echo "== every launcher version has an entry, and every entry a launcher version =="
