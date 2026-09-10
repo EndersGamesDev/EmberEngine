@@ -31,7 +31,7 @@ Each merge to `develop` advances the patch grade of every series it changes. The
 
 ## Release tags
 
-The release namespace uses the ruleset ref pattern `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`, while the workflow trigger omits the `refs/tags/` prefix and uses `*-[0-9]*.[0-9]*.[0-9]*`. GitHub evaluates these as fnmatch patterns, so they are deliberately coarser than the workflow's exact runtime regex; the workflow re-validates every candidate and fails unless the final version suffix has the exact numeric form `MAJOR.MINOR.PATCH`, with each component either `0` or a non-zero digit followed by digits, and the prefix is `ember`, an exact game `id` in `web/games.json`, or an exact lab directory id under `web/labs/`. Bare versions and `v`-prefixed versions are invalid because every tag belongs unambiguously to one versioned series.
+The release namespace uses the ruleset ref pattern `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`, while the workflow trigger omits the `refs/tags/` prefix and uses `*-[0-9]*.[0-9]*.[0-9]*`. GitHub evaluates these as fnmatch patterns, so they are deliberately coarser than the workflow's exact runtime regex; the workflow re-validates every candidate and fails unless the final version suffix has the exact numeric form `MAJOR.MINOR.0`, with the major and minor each either `0` or a non-zero digit followed by digits, and the prefix is `ember`, an exact game `id` in `web/games.json`, or an exact lab directory id under `web/labs/`. Bare versions and `v`-prefixed versions are invalid because every tag belongs unambiguously to one versioned series.
 
 Release tags are annotated and signed. Their signatures verify against an armored public key committed under `deploy/keys/`, which makes the allowed signing material reviewable in the same history as the release policy.
 
@@ -62,7 +62,7 @@ This branch ruleset targets only `refs/heads/develop` and has no bypass actors. 
 - `Block force pushes` prevents an integrated commit from changing identity.
 - `Require a pull request before merging` allows only the merge-commit method, dismisses stale reviews after new pushes and requires `0` approving reviews for now; code-owner review, last-push approval and resolved review threads are not mechanical merge requirements.
 - `Require status checks to pass` requires the literal contexts `cores + servers`, `deploy scripts` and `workspace`, each from GitHub Actions integration id `15368`, with `Require branches to be up to date before merging` enabled and creation not exempted.
-- `Require signed commits` preserves attributable source history; GitHub's signed merge commit closes the pull request.
+- `Require signed commits` verifies commits introduced by updates after activation rather than retrospectively checking history already present on `develop`; GitHub's signed merge commit closes the pull request.
 
 ### `main-integrity.json`
 
@@ -70,7 +70,7 @@ This branch ruleset targets only `refs/heads/main` and has no bypass actors.
 
 - `Restrict deletions` prevents removal of the live-line reference.
 - `Block force pushes` makes every promotion a fast-forward in addition to the workflow's plain-push check.
-- `Require signed commits` verifies commits introduced by non-bypassed updates after activation; history already present when the rule is activated is not rechecked.
+- `Require signed commits` verifies commits introduced by non-bypassed updates after activation; history already present when the rule is activated, including unsigned commits, is not rechecked.
 
 ### `main-authorization.json`
 
@@ -85,7 +85,7 @@ This tag ruleset targets `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`. User `322515484` (`
 
 - `Restrict creations` limits matching tag creation to the two release actors.
 
-The workflow separately verifies a tag signature against the armored public keys actually present in `deploy/keys/`. Only the Wild Sky Maker key is present now, so a tag from the second creator cannot pass release validation until that creator's public key is added through the repository history.
+The workflow separately verifies a tag signature against the armored public keys actually present in `deploy/keys/`. Only the Wild Sky Maker key is present now; the second identified signer's armored public key must enter `deploy/keys/` through a pull request before that signer's tags can pass release validation.
 
 ### `release-tags-integrity.json`
 
@@ -120,7 +120,7 @@ Each validation fails the run immediately: the tag shape and allowed series are 
 
 After validation, the workflow uses `deploy/deploy-pages.sh` to build and stamp the whole Pages site archive, regardless of which series names the tag, because Pages deploys the complete hub and every retained game and lab as one byte-identical artifact. It uploads that archive between jobs, runs `deploy/github-releases.sh --apply --tag TAG --draft` and attaches the archive while the release is unpublished, then uses the SSH key in `RELEASE_DEPLOY_KEY` for a plain push of the tag's peeled commit to `refs/heads/main`; git and the ruleset both reject a non-fast-forward promotion. A failed promotion deletes the draft so no public release survives a failed move of `main`; a successful promotion is followed by the explicit draft-to-published transition. The single-tag path refuses the historical annotation and series-path fallback when the exact changelog entry is absent, while bulk backfill retains that fallback so historical annotated tags can still be reconciled deliberately.
 
-The release deploy key is the ruleset's only bypass actor on `main`. Adding that key to the repository ruleset and storing its private half as `RELEASE_DEPLOY_KEY` are owner-run credential steps outside repository history, which keeps the credential boundary separate from reviewable workflow code.
+The release deploy key is the ruleset's only bypass actor on `main`. Generating the deploy key and storing `RELEASE_DEPLOY_KEY` are credential steps performed outside repository history by the repository owner; this boundary keeps credential material separate from reviewable workflow code.
 
 ### Pages
 
@@ -138,6 +138,7 @@ Production hosts use `EMBER_REF=main`. A host therefore rebuilds only after the 
 
 1. The replayed history establishes `develop` at `eefd43d0`, providing the integration baseline before protections begin.
 2. Surviving working branches are named under `feature/*`; `ci-passed` is retired; and `main` is created once at the current `develop` tip so hosts do not roll back to an old tag.
-3. The document and workflow changes land together through the first pull request governed by the new `develop` process, making the repository contract and its automation agree.
-4. The repository rulesets are activated, the release deploy key is registered as the only `main` bypass actor, its private key is stored as `RELEASE_DEPLOY_KEY`, and the `github-pages` environment is restricted to `main`; these external settings make the checked-in specification effective.
-5. The first conforming release tag proves the end-to-end contract by creating the release asset, fast-forwarding `main`, deploying Pages from the same bytes and allowing hosts to update from the same source.
+3. The corrected `develop` ruleset is activated from `deploy/rulesets/develop.json` before the first pull request, so that pull request is governed by the status, signature and merge-method policy it introduces into repository history.
+4. The document, payload and workflow changes land together through that governed pull request, making the repository contract and its automation agree.
+5. The remaining repository rulesets are activated, the release deploy key is registered as the only `main` bypass actor, its private key is stored as `RELEASE_DEPLOY_KEY`, and the `github-pages` environment is restricted to `main`; these external settings make the checked-in specification effective.
+6. The first conforming release tag proves the end-to-end contract by creating the release asset, fast-forwarding `main`, deploying Pages from the same bytes and allowing hosts to update from the same source.

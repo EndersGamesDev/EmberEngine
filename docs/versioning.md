@@ -12,7 +12,7 @@ Each independently released game or lab owns a series. Its application, core, se
 | `fire` | `fire`, `fire-core`, `fire-server` | `1.0.0` |
 | `kings` | `kings`, `kings-core`, `kings-server` | `1.0.0` |
 | `league` | `league`, `league-core`, `league-server` | `2.0.0` |
-| `end-game` | `end-game`, `end-game-core` | `1.0.0` |
+| `end-game` | `end-game`, `end-game-core` | `12.0.0` |
 | `what-is-this` | `what-is-this` | `1.0.0` |
 | `julibrot` | `ember-julibrot-app`, `ember-julibrot-kernels`, `ember-julibrot-math`, `ember-julibrot-present`, `ember-julibrot-shader`, `ember-julibrot-worker` | `1.0.0` |
 | `heap` | `ember-lab-heap` | `0.1.0` |
@@ -42,11 +42,11 @@ The next deliberate release of every series is its first new three-grade minor t
 
 Historical tags are re-issued at the same commits: `vN` becomes `arena-N.0.0`, and `<series>-vN` becomes `<series>-N.0.0`. The replacement is annotated and signed, preserves the old tag message, and names the old tag it replaces. After every requested remote has the replacement, the old local and remote tag is removed. Directory slots and launcher paths retain their historical `vN` names.
 
-The orchestrator owns the one-time migration and runs `bash deploy/retag.sh --apply origin sokol osprey` from a clean `main` checkout after the versioning merge.
+`deploy/retag.sh` remains a dry-run-by-default historical reconciliation tool whose apply mode requires a clean checkout and an explicit remote list, because replacement tag provenance is unsafe when either the source tree or its destinations are implicit.
 
 The tag migration is complete, and the changelog check accepts only series-prefixed tag names. A series prefix makes every release tag self-identifying in the shared repository.
 
-Release tags are created only from a `develop` commit whose `ci` check run concluded `success`. Branch and merge work prepares versions, catalog data, documentation, and migration tooling, while the green run proves the exact commit before its tag makes it releasable.
+Release tags are created only from a `develop` commit whose exact-SHA `push` run of `.github/workflows/ci.yml` concluded `success` with all three required jobs successful. Branch and merge work prepares versions, catalog data, documentation, and migration tooling, while that workflow evidence proves the integrated commit before its tag makes it releasable.
 
 `main` is the fast-forward-only live sequence selected by release tags. Its one-time creation at the current `develop` tip is a migration anchor that prevents hosts from reverting to months-old source; after that anchor, every advance points at a validated release tag's commit, so `main` records what is live rather than accepting integration work.
 

@@ -12,7 +12,7 @@ Depth lives in linked docs, loaded only when the task needs them. This file stay
 
 Every game in this repo runs on ember: Rust against the layering above, compiled to one wasm bundle, drawn by the renderer whose constraints are listed below, and listed in the launcher (`web/games.json`) only once it does. A game that brings its own engine, its own runtime or its own build toolchain is not merged and is not put in the launcher, however finished it is: two engines in one repo means two sets of constraints, two deploy paths and two things to keep alive.
 
-Denied on this rule, 2026-09-04: the `verschaetz-dich` branch, a standalone Next.js app whose five commits replace the whole repository root. It stays on `origin` as its own branch, unmerged and unlisted. Port a game like that onto ember, or host it as its own project; do not land it here.
+The `verschaetz-dich` branch stays unmerged and unlisted as a standalone Next.js app whose five commits replace the whole repository root. It remains on `origin` as an independent branch; bringing the game into this repository would first require a port onto Ember, while the existing application fits a separate project.
 
 ## Simulation rules
 

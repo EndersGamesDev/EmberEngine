@@ -3,9 +3,9 @@
 # Every validation fails closed so a release name, source, CI evidence, version,
 # changelog and artifact cannot describe different commits.
 #
-# The SSH deploy key is main's only ruleset bypass actor. Adding its public half
-# as that actor and storing its private half in RELEASE_DEPLOY_KEY are owner-run
-# credential steps; repository code never contains or distributes the key.
+# The SSH deploy key is main's only ruleset bypass actor. Generating the deploy
+# key and storing RELEASE_DEPLOY_KEY are credential steps performed outside
+# repository history by the repository owner; repository code contains no key.
 name: release
 
 on:

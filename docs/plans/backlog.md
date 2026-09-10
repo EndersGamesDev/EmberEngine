@@ -8,7 +8,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## release-governance
 
-- A second release signing key for the repository owner is absent from `deploy/keys`; add the armored public key through a pull request so releases are not dependent on one signer.
+- The second identified release signer has no armored public key in `deploy/keys`; a pull request adding that key is required before that signer's tags can pass release validation, while the present key remains the only accepted signing material.
 - Required approvals on `develop` start at 0 because CI is the merge gate and review is recorded in the pull-request body; revisit the count after the process has operating evidence.
 - GitHub repository rulesets are applied outside this repository; `docs/branching.md` is their specification, and drift between the live settings and that specification is checked by hand.
 
