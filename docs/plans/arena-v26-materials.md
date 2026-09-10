@@ -4,7 +4,7 @@ What v26 actually shipped — its protocol, build stamp and source commit — is
 
 ## Scope and coordination
 
-Branch `codex/graphics-polish`, based on main `00982ed`. Client/renderer presentation only; protocol 20, movement, level collision and the running v25 server stay unchanged. Root owns the renderer API/shader and release; workers own CPU mip filtering, Arena material presets, and independent headless capture/review. Keep the original dirty checkout untouched. No shared-target Cargo builds run concurrently.
+Branch `feature/codex/graphics-polish`, based on main `00982ed`. Client/renderer presentation only; protocol 20, movement, level collision and the running v25 server stay unchanged. Root owns the renderer API/shader and release; workers own CPU mip filtering, Arena material presets, and independent headless capture/review. Keep the original dirty checkout untouched. No shared-target Cargo builds run concurrently.
 
 ## First changes
 

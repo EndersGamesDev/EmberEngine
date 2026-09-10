@@ -48,7 +48,7 @@ The user explicitly approved proceeding after the final confirmation named autom
 
 ## Scope and ownership
 
-Start from main `b97b87bf` in clean worktree `C:/Users/end/dev/ember-parkour`, branch `codex/harbor-parkour-v29`. Preserve original checkout's unrelated Arena/League changes and every independently published peer release. Root owns protocol/server snapshot/client prediction integration, gates and coordinated release. Workers own shared parkour simulation, authored Harbor geometry/art, and browser page/test preparation plus read-only deployment audit. Only root runs Cargo at Idle priority; no process may operate the user's keyboard, cursor, focus, fullscreen or pointer lock.
+Start from main `b97b87bf` in clean worktree `C:/Users/end/dev/ember-parkour`, branch `feature/codex/harbor-parkour-v29`. Preserve original checkout's unrelated Arena/League changes and every independently published peer release. Root owns protocol/server snapshot/client prediction integration, gates and coordinated release. Workers own shared parkour simulation, authored Harbor geometry/art, and browser page/test preparation plus read-only deployment audit. Only root runs Cargo at Idle priority; no process may operate the user's keyboard, cursor, focus, fullscreen or pointer lock.
 
 ## Requested behavior
 

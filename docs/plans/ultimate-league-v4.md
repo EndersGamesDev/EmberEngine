@@ -4,7 +4,7 @@ The owner approved a focused V4 pass for UltimateLegue to improve map readabilit
 
 ## Owner and integration model
 
-This release is coordinated from the Codex seat (`codex/league-environment-feedback`) using V4 scene and client work prepared on shared branches. Fable owns environmental art and placement details, OpenCode owns read-only review of `web/games/league/v4` feedback behavior, and the release guard stays in Codex-owned `league` root wiring. The V4 work is designed to be a single branchable change with no cross-game process impact.
+This release is coordinated from the Codex seat (`feature/codex/league-environment-feedback`) using V4 scene and client work prepared on shared branches. Fable owns environmental art and placement details, OpenCode owns read-only review of `web/games/league/v4` feedback behavior, and the release guard stays in Codex-owned `league` root wiring. The V4 work is designed to be a single branchable change with no cross-game process impact.
 
 ## V4 scope
 
@@ -48,7 +48,7 @@ OpenCode read `web/games/league/v4/{ui.js,index.html,ui.css}` at `70d4263f` agai
 
 [Play UltimateLegue V4](https://endersgamesdev.github.io/EmberEngine/games/league/v4/), reached from the [story and trailer page](https://endersgamesdev.github.io/EmberEngine/games/league/) and the hub.
 
-- Source: main `bc7baa803052582985f30b44af32a4339fdb9c24` (r1799), fast-forwarded from `fable/league-v4`; main CI run 34126155702 green (https://github.com/EndersGamesDev/EmberEngine/actions/runs/34126155702).
+- Source: main `bc7baa803052582985f30b44af32a4339fdb9c24` (r1799), fast-forwarded from `feature/fable/league-v4`; main CI run 34126155702 green (https://github.com/EndersGamesDev/EmberEngine/actions/runs/34126155702).
 - Game publication: Pages `68b6eea83bfb950f8f1be39b4f6a978776d7c82f` via `tools/league/publish.cjs --game-version=v4 --server-commit=cf4a95f0…`, eleven staged files (catalogue entry, `games/league/v4/` page, style, script, art previews with manifest, `pkg/league.js`, `pkg/league_bg.wasm` sha256 `0e31cf22e8bd7990ef874622bbef202a18a8446cdc20441aedf332b3a54acc6c`, `version.json`). Landing publication: Pages `b11fdf7399fa9dca2ad559949c3f4cb7667936c9` via `tools/league/publish-landing.cjs --game-version=v4`. Pages deploy 34126489361.
 - Server: the V3 runtime `dusky-osprey-league-v3` on port 7784, protocol 2, commit `cf4a95f0`, reused unchanged; `league-core` and `league-server` are byte-identical between `cf4a95f0` and the source, which the publisher proves before staging. No service, tunnel or task was touched; V1, V2 and V3 trees stay frozen.
 - Verification before the push: CI-scope tests (eight core and server crates, `--locked`) green; `wsprobe` example built; league lib tests 51/51; league clippy with tests clean; wasm32 check clean; `visual-v4.cjs --version=v4 --require-ui` five champions × 8 checks; `browser.cjs` with `LEAGUE_GAME_VERSION=v4` clean; native hands-off captures of the second ground pass. After the push: prove-live passed (11 public files byte-identical, 30 frozen files unchanged, real public 1v1 and 3v3 through wsprobe healthy on protocol 2 in 0.58 s and 0.42 s, 14.1 s total); prove-landing passed (CDN bytes of the landing match the source, 4 s); Pages deployment 34126489361 success at 13:19:04Z.

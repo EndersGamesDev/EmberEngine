@@ -8,7 +8,7 @@ The original visual direction is Crystalforge: weathered ivory, aged bronze, lum
 
 ## Ownership and interfaces
 
-Root integrates on `codex/ultimate-league-v2`, drives the single SDXL queue, reviews each image/mesh, owns portrait derivatives and provenance, verifies the combined build, and releases it. Fable delivered `scene.rs`, `scene/art.rs`, converted GLBs/sidecars and conversion tooling on `fable/league-v2-scene` through349813c9. OpenCode's three interface files were integrated from its worktree at89efe868. Following the owner's terminal instruction, root took final UI and scene integration ownership; the external branches are preserved. Assignments and handoffs are recorded in Barza messages143–176.
+Root integrates on `feature/codex/ultimate-league-v2`, drives the single SDXL queue, reviews each image/mesh, owns portrait derivatives and provenance, verifies the combined build, and releases it. Fable delivered `scene.rs`, `scene/art.rs`, converted GLBs/sidecars and conversion tooling on `feature/fable/league-v2-scene` through349813c9. OpenCode's three interface files were integrated from its worktree at89efe868. Following the owner's terminal instruction, root took final UI and scene integration ownership; the external branches are preserved. Assignments and handoffs are recorded in Barza messages143–176.
 
 The scene appends meshes after procedural ids1–9 through `scene::build_meshes()`. Assets use embedded 8-bit base-color textures, white instance tint, and scalar surface response; vertex colors and imported PBR maps are not consumed by Ember. Generated sources remain in `target/league-art`; converted GLBs and small web derivatives ship. Target added mesh/texture payload is8MiB, with512px atlases and roughly3k–6k triangles per champion.
 

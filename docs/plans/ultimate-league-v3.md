@@ -70,7 +70,7 @@ configuration. V3 uses an independent clean runtime, port 7784, task suffix
 release. No Killshot, Fire Racer or other game's service is restarted.
 
 The source worktree is `C:/Users/end/dev/ember-league-launch`, branch
-`codex/league-landing-trailer`. Final publication requires clean source, exact
+`feature/codex/league-landing-trailer`. Final publication requires clean source, exact
 main CI, tested bundle hashes and a proven public V3 server. The selected-game
 publisher changes only V3 and the League catalog entry. A second standalone
 landing publisher changes only the four landing files, `media/`, and an exact
