@@ -314,6 +314,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## docs-process
 
+- `deploy/tests/test-commit-messages.sh` validates commit-subject structure but does not enforce the closed scope list in `docs/commit-messages.md`; add allowlist enforcement and rejection fixtures.
 - `docs/authority-and-time.md:11` and 25 further lines cite crates renamed the day after the document was last touched; the rename updated the other documents and skipped this one, so every one of those citations resolves to nothing.
 - `docs/one-server-evergreen.md:12` states a protocol number and a line that are both wrong, `:17` cites a deploy script deleted when the cube demo surface was retired, and `:226` still poses as open the recovery and admission of the historical arena versions, which have since landed as contract crates with fixtures.
 - `docs/input-latch.md:161` repeats a claim the arena client's own header has since corrected: the client aims with relative mouse deltas under pointer lock and unprojects no cursor.

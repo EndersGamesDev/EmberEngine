@@ -106,44 +106,6 @@ The first End Game chapter runs on Ember: awaken in a wooden-floored dungeon cel
 
 Validation covered six simulation tests, three client input tests, three resolution tests, 53 engine tests, 12 GPU tests, 125 deployment fixtures, offline publication preservation, sibling-client compilation and passive native visual inspection. Release WASM builds successfully. Physical controllers, mobile devices, browser gameplay and 5K frame rates remain unverified; the unrigged armor swap and supplied dragon film establish a v1 prototype, with continuous animation and photorealistic material simulation left in the backlog (`9e664ac0`).
 
-### Julibrot rounds two and three
-
-Native Julibrot GPU scene waits now use a 120-second wall deadline with one-millisecond cooperative sleeps, allowing shared software Vulkan adapters time to complete while preserving scene assertions and reporting scene, poll and elapsed-time diagnostics; poisoned GPU test mutexes recover so an earlier failure cannot mask a later test's result (`d5503c16`, `5f23617f`).
-
-Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
-
-Julibrot now renders its first production WGSL template while creating the shade pipeline, deriving the real palette layout, enum values, binding slots, status sentinels and diagnostic colours from CPU-side Rust metadata and validating the result with Naga (`a5d81b2a`).
-
-Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
-
-Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).
-
-Retired main-grid ownership is now an explicit absent state, including restoration and failure paths, and the short, zoom, height, capture and finished-picture scenarios share one trace fixture without changing their frame or browser-action records (`2e864405`).
-
-Presentation polling now consumes its fixed event set without allocating a vector, reprojection no longer accepts unread precision and validation parameters, and static versus HOT uniform construction makes dynamic offsets structural; the planner, trace and pixel corpora stayed unchanged (`84e8d4f8`).
-
-Surface acquisition, warp submission, receipt validation, retention and presentation now pass through a replayable surface-resolution owner whose ordered record preserves failed turns and distinguishes present, drop and ignore outcomes (`0c746bf3`).
-
-Scene and warp completion, refusal, retained-source bookkeeping and stable facts now pass through a replayable Present-event owner, with poll-before-apply-before-finish ordering and failure chronology pinned (`4a376831`).
-
-Kernel planning, allocation, retirement, encoding and publication now pass through a replayable submission owner whose whole-grid job carries every semantic input by value, including the complete perturbation reference identity (`fb3cc50c`).
-
-Worker submission, arrival processing, reference disposition, facts and channel-only reads now pass through a replayable worker-service owner with a chronological turn record (`a9f3c778`).
-
-The browser and native Julibrot drivers now use one ordered refresh executor with typed stage tokens, replacing marker-only ordering and pinning scene-before-warp and fence-observation order (`e77ddad4`).
-
-The same-thread and browser transports now share one ownership core while retaining ABI-3 bytes, four buffers and their measured transport differences, and app callers reach the viewer through narrowed pan, zoom, precision and navigation entries instead of the mutable owner (`807aa546`, integrating source merges `61acab7b` and `fd96a4de`).
-
-Warm-up measurements now select the newest completed submission by a shared completion sequence instead of mistaking the longest wall duration for recency (`3f885813`).
-
-Round two began with frozen worker-event and app-frame traces, a paired planner corpus, native whole-grid pixels and a served raw-RGBA artifact whose load-dependent facts are explicitly excluded from stable comparison (`e53da1bb`, integrating source merge `148c828f`).
-
-The refactor survey classified the Julibrot ownership seams, measured its debt and established the round-two and round-three oracle contract without changing runtime behavior (`8734d336`).
-
-Relief-aware zoom now reprojects the retained source through the requested view, applies palette only during presentation and holds a covering source instead of clearing it during the transition (`430a56ad`).
-
-A relief zoom that cannot be represented now reports the refusal, retains partial-error evidence and records where each held, redrawn, warped or cleared picture placed the requested view (`b0422875`).
-
 ### Killshot engineering
 
 Killshot has a landing page at `web/games/arena/`: what the game is, its eight weapons, its three maps and its rules, and a trailer that plays real gameplay recorded from the shipped client alongside generated cinematic shots, a generated score and a spoken narration. The launcher's story link became generic at the same time, reading a `landing` key from `web/games.json` so any game that grows a landing page gets the link by adding one line, while the league's existing block stayed byte-identical because its publisher asserts on those exact bytes. The page's copy was written against `crates/arena-core` rather than the launcher's marketing line, which corrected three claims a reader could otherwise draw from it: there are eight weapons in total and the Breach-12 is the eighth rather than a ninth, slot 9 is permanently empty, and wall kicks chain between opposing walls rather than up one. The page is not published by `deploy/deploy-pages.sh`, which copies only the live version's `index.html` and `settings.js` for this game (`b85ac8d9`).
@@ -681,6 +643,48 @@ Fixed wasm CPU and timing kernels, floating-point and feature fingerprints, and 
 The first publication, `070e4cd9`, was stamped r583 `b9ae7bb1` — a commit that is in this repository's object store but reachable from no ref, the deploy having been run from a working branch whose change reached `main` as a different commit with a different tree. Nine publications later the page has been rebuilt from `main` proper, and the newest with an on-`main` stamp, r1469 `f28a145f`, is what serves and what the note above describes. That is what the tag marks; the dangling first stamp is recorded here and is not tagged.
 
 ## Julibrot Lab
+
+### v1 — 2026-09-11
+
+no proto · stamp — · source `db3695b7` · tag `julibrot-1.1.0` (pending)
+
+Deep navigation keeps retained and pending views anchored as sampled-reference frames arrive, while relief zoom transitions preserve covering imagery and GPU scene completion remains reliable on slower software adapters.
+
+Native Julibrot GPU scene waits now use a 120-second wall deadline with one-millisecond cooperative sleeps, allowing shared software Vulkan adapters time to complete while preserving scene assertions and reporting scene, poll and elapsed-time diagnostics; poisoned GPU test mutexes recover so an earlier failure cannot mask a later test's result (`d5503c16`, `5f23617f`).
+
+Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
+
+Julibrot now renders its first production WGSL template while creating the shade pipeline, deriving the real palette layout, enum values, binding slots, status sentinels and diagnostic colours from CPU-side Rust metadata and validating the result with Naga (`a5d81b2a`).
+
+Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
+
+Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).
+
+Retired main-grid ownership is now an explicit absent state, including restoration and failure paths, and the short, zoom, height, capture and finished-picture scenarios share one trace fixture without changing their frame or browser-action records (`2e864405`).
+
+Presentation polling now consumes its fixed event set without allocating a vector, reprojection no longer accepts unread precision and validation parameters, and static versus HOT uniform construction makes dynamic offsets structural; the planner, trace and pixel corpora stayed unchanged (`84e8d4f8`).
+
+Surface acquisition, warp submission, receipt validation, retention and presentation now pass through a replayable surface-resolution owner whose ordered record preserves failed turns and distinguishes present, drop and ignore outcomes (`0c746bf3`).
+
+Scene and warp completion, refusal, retained-source bookkeeping and stable facts now pass through a replayable Present-event owner, with poll-before-apply-before-finish ordering and failure chronology pinned (`4a376831`).
+
+Kernel planning, allocation, retirement, encoding and publication now pass through a replayable submission owner whose whole-grid job carries every semantic input by value, including the complete perturbation reference identity (`fb3cc50c`).
+
+Worker submission, arrival processing, reference disposition, facts and channel-only reads now pass through a replayable worker-service owner with a chronological turn record (`a9f3c778`).
+
+The browser and native Julibrot drivers now use one ordered refresh executor with typed stage tokens, replacing marker-only ordering and pinning scene-before-warp and fence-observation order (`e77ddad4`).
+
+The same-thread and browser transports now share one ownership core while retaining ABI-3 bytes, four buffers and their measured transport differences, and app callers reach the viewer through narrowed pan, zoom, precision and navigation entries instead of the mutable owner (`807aa546`, integrating source merges `61acab7b` and `fd96a4de`).
+
+Warm-up measurements now select the newest completed submission by a shared completion sequence instead of mistaking the longest wall duration for recency (`3f885813`).
+
+Round two began with frozen worker-event and app-frame traces, a paired planner corpus, native whole-grid pixels and a served raw-RGBA artifact whose load-dependent facts are explicitly excluded from stable comparison (`e53da1bb`, integrating source merge `148c828f`).
+
+The refactor survey classified the Julibrot ownership seams, measured its debt and established the round-two and round-three oracle contract without changing runtime behavior (`8734d336`).
+
+Relief-aware zoom now reprojects the retained source through the requested view, applies palette only during presentation and holds a covering source instead of clearing it during the transition (`430a56ad`).
+
+A relief zoom that cannot be represented now reports the refusal, retains partial-error evidence and records where each held, redrawn, warped or cleared picture placed the requested view (`b0422875`).
 
 ### v1 — 2026-09-04
 
