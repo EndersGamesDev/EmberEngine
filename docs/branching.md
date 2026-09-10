@@ -11,7 +11,7 @@ Ember integrates changes on `develop` through pull requests and reserves `main` 
 | `develop` | The default integration line; every integrated change passed the required checks in a pull request | GitHub pull-request merges | Merge commits only; direct pushes and force pushes are blocked. |
 | `main` | The live line; after its one-time migration anchor, it advances only to commits selected by valid release tags | The release workflow through its deploy key | Plain fast-forward pushes of tag target commits only. |
 
-`gh-pages` and `ci-passed` are retired names rather than permitted creation patterns. The branch-naming rule applies only to creation, so it leaves any existing branch ref untouched.
+`ci-passed` no longer exists, while `gh-pages` remains frozen as the publication record because the changelog ledger cites publications by their `gh-pages` commit ids and stamps, `deploy/deploy-pages.sh` reads the branch as the read-only seed of the archived first web build, no archive name is creatable under live ruleset `22770318`, and no non-release tag is creatable under live ruleset `22795785`. Actions owns publication and nothing writes `gh-pages`, so a no-bypass update-and-deletion freeze constrains no active writer and prevents an accidental legacy publication from changing the live site while Pages still builds from that resolvable ref; the branch-name ruleset also refuses recreation of `ci-passed`.
 
 `main` is always an ancestor of `develop`, so a release promotion cannot introduce a commit that was not integrated. Nothing is committed or merged directly on `main`, so the branch cannot diverge from `develop` and never needs a reconciliation merge.
 
@@ -20,6 +20,8 @@ The migration creates `main` once at the then-current tip of `develop`, even whe
 ## Pull requests into `develop`
 
 Every change, including release-process changes, reaches `develop` through a pull request. Direct integration would separate the resulting commit from the CI and review record that establish why it is safe to land.
+
+The fixed pull-request body contract and step-by-step landing procedure live in [`pull-requests.md`](pull-requests.md), keeping every candidate's gate and review record consistent with this branch policy.
 
 Only merge commits are enabled; squash and rebase merges are disabled because they replace authored commits and flatten their reviewable history. The merge subject and body follow [`commit-messages.md`](commit-messages.md), preserving the authored commits beneath the integration record.
 
@@ -57,6 +59,15 @@ The files under `deploy/rulesets/` are complete request bodies for GitHub's repo
 ### `branch-names.json`
 
 This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**` and `lane/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
+
+### `gh-pages-frozen.json`
+
+This branch ruleset targets only `refs/heads/gh-pages` and has no bypass actors. It is applied as soon as its payload is integrated, after which its live id is recorded in `deploy/rulesets/README.md`.
+
+- `Restrict updates` sets `update_allows_fetch_and_merge` to false and refuses every push, preserving each publication commit and stamp under its original ref.
+- `Restrict deletions` keeps the publication record resolvable because the branch-name ruleset would refuse its recreation.
+
+`Block force pushes` is not a separate rule because `Restrict updates` already refuses both fast-forward and non-fast-forward pushes.
 
 ### `develop.json`
 
@@ -130,7 +141,7 @@ The release deploy key is the ruleset's only bypass actor on `main`. Generating 
 
 `.github/workflows/pages.yml` runs after the `release` workflow completes successfully, then checks out `main` and finds a release tag that points at `HEAD`. Waiting for successful completion prevents the push-to-`main` event from racing the draft-to-published transition. The workflow fails unless that tag has a published release with exactly one `ember-pages.tar.gz` asset, downloads that asset rather than rebuilding it, and deploys the archive through `actions/configure-pages`, `actions/upload-pages-artifact` and `actions/deploy-pages` into the `github-pages` environment.
 
-The environment accepts deployments from `main` only. Reusing the release asset makes the published bytes identical to the reviewed release instead of producing a second build with merely equivalent source.
+The environment accepts deployments from `main` and, until the release workflow's first Pages deployment replaces the legacy build, from `gh-pages`; that first deployment removes the `gh-pages` policy entry so `main` becomes the environment's sole accepted ref. Pages still builds from the frozen `gh-pages` branch until that replacement, and the branch remains afterward as the resolvable publication record. Reusing the release asset makes the published bytes identical to the reviewed release instead of producing a second build with merely equivalent source.
 
 ## Host rule
 
@@ -140,9 +151,12 @@ Production hosts use `EMBER_REF=main`. A host therefore rebuilds only after the 
 
 ## Order of operations
 
-1. The replayed history establishes `develop` at `eefd43d0`, providing the integration baseline before protections begin.
-2. Surviving working branches have been renamed under `feature/*`, and live ruleset `22770318` now refuses creation outside `develop`, `main`, `feature/**` and `lane/**`; `ci-passed` is retired; and `main` is created once at the current `develop` tip so hosts do not roll back to an old tag.
-3. The corrected `develop` ruleset is activated from `deploy/rulesets/develop.json` before the first pull request, so that pull request is governed by the status and merge-method policy it introduces into repository history.
-4. The document, payload and workflow changes land together through that governed pull request, making the repository contract and its automation agree.
-5. The remaining repository rulesets are activated, the release deploy key is registered as the only `main` bypass actor, its private key is stored as `RELEASE_DEPLOY_KEY`, and the `github-pages` environment is restricted to `main`; these external settings make the checked-in specification effective.
-6. The first conforming release tag proves the end-to-end contract by creating the release asset, fast-forwarding `main`, deploying Pages from the same bytes and allowing hosts to update from the same source.
+1. The replayed history established `develop` at `eefd43d0` as the integration baseline before any protection existed. This fixed starting point keeps the replayed source and the boundary of protected history auditable.
+2. Surviving working branches have completed their renames under `feature/*`, and live branch-name ruleset `22770318` admits creation only of `develop`, `main`, `feature/**` and `lane/**` with no bypass actors. This state keeps candidate work on bounded names while preserving the two governed long-lived lines.
+3. `main` exists at the `develop` tip used for the one-time migration anchor, and `ci-passed` no longer exists because its replayed content is contained in `develop`; ruleset `22770318` refuses its recreation. The anchor prevents hosts from rolling back to older source, while deleting the obsolete integration ref removes a competing line without discarding its content.
+4. `develop` is governed by live ruleset `22736795` from `deploy/rulesets/develop.json`: deletion and force pushes are blocked, pull requests with merge commits are the sole integration method, required approvals are zero, and the strict required contexts `cores + servers`, `deploy scripts` and `workspace` are bound to GitHub Actions integration id `15368`; no bypass actor exists. This policy joins every integration commit to current-tree CI evidence without depending on an approval count.
+5. `main` is governed by live rulesets `22736890` from `main-authorization.json` and `22795584` from `main-integrity.json`: creation and updates are blocked except for the release deploy key, while deletion and force pushes are blocked without bypass. The deploy key is registered and its private key is stored as `RELEASE_DEPLOY_KEY`, giving the release workflow only the narrow fast-forward capability required for promotion.
+6. Release tags are governed by live rulesets `22795757` from `release-tags-authorization.json` and `22795767` from `release-tags-integrity.json`, while live ruleset `22795785` from `other-tags.json` blocks creation outside the release namespace. This separation permits the identified release-tag creation path without permitting any actor to rewrite or delete release provenance.
+7. The tracked `gh-pages-frozen.json` payload is applied as soon as this change is integrated, and its resulting live ruleset id is then recorded in `deploy/rulesets/README.md`. Its no-bypass update and deletion rules close the legacy write path while keeping every cited publication commit and stamp resolvable under the only available archive name.
+8. The `github-pages` environment accepts deployments from `main` and, until the release workflow's first Pages deployment replaces the legacy build, from `gh-pages`; that deployment removes the `gh-pages` policy entry while the branch remains as the frozen record. This overlap keeps the existing site available before the reviewed archive from promoted `main` makes `main` the environment's sole accepted ref.
+9. The first conforming release tag has not yet been cut and remains the final migration step. Its successful run will prove the end-to-end contract by creating the release asset, fast-forwarding `main`, publishing Pages from the same bytes and allowing hosts to update from the same source.

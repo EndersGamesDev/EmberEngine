@@ -60,7 +60,7 @@ Large artist source stays **out of git** (see `.gitignore`); only the converted 
 ## Working rules
 
 - **Measure and report wall time.** An action that did not say how long it took is a process bug.
-- Branch integration, release promotion and live-line rules follow **`docs/branching.md`**.
+- Branch integration, release promotion and live-line rules follow **`docs/branching.md`**, and pull-request bodies and merges follow **`docs/pull-requests.md`**.
 - **Builds run at minimum priority** so they never contend with the interactive session.
 - **Never drive this machine's input.** Someone is sitting at it: nothing you run may move the cursor, synthesise a key or a click, or take the foreground. A client drives itself instead — `EMBER_SCRIPT` (`crates/arena/src/script.rs`), which is how `tools/v18/capture.ps1` gets its pictures.
 - Markdown paragraphs run: one line per paragraph, soft-wrapped by the viewer. Never hard-wrap prose.
