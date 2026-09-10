@@ -253,6 +253,10 @@ jobs:
           ref: ${{ needs.validate.outputs.sha }}
           fetch-depth: 0
           fetch-tags: true
+      - name: native build packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
       - name: toolchain (pinned by rust-toolchain.toml)
         run: rustup show
       - uses: Swatinem/rust-cache@v2

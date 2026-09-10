@@ -51,9 +51,6 @@
         ],
         "strict_required_status_checks_policy": true
       }
-    },
-    {
-      "type": "required_signatures"
     }
   ]
 }

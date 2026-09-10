@@ -1,6 +1,6 @@
 # Killshot v31 — Breach-12
 
-User request: introduce a shotgun in v31. Work stays on `codex/killshot-v31`, incorporating main's host repair `70ffba2a` and the v30 release handoff. Preserve the unrelated dirty original checkout, all frozen releases, and peer game changes. No all-game updater or new Cloudflare tunnel is part of this task.
+User request: introduce a shotgun in v31. Work stays on `feature/codex/killshot-v31`, incorporating main's host repair `70ffba2a` and the v30 release handoff. Preserve the unrelated dirty original checkout, all frozen releases, and peer game changes. No all-game updater or new Cloudflare tunnel is part of this task.
 
 What v31 actually shipped — its protocol, build stamp and source commit — is the `v31` entry in `CHANGELOG.md`; the checkpoint below names an earlier candidate than the one that was published.
 

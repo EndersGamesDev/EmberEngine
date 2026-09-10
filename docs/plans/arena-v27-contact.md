@@ -4,7 +4,7 @@ What v27 actually shipped — its protocol, build stamp and source commit — is
 
 ## Scope
 
-Follow v26 with nearby static light blockage, making container feet, wall junctions and cover more grounded. Work starts from main `dae87d1` in isolated `codex/contact-shading`; preserve the original dirty checkout and the v26 build for comparison. Presentation only: no movement, simulation, map geometry or protocol change, and no live server restart. Root owns GPU integration/release, separate workers own the pure CPU baker, Arena integration and independent verification.
+Follow v26 with nearby static light blockage, making container feet, wall junctions and cover more grounded. Work starts from main `dae87d1` in isolated `feature/codex/contact-shading`; preserve the original dirty checkout and the v26 build for comparison. Presentation only: no movement, simulation, map geometry or protocol change, and no live server restart. Root owns GPU integration/release, separate workers own the pure CPU baker, Arena integration and independent verification.
 
 ## Selected approach and limits
 
@@ -22,7 +22,7 @@ Use fixed-Frame native pixel comparisons for exact invariants: the existing brow
 
 ## Status
 
-Implemented and verified; publication and public artifact verification follow the gates below. Client-only protocol 20: no live server restart. The original checkout's seven pre-existing modifications remain untouched. Work is coordinated on `codex/contact-shading` and Barza; no Fable acknowledgement or PR review is claimed.
+Implemented and verified; publication and public artifact verification follow the gates below. Client-only protocol 20: no live server restart. The original checkout's seven pre-existing modifications remain untouched. Work is coordinated on `feature/codex/contact-shading` and Barza; no Fable acknowledgement or PR review is claimed.
 
 ## Measured browser, visual and cost evidence
 

@@ -30,7 +30,7 @@ The owner's completed slowdown was uncommitted in the shared `lane/arena-v18` ch
 
 Arena protocol 19 includes the recovered protocol-18 movement change and the timed handling rules. Exact join gating is intentional: a cached protocol-17 client predicts the wrong speed and does not display these accuracy states. Deploy the matching server before the v24 client; older archived Arena pages remain frozen and cannot join a protocol-19 match. The launcher remains able to list hosts without joining a game.
 
-At the start of this task, source main `9953e6a` already contained the Julibrot and diagnostic integrations, but the public Pages build was still `d045403`. There was no missing game merge: the updated nine-stage “what is this?” test and Julibrot saved-view/retained-frame work needed publication. Rebuild all four game bundles plus the Julibrot bundle from the integrated source; do not pair the new lab loader with older WASM. The standalone Next.js `verschaetz-dich` branch remains unmerged under the repository's one-engine rule.
+At the start of this task, source main `9953e6a` already contained the Julibrot and diagnostic integrations, but the public Pages build was still `d045403`. There was no missing game merge: the updated nine-stage “what is this?” test and Julibrot saved-view/retained-frame work needed publication. Rebuild all four game bundles plus the Julibrot bundle from the integrated source; do not pair the new lab loader with older WASM. The standalone Next.js `feature/verschaetz-dich` branch remains unmerged under the repository's one-engine rule.
 
 ## Verification
 

@@ -22,7 +22,7 @@ Verified gameplay and visual gates are detailed below. Not verified: trusted phy
 
 ## Contract and scope
 
-Development branch: `codex/killshot-v30`, based on released runtime `129bcac4` plus the v29 operational handoff. Preserve every frozen Arena page and every other game's source, catalog entry and public artifact. No broad host updater or tunnel creation is part of this change. The current public server stays on v29 during development.
+Development branch: `feature/codex/killshot-v30`, based on released runtime `129bcac4` plus the v29 operational handoff. Preserve every frozen Arena page and every other game's source, catalog entry and public artifact. No broad host updater or tunnel creation is part of this change. The current public server stays on v29 during development.
 
 Protocol 23 coordinates authoritative weapon inventory, reload remaining time, supplies and the loadout choice. Weapon IDs 1–7 occupy fixed matching slots; slots 8–9 are reserved and visibly empty. Collected weapons and their remaining ammunition persist for the current life, not across deaths or matches. Everyone always retains a safety pistol. Classic starts with the weak pistol; Custom loadout lets the host select the same starting gun for all players, independently of FFA/TDM/Hill. Respawn resets to that lobby loadout.
 

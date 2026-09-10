@@ -6,12 +6,12 @@ Ember integrates changes on `develop` through pull requests and reserves `main` 
 
 | Branch | Meaning | Writers | Update path |
 |---|---|---|---|
-| `feature/TOPIC` | A bounded human-authored change | The branch author | Pushes may be rebased, amended or replaced with force-with-lease. |
-| `lane/NAME` | A bounded loop-authored change | The lane | Pushes may be rebased, amended or replaced with force-with-lease. |
+| `feature/**` | A bounded human-authored change | The branch author | Pushes may be rebased, amended or replaced with force-with-lease. |
+| `lane/**` | A bounded loop-authored change | The lane | Pushes may be rebased, amended or replaced with force-with-lease. |
 | `develop` | The default integration line; every integrated change passed the required checks in a pull request | GitHub pull-request merges | Merge commits only; direct pushes and force pushes are blocked. |
 | `main` | The live line; after its one-time migration anchor, it advances only to commits selected by valid release tags | The release workflow through its deploy key | Plain fast-forward pushes of tag target commits only. |
-| `gh-pages` | Retired because Pages deploys the release asset selected by `main` | Nobody | No updates. |
-| `ci-passed` | Retired because hosts follow tagged releases on `main` | Nobody | No updates. |
+
+`gh-pages` and `ci-passed` are retired names rather than permitted creation patterns. The branch-naming rule applies only to creation, so it leaves any existing branch ref untouched.
 
 `main` is always an ancestor of `develop`, so a release promotion cannot introduce a commit that was not integrated. Nothing is committed or merged directly on `main`, so the branch cannot diverge from `develop` and never needs a reconciliation merge.
 
@@ -21,7 +21,7 @@ The migration creates `main` once at the then-current tip of `develop`, even whe
 
 Every change, including release-process changes, reaches `develop` through a pull request. Direct integration would separate the resulting commit from the CI and review record that establish why it is safe to land.
 
-Only merge commits are enabled; squash and rebase merges are disabled because they replace authored commits and discard their signatures. The merge subject and body follow [`commit-messages.md`](commit-messages.md), while GitHub signs the merge commit with its key and every source commit remains signed by its author.
+Only merge commits are enabled; squash and rebase merges are disabled because they replace authored commits and flatten their reviewable history. The merge subject and body follow [`commit-messages.md`](commit-messages.md), preserving the authored commits beneath the integration record.
 
 The pull-request branch is up to date with `develop` before merging. Strict status checks then prove the current candidate rather than an older tree, and the merge commit carries the same content as that gated candidate.
 
@@ -41,7 +41,7 @@ Only deliberate major and minor versions receive release tags; patch grades reco
 
 ## Push permissions
 
-| Actor | Feature or lane branches | `develop` | `main` | Release tags |
+| Actor | Feature or lane branches (no signature requirement) | `develop` (no signature requirement) | `main` (no signature requirement) | Release tags (workflow signature required) |
 |---|---|---|---|---|
 | Repository owner | Push and force-with-lease | Pull-request merge only | No direct update | Create matching annotated, allowed-key-signed tags |
 | Loop account | Push and force-with-lease on `lane/*` | Pull-request merge only | No direct update | Create matching annotated, allowed-key-signed tags |
@@ -52,7 +52,11 @@ Quarantine fetches and integration comparisons use `develop`; a candidate is pus
 
 ## GitHub repository rulesets
 
-The files under `deploy/rulesets/` are complete request bodies for GitHub's repository-ruleset REST API. The rule names below use GitHub's repository-ruleset labels exactly, every payload has `enforcement` set to `active`, and authorization is split from integrity wherever a bypass is required so no bypass actor can delete, rewrite or evade signature protection. `bash deploy/tests/test-rulesets.sh` checks the payloads against this contract and the CI workflow.
+The files under `deploy/rulesets/` are complete request bodies for GitHub's repository-ruleset REST API. The rule names below use GitHub's repository-ruleset labels exactly, every payload has `enforcement` set to `active`, and authorization is split from integrity wherever a bypass is required so no bypass actor can delete or rewrite protected history. `bash deploy/tests/test-rulesets.sh` checks the payloads against this contract and the CI workflow.
+
+### `branch-names.json`
+
+This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**` and `lane/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
 
 ### `develop.json`
 
@@ -62,7 +66,6 @@ This branch ruleset targets only `refs/heads/develop` and has no bypass actors. 
 - `Block force pushes` prevents an integrated commit from changing identity.
 - `Require a pull request before merging` allows only the merge-commit method, dismisses stale reviews after new pushes and requires `0` approving reviews for now; code-owner review, last-push approval and resolved review threads are not mechanical merge requirements.
 - `Require status checks to pass` requires the literal contexts `cores + servers`, `deploy scripts` and `workspace`, each from GitHub Actions integration id `15368`, with `Require branches to be up to date before merging` enabled and creation not exempted.
-- `Require signed commits` verifies commits introduced by updates after activation rather than retrospectively checking history already present on `develop`; GitHub's signed merge commit closes the pull request.
 
 ### `main-integrity.json`
 
@@ -70,7 +73,8 @@ This branch ruleset targets only `refs/heads/main` and has no bypass actors.
 
 - `Restrict deletions` prevents removal of the live-line reference.
 - `Block force pushes` makes every promotion a fast-forward in addition to the workflow's plain-push check.
-- `Require signed commits` verifies commits introduced by non-bypassed updates after activation; history already present when the rule is activated, including unsigned commits, is not rechecked.
+
+Commit signatures are not required on `develop` or `main` for now. Release provenance does not depend on a branch-signature rule: `release.yml` still verifies each annotated release tag against `deploy/keys/` after selecting a green exact-SHA `develop` run. If branch signatures become part of the policy later, `required_signatures` can be added to both `develop.json` and `main-integrity.json` without changing the authorization payloads.
 
 ### `main-authorization.json`
 
@@ -100,7 +104,7 @@ This tag ruleset includes `~ALL`, excludes `refs/tags/*-[0-9]*.[0-9]*.[0-9]*`, a
 
 - `Restrict creations` prevents tags outside the release namespace, eliminating names that would bypass the series and semantic-version checks.
 
-Feature and lane branches have no ruleset because rewriting a private candidate is useful; the signed-commit and CI requirements take effect when that candidate enters `develop`.
+Feature and lane branches remain rewritable because changing a private candidate is useful; the branch-naming ruleset limits only which names can be created, while pull-request and CI requirements take effect when a candidate enters `develop`.
 
 ## Workflow contract
 
@@ -108,7 +112,7 @@ Feature and lane branches have no ruleset because rewriting a private candidate 
 
 `.github/workflows/ci.yml` runs for every pull request targeting `develop` and every push to `develop`, with no path exclusions. Pull-request checks run against GitHub's synthetic merge SHA and gate the proposed merge; the final commit pushed to `develop` has a different SHA, so its push run supplies the exact-SHA workflow and job evidence that `release.yml` consumes. The resulting one complete CI run per merge, including a documentation-only merge, is the cost of making every integrated commit potentially releasable.
 
-The existing `cores + servers` and `deploy scripts` jobs remain. The deploy job runs `deploy/tests/test-readmes.sh`, `test-done-lists.sh`, `test-changelog.sh` and `test-commit-messages.sh` on every pull request. The `workspace` job selects `rust-toolchain.toml` through `rustup show`, checks `cargo fmt --all -- --check`, runs `cargo clippy --workspace --all-targets --locked`, tests the workspace with the linter and presentation package excluded, then tests `ember-julibrot-present` with one test thread; `Swatinem/rust-cache` keeps that complete gate practical.
+The existing `cores + servers` and `deploy scripts` jobs remain. The deploy job runs `deploy/tests/test-readmes.sh`, `test-done-lists.sh`, `test-changelog.sh` and `test-commit-messages.sh` on every pull request. The `workspace` job installs `pkg-config`, `libudev-dev` and `libasound2-dev` before Rust setup because the runner image carries neither the package metadata tool nor the native development headers required by the engine's Linux gamepad and audio crates. It then selects `rust-toolchain.toml` through `rustup show`, checks `cargo fmt --all -- --check`, runs `cargo clippy --workspace --all-targets --locked`, tests the workspace with the linter and presentation package excluded, then tests `ember-julibrot-present` with one test thread; `Swatinem/rust-cache` keeps that complete gate practical.
 
 There is no promotion job in CI. Passing integration CI proves `develop`; it does not turn an arbitrary merge into a release or move the live line.
 
@@ -137,8 +141,8 @@ Production hosts use `EMBER_REF=main`. A host therefore rebuilds only after the 
 ## Order of operations
 
 1. The replayed history establishes `develop` at `eefd43d0`, providing the integration baseline before protections begin.
-2. Surviving working branches are named under `feature/*`; `ci-passed` is retired; and `main` is created once at the current `develop` tip so hosts do not roll back to an old tag.
-3. The corrected `develop` ruleset is activated from `deploy/rulesets/develop.json` before the first pull request, so that pull request is governed by the status, signature and merge-method policy it introduces into repository history.
+2. Surviving working branches have been renamed under `feature/*`, and live ruleset `22770318` now refuses creation outside `develop`, `main`, `feature/**` and `lane/**`; `ci-passed` is retired; and `main` is created once at the current `develop` tip so hosts do not roll back to an old tag.
+3. The corrected `develop` ruleset is activated from `deploy/rulesets/develop.json` before the first pull request, so that pull request is governed by the status and merge-method policy it introduces into repository history.
 4. The document, payload and workflow changes land together through that governed pull request, making the repository contract and its automation agree.
 5. The remaining repository rulesets are activated, the release deploy key is registered as the only `main` bypass actor, its private key is stored as `RELEASE_DEPLOY_KEY`, and the `github-pages` environment is restricted to `main`; these external settings make the checked-in specification effective.
 6. The first conforming release tag proves the end-to-end contract by creating the release asset, fast-forwarding `main`, deploying Pages from the same bytes and allowing hosts to update from the same source.
