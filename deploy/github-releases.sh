@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Create or update one GitHub release for every series-prefixed release tag.
-# Dry-run by default; run from a clean main checkout with --apply after the
-# tags exist. Use --replace-drafts to remove the superseded v20/v22 drafts.
+# Create or update GitHub releases from series-prefixed release tags.
+# Dry-run by default. Bulk apply runs from clean main; --tag applies one tag
+# from a clean checkout at its target, which is the release workflow's path.
+# Use --replace-drafts only in bulk mode for the superseded v20/v22 drafts.
 #
-#   bash deploy/github-releases.sh [--replace-drafts]
-#   bash deploy/github-releases.sh --apply [--replace-drafts]
+#   bash deploy/github-releases.sh [--tag TAG] [--replace-drafts]
+#   bash deploy/github-releases.sh --apply [--tag TAG] [--replace-drafts]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,7 +18,7 @@ LATEST_TAG=""
 GITHUB_RELEASES_WORK=""
 
 usage() {
-    echo "usage: bash deploy/github-releases.sh [--apply] [--replace-drafts]"
+    echo "usage: bash deploy/github-releases.sh [--apply] [--tag TAG] [--replace-drafts]"
 }
 
 die() {
@@ -112,6 +113,30 @@ launcher_path_for_version() {
     ' "$GAMES"
 }
 
+series_title_for() {
+    local series="$1" title
+    title="$(launcher_title_for "$series")"
+    if [ -n "$title" ]; then
+        printf '%s\n' "$title"
+        return
+    fi
+    case "$series" in
+        ember) printf 'Ember\n' ;;
+        *)
+            [ -d "$REPO/web/labs/$series" ] || return 0
+            printf '%s Lab\n' "${series^}"
+            ;;
+    esac
+}
+
+series_path_for() {
+    local series="$1"
+    case "$series" in
+        ember) printf './\n' ;;
+        *) [ ! -d "$REPO/web/labs/$series" ] || printf 'labs/%s/\n' "$series" ;;
+    esac
+}
+
 changelog_entry_for() {
     local tag="$1"
     awk -v wanted="$tag" '
@@ -155,14 +180,15 @@ tag_annotation_for() {
 
 derive_release() {
     local tag="$1" notes="$2"
-    local series version entry slot source_commit annotation tag_commit
+    local series version entry slot source_commit annotation tag_commit title
 
     valid_tag "$tag" || die "tag '$tag' does not match the release tag grammar"
     series="${tag%-*}"
     version="${tag##*-}"
 
-    RELEASE_TITLE="$(launcher_title_for "$series") $version"
-    [ "$RELEASE_TITLE" != " $version" ] || die "no launcher title for series '$series'"
+    title="$(series_title_for "$series")"
+    [ -n "$title" ] || die "no release title for series '$series'"
+    RELEASE_TITLE="$title $version"
     RELEASE_LATEST=false
     [ "$tag" = "$LATEST_TAG" ] && RELEASE_LATEST=true
     RELEASE_PRERELEASE=false
@@ -177,7 +203,8 @@ derive_release() {
         RELEASE_LINE="$(printf '%s\n' "$entry" | awk 'NR > 1 && NF { print; exit }')"
         slot="$(printf '%s\n' "$entry" | awk 'NR == 1 { print $2 }')"
         RELEASE_PATH="$(launcher_path_for_slot "$series" "$slot")"
-        [ -n "$RELEASE_PATH" ] || die "$tag entry uses launcher slot '$slot', which has no path"
+        [ -n "$RELEASE_PATH" ] || RELEASE_PATH="$(series_path_for "$series")"
+        [ -n "$RELEASE_PATH" ] || die "$tag entry uses slot '$slot', which has no release path"
         source_commit="$(printf '%s\n' "$RELEASE_LINE" | sed -nE 's/.*source `([0-9a-f]{7,40})`.*/\1/p')"
         if [ -z "$source_commit" ]; then
             source_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
@@ -190,7 +217,8 @@ derive_release() {
     else
         tag_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
         RELEASE_PATH="$(launcher_path_for_version "$series" "$version")"
-        [ -n "$RELEASE_PATH" ] || die "$tag has no changelog entry or launcher path"
+        [ -n "$RELEASE_PATH" ] || RELEASE_PATH="$(series_path_for "$series")"
+        [ -n "$RELEASE_PATH" ] || die "$tag has no changelog entry or release path"
         annotation="$(tag_annotation_for "$tag")" || die "$tag has no changelog entry and is not annotated"
         [ -n "$annotation" ] || die "$tag has no changelog entry or annotation message"
         {
@@ -253,7 +281,7 @@ replace_stale_drafts() {
 }
 
 main() {
-    local started=$SECONDS apply="" replace_drafts="" tag notes
+    local started=$SECONDS apply="" replace_drafts="" selected_tag="" tag notes target
     local creates=0 updates=0 release_count=0
     local work
     local -a tags create_args edit_args
@@ -262,6 +290,12 @@ main() {
         case "$1" in
             --apply) apply=1 ;;
             --replace-drafts) replace_drafts=1 ;;
+            --tag)
+                shift
+                [ "$#" -gt 0 ] || die "--tag requires a tag name"
+                [ -z "$selected_tag" ] || die "--tag may be supplied only once"
+                selected_tag="$1"
+                ;;
             --help|-h) usage; exit 0 ;;
             --*) die "unknown option: $1" ;;
             *) die "unexpected argument: $1" ;;
@@ -272,12 +306,26 @@ main() {
     git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || die "$REPO is not a git checkout"
     [ -f "$CHANGELOG" ] || die "no CHANGELOG.md at $CHANGELOG"
     [ -f "$GAMES" ] || die "no web/games.json at $GAMES"
+    [ -z "$selected_tag" ] || [ -z "$replace_drafts" ] || die "--replace-drafts is available only in bulk mode"
     if [ -n "$apply" ]; then
-        [ "$(git -C "$REPO" symbolic-ref --quiet --short HEAD)" = "main" ] || die "--apply must run from main"
         [ -z "$(git -C "$REPO" status --porcelain)" ] || die "--apply requires a clean checkout"
+        if [ -n "$selected_tag" ]; then
+            target="$(git -C "$REPO" rev-parse "refs/tags/$selected_tag^{commit}" 2>/dev/null)" \
+                || die "tag '$selected_tag' does not resolve to a commit"
+            [ "$(git -C "$REPO" rev-parse HEAD)" = "$target" ] || die "--apply --tag requires HEAD at $selected_tag's target"
+        else
+            [ "$(git -C "$REPO" symbolic-ref --quiet --short HEAD)" = "main" ] || die "bulk --apply must run from main"
+        fi
     fi
 
-    mapfile -t tags < <(release_tags)
+    if [ -n "$selected_tag" ]; then
+        valid_tag "$selected_tag" || die "tag '$selected_tag' does not match the release tag grammar"
+        git -C "$REPO" rev-parse -q --verify "refs/tags/$selected_tag" >/dev/null \
+            || die "tag '$selected_tag' does not exist"
+        tags=("$selected_tag")
+    else
+        mapfile -t tags < <(release_tags)
+    fi
     [ "${#tags[@]}" -gt 0 ] || die "no series-prefixed release tags found"
     LATEST_TAG="$(latest_arena_tag)"
     [ -n "$LATEST_TAG" ] || die "no arena release tag found to mark latest"

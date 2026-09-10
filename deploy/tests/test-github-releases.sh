@@ -55,6 +55,12 @@ capture_plan() {
         > "$TEST_WORK/plan.out" 2> "$TEST_WORK/plan.err"
 }
 
+capture_selected_plan() {
+    local tag="$1"
+    GH="$TEST_WORK/gh-forbidden" bash "$RELEASE_SCRIPT" --tag "$tag" \
+        > "$TEST_WORK/selected-plan.out" 2> "$TEST_WORK/selected-plan.err"
+}
+
 derive_repository_releases() {
     local tag notes
     while IFS= read -r tag; do
@@ -146,6 +152,9 @@ self_test() {
     git -C "$fixture" tag -a fixture-1.0.0 -m 'fixture annotation with changelog' "$commit"
     git -C "$fixture" tag -a fixture-2.0.0 -m 'fixture annotation without changelog' "$commit"
     git -C "$fixture" tag -a fixture-0.1.0 -m 'fixture pre-release annotation' "$commit"
+    git -C "$fixture" tag -a ember-1.0.0 -m 'fixture Ember annotation' "$commit"
+    git -C "$fixture" tag -a heap-0.1.0 -m 'fixture lab annotation' "$commit"
+    mkdir -p "$fixture/web/labs/heap"
     write_fixture_games "$fixture/web/games.json"
     write_fixture_changelog "$fixture/CHANGELOG.md" "$commit"
 
@@ -172,11 +181,21 @@ self_test() {
     derive_release fixture-0.1.0 "$notes"
     [ "$RELEASE_PRERELEASE" = true ] && ok "fixture 0.x tag is a pre-release" || bad "fixture 0.x tag is not a pre-release"
 
+    notes="$fixture/notes/ember-1.0.0.md"
+    derive_release ember-1.0.0 "$notes"
+    [ "$RELEASE_TITLE" = "Ember 1.0.0" ] && ok "Ember title derives without a launcher row" || bad "Ember title is '$RELEASE_TITLE'"
+    [ "$RELEASE_PATH" = "./" ] && ok "Ember release points at the hub" || bad "Ember path is '$RELEASE_PATH'"
+
+    notes="$fixture/notes/heap-0.1.0.md"
+    derive_release heap-0.1.0 "$notes"
+    [ "$RELEASE_TITLE" = "Heap Lab 0.1.0" ] && ok "lab title derives from its id" || bad "lab title is '$RELEASE_TITLE'"
+    [ "$RELEASE_PATH" = "labs/heap/" ] && ok "lab release path derives from its directory" || bad "lab path is '$RELEASE_PATH'"
+
     if [ "$FAILURES" -eq 0 ]; then
-        echo "SELF-TEST PASS: $CHECKS checks, 3 tags, 0 failures, $((SECONDS - started))s wall"
+        echo "SELF-TEST PASS: $CHECKS checks, 5 tags, 0 failures, $((SECONDS - started))s wall"
         return 0
     fi
-    echo "SELF-TEST FAIL: $CHECKS checks, 3 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
+    echo "SELF-TEST FAIL: $CHECKS checks, 5 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
     return 1
 }
 
@@ -206,6 +225,19 @@ if test_timed "dry-run plan" capture_plan; then
 else
     bad "dry-run failed or invoked gh"
     sed -n '1,20p' "$TEST_WORK/plan.err" >&2
+fi
+
+selected_tag="$(head -n 1 "$TEST_WORK/tags")"
+if test_timed "single-tag dry-run plan" capture_selected_plan "$selected_tag"; then
+    selected_plan="$(awk '$1 == "github-releases:" && $2 == "plan" && $3 == "release" { print $4 }' "$TEST_WORK/selected-plan.out")"
+    if [ "$selected_plan" = "$selected_tag" ]; then
+        ok "--tag plans exactly the selected release"
+    else
+        bad "--tag planned '$selected_plan' instead of '$selected_tag'"
+    fi
+else
+    bad "single-tag dry-run failed or invoked gh"
+    sed -n '1,20p' "$TEST_WORK/selected-plan.err" >&2
 fi
 
 awk '$1 == "github-releases:" && $2 == "plan" && $3 == "release" { print $4 }' \
