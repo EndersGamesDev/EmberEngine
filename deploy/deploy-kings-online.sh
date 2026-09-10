@@ -5,8 +5,8 @@
 #      fresh https://….trycloudflare.com domain on EVERY restart
 #   3. health-check by SPEAKING THE PROTOCOL, on loopback and then through
 #      the public URL
-#   4. only then publish the domain to server.json on GitHub Pages as
-#      "kings_ws" (with "kings_proto"), merging into the other games' keys
+#   4. only then optionally publish the domain to an explicitly configured
+#      address book as "kings_ws" with "kings_proto"
 #
 # Run from Windows (Git Bash):
 #   bash deploy/deploy-kings-online.sh          # up (the default)
@@ -63,6 +63,7 @@ BIND="127.0.0.1:$PORT"
 PROTO_FILE="crates/kings-core/src/proto.rs"
 # Where the pages currently point players; `status` compares it with the log.
 PAGES_URL="${EMBER_PAGES_URL:-https://endersgamesdev.github.io/EmberEngine}"
+EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 
 cd "$REPO_DIR"
 
@@ -328,7 +329,8 @@ do_up() {
 # half against the pair that is already running, instead of restarting it
 # and minting yet another name.
 probe_and_publish() {
-    local WS_URL="$1" COMMIT="$2" KINGS_PROTO="$3" ok i PAGES_DIR
+    local WS_URL="$1" COMMIT="$2" KINGS_PROTO="$3" ok i HOST_NAME VERSION ENTRY PUBLISH_REPO PUBLISH_BRANCH
+    local -a PUBLISH_ARGS
 
     step "probe THROUGH the public URL"
     # Two minutes of retries, five seconds apart: long enough for the name to
@@ -347,34 +349,40 @@ probe_and_publish() {
         fail "the tunnel is up but the server never passed the probe through it. Not publishing server.json; the page keeps its previous value. Once the name resolves, 'bash deploy/deploy-kings-online.sh publish' finishes this without restarting the pair."
     fi
 
-    step "publishing server.json to GitHub Pages"
+    step "recording the host entry ($EMBER_PUBLISH)"
     # Only after the public probe passed: publishing first would point every
     # player at a server we had not yet proved was alive through that URL.
-    # Merge, never overwrite: server.json carries the arena's "ws"/"proto",
-    # fire's "fire_ws"/"fire_proto", and the multi-host "hosts"/"mirrors".
-    PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-    git worktree prune
-    git worktree add -q "$PAGES_DIR" gh-pages
-    ctl merge "$(to_mnt "$PAGES_DIR")/server.json" kings_ws "$WS_URL" kings_proto "$KINGS_PROTO" \
-        || { git worktree remove --force "$PAGES_DIR"; fail "merge-server-json.py failed; server.json untouched"; }
-    (
-        cd "$PAGES_DIR"
-        git add server.json
-        if git diff --cached --quiet; then
-            echo "   server.json unchanged"
-        else
-            git commit -q -m "Point kings_ws at $WS_URL
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-            git push -q origin gh-pages
-            echo "   pushed gh-pages"
-        fi
-    )
-    git worktree remove --force "$PAGES_DIR"
+    HOST_NAME="${EMBER_HOST_NAME:-}"
+    [ -n "$HOST_NAME" ] || HOST_NAME="$(ctl host-name)"
+    [ -n "$HOST_NAME" ] || fail "the running host has no name to publish"
+    VERSION="r$(git rev-list --count HEAD)"
+    PUBLISH_ARGS=(--name "$HOST_NAME" --game kings --url "$WS_URL" --proto "$KINGS_PROTO" \
+        --version "$VERSION" --commit "$COMMIT" --by "$(id -un)@$DISTRO")
+    case "$EMBER_PUBLISH" in
+        none|"")
+            ENTRY="$(mktemp -t ember-kings-host-XXXXXX.json)"
+            : > "$ENTRY"
+            bash "$REPO_DIR/deploy/publish-host.sh" --book "$ENTRY" --file host.json "${PUBLISH_ARGS[@]}"
+            echo "   EMBER_PUBLISH=none; the entry was not published:"
+            cat "$ENTRY"
+            rm -f "$ENTRY"
+            ;;
+        *#*)
+            PUBLISH_REPO="${EMBER_PUBLISH%#*}"
+            PUBLISH_BRANCH="${EMBER_PUBLISH##*#}"
+            [ -n "$PUBLISH_REPO" ] && [ -n "$PUBLISH_BRANCH" ] \
+                || fail "EMBER_PUBLISH needs <git url>#<branch>"
+            bash "$REPO_DIR/deploy/publish-host.sh" --repo "$PUBLISH_REPO" --branch "$PUBLISH_BRANCH" \
+                --file server.json "${PUBLISH_ARGS[@]}"
+            ;;
+        *)
+            fail "EMBER_PUBLISH must be none or <git url>#<branch>"
+            ;;
+    esac
     step_done
 
     echo "== ONLINE: $WS_URL =="
-    echo "   the kings page picks it up from server.json on its next load"
+    echo "   publication destination: $EMBER_PUBLISH"
     echo "   steps: $(printf '%s; ' "${TIMINGS[@]}")total ${SECONDS}s"
 }
 
