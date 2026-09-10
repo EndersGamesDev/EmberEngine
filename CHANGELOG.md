@@ -18,6 +18,8 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 ### Integration and release process
 
+The pull-request runbook now makes per-commit gates and wall times, pre-opening adversarial review, the fixed six-section body, strict rebase-and-recheck handling, GitHub-created merge commits, quarantined post-merge inspection, branch cleanup and pull-request participation one landing contract (`7f3283fd`); the tracked no-bypass freeze payload preserves the `gh-pages` publication record against update and deletion (`dd8a5d37`); the accompanying cross-references record the replay baseline, the live branch and tag rulesets, the `main` migration anchor, the deleted `ci-passed` ref whose replayed content remains in `develop`, the registered release credential, the frozen `gh-pages` publication-record decision and the first conforming release tag as the remaining step (`3d928323`); the changelog policy suite decides raw object presence before its unavailable off-main name fallback, rejects ambiguous or non-commit names, retains object comparison for resolvable commits and pins those paths with deterministic fixtures (`879d9cd9`).
+
 The workspace CI job now installs Mesa's lavapipe software Vulkan adapter so Ember's GPU readback tests can run on GitHub-hosted runners without a hardware GPU, and workflow policy tests require the package in both parser modes while rejecting an adapter-free fixture (`9d66b0c6`).
 
 Branch integrity now leaves commit signatures optional on `develop` and `main` while the release workflow keeps allowed-key tag verification, and tracked live ruleset `22770318` permits new `develop`, `main`, `feature/**` and `lane/**` names without a bypass; branch records use the completed `feature/*` renames (`4a78db6d`).
