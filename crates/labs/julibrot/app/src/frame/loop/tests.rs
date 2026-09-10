@@ -3358,6 +3358,7 @@ fn cpu_packed_s1_round_trips_through_descriptor_path() {
     assert_eq!(reconstructed.value, value);
 }
 
+// Poison recovery keeps one GPU test failure from masking a later test's own result.
 static PAIRED_GPU_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn wait_for_gpu_future<F: Future>(future: F) -> F::Output {
@@ -3929,7 +3930,7 @@ fn paired_gpu_dispatch_matches_legacy_s0_and_mapped_s1_reconstructs() {
 
     let _guard = PAIRED_GPU_TEST_MUTEX
         .lock()
-        .expect("the paired GPU test mutex is available");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (device, queue) = paired_gpu_test_device();
     let source = paired_gpu_source_pose();
     let render =
@@ -8784,7 +8785,7 @@ fn cursor_anchor_placement_across_shallow_perturbation_and_binary64_depths() {
     );
     let _guard = PAIRED_GPU_TEST_MUTEX
         .lock()
-        .expect("the native GPU test mutex is not poisoned");
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (device, queue) = paired_gpu_test_device();
     let runs = [
         drive_anchor_zoom_trace("shallow", SHALLOW_ZOOM_LOG2, false, &device, &queue),
