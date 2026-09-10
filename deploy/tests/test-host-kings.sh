@@ -45,7 +45,7 @@ export EMBER_HOST_NAME="quiet-egret"
 export EMBER_HOME="$TMP/home"
 export EMBER_REPO="$TMP/source.git"
 export EMBER_REF=HEAD
-export EMBER_PUBLISH="$PAGES#gh-pages"
+export EMBER_PUBLISH="$PAGES#host-book"
 export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
 export EMBER_ARENA_PORT=17780
 export EMBER_FIRE_PORT=17781
@@ -60,6 +60,7 @@ else
     summary host-kings
     exit 1
 fi
+contains "$(cat "$EMBER_CONF_DIR/host.env")" "#EMBER_REF=main" "new host configuration follows the release line by default"
 
 WIRE="$(cat "$SHIM_LOG")"
 contains "$WIRE" "arena-server [--bind] [127.0.0.1:17780]" "arena launch argv is unchanged"

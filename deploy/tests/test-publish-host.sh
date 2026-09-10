@@ -152,7 +152,7 @@ is "$(jget "$STAMPS" '[h for h in d["hosts"] if h["name"]=="host-a"][0]["fire_ve
     "and separately which fire build"
 
 echo "== an entry from before the per-game stamp still ranks =="
-# Every entry already on gh-pages carries only the bare `version`. Reading such
+# Every entry already on the address-book branch carries only the bare `version`. Reading such
 # an entry as build 0 would flip each legacy key to whichever new-format host
 # published last — the same defect with the sign reversed.
 OLDFMT="$TMP/oldformat.json"
@@ -282,7 +282,7 @@ is "$(ls "$TMP"/*.tmp 2>/dev/null | wc -l | tr -d ' ')" "0" "and no half-written
 
 echo "== deploy-pages.sh is the book's OTHER writer, and refuses one too =="
 # It writes the top-level protocol keys into the same file. It used to catch a
-# parse error, start from `{}`, and push the result — one bad byte on gh-pages
+# parse error, start from `{}`, and push the result — one bad byte on the address-book branch
 # became the silent loss of every host entry and every mirror. The block is
 # lifted out of the script as it ships rather than copied here, so the test
 # cannot drift from what actually runs.
@@ -381,20 +381,20 @@ contains "$NOPY" "need a working python3" "a host with no python is told why"
 echo "== push to a real repository =="
 BARE="$TMP/pages.git"
 git init -q --bare "$BARE"
-$PUB --repo "$BARE" --branch gh-pages --name misty-egret \
+$PUB --repo "$BARE" --branch host-book --name misty-egret \
     --game arena --url wss://p.example --proto 12 --version r42 --commit ccc3333 >/dev/null
 CHECK="$TMP/check"
-git clone -q --branch gh-pages "$BARE" "$CHECK"
+git clone -q --branch host-book "$BARE" "$CHECK"
 is "$(jget "$CHECK/server.json" 'd["hosts"][0]["name"]')" "misty-egret" "pushed entry landed on the branch"
 is "$(git -C "$CHECK" log -1 --pretty=%s)" "Publish host misty-egret" "commit subject"
 
 echo "== a second push merges rather than replaces =="
-$PUB --repo "$BARE" --branch gh-pages --name misty-egret \
+$PUB --repo "$BARE" --branch host-book --name misty-egret \
     --game fire --url wss://p-fire.example --proto 1 >/dev/null
-$PUB --repo "$BARE" --branch gh-pages --name olive-gecko \
+$PUB --repo "$BARE" --branch host-book --name olive-gecko \
     --game arena --url wss://q.example --proto 12 --version r43 >/dev/null
 rm -rf "$CHECK"
-git clone -q --branch gh-pages "$BARE" "$CHECK"
+git clone -q --branch host-book "$BARE" "$CHECK"
 is "$(jget "$CHECK/server.json" 'len(d["hosts"])')" "2" "two hosts on the branch"
 is "$(jget "$CHECK/server.json" 'd["hosts"][0]["fire_ws"]')" "wss://p-fire.example" "the first host kept and gained keys"
 is "$(jget "$CHECK/server.json" 'd["hosts"][0]["ws"]')" "wss://p.example" "and kept its arena address"
@@ -402,23 +402,22 @@ is "$(jget "$CHECK/server.json" 'd["hosts"][0]["ws"]')" "wss://p.example" "and k
 echo "== the fetch is by branch name, not the repository default =="
 # A shallow `git clone` takes the remote's DEFAULT branch, so a book branch
 # that is not the default would look missing and be restarted from nothing.
-# Give this bare repo a default branch that is not gh-pages and publish again.
+# Give this bare repo a default branch that is not the address-book branch and publish again.
 git -C "$BARE" symbolic-ref HEAD refs/heads/main
 git -C "$CHECK" checkout -q -b main
 git -C "$CHECK" push -q origin main
-$PUB --repo "$BARE" --branch gh-pages --name rapid-tapir \
+$PUB --repo "$BARE" --branch host-book --name rapid-tapir \
     --game arena --url wss://s.example --proto 12 --version r44 >/dev/null
 rm -rf "$CHECK"
-git clone -q --branch gh-pages "$BARE" "$CHECK"
+git clone -q --branch host-book "$BARE" "$CHECK"
 is "$(jget "$CHECK/server.json" 'len(d["hosts"])')" "3" "the existing book was extended, not replaced"
 
 echo "== a refused push is refetched and rewritten, not re-pushed =="
-# Several machines write this branch now — another workstation, a self-service
-# host with EMBER_PUBLISH=upstream — so a push landing on a branch that moved
-# under it is a normal event, not an error. It must not be forced and it must
-# not be retried as-is: the commit was computed against the book that was just
-# superseded. The hook refuses exactly once, standing in for another writer
-# getting there first.
+# Several machines can write an address-book mirror, so a push landing on a
+# branch that moved under it is a normal event, not an error. It must not be
+# forced or retried as-is: the commit was computed against the book that was
+# just superseded. The hook refuses exactly once, standing in for another
+# writer getting there first.
 cat > "$BARE/hooks/pre-receive" <<'HOOK'
 #!/bin/sh
 if [ -e ./refuse-once ]; then
@@ -430,11 +429,11 @@ exit 0
 HOOK
 chmod +x "$BARE/hooks/pre-receive"
 touch "$BARE/refuse-once"
-RETRY="$($PUB --repo "$BARE" --branch gh-pages --name coral-shrike \
+RETRY="$($PUB --repo "$BARE" --branch host-book --name coral-shrike \
     --game arena --url wss://t.example --proto 12 --version r45 2>&1)"
 contains "$RETRY" "refetching and rewriting (attempt 2)" "the writer says it is starting over"
 rm -rf "$CHECK"
-git clone -q --branch gh-pages "$BARE" "$CHECK"
+git clone -q --branch host-book "$BARE" "$CHECK"
 is "$(jget "$CHECK/server.json" '[h["name"] for h in d["hosts"]].count("coral-shrike")')" "1" \
     "the entry landed on the retry"
 is "$(jget "$CHECK/server.json" 'len(d["hosts"])')" "4" "and the hosts already there survived it"
@@ -444,7 +443,7 @@ STUCK="$TMP/stuck.git"
 git init -q --bare "$STUCK"
 printf '#!/bin/sh\nexit 1\n' > "$STUCK/hooks/pre-receive"
 chmod +x "$STUCK/hooks/pre-receive"
-if STUCKOUT="$($PUB --repo "$STUCK" --branch gh-pages --name coral-shrike \
+if STUCKOUT="$($PUB --repo "$STUCK" --branch host-book --name coral-shrike \
         --game arena --url wss://t.example --proto 12 --version r45 2>&1)"; then
     bad "a push that never succeeds was reported as a publish"
 else
@@ -455,10 +454,10 @@ contains "$STUCKOUT" "after 3 attempts" "and says how hard it tried"
 echo "== a mirror push starts a branch that did not exist =="
 MBARE="$TMP/mirror.git"
 git init -q --bare "$MBARE"
-$PUB --repo "$MBARE" --branch gh-pages --file host.json --name rapid-tapir \
+$PUB --repo "$MBARE" --branch host-book --file host.json --name rapid-tapir \
     --game fire --url wss://r.example --proto 1 --version r9 >/dev/null
 MCHECK="$TMP/mcheck"
-git clone -q --branch gh-pages "$MBARE" "$MCHECK"
+git clone -q --branch host-book "$MBARE" "$MCHECK"
 is "$(jget "$MCHECK/host.json" 'd["name"]')" "rapid-tapir" "mirror file pushed"
 is "$(jget "$MCHECK/host.json" 'd["fire_ws"]')" "wss://r.example" "with its address"
 is "$(ls "$MCHECK" | tr '\n' ' ')" "host.json " "and nothing else"

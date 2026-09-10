@@ -70,7 +70,7 @@ export EMBER_NAME_FILE="$TMP/conf/host-name"
 export EMBER_HOME="$TMP/home"
 export EMBER_REPO="$SRC_REPO"
 export EMBER_REF="$REF"
-export EMBER_PUBLISH="$PAGES#gh-pages"
+export EMBER_PUBLISH="$PAGES#host-book"
 export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
 # High ports, so a real host running the games on 7780/7781/7782 is not disturbed
 # by a test run.
@@ -141,7 +141,7 @@ if [ -s "$EMBER_HOME/run/deployed" ]; then ok "and the deployed ref is on disk";
 
 echo "== the published entry =="
 ENTRY="$TMP/entry"
-git clone -q --branch gh-pages "$PAGES" "$ENTRY"
+git clone -q --branch host-book "$PAGES" "$ENTRY"
 BOOK="$ENTRY/host.json"
 is "$(jget "$BOOK" 'd["name"]')" "$NAME" "name"
 is "$(jget "$BOOK" 'd["ws"]')" "ws://127.0.0.1:17780" "ws"
