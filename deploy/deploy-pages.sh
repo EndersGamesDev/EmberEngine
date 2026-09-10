@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Build the wasm bundle and publish the games hub to GitHub Pages (gh-pages).
+# Build and verify the wasm bundle and games hub without publishing a branch.
 # Run from anywhere (git-bash): bash deploy/deploy-pages.sh
 #
-# Server-build/workstation-publish recipe (the workstation holds the push key):
+# GitHub Actions deploys Pages from the release asset selected by main;
+# this script remains the local dry-run and byte-identity path for that asset.
+# Set SOURCE_DATE_EPOCH to the release commit time for a reproducible stamp,
+# EMBER_PAGES_ARCHIVE to write the assembled tree, and EMBER_PAGES_COMPARE to
+# fail unless the assembled files are byte-identical to an existing archive.
+#
+# Server-build/workstation dry-run recipe:
 #   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p ember-julibrot-app --lib
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
@@ -10,12 +16,14 @@
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/league.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
-# Copy web/pkg from the server into this checkout, then publish without builds:
+# Copy web/pkg from the server into this checkout, then assemble without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
 # Assemble the same tree as a release archive without committing or pushing:
 #   EMBER_PAGES_ARCHIVE=ember-pages.tar.gz bash deploy/deploy-pages.sh
+# Compare a clean rebuild with a downloaded release asset:
+#   SOURCE_DATE_EPOCH=... EMBER_PAGES_COMPARE=ember-pages.tar.gz bash deploy/deploy-pages.sh
 #
-# Layout on gh-pages:
+# Layout in the Pages release archive:
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
@@ -54,7 +62,7 @@ cd "$REPO_DIR"
 V1_COMMIT="e7b85e8"
 
 # Release versions come from the packages being shipped. Validate every
-# catalog entry before a build or publish, then use Arena's release major to
+# catalog entry before a build or archive, then use Arena's release major to
 # select its stable vN directory. Other legacy slots remain explicit locators.
 IFS=$'\t' read -r ARENA_LIVE LEAGUE_LIVE END_GAME_LIVE < <("$PY" - web/games.json <<'PY'
 import json, pathlib, re, sys
@@ -162,17 +170,14 @@ else
         target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 fi
 
-echo "== publishing gh-pages =="
-# Detached at what ORIGIN has, never at the local branch. `git worktree add
-# <dir> gh-pages` checked out this checkout's own gh-pages, which nothing here
-# fetches — `git fetch` moves origin/gh-pages and not the branch — so once a
-# second writer published (another workstation, a host running host.sh with
-# EMBER_PUBLISH=upstream) the push below was rejected as a non-fast-forward.
-# `--detach` also means a leftover worktree still holding the local branch
-# cannot block this one, which `-B gh-pages origin/gh-pages` would not survive.
+echo "== assembling the Pages release tree =="
+# The retired gh-pages branch remains a read-only seed for frozen historical
+# bundles that are not stored in source. The detached worktree makes it
+# impossible for this local build path to move the branch it reads.
 git fetch -q origin gh-pages \
-    || { echo "FAILED: cannot fetch origin gh-pages; is the branch there?" >&2; exit 1; }
+    || { echo "FAILED: cannot fetch the legacy origin/gh-pages seed" >&2; exit 1; }
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
+COMPARE_DIR=""
 # Armed BEFORE the add, so neither a failing add nor anything after it can
 # leave the directory registered as a worktree. Without this, one failed push
 # left gh-pages checked out under /tmp and every later deploy — of the pages
@@ -180,11 +185,11 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 # `git worktree remove`. The status is preserved: the trap reports the failure
 # that caused it, not the cleanup's own.
 # shellcheck disable=SC2154
-trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
+trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; [ -z "$COMPARE_DIR" ] || rm -rf "$COMPARE_DIR"; exit $st' EXIT
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
-# A peer can publish Fire from an unmerged source branch. Never downgrade its
-# independently versioned release when publishing another game's newer main.
+# The legacy seed can contain an independently versioned Fire release. Never
+# downgrade it while assembling a full site from older Fire source.
 "$PY" - "$PAGES_DIR/games/fire/v2/release.json" "$REPO_DIR/crates/fire-core/src/proto.rs" <<'PY'
 import json, pathlib, re, sys
 release, source = map(pathlib.Path, sys.argv[1:])
@@ -192,7 +197,7 @@ if release.exists():
     shipped = json.loads(release.read_text(encoding="utf-8"))["protocol"]
     local = int(re.search(r"PROTO_VERSION: u16 = (\d+)", source.read_text(encoding="utf-8")).group(1))
     if shipped > local:
-        raise SystemExit("FAILED: live Fire is newer than this source; preserve its release or integrate its source before a full Pages publish")
+        raise SystemExit("FAILED: live Fire is newer than this source; preserve its release or integrate its source before a full Pages build")
 PY
 
 # Live version dirs (older versions stay frozen on the branch untouched).
@@ -313,7 +318,7 @@ if [ ! -f "$PAGES_DIR/games/pong/v1/index.html" ]; then
     git show "$V1_COMMIT:pkg/pong_bg.wasm" > "$PAGES_DIR"/games/pong/v1/pkg/pong_bg.wasm
 fi
 
-# The catalog is the hub's promise. Refuse to publish a live link unless this
+# The catalog is the hub's promise. Refuse to archive a live link unless this
 # assembly actually produced its page, so games.json and this script cannot
 # silently drift apart again.
 # Piped through tr: Python's stdout is a text stream, so on Windows every
@@ -353,8 +358,7 @@ def die(msg):
 
 # FAIL CLOSED, the same rule publish-host.sh states: a book that will not parse
 # is never overwritten. This used to start from `{}` on a parse error and push
-# the result, which turns one bad byte on gh-pages — a hand edit, a badly
-# resolved conflict now that several machines write the branch — into the
+# the result, which turns one bad byte in the legacy seed into the
 # silent loss of every host entry and every mirror. An empty file is the one
 # legitimate `{}` start.
 d = {}
@@ -412,13 +416,13 @@ if was_fire is not None and was_fire != fire_proto:
 """)
 if was is None:
     print(f"""
-!! NO PREVIOUS PROTOCOL RECORDED on this Pages branch, so this deploy
+!! NO PREVIOUS PROTOCOL RECORDED in the Pages seed, so this build
 !! cannot be compared against the last one. It ships v{proto}. If the
 !! running arena-server was built before v{proto}, players will be told
 !! "this build speaks protocol v{proto}, the live game is v<older>" and
 !! cannot create or join. Check the server's build before announcing.
-!! (A freshly seeded or relocated gh-pages branch lands here once; the
-!! next deploy has a baseline and compares normally.)
+!! (A freshly seeded release archive lands here once; the next build has
+!! a baseline and compares normally.)
 """)
 elif was != proto:
     print(f"""
@@ -508,6 +512,22 @@ if missing:
     sys.exit(1)
 PY
 
+if [ -n "${EMBER_PAGES_COMPARE:-}" ]; then
+    case "$EMBER_PAGES_COMPARE" in
+        /*) COMPARE_PATH="$EMBER_PAGES_COMPARE" ;;
+        *) COMPARE_PATH="$REPO_DIR/$EMBER_PAGES_COMPARE" ;;
+    esac
+    [ -f "$COMPARE_PATH" ] || die "comparison archive does not exist: $COMPARE_PATH"
+    COMPARE_DIR="$(mktemp -d -t ember-pages-compare-XXXX)"
+    tar -xzf "$COMPARE_PATH" -C "$COMPARE_DIR"
+    if ! diff -qr --exclude=.git "$COMPARE_DIR" "$PAGES_DIR"; then
+        die "assembled tree is not byte-identical to $COMPARE_PATH"
+    fi
+    rm -rf "$COMPARE_DIR"
+    COMPARE_DIR=""
+    echo "== assembled tree is byte-identical to $COMPARE_PATH =="
+fi
+
 if [ -n "${EMBER_PAGES_ARCHIVE:-}" ]; then
     case "$EMBER_PAGES_ARCHIVE" in
         /*) ARCHIVE_PATH="$EMBER_PAGES_ARCHIVE" ;;
@@ -516,20 +536,8 @@ if [ -n "${EMBER_PAGES_ARCHIVE:-}" ]; then
     mkdir -p "$(dirname "$ARCHIVE_PATH")"
     tar --exclude='./.git' -czf "$ARCHIVE_PATH" -C "$PAGES_DIR" .
     echo "== assembled release archive at $ARCHIVE_PATH; no branch was published =="
-    exit 0
 fi
 
-(
-    cd "$PAGES_DIR"
-    git add -A
-    if git diff --cached --quiet; then
-        echo "nothing changed; skipping commit"
-    else
-        git commit -m "Deploy games hub"
-        # The worktree is detached, so name both ends of the refspec.
-        git push origin HEAD:refs/heads/gh-pages
-    fi
-)
-# No explicit `worktree remove` here: the EXIT trap above does it on every
-# path, and a cleanup that only runs when nothing went wrong is the bug.
-echo "== live at https://endersgamesdev.github.io/EmberEngine/ =="
+if [ -z "${EMBER_PAGES_ARCHIVE:-}" ] && [ -z "${EMBER_PAGES_COMPARE:-}" ]; then
+    echo "== local dry-run complete; no branch or release asset was published =="
+fi

@@ -448,7 +448,7 @@ if after == before:
 # `v` is the pages' cache-buster, so it moves exactly when the bytes do — not
 # on every invocation, or every no-op publish would make every player
 # re-download the wasm bundles.
-doc["v"] = str(int(time.time()))
+doc["v"] = str(int(os.environ.get("SOURCE_DATE_EPOCH", time.time())))
 write_json(path, doc)
 print("CHANGED")
 PY
