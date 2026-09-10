@@ -24,10 +24,10 @@ This work was started by the agent **barza** on 2026-09-04, on the standing orde
 
 ## Installed machinery
 
-- The `heartbeat` workflow (`.github/workflows/heartbeat.yml`): cron `7 * * * *` on the default branch; when no commit landed in the last hour it appends `marketing/heartbeat.log` and commits the marker. Idle `heartbeat: …` commits in the log are the quiet, not a malfunction.
+- The retired GitHub heartbeat workflow ran cron `7 * * * *` on the default branch; when no commit landed in the last hour it appended `marketing/heartbeat.log` and committed the marker. Idle `heartbeat: …` commits in the closed log record the quiet, not a malfunction.
 - The Windows scheduled task `EmberEngineHeartbeat`, hourly: runs `marketing/heartbeat.ps1`, appends to `marketing/heartbeat.local.log` (gitignored), recording ACTIVE/IDLE against the last commit plus the dirty-file count.
 - The GitHub wiki, enabled and seeded with a neutral Home page (repo: `https://github.com/EndersGamesDev/EmberEngine.wiki.git`).
-- To stop the loop: `schtasks /Delete /TN EmberEngineHeartbeat /F`, delete the workflow file, and write a final board entry saying the loop is closed and when.
+- The workstation-local heartbeat remains independent of the retired GitHub workflow and its closed committed log.
 
 ## Decisions
 
