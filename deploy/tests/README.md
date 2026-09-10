@@ -8,7 +8,7 @@ Deployment scripts depend on these tests to prove behavior without contacting a 
 
 `test-rulesets.sh` parses every tracked repository-ruleset payload with Python's standard JSON support, derives the required check contexts from the CI job names, and proves the branch, actor, integrity and coarse-tag-pattern boundaries documented in [`../../docs/branching.md`](../../docs/branching.md).
 
-`test-changelog.sh --tag TAG` runs the complete ledger validation and additionally requires exactly one accepted row for that release tag, so a release cannot substitute an annotation for missing release notes.
+`deploy/tests/test-changelog.sh` fully defines allowed line shapes 1–5, the heading-text rules, the positional release line, the ban on angle brackets everywhere and the ban on asterisk-only lines, so its line-oriented reader and GitHub's renderer agree which lines are entries. Its `--tag TAG` mode runs the complete ledger validation and additionally requires exactly one accepted row in the tag series's section whose launcher slot carries the tag's three-grade version, while a pending row requires `stamp —` and permits the tag to be absent before integration, then requires an annotated tag on the exact two-parent merge that integrated the release line from a second parent containing its source, and a completed Actions-era row checks its deterministic commit-count stamp except for the eight named pre-stamp Arena tags.
 
 Each suite documents its invocation and isolation contract in its header; follow the timing and verification rules in [`CLAUDE.md`](../../CLAUDE.md), and keep a changed deploy contract paired with the focused suite that demonstrates it.
 

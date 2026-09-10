@@ -18,6 +18,7 @@ GAMES="$REPO/web/games.json"
 GH_BIN="${GH:-gh}"
 LATEST_TAG=""
 GITHUB_RELEASES_WORK=""
+RELEASE_WAS_PENDING=false
 
 usage() {
     echo "usage: bash deploy/github-releases.sh [--apply] [--tag TAG] [--draft] [--replace-drafts]"
@@ -144,18 +145,30 @@ series_path_for() {
 changelog_entry_for() {
     local tag="$1"
     awk -v wanted="$tag" '
+        function tag_field_matches(line, fields, count, field, prefix, rest) {
+            count = split(line, fields, " · ")
+            if (count < 4) return 0
+            field = fields[4]
+            prefix = "tag `" wanted "`"
+            if (field == prefix || field == prefix " (pending)") return 1
+            rest = substr(field, length(prefix) + 1)
+            return index(field, prefix) == 1 && rest ~ /^ \(points at `[0-9a-f]+`\)$/
+        }
         function emit() {
-            sub(/\n+$/, "", entry)
-            printf "%s\n", entry
-            emitted = 1
+            sub(/\n+$/, "", chosen)
+            printf "%s\n", chosen
+        }
+        function finish_entry() {
+            if (entry != "" && matched) {
+                matches++
+                chosen = entry
+            }
         }
         /^## / || /^### / {
-            if (entry != "" && matched) {
-                emit()
-                exit
-            }
+            finish_entry()
             entry = ""
             matched = 0
+            saw_release = 0
             if ($0 ~ /^### /) {
                 entry = $0 ORS
             }
@@ -163,12 +176,19 @@ changelog_entry_for() {
         }
         entry != "" {
             entry = entry $0 ORS
-            if (index($0, "tag `" wanted "`")) {
-                matched = 1
+            if (!saw_release && $0 !~ /^[[:space:]]*$/) {
+                saw_release = 1
+                matched = tag_field_matches($0)
             }
         }
         END {
-            if (!emitted && entry != "" && matched) {
+            finish_entry()
+            if (matches > 1) {
+                print "github-releases: tag " wanted " has " matches \
+                      " matching CHANGELOG.md entries, expected one" > "/dev/stderr"
+                exit 2
+            }
+            if (matches == 1) {
                 emit()
             }
         }
@@ -185,6 +205,7 @@ tag_annotation_for() {
 derive_release() {
     local tag="$1" notes="$2" require_entry="${3:-}"
     local series version entry slot source_commit annotation tag_commit title
+    local recorded_line tag_field tag_stamp
 
     valid_tag "$tag" || die "tag '$tag' does not match the release tag grammar"
     series="${tag%-*}"
@@ -198,27 +219,53 @@ derive_release() {
     RELEASE_PRERELEASE=false
     [[ "$version" =~ ^0\. ]] && RELEASE_PRERELEASE=true
 
-    entry="$(changelog_entry_for "$tag")"
-    RELEASE_ENTRY="$entry"
+    if ! entry="$(changelog_entry_for "$tag")"; then
+        die "$tag has ambiguous CHANGELOG.md entries"
+    fi
     RELEASE_HAS_ENTRY=false
+    RELEASE_WAS_PENDING=false
     RELEASE_LINE=""
     if [ -n "$entry" ]; then
         RELEASE_HAS_ENTRY=true
-        RELEASE_LINE="$(printf '%s\n' "$entry" | awk 'NR > 1 && NF { print; exit }')"
+        recorded_line="$(printf '%s\n' "$entry" | awk 'NR > 1 && NF { print; exit }')"
+        RELEASE_LINE="$recorded_line"
         slot="$(printf '%s\n' "$entry" | awk 'NR == 1 { print $2 }')"
         RELEASE_PATH="$(launcher_path_for_slot "$series" "$slot")"
         [ -n "$RELEASE_PATH" ] || RELEASE_PATH="$(series_path_for "$series")"
         [ -n "$RELEASE_PATH" ] || die "$tag entry uses slot '$slot', which has no release path"
-        source_commit="$(printf '%s\n' "$RELEASE_LINE" | sed -nE 's/.*source `([0-9a-f]{7,40})`.*/\1/p')"
-        if [ -z "$source_commit" ]; then
-            source_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
+        tag_field="$(printf '%s\n' "$recorded_line" | awk -F ' · ' '{ print $4 }')"
+        if [ "$tag_field" = "tag \`$tag\` (pending)" ]; then
+            RELEASE_WAS_PENDING=true
+            tag_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
+            tag_stamp="r$(git -C "$REPO" rev-list --count "refs/tags/$tag^{commit}")"
+            source_commit="$tag_commit"
+            RELEASE_LINE="${recorded_line% (pending)}"
+            RELEASE_LINE="$(printf '%s\n' "$RELEASE_LINE" | awk \
+                -v commit="$tag_commit" -v stamp="$tag_stamp" '
+                {
+                    sub(/stamp —/, "stamp " stamp)
+                    sub(/source `[0-9a-f]+`/, "source `" commit "`")
+                    print
+                }
+            ')"
+            entry="$(printf '%s\n' "$entry" | awk -v old="$recorded_line" -v new="$RELEASE_LINE" '
+                !changed && $0 == old { print new; changed = 1; next }
+                { print }
+            ')"
+        else
+            source_commit="$(printf '%s\n' "$RELEASE_LINE" | sed -nE 's/.*source `([0-9a-f]{7,40})`.*/\1/p')"
+            if [ -z "$source_commit" ]; then
+                source_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
+            fi
         fi
+        RELEASE_ENTRY="$entry"
         {
             printf 'Tag `%s` · source commit `%s`\n\n' "$tag" "$source_commit"
             printf '%s\n\n' "$entry"
             printf 'Launcher path: `%s`\n' "$RELEASE_PATH"
         } > "$notes"
     else
+        RELEASE_ENTRY=""
         [ -z "$require_entry" ] || die "$tag has no matching CHANGELOG.md entry; single-tag mode refuses annotation and series-path fallback"
         tag_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
         RELEASE_PATH="$(launcher_path_for_version "$series" "$version")"
@@ -232,6 +279,34 @@ derive_release() {
             printf 'Tag annotation message:\n\n%s\n\n' "$annotation"
             printf 'Launcher path: `%s`\n' "$RELEASE_PATH"
         } > "$notes"
+    fi
+}
+
+assert_pending_notes() {
+    local tag="$1" notes="$2" tag_commit expected_header expected_stamp
+    local line_source line_stamp
+
+    tag_commit="$(git -C "$REPO" rev-parse "refs/tags/$tag^{commit}")"
+    expected_stamp="r$(git -C "$REPO" rev-list --count "refs/tags/$tag^{commit}")"
+    if grep -Fq '(pending)' "$notes"; then
+        echo "pending release notes for $tag still contain '(pending)'" >&2
+        return 1
+    fi
+    expected_header="Tag \`$tag\` · source commit \`$tag_commit\`"
+    if ! grep -Fqx "$expected_header" "$notes"; then
+        echo "pending release notes for $tag do not identify peeled tag commit $tag_commit" >&2
+        return 1
+    fi
+    line_stamp="$(printf '%s\n' "$RELEASE_LINE" | awk -F ' · ' \
+        '{ sub(/^stamp /, "", $2); print $2 }')"
+    if [ "$line_stamp" != "$expected_stamp" ]; then
+        echo "pending release notes for $tag carry stamp $line_stamp instead of deterministic stamp $expected_stamp" >&2
+        return 1
+    fi
+    line_source="$(printf '%s\n' "$RELEASE_LINE" | sed -nE 's/.*source `([0-9a-f]{7,40})`.*/\1/p')"
+    if [ "$line_source" != "$tag_commit" ] || ! grep -Fqx "$RELEASE_LINE" "$notes"; then
+        echo "pending release notes for $tag carry source $line_source instead of peeled tag commit $tag_commit" >&2
+        return 1
     fi
 }
 
@@ -289,7 +364,7 @@ main() {
     local started=$SECONDS apply="" draft="" replace_drafts="" selected_tag="" tag notes target
     local draft_state=false release_latest
     local creates=0 updates=0 release_count=0
-    local work
+    local work selected_entry
     local -a tags create_args edit_args
 
     while [ "$#" -gt 0 ]; do
@@ -320,7 +395,9 @@ main() {
         valid_tag "$selected_tag" || die "tag '$selected_tag' does not match the release tag grammar"
         git -C "$REPO" rev-parse -q --verify "refs/tags/$selected_tag" >/dev/null \
             || die "tag '$selected_tag' does not exist"
-        [ -n "$(changelog_entry_for "$selected_tag")" ] \
+        selected_entry="$(changelog_entry_for "$selected_tag")" \
+            || die "$selected_tag has ambiguous CHANGELOG.md entries"
+        [ -n "$selected_entry" ] \
             || die "$selected_tag has no matching CHANGELOG.md entry; single-tag mode refuses annotation and series-path fallback"
     fi
     if [ -n "$apply" ]; then
@@ -359,6 +436,10 @@ main() {
         release_count=$((release_count + 1))
         release_latest="$RELEASE_LATEST"
         [ "$draft_state" = false ] || release_latest=false
+        if [ "$RELEASE_WAS_PENDING" = true ]; then
+            assert_pending_notes "$tag" "$notes" \
+                || die "refusing to publish inconsistent pending release notes for $tag"
+        fi
         create_args=(release create "$tag" --verify-tag --title "$RELEASE_TITLE" \
             --notes-file "$notes" --draft="$draft_state" --prerelease="$RELEASE_PRERELEASE" \
             --latest="$release_latest")
