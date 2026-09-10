@@ -4,6 +4,8 @@ This directory contains shell suites for Pages assembly, host lifecycle, publish
 
 Deployment scripts depend on these tests to prove behavior without contacting a real host or network; `run.sh` selects suites, `lib.sh` supplies assertions, and `shims/` replaces external programs where needed.
 
+`test-workflows.sh` parses every tracked workflow with PyYAML when available and otherwise applies its strict shell fallback. It also locks the retired-job and retired-reference exclusions plus the release-tag and Pages-branch literals shared with [`../../docs/branching.md`](../../docs/branching.md).
+
 Each suite documents its invocation and isolation contract in its header; follow the timing and verification rules in [`CLAUDE.md`](../../CLAUDE.md), and keep a changed deploy contract paired with the focused suite that demonstrates it.
 
 `test-shaders.sh` reads `julibrot-shader-allowlist.txt`, rejects new `.wgsl` files and inline WGSL under the Julibrot crates, and permits only the closed migration debt linked to [`../../docs/julibrot/shaders.md`](../../docs/julibrot/shaders.md). Test fixtures do not bypass that boundary; WGSL used by shader-crate tests lives in its test-only template registry.
