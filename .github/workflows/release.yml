@@ -227,6 +227,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$EMBER_PAGES_ARCHIVE")"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           echo "release: assembling $RELEASE_SERIES with the shared Pages build"
           bash deploy/deploy-pages.sh
       - uses: actions/upload-artifact@v4

@@ -1,0 +1,84 @@
+# pages: deploy the immutable release asset selected when main fast-forwards.
+# This workflow never rebuilds source, so the bytes served by Pages are the
+# bytes attached to the validated tag's GitHub release.
+name: pages
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy release asset
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: select a release tag at main HEAD
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(git for-each-ref --points-at=HEAD --sort=-creatordate --format='%(refname:strip=2)' 'refs/tags/*-*.*.*')
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "pages: no release tag points at main HEAD" >&2
+            exit 1
+          fi
+          TAG=""
+          for candidate in "${tags[@]}"; do
+            if asset_count="$(gh release view "$candidate" --json assets --jq '[.assets[] | select(.name == "ember-pages.tar.gz")] | length' 2>/dev/null)" \
+              && [ "$asset_count" = 1 ]; then
+              TAG="$candidate"
+              break
+            fi
+          done
+          if [ -z "$TAG" ]; then
+            echo "pages: no tag at main HEAD has exactly one ember-pages.tar.gz release asset" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: download the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pages-release"
+          gh release download "$TAG" --pattern ember-pages.tar.gz --dir "$RUNNER_TEMP/pages-release"
+          test -f "$RUNNER_TEMP/pages-release/ember-pages.tar.gz"
+      - name: extract the release asset
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/pages-release/ember-pages.tar.gz"
+          tar -tzf "$archive" > "$RUNNER_TEMP/pages-archive.list"
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' "$RUNNER_TEMP/pages-archive.list"; then
+            echo "pages: release asset contains an unsafe path" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/pages-site"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/pages-site"
+          test -f "$RUNNER_TEMP/pages-site/index.html"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ runner.temp }}/pages-site
+      - name: deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
