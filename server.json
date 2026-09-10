@@ -1,6 +1,6 @@
 {
   "ws": "wss://organization-festivals-inspired-architecture.trycloudflare.com",
-  "v": "1789031760",
+  "v": "1789031766",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -77,11 +77,11 @@
     },
     {
       "name": "dusky-osprey-league-v3",
-      "league_ws": "wss://designated-great-muslim-talented.trycloudflare.com",
+      "league_ws": "wss://complimentary-orders-postal-wishes.trycloudflare.com",
       "league_proto": 2,
       "league_version": "r1759",
       "league_commit": "cf4a95f0e206abc6ee519c98f4ea8478962dfdb4",
-      "updated": "2026-09-09T14:27:56Z"
+      "updated": "2026-09-10T09:16:06Z"
     }
   ],
   "mirrors": [
