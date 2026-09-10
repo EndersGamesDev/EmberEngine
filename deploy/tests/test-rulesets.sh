@@ -47,6 +47,7 @@ import re
 root = pathlib.Path(".")
 ruleset_root = root / "deploy" / "rulesets"
 expected_names = {
+    "branch-names.json",
     "develop.json",
     "main-authorization.json",
     "main-integrity.json",
@@ -56,7 +57,7 @@ expected_names = {
 }
 paths = sorted(ruleset_root.glob("*.json"))
 if {path.name for path in paths} != expected_names:
-    raise SystemExit("ruleset file set differs from the six documented payloads")
+    raise SystemExit("ruleset file set differs from the seven documented payloads")
 
 documents = {path.name: json.loads(path.read_text(encoding="utf-8")) for path in paths}
 for name, document in documents.items():
@@ -99,7 +100,7 @@ if develop["bypass_actors"]:
 if develop["conditions"]["ref_name"] != {"include": ["refs/heads/develop"], "exclude": []}:
     raise SystemExit("develop.json does not target only develop")
 develop_rules = {rule["type"]: rule for rule in develop["rules"]}
-if set(develop_rules) != {"deletion", "non_fast_forward", "pull_request", "required_status_checks", "required_signatures"}:
+if set(develop_rules) != {"deletion", "non_fast_forward", "pull_request", "required_status_checks"}:
     raise SystemExit("develop.json has the wrong rule set")
 pull_request = develop_rules["pull_request"]["parameters"]
 expected_pull_request = {
@@ -121,6 +122,14 @@ if contexts != job_names:
 if any(item.get("integration_id") != 15368 for item in status["required_status_checks"]):
     raise SystemExit("develop status checks are not bound to GitHub Actions integration 15368")
 
+main_integrity = documents["main-integrity.json"]
+if main_integrity["bypass_actors"]:
+    raise SystemExit("main integrity has bypass actors")
+if main_integrity["conditions"]["ref_name"] != {"include": ["refs/heads/main"], "exclude": []}:
+    raise SystemExit("main integrity does not target only main")
+if {rule["type"] for rule in main_integrity["rules"]} != {"deletion", "non_fast_forward"}:
+    raise SystemExit("main integrity does not contain deletion and non-fast-forward only")
+
 main_authorization = documents["main-authorization.json"]
 if main_authorization["bypass_actors"] != [{"actor_type": "DeployKey", "bypass_mode": "always"}]:
     raise SystemExit("main authorization does not have exactly one DeployKey bypass category")
@@ -136,6 +145,42 @@ if release_authorization["bypass_actors"] != expected_signers:
     raise SystemExit("release-tag authorization does not name exactly the two release actors")
 if [rule["type"] for rule in release_authorization["rules"]] != ["creation"]:
     raise SystemExit("release-tag authorization does not contain creation only")
+
+docs = (root / "docs" / "branching.md").read_text(encoding="utf-8")
+documented_branches = set()
+inside_branch_table = False
+for line in docs.splitlines():
+    if line == "| Branch | Meaning | Writers | Update path |":
+        inside_branch_table = True
+        continue
+    if not inside_branch_table or line == "|---|---|---|---|":
+        continue
+    match = re.fullmatch(r"\| `([^`]+)` \|.*", line)
+    if match:
+        documented_branches.add("refs/heads/" + match.group(1))
+        continue
+    break
+expected_branches = {
+    "refs/heads/develop",
+    "refs/heads/main",
+    "refs/heads/feature/**",
+    "refs/heads/lane/**",
+}
+if documented_branches != expected_branches:
+    raise SystemExit(f"documented branch names differ from policy: {sorted(documented_branches)}")
+
+branch_names = documents["branch-names.json"]
+if branch_names.get("name") != "branch names" or branch_names.get("target") != "branch":
+    raise SystemExit("branch names has the wrong name or target")
+if branch_names["bypass_actors"]:
+    raise SystemExit("branch names has bypass actors")
+if [rule["type"] for rule in branch_names["rules"]] != ["creation"]:
+    raise SystemExit("branch names does not contain creation only")
+branch_name_condition = branch_names["conditions"]["ref_name"]
+if branch_name_condition.get("include") != ["~ALL"]:
+    raise SystemExit("branch names does not include all branch refs")
+if len(branch_name_condition.get("exclude", [])) != len(expected_branches) or set(branch_name_condition["exclude"]) != documented_branches:
+    raise SystemExit("branch-name exclusions differ from the documented branch table")
 
 dangerous = {"deletion", "non_fast_forward", "required_signatures"}
 for name, document in documents.items():
@@ -170,7 +215,6 @@ for tag in rejected:
 if not fnmatch.fnmatchcase("refs/tags/ember-01.0.0", release_pattern) or runtime_pattern.fullmatch("ember-01.0.0") is not None:
     raise SystemExit("the ruleset fixture does not demonstrate the documented coarse fnmatch boundary")
 
-docs = (root / "docs" / "branching.md").read_text(encoding="utf-8")
 if release_pattern not in docs or "test-rulesets.sh" not in docs:
     raise SystemExit("branching.md does not name the ruleset pattern and contract suite")
 PY
