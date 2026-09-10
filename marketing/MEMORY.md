@@ -10,7 +10,7 @@ This work was started by the agent **barza** on 2026-09-04, on the standing orde
 
 - `origin` = `https://github.com/EndersGamesDev/EmberEngine`, public, default branch `main`. Other remotes exist (`enderpeer-old`, `wildsky`) for other purposes; marketing pushes only to `origin`.
 - The local working tree sits on `lane/arena-v18` and had uncommitted changes (README, arena crates, the backlog, the v20 page) when marketing started. Never commit from that tree; work in a worktree off `origin/main`.
-- The games hub is `web/index.html`, deployed to `gh-pages` by `deploy/deploy-pages.sh`, which copies a whitelist of files; `engine.html` has its own guarded copy line.
+- The games hub is `web/index.html`; `deploy/deploy-pages.sh` assembles the release archive, and Actions deploys that asset from `main`. The retired publication branch remains a read-only source for frozen historical files.
 - `gh` on this Windows host is authenticated as `enderPeer` with ADMIN on the repo. `docs/worker-protocol.md` says gh belongs in WSL; on this box it works on Windows, and that is the current fact.
 - The live hub is `https://endersgamesdev.github.io/EmberEngine/` — the only link any post may carry, because a tunnel domain changes on every restart and the hub is the stable front door.
 - Commit style: lowercase, `area: description`, one topic per commit. The repo is the medium (`docs/worker-protocol.md`).

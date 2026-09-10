@@ -55,5 +55,5 @@ Voice: "The repo, the design docs, and the backlog are in the description. The e
 - [ ] Four Kings: one Joker teleport.
 - [ ] The network tab of the arena page load.
 - [ ] The host chip in the header, hovered for the tooltip.
-- [ ] server.json on gh-pages, one entry visible.
+- [ ] `server.json` in the promoted release asset has at least one visible entry.
 - [ ] The README roadmap section; the backlog, one line at a time.
