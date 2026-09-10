@@ -1,6 +1,6 @@
 {
   "ws": "wss://organization-festivals-inspired-architecture.trycloudflare.com",
-  "v": "1789031766",
+  "v": "1789037226",
   "proto": 24,
   "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
   "fire_proto": 1,
@@ -31,12 +31,12 @@
       "version": "r1511",
       "commit": "05aeea2b",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-10T09:16:00Z",
+      "updated": "2026-09-10T10:47:06Z",
       "fire_ws": "wss://quantities-columbus-stan-weekends.trycloudflare.com",
       "fire_proto": 2,
       "fire_version": "r1244",
       "fire_commit": "86086a2",
-      "league_ws": "wss://minutes-drunk-occur-indirect.trycloudflare.com",
+      "league_ws": "wss://shakespeare-drives-finds-ips.trycloudflare.com",
       "league_proto": 1,
       "league_version": "r1592",
       "league_commit": "2bc7dc98973acd5e0759967703fd2938c3195a20"
