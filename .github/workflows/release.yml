@@ -43,18 +43,13 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          pattern='^(.+)-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$'
+          pattern='^(.+)-((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0))$'
           if [[ ! "$TAG" =~ $pattern ]]; then
             echo "release: tag '$TAG' does not have shape SERIES-MAJOR.MINOR.PATCH" >&2
             exit 1
           fi
           SERIES="${BASH_REMATCH[1]}"
           VERSION="${BASH_REMATCH[2]}"
-          PATCH="${BASH_REMATCH[5]}"
-          if [ "$PATCH" != 0 ]; then
-            echo "release: patch grades are integration records and are not tagged" >&2
-            exit 1
-          fi
           python3 - "$SERIES" <<'PY'
           import json
           import pathlib
