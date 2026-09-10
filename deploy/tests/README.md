@@ -4,7 +4,7 @@ This directory contains shell suites for Pages assembly, host lifecycle, publish
 
 Deployment scripts depend on these tests to prove behavior without contacting a real host or network; `run.sh` selects suites, `lib.sh` supplies assertions, and `shims/` replaces external programs where needed.
 
-`test-workflows.sh` parses every tracked workflow with PyYAML when available and otherwise applies a strict shell fallback that normalizes quoted and unquoted keys. Its structural checks lock the exact-SHA CI triggers, retired job and reference exclusions, release draft-to-publish dependencies, release-tag runtime regex and successful-release Pages handoff; quoted-job and permissive-regex fixtures prove the checks reject the false-positive forms they are meant to catch, while shared literals remain tied to [`../../docs/branching.md`](../../docs/branching.md).
+`test-workflows.sh` parses every tracked workflow with PyYAML when available and otherwise applies a strict shell fallback that normalizes quoted and unquoted keys. Its structural checks lock the exact-SHA CI triggers, retired job and reference exclusions, queued release concurrency, draft-to-publish dependencies, release-tag runtime regex and successful-release Pages handoff; quoted-job and permissive-regex fixtures prove the checks reject the false-positive forms they are meant to catch, while shared literals remain tied to [`../../docs/branching.md`](../../docs/branching.md).
 
 `test-rulesets.sh` parses every tracked repository-ruleset payload with Python's standard JSON support, derives the required check contexts from the CI job names, and proves the branch, actor, integrity and coarse-tag-pattern boundaries documented in [`../../docs/branching.md`](../../docs/branching.md).
 

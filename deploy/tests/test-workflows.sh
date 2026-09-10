@@ -216,6 +216,9 @@ import yaml
 
 document = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 jobs = document.get("jobs", {})
+concurrency = document.get("concurrency")
+if concurrency != {"group": "release", "cancel-in-progress": False, "queue": "max"}:
+    raise SystemExit(1)
 expected = {
     "draft": {"validate", "build"},
     "promote": {"validate", "draft"},
@@ -253,6 +256,7 @@ PY
             && grep -Fxq publish <<< "$jobs" \
             && grep -Fq 'needs: [validate, draft]' "$file" \
             && grep -Fq 'needs: [validate, promote]' "$file" \
+            && grep -Fq '  queue: max' "$file" \
             && grep -Fq -- '--draft=false' "$file"
     fi
 }
@@ -403,9 +407,9 @@ else
 fi
 
 if release_order_matches_contract .github/workflows/release.yml; then
-    ok "release.yml publishes only after its draft is promoted"
+    ok "release.yml queues tag runs and publishes only after promotion"
 else
-    bad "release.yml does not preserve draft, promotion, cleanup and publication order"
+    bad "release.yml does not preserve its queue, draft, promotion, cleanup and publication contract"
 fi
 if pages_matches_contract .github/workflows/pages.yml; then
     ok "pages.yml waits for release success and selects a published asset at main"

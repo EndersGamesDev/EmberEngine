@@ -114,7 +114,7 @@ There is no promotion job in CI. Passing integration CI proves `develop`; it doe
 
 ### Release
 
-`.github/workflows/release.yml` runs for pushes of tags matching `*-[0-9]*.[0-9]*.[0-9]*` in the serial `release` concurrency group, with cancellation disabled so one release cannot interrupt another. Job permissions are read-only by default, and `contents: write` exists only where GitHub release publication requires it.
+`.github/workflows/release.yml` runs for pushes of tags matching `*-[0-9]*.[0-9]*.[0-9]*` in the `release` concurrency group. `cancel-in-progress: false` preserves the active release, and `queue: max` retains later tag runs so the group processes them sequentially rather than replacing an older pending release. Job permissions are read-only by default, and `contents: write` exists only where GitHub release publication requires it.
 
 Each validation fails the run immediately: the tag shape and allowed series are checked; the tag is annotated; its signature verifies after the armored keys in `deploy/keys/*.asc` are imported into a temporary `GNUPGHOME`; its target is an ancestor of `origin/develop`; the Actions REST API selects the newest successful completed `push` run for `develop` at that SHA whose path is `.github/workflows/ci.yml` and proves that run contains exactly the three successful required jobs; every manifest assigned to the series by `docs/versioning.md` equals the tag version, with the Ember series additionally requiring every shared crate to inherit its checked workspace version; `bash deploy/tests/test-changelog.sh --tag TAG` proves the parsed ledger has exactly one accepted entry for that candidate; and `origin/main` is either absent or an ancestor of the target.
 
