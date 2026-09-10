@@ -498,7 +498,7 @@ The page itself is older than its arena path: it entered as `web/games/pong/v2/i
 
 ### v12 — 2026-09-09
 
-no proto · stamp — · source `e8af2e30809053f1d67f0d57476cde5969c34f24` · no tag · published `bce6ca2b6850ec82bf769f2845fc6ab69223997a` (release stamp)
+no proto · stamp — · source `e8af2e30809053f1d67f0d57476cde5969c34f24` (not on main) · no tag · published `bce6ca2b6850ec82bf769f2845fc6ab69223997a` (release stamp)
 
 Parry and Impact gives the guard a timed answer. Pressing guard opens a 120 ms window, tap or hold; a strike arriving inside it is deflected rather than blocked, costs 22 stamina instead of the weapon's 22–38, wounds nothing and staggers the attacker. A guard already raised when the blade lands still blocks at the weapon's own cost, so holding and tapping are different answers to the same strike. A deflection locks the guard for 500 ms, which is what stops the parry from replacing the block. The warden's knife and every castle weapon route through the same window.
 
