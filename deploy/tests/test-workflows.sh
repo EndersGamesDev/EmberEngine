@@ -233,7 +233,7 @@ if ["sudo", "apt-get", "update"] not in commands:
     raise SystemExit(1)
 prefix = ["sudo", "apt-get", "install", "-y", "--no-install-recommends"]
 installs = [command for command in commands if command[:len(prefix)] == prefix]
-required = {"pkg-config", "libudev-dev", "libasound2-dev"}
+required = {"pkg-config", "libudev-dev", "libasound2-dev", "mesa-vulkan-drivers"}
 if len(installs) != 1 or not required.issubset(installs[0][len(prefix):]):
     raise SystemExit(1)
 PY
@@ -293,6 +293,7 @@ PY
                 if (index(padded, " pkg-config ") == 0) exit 1
                 if (index(padded, " libudev-dev ") == 0) exit 1
                 if (index(padded, " libasound2-dev ") == 0) exit 1
+                if (index(padded, " mesa-vulkan-drivers ") == 0) exit 1
             }
         ' "$file"
     fi
@@ -420,7 +421,7 @@ YAML
 
 write_missing_native_package_fixture() {
     local source="$1" file="$2"
-    sed 's/ libasound2-dev//' "$source" > "$file"
+    sed 's/ mesa-vulkan-drivers//' "$source" > "$file"
 }
 
 TEST_WORK="$(mktemp -d "${TMPDIR:?}/ember-workflow-test.XXXXXX")"

@@ -75,10 +75,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Mesa lavapipe supplies the software Vulkan adapter that engine GPU readback tests need on GPU-less runners.
       - name: native build packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev
+          sudo apt-get install -y --no-install-recommends pkg-config libudev-dev libasound2-dev mesa-vulkan-drivers
       - name: toolchain (pinned by rust-toolchain.toml)
         run: rustup show
       - uses: Swatinem/rust-cache@v2
