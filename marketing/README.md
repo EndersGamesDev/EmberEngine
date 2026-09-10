@@ -8,8 +8,8 @@ The home of this engine's promotion: the plan, the log, the board, the launch ma
 | `LOG.md` | The work log: what was done, when, with what evidence. Append-only; never rewrite history. |
 | `BOARD.md` | The barza board: open tasks, notes for the next worker, briefs ready to paste for other agents. |
 | `MEMORY.md` | Persistent memory: repo facts, access, decisions, what is deliberately not done. |
-| `HEARTBEAT.md` | The heartbeat protocol: the hourly check that work is moving. |
+| `HEARTBEAT.md` | The retirement record for the former hourly repository heartbeat and the still-local watcher. |
 | `heartbeat.ps1` | The local watcher. Run hourly by the `EmberEngineHeartbeat` scheduled task; appends to `heartbeat.local.log` (gitignored). |
-| `heartbeat.log` | The committed heartbeat: the `heartbeat` Actions workflow appends a marker when the lane is quiet for an hour. |
+| `heartbeat.log` | The closed committed record produced by the retired heartbeat Actions workflow. |
 | `posts/` | Launch posts per channel, ready to paste. Posting needs a human account; the drafts are the deliverable. |
 | `wiki/` | A neutral encyclopedic article draft for later, with a policy note on when it is safe to publish. |
