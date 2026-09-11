@@ -340,6 +340,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - League review harness: `tools/league/review.ps1` photographs the SCREEN like the arena harness, so a window dragged over the client lands in the picture; an off-screen capture written by the client itself would need no screen space.
 - League review harness: the human seat idles at its fountain in a practice run because the harness sends no input by rule; a `LEAGUE_BOT_ME=1` that hands the own seat to the bot brain would put the review camera in a real 3v3 instead of a 3v2 plus a bystander.
 - `deploy/tests/test-changelog.sh`: a release line naming `tag X` must fail when no such tag exists; the League v4 row claimed `league-v4` with no such tag on any remote and the suite passed. Add the existence check and pin it with a fixture.
+- The ledger checker's pending-row rule compares the release line as an exact string, so a differently spelled but identical source (full versus abbreviated SHA) would evade the first-parent check; canonicalise source identities in `deploy/tests/test-changelog.sh` and state the rule in `docs/versioning.md`.
 
 ## end-game
 

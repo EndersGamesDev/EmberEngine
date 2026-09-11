@@ -43,23 +43,23 @@ Only deliberate major and minor versions receive release tags; patch grades reco
 
 ### Cutting a release
 
-1. Identify the merged release pull request's commit with `gh pr view NUMBER --json mergeCommit --jq .mergeCommit.oid`; record its result as `SHA`, and do not substitute a branch tip or a local pre-merge commit. For the first release, the worked tag in the commands below is `julibrot-1.1.0`.
+1. Identify the merged release pull request's commit with `gh pr view NUMBER --json mergeCommit --jq .mergeCommit.oid`; record its result as `SHA`, and do not substitute a branch tip or a local pre-merge commit. For the first release, the worked tag in the commands below is `julibrot-1.2.0`.
 
 2. Run `gh run list --branch develop --event push --commit SHA --workflow ci.yml` and confirm the exact-SHA run is completed with conclusion `success` before creating the tag.
 
 3. Before the first release only, switch Pages from the legacy branch build to Actions with `gh api --method PUT repos/OWNER/REPO/pages -f build_type=workflow`.
 
-4. Confirm the signing key's armored public key is committed under `deploy/keys/`; for the current signing subkey recorded in `deploy/keys/wild-sky-maker.asc`, create the annotated signed tag with `git tag -s -u 309F3BF0ABAAC226494C8D9FFAB00BAD8B48D17C julibrot-1.1.0 SHA -m 'julibrot 1.1.0'`. A different signing key may be used only after its armored public key is committed there.
+4. Confirm the signing key's armored public key is committed under `deploy/keys/`; for the current signing subkey recorded in `deploy/keys/wild-sky-maker.asc`, create the annotated signed tag with `git tag -s -u 309F3BF0ABAAC226494C8D9FFAB00BAD8B48D17C julibrot-1.2.0 SHA -m 'julibrot 1.2.0'`. A different signing key may be used only after its armored public key is committed there.
 
-5. Verify the local tag and its signature with `git verify-tag julibrot-1.1.0`.
+5. Verify the local tag and its signature with `git verify-tag julibrot-1.2.0`.
 
-6. Push only the new tag ref with `git push origin refs/tags/julibrot-1.1.0`; do not push a branch or a broader tag refspec as part of this operation.
+6. Push only the new tag ref with `git push origin refs/tags/julibrot-1.2.0`; do not push a branch or a broader tag refspec as part of this operation.
 
 7. Find the matching release run with `gh run list --workflow release.yml --event push --commit SHA`, then wait for it with `gh run watch RUN_ID --exit-status`; after it succeeds, find the triggered Pages run with `gh run list --workflow pages.yml --event workflow_run --commit SHA` and wait for that run with `gh run watch RUN_ID --exit-status`.
 
-8. Confirm `main` moved to `SHA` with `gh api repos/OWNER/REPO/git/ref/heads/main --jq .object.sha`, then run `gh release view julibrot-1.1.0 --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'` and require a published release (`isDraft` is false) with exactly one asset named `ember-pages.tar.gz`.
+8. Confirm `main` moved to `SHA` with `gh api repos/OWNER/REPO/git/ref/heads/main --jq .object.sha`, then run `gh release view julibrot-1.2.0 --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'` and require a published release (`isDraft` is false) with exactly one asset named `ember-pages.tar.gz`.
 
-9. Download the published archive with `gh release download julibrot-1.1.0 --pattern ember-pages.tar.gz --dir DIR` and read its archive-root stamp with `tar -xOf DIR/ember-pages.tar.gz ./version.json`; require its `commit` to resolve to `SHA` and its `version` to equal `r$(git rev-list --count SHA)`, then complete the pending ledger row in a later documentation pull request by replacing its source with `SHA`, recording that version as its stamp, removing `(pending)` so the tag field is plain and leaving `published` absent because the GitHub release archive is the publication. The archive-root file was copied from source `web/version.json`.
+9. Download the published archive with `gh release download julibrot-1.2.0 --pattern ember-pages.tar.gz --dir DIR` and read its archive-root stamp with `tar -xOf DIR/ember-pages.tar.gz ./version.json`; require its `commit` to resolve to `SHA` and its `version` to equal `r$(git rev-list --count SHA)`, then complete the pending ledger row in a later documentation pull request by replacing its source with `SHA`, recording that version as its stamp, removing `(pending)` so the tag field is plain and leaving `published` absent because the GitHub release archive is the publication. The archive-root file was copied from source `web/version.json`.
 
 10. After the first workflow deployment succeeds, list the environment policies with `gh api repos/OWNER/REPO/environments/github-pages/deployment-branch-policies`, identify the policy id for `gh-pages`, and remove it with `gh api --method DELETE repos/OWNER/REPO/environments/github-pages/deployment-branch-policies/POLICY_ID`; retain the frozen branch itself as the historical record.
 
