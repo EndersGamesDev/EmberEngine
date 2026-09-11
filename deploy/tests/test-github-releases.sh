@@ -136,6 +136,12 @@ write_fixture_changelog() {
     {
         printf '# Fixture changelog\n\n'
         printf '## Fixture Game\n\n'
+        printf '### v2 — 2026-09-10\n\n'
+        printf 'no proto · stamp — · source `%s` · tag `fixture-2.1.0`\n\n' "$commit"
+        printf 'Earlier entry prose mentions tag `fixture-1.1.0` but does not own it.\n\n'
+        printf '### v1 — 2026-09-09\n\n'
+        printf 'no proto · stamp — · source `%s` · tag `fixture-1.1.0` (pending)\n\n' "$commit"
+        printf 'Pending release prose, selected from its release line.\n\n'
         printf '### v1 — 2026-09-08\n\n'
         printf 'no proto · stamp — · source `%s` · tag `fixture-1.0.0`\n\n' "$commit"
         printf 'Fixture release prose, retained verbatim.\n'
@@ -143,7 +149,8 @@ write_fixture_changelog() {
 }
 
 self_test() {
-    local started=$SECONDS fixture commit notes release_line
+    local started=$SECONDS fixture commit pending_commit notes release_line
+    local pending_line pending_stamp expected_header output
     fixture="$(mktemp -d "${TMPDIR:?}/ember-github-release-fixture.XXXXXX")"
     TEST_WORK="$fixture"
     mkdir -p "$fixture/web" "$fixture/notes"
@@ -161,9 +168,14 @@ self_test() {
     git -C "$fixture" tag -a fixture-0.1.0 -m 'fixture pre-release annotation' "$commit"
     git -C "$fixture" tag -a ember-1.0.0 -m 'fixture Ember annotation' "$commit"
     git -C "$fixture" tag -a heap-0.1.0 -m 'fixture lab annotation' "$commit"
+    git -C "$fixture" tag -a arena-1.0.0 -m 'fixture latest-selection annotation' "$commit"
     mkdir -p "$fixture/web/labs/heap"
     write_fixture_games "$fixture/web/games.json"
     write_fixture_changelog "$fixture/CHANGELOG.md" "$commit"
+    git -C "$fixture" add CHANGELOG.md web/games.json
+    git -C "$fixture" commit -qm 'fixture pending release'
+    pending_commit="$(git -C "$fixture" rev-parse HEAD)"
+    git -C "$fixture" tag -a fixture-1.1.0 -m 'fixture pending annotation' "$pending_commit"
 
     REPO="$fixture"
     CHANGELOG="$fixture/CHANGELOG.md"
@@ -177,6 +189,46 @@ self_test() {
     [ "$RELEASE_PATH" = "games/fixture/v1/" ] && ok "fixture entry selects its launcher slot" || bad "fixture path is '$RELEASE_PATH'"
     grep -Fqx "$release_line" "$notes" && ok "fixture release line is verbatim" || bad "fixture release line changed"
     grep -Fqx 'Fixture release prose, retained verbatim.' "$notes" && ok "fixture prose is verbatim" || bad "fixture prose changed"
+
+    notes="$fixture/notes/fixture-1.1.0.md"
+    derive_release fixture-1.1.0 "$notes" required
+    pending_stamp="r$(git -C "$fixture" rev-list --count "$pending_commit")"
+    pending_line="no proto · stamp $pending_stamp · source \`$pending_commit\` · tag \`fixture-1.1.0\`"
+    expected_header="Tag \`fixture-1.1.0\` · source commit \`$pending_commit\`"
+    grep -Fqx "$expected_header" "$notes" && ok "pending fixture header uses the peeled tag commit" || bad "pending fixture header does not use the peeled tag commit"
+    grep -Fqx "$pending_line" "$notes" && ok "pending fixture release line uses the peeled tag commit without the marker" || bad "pending fixture release line was not normalized"
+    if grep -Fq '(pending)' "$notes"; then bad "pending fixture notes retain the marker"; else ok "pending fixture notes omit the marker"; fi
+    grep -Fqx 'Pending release prose, selected from its release line.' "$notes" && ok "pending fixture selects its owning entry" || bad "pending fixture omitted its owning prose"
+    if grep -Fq 'Earlier entry prose mentions tag `fixture-1.1.0`' "$notes"; then bad "a prose tag mention selected the earlier entry"; else ok "a prose tag mention does not select the earlier entry"; fi
+    assert_pending_notes fixture-1.1.0 "$notes" && ok "pending fixture passes the deterministic notes assertion" || bad "pending fixture fails the deterministic notes assertion"
+
+    cp "$fixture/CHANGELOG.md" "$fixture/CHANGELOG.saved"
+    sed -i 's/Pending release prose, selected/Pending release prose (pending), selected/' \
+        "$fixture/CHANGELOG.md"
+    if output="$(GITHUB_RELEASES_REPO="$fixture" GH="$fixture/gh-forbidden" \
+            bash "$RELEASE_SCRIPT" --tag fixture-1.1.0 2>&1)"; then
+        bad "dry-run main entry point accepted a pending marker in the release body"
+    elif [[ "$output" == *"still contain '(pending)'"* \
+            && "$output" == *"refusing to publish inconsistent pending release notes"* ]]; then
+        ok "dry-run main entry point rejects a pending marker in the release body"
+    else
+        bad "dry-run pending-body assertion returned the wrong error: $output"
+    fi
+    mv "$fixture/CHANGELOG.saved" "$fixture/CHANGELOG.md"
+
+    cp "$fixture/CHANGELOG.md" "$fixture/CHANGELOG.saved"
+    {
+        printf '\n### v1 — 2026-09-07\n\n'
+        printf 'no proto · stamp — · source `%s` · tag `fixture-1.1.0` (pending)\n' "$commit"
+    } >> "$fixture/CHANGELOG.md"
+    if output="$(derive_release fixture-1.1.0 "$notes" required 2>&1)"; then
+        bad "duplicate matching changelog entries were accepted"
+    elif [[ "$output" == *"has ambiguous CHANGELOG.md entries"* ]]; then
+        ok "duplicate matching changelog entries are rejected"
+    else
+        bad "duplicate matching entries returned the wrong error: $output"
+    fi
+    mv "$fixture/CHANGELOG.saved" "$fixture/CHANGELOG.md"
 
     notes="$fixture/notes/fixture-2.0.0.md"
     derive_release fixture-2.0.0 "$notes"
@@ -215,10 +267,10 @@ self_test() {
     [ "$RELEASE_PATH" = "labs/heap/" ] && ok "lab release path derives from its directory" || bad "lab path is '$RELEASE_PATH'"
 
     if [ "$FAILURES" -eq 0 ]; then
-        echo "SELF-TEST PASS: $CHECKS checks, 5 tags, 0 failures, $((SECONDS - started))s wall"
+        echo "SELF-TEST PASS: $CHECKS checks, 7 tags, 0 failures, $((SECONDS - started))s wall"
         return 0
     fi
-    echo "SELF-TEST FAIL: $CHECKS checks, 5 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
+    echo "SELF-TEST FAIL: $CHECKS checks, 7 tags, $FAILURES failure(s), $((SECONDS - started))s wall" >&2
     return 1
 }
 

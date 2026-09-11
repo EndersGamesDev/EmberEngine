@@ -32,6 +32,8 @@ The major is the release line a player sees and the launcher retains. Historical
 
 A minor bump is a deliberate release. It always receives an annotated, signed tag named `<series>-MAJOR.MINOR.PATCH`, where the series is the game or lab id, or `ember` for the engine and workspace. Examples are `arena-31.1.0`, `league-2.1.0`, `julibrot-1.1.0`, and `ember-1.1.0`. New tags never use a bare name or a `v` prefix.
 
+A release row authored in the release's own pull request names the complete tag as pending with ``tag `<series>-MAJOR.MINOR.PATCH` (pending)``, records the authored version commit as its source and uses `stamp —`. Before integration the absent tag is valid; once the tag exists, it must be annotated and target the two-parent merge commit that integrated the row, with a first parent that lacks the exact release line, a merged tree that contains it and a second parent that contains the recorded source.
+
 After baseline migration, each merge to `develop` advances the patch grade of every game, lab, or Ember workspace series it changes. The bump belongs to the merge itself and is not tagged.
 
 The merge establishing these baseline versions is the one-time migration baseline; the per-merge patch rule begins with the next merge to `develop`.
@@ -45,6 +47,8 @@ Historical tags are re-issued at the same commits: `vN` becomes `arena-N.0.0`, a
 `deploy/retag.sh` remains a dry-run-by-default historical reconciliation tool whose apply mode requires a clean checkout and an explicit remote list, because replacement tag provenance is unsafe when either the source tree or its destinations are implicit.
 
 The tag migration is complete, and the changelog check accepts only series-prefixed tag names. A series prefix makes every release tag self-identifying in the shared repository.
+
+For a pending release, the tag is cut on the GitHub-created merge commit after the release pull request lands, and release tooling renders the public notes without the pending marker, with that peeled tag commit as their source and with `stamp r<commit count>` from `git rev-list --count` of that commit. Once the release run has published, a later documentation pull request changes `source` to the merge commit the tag points at, changes `stamp` to that deterministic value and returns the tag field to plain ``tag `<series>-MAJOR.MINOR.PATCH` ``; `published` stays absent because the publication is the GitHub release's archive rather than a `gh-pages` commit. The archive-root `version.json`, copied from source `web/version.json`, must name the same commit and `r<commit count>` version. The pending row temporarily names the authored version commit because the ledger defines a version's source as the commit its stamp names, and neither the future merge commit nor its build stamp exists while the release pull request is authored.
 
 Release tags are created only from a `develop` commit whose exact-SHA `push` run of `.github/workflows/ci.yml` concluded `success` with all three required jobs successful. Branch and merge work prepares versions, catalog data, documentation, and migration tooling, while that workflow evidence proves the integrated commit before its tag makes it releasable.
 

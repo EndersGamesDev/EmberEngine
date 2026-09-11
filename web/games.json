@@ -472,10 +472,10 @@
       "versions": [
         {
           "v": "v1",
-          "version": "1.0.7",
+          "version": "1.1.0",
           "path": "labs/julibrot/",
           "live": true,
-          "note": "updated slice viewer: saved-view application, retained frames across partition changes, and visible limits and measurements"
+          "note": "Deep navigation keeps retained and pending views anchored as sampled-reference frames arrive, while relief zoom transitions preserve covering imagery and GPU scene completion remains reliable on slower software adapters."
         }
       ]
     }

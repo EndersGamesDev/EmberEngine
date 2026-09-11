@@ -2,13 +2,13 @@
 
 Every version the launcher (`web/games.json`) lists, in one place: what a player or a host operator would notice, and what changed the protocol. One section per game in launcher order, newest release first within each game.
 
-**A release's source commit is the commit its build stamp names**, and each entry names the publication that establishes it, so the claim can be checked rather than taken. `deploy/deploy-pages.sh` runs `deploy/stamp-version.sh` before publishing, writing `web/version.json` — `r<commit count>`, the deploy's short sha and that commit's subject — and those bytes travel to the published branch with the build. A stamp reading `+dirty` means the published bytes correspond to no commit at all, and the entry says so.
+**A release's source commit is the commit its build stamp names**, and each entry names the publication that establishes it, so the claim can be checked rather than taken. `deploy/deploy-pages.sh` runs `deploy/stamp-version.sh` before publishing, writing `web/version.json` — `rCOMMIT-COUNT`, the deploy's short sha and that commit's subject — and those bytes travel to the published branch with the build. A stamp reading `+dirty` means the published bytes correspond to no commit at all, and the entry says so.
 
 **Which publication.** A frozen page is not frozen from its first publication: a hub deploy rebuilds every live page it carries, so one version can be published several times, from a different commit each time, and the first publication can even predate the protocol the launcher now records for it. The rule, applied to every row: **the source of a version is the newest publication of that version whose stamp names a commit on `main`.** A later publication from a commit `main` does not carry is recorded in the entry with its stamp and is not tagged, because a tag would pin history this repository cannot reach.
 
 **Which stamp.** The hub stamp is one file at the root, so a publication that touches only one game leaves it reading the previous game's release. Two things outrank it, and an entry says which it used. A release that writes its own `version.json` inside its page tree is strongest: it names the full source sha and can carry the hash of the bundle beside it, which makes the claim checkable against the published bytes. Next is a targeted publication whose own commit message names the source it shipped. The root stamp is the fallback, and the rule above says which publication's root stamp counts.
 
-**Tags.** Every release tag is annotated and signed and names its series and full three-grade version: `<series>-MAJOR.MINOR.PATCH`, with `ember` as the engine and workspace series. Historical `vN` and `<id>-vN` tags are re-issued at the same commits as `<series>-N.0.0` by `deploy/retag.sh`; during that migration the verifier accepts either name, and the old names are then removed. An existing tag is never moved — where a tag sits somewhere other than the entry's source commit, the entry records both. Releases without a tag state that directly.
+**Tags.** Every release tag is annotated and signed and names its series and full three-grade version: `SERIES-MAJOR.MINOR.PATCH`, with `ember` as the engine and workspace series. Historical `vN` and `ID-vN` tags are re-issued at the same commits as `SERIES-N.0.0` by `deploy/retag.sh`; during that migration the verifier accepts either name, and the old names are then removed. A row authored in its release's own pull request uses ``tag `SERIES-MAJOR.MINOR.PATCH` (pending)``, records the authored version commit as its source and uses `stamp —` because GitHub has not created the merge commit or its build stamp yet. The missing tag is accepted before integration; once it exists, it must be annotated and target the two-parent merge commit that integrated the row, whose first parent lacks the exact release line, whose merged tree contains it and whose second parent contains the recorded source. Release tooling removes the pending marker from public notes, identifies the peeled tag commit as their source and renders `stamp rCOMMIT-COUNT` for that commit. After publication, a documentation change completes the row: `source` becomes the merge commit the tag points at, `stamp` becomes that deterministic `rCOMMIT-COUNT`, the tag field returns to plain ``tag `SERIES-MAJOR.MINOR.PATCH` `` and `published` remains absent because the publication is the GitHub release's archive rather than a `gh-pages` commit. The archive-root `version.json`, copied from source `web/version.json`, must name the same commit and version value. This retrospective change follows the ledger rule that a version's source is the commit its stamp names; neither that future merge commit nor its stamp can be named while the pull request is authored. `deploy/tests/test-changelog.sh` fully defines allowed line shapes 1–5, the heading-text rules, the positional release line, the ban on angle brackets everywhere and the ban on asterisk-only lines, so its line-oriented reader and GitHub's renderer agree which lines are entries. The `(points at …)` form remains for a tag whose target intentionally differs from a row's source. An existing tag is never moved. Releases without a tag state that directly.
 
 The full evidence for every row, including the freeze commits and every publication considered, is the release ledger this file was built from.
 
@@ -17,6 +17,8 @@ The full evidence for every row, including the freeze commits and every publicat
 This is the repository's only ledger for finished work that has not yet been assigned to a launcher release; living plans keep their open work and replace completed-work narrative with a pointer here. Entries are grouped by game or area, newest first within each subsection, and every paragraph names the merge or source commit that establishes the change.
 
 ### Integration and release process
+
+The release ledger now accepts a pending tag before its GitHub merge commit exists, then requires an existing annotated tag to target the exact two-parent merge that introduced the release line from a second parent containing its authored source. `deploy/tests/test-changelog.sh` is the full definition of the closed positional ledger syntax that keeps the line-oriented checker and GitHub renderer from disagreeing about hidden entries; completed Actions-era rows require their deterministic commit-count stamp except for the eight named pre-stamp Arena tags. Tag-specific validation binds the row to its series section and launcher version, and GitHub release notes select only the release line while replacing pending provenance with the peeled tag commit and deterministic stamp; the later ledger update records that stamped merge commit as the plain tag's source (`6e6fffac`).
 
 The pull-request runbook now makes per-commit gates and wall times, pre-opening adversarial review, the fixed six-section body, strict rebase-and-recheck handling, GitHub-created merge commits, quarantined post-merge inspection, branch cleanup and pull-request participation one landing contract (`7f3283fd`); the tracked no-bypass freeze payload preserves the `gh-pages` publication record against update and deletion (`dd8a5d37`); the accompanying cross-references record the replay baseline, the live branch and tag rulesets, the `main` migration anchor, the deleted `ci-passed` ref whose replayed content remains in `develop`, the registered release credential, the frozen `gh-pages` publication-record decision and the first conforming release tag as the remaining step (`3d928323`); the changelog policy suite decides raw object presence before its unavailable off-main name fallback, rejects ambiguous or non-commit names, retains object comparison for resolvable commits and pins those paths with deterministic fixtures (`879d9cd9`).
 
@@ -105,44 +107,6 @@ Seven generated furnishings add a stitched straw cot, iron-hooped bucket, shackl
 The first End Game chapter runs on Ember: awaken in a wooden-floored dungeon cell, recover a key, evade or fight the sleeping warden, claim the greatsword and break the exit chain. Wolf and werewolf armor forms, a prerecorded prologue, material densities and gravity, individually varied surfaces, local torch lighting and adaptive resolution up to a 5120-pixel width accompany keyboard/mouse, standard gamepad and touch controls. The launcher entry and scoped publisher preserve the other live games; each targeted release records its source and file hashes in the game's own `version.json` (`9e664ac0`).
 
 Validation covered six simulation tests, three client input tests, three resolution tests, 53 engine tests, 12 GPU tests, 125 deployment fixtures, offline publication preservation, sibling-client compilation and passive native visual inspection. Release WASM builds successfully. Physical controllers, mobile devices, browser gameplay and 5K frame rates remain unverified; the unrigged armor swap and supplied dragon film establish a v1 prototype, with continuous animation and photorealistic material simulation left in the backlog (`9e664ac0`).
-
-### Julibrot rounds two and three
-
-Native Julibrot GPU scene waits now use a 120-second wall deadline with one-millisecond cooperative sleeps, allowing shared software Vulkan adapters time to complete while preserving scene assertions and reporting scene, poll and elapsed-time diagnostics; poisoned GPU test mutexes recover so an earlier failure cannot mask a later test's result (`d5503c16`, `5f23617f`).
-
-Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
-
-Julibrot now renders its first production WGSL template while creating the shade pipeline, deriving the real palette layout, enum values, binding slots, status sentinels and diagnostic colours from CPU-side Rust metadata and validating the result with Naga (`a5d81b2a`).
-
-Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
-
-Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).
-
-Retired main-grid ownership is now an explicit absent state, including restoration and failure paths, and the short, zoom, height, capture and finished-picture scenarios share one trace fixture without changing their frame or browser-action records (`2e864405`).
-
-Presentation polling now consumes its fixed event set without allocating a vector, reprojection no longer accepts unread precision and validation parameters, and static versus HOT uniform construction makes dynamic offsets structural; the planner, trace and pixel corpora stayed unchanged (`84e8d4f8`).
-
-Surface acquisition, warp submission, receipt validation, retention and presentation now pass through a replayable surface-resolution owner whose ordered record preserves failed turns and distinguishes present, drop and ignore outcomes (`0c746bf3`).
-
-Scene and warp completion, refusal, retained-source bookkeeping and stable facts now pass through a replayable Present-event owner, with poll-before-apply-before-finish ordering and failure chronology pinned (`4a376831`).
-
-Kernel planning, allocation, retirement, encoding and publication now pass through a replayable submission owner whose whole-grid job carries every semantic input by value, including the complete perturbation reference identity (`fb3cc50c`).
-
-Worker submission, arrival processing, reference disposition, facts and channel-only reads now pass through a replayable worker-service owner with a chronological turn record (`a9f3c778`).
-
-The browser and native Julibrot drivers now use one ordered refresh executor with typed stage tokens, replacing marker-only ordering and pinning scene-before-warp and fence-observation order (`e77ddad4`).
-
-The same-thread and browser transports now share one ownership core while retaining ABI-3 bytes, four buffers and their measured transport differences, and app callers reach the viewer through narrowed pan, zoom, precision and navigation entries instead of the mutable owner (`807aa546`, integrating source merges `61acab7b` and `fd96a4de`).
-
-Warm-up measurements now select the newest completed submission by a shared completion sequence instead of mistaking the longest wall duration for recency (`3f885813`).
-
-Round two began with frozen worker-event and app-frame traces, a paired planner corpus, native whole-grid pixels and a served raw-RGBA artifact whose load-dependent facts are explicitly excluded from stable comparison (`e53da1bb`, integrating source merge `148c828f`).
-
-The refactor survey classified the Julibrot ownership seams, measured its debt and established the round-two and round-three oracle contract without changing runtime behavior (`8734d336`).
-
-Relief-aware zoom now reprojects the retained source through the requested view, applies palette only during presentation and holds a covering source instead of clearing it during the transition (`430a56ad`).
-
-A relief zoom that cannot be represented now reports the refusal, retains partial-error evidence and records where each held, redrawn, warped or cleared picture placed the requested view (`b0422875`).
 
 ### Killshot engineering
 
@@ -681,6 +645,48 @@ Fixed wasm CPU and timing kernels, floating-point and feature fingerprints, and 
 The first publication, `070e4cd9`, was stamped r583 `b9ae7bb1` — a commit that is in this repository's object store but reachable from no ref, the deploy having been run from a working branch whose change reached `main` as a different commit with a different tree. Nine publications later the page has been rebuilt from `main` proper, and the newest with an on-`main` stamp, r1469 `f28a145f`, is what serves and what the note above describes. That is what the tag marks; the dangling first stamp is recorded here and is not tagged.
 
 ## Julibrot Lab
+
+### v1 — 2026-09-11
+
+no proto · stamp — · source `db3695b7` · tag `julibrot-1.1.0` (pending)
+
+Deep navigation keeps retained and pending views anchored as sampled-reference frames arrive, while relief zoom transitions preserve covering imagery and GPU scene completion remains reliable on slower software adapters.
+
+Native Julibrot GPU scene waits now use a 120-second wall deadline with one-millisecond cooperative sleeps, allowing shared software Vulkan adapters time to complete while preserving scene assertions and reporting scene, poll and elapsed-time diagnostics; poisoned GPU test mutexes recover so an earlier failure cannot mask a later test's result (`d5503c16`, `5f23617f`).
+
+Accepted references now carry their own generation identity through presentation, so retained and pending poses consume each reference shift exactly once even when navigation published the centre revision first; the rebase converts from the accepted view's pixel scale before reprojection, preventing deep cursor anchors from stepping as fast, sampled-reference and deterministic frames arrive. Exact-camera reversibility remains open: after sampled-reference acceptance, the deep-shallow-deep round trip pins a 1224.86-pixel residual at exponent 54 without blaming centre narrowing—the controller starts at 1,024 bits and only widens—until `ember-camera` replaces the F32 plane-and-scale edit ceiling (`a2522738`, `50147fa1`).
+
+Julibrot now renders its first production WGSL template while creating the shade pipeline, deriving the real palette layout, enum values, binding slots, status sentinels and diagnostic colours from CPU-side Rust metadata and validating the result with Naga (`a5d81b2a`).
+
+Round three opened with one engine-neutral vocabulary for tile content, render and source identities, signed source rectangles, mesh handles, paired value and reconstruction spans, residency, quality, invalidation and a versioned 512-byte pose-header ABI. Kernels now own those records and Present re-exports adapters without changing the live rendering path or any frozen whole-grid oracle (`a8c1fdbd`).
+
+Round two closed by replaying all four oracle classes together, removing the unreferenced Present-facts clone, completing worker-service replay coverage and proving the release wasm byte-identical to the baseline while the served bundle remained at deterministic parity (`6e940937`).
+
+Retired main-grid ownership is now an explicit absent state, including restoration and failure paths, and the short, zoom, height, capture and finished-picture scenarios share one trace fixture without changing their frame or browser-action records (`2e864405`).
+
+Presentation polling now consumes its fixed event set without allocating a vector, reprojection no longer accepts unread precision and validation parameters, and static versus HOT uniform construction makes dynamic offsets structural; the planner, trace and pixel corpora stayed unchanged (`84e8d4f8`).
+
+Surface acquisition, warp submission, receipt validation, retention and presentation now pass through a replayable surface-resolution owner whose ordered record preserves failed turns and distinguishes present, drop and ignore outcomes (`0c746bf3`).
+
+Scene and warp completion, refusal, retained-source bookkeeping and stable facts now pass through a replayable Present-event owner, with poll-before-apply-before-finish ordering and failure chronology pinned (`4a376831`).
+
+Kernel planning, allocation, retirement, encoding and publication now pass through a replayable submission owner whose whole-grid job carries every semantic input by value, including the complete perturbation reference identity (`fb3cc50c`).
+
+Worker submission, arrival processing, reference disposition, facts and channel-only reads now pass through a replayable worker-service owner with a chronological turn record (`a9f3c778`).
+
+The browser and native Julibrot drivers now use one ordered refresh executor with typed stage tokens, replacing marker-only ordering and pinning scene-before-warp and fence-observation order (`e77ddad4`).
+
+The same-thread and browser transports now share one ownership core while retaining ABI-3 bytes, four buffers and their measured transport differences, and app callers reach the viewer through narrowed pan, zoom, precision and navigation entries instead of the mutable owner (`807aa546`, integrating source merges `61acab7b` and `fd96a4de`).
+
+Warm-up measurements now select the newest completed submission by a shared completion sequence instead of mistaking the longest wall duration for recency (`3f885813`).
+
+Round two began with frozen worker-event and app-frame traces, a paired planner corpus, native whole-grid pixels and a served raw-RGBA artifact whose load-dependent facts are explicitly excluded from stable comparison (`e53da1bb`, integrating source merge `148c828f`).
+
+The refactor survey classified the Julibrot ownership seams, measured its debt and established the round-two and round-three oracle contract without changing runtime behavior (`8734d336`).
+
+Relief-aware zoom now reprojects the retained source through the requested view, applies palette only during presentation and holds a covering source instead of clearing it during the transition (`430a56ad`).
+
+A relief zoom that cannot be represented now reports the refusal, retains partial-error evidence and records where each held, redrawn, warped or cleared picture placed the requested view (`b0422875`).
 
 ### v1 — 2026-09-04
 
