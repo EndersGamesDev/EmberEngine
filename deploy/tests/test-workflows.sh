@@ -354,6 +354,139 @@ PY
     fi
 }
 
+release_tag_object_matches_contract() {
+    local file="$1"
+    if [ -n "$HAVE_PYYAML" ]; then
+        python3 - "$file" <<'PY'
+import pathlib
+import sys
+import yaml
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def construct_unique_mapping(loader, node, deep=False):
+    loader.flatten_mapping(node)
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found duplicate key %r" % key,
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    construct_unique_mapping,
+)
+try:
+    document = yaml.load(
+        pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"),
+        Loader=UniqueKeyLoader,
+    )
+except yaml.YAMLError:
+    raise SystemExit(1)
+steps = document.get("jobs", {}).get("validate", {}).get("steps")
+if not isinstance(steps, list):
+    raise SystemExit(1)
+
+checkouts = [(index, step) for index, step in enumerate(steps) if step.get("uses") == "actions/checkout@v4"]
+fetches = [(index, step) for index, step in enumerate(steps) if step.get("name") == "fetch the tag object"]
+annotated = [(index, step) for index, step in enumerate(steps) if step.get("name") == "require an annotated tag"]
+if len(checkouts) != 1 or len(fetches) != 1 or len(annotated) != 1:
+    raise SystemExit(1)
+if fetches[0][0] != checkouts[0][0] + 1 or fetches[0][0] >= annotated[0][0]:
+    raise SystemExit(1)
+
+step = fetches[0][1]
+if step.get("env") != {"TAG": "${{ github.ref_name }}"}:
+    raise SystemExit(1)
+run = step.get("run")
+if not isinstance(run, str):
+    raise SystemExit(1)
+commands = [line.strip() for line in run.splitlines() if line.strip()]
+required = {
+    "set -euo pipefail",
+    'git fetch --no-tags --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"',
+    'test "$(git cat-file -t "refs/tags/$TAG")" = tag',
+}
+if not required.issubset(commands):
+    raise SystemExit(1)
+PY
+    else
+        awk '
+            function record_step_field(value) {
+                if (value == "uses: actions/checkout@v4") checkout[step] = 1
+                if (value == "name: fetch the tag object") fetch[step] = 1
+                if (value == "name: require an annotated tag") annotated[step] = 1
+                if (value == "env:") {
+                    section = "env"
+                } else if (value ~ /^run:/) {
+                    section = "run"
+                } else {
+                    section = ""
+                }
+            }
+            /^  validate:$/ {
+                inside = 1
+                next
+            }
+            inside && /^  [^ ]/ {
+                inside = 0
+            }
+            !inside {
+                next
+            }
+            /^      - / {
+                step++
+                record_step_field(substr($0, 9))
+                next
+            }
+            /^        [^ ]/ {
+                record_step_field(substr($0, 9))
+                next
+            }
+            section == "env" && /^          [^[:space:]#][^:]*:/ {
+                env_count[step]++
+                if ($0 == "          TAG: ${{ github.ref_name }}") tag_env[step] = 1
+                next
+            }
+            section == "run" {
+                if ($0 == "          set -euo pipefail") strict[step] = 1
+                if ($0 == "          git fetch --no-tags --force origin \"+refs/tags/${TAG}:refs/tags/${TAG}\"") refspec[step] = 1
+                if ($0 == "          test \"$(git cat-file -t \"refs/tags/$TAG\")\" = tag") object_type[step] = 1
+            }
+            END {
+                for (candidate = 1; candidate <= step; candidate++) {
+                    if (checkout[candidate]) {
+                        checkout_count++
+                        checkout_step = candidate
+                    }
+                    if (fetch[candidate]) {
+                        fetch_count++
+                        fetch_step = candidate
+                    }
+                    if (annotated[candidate]) {
+                        annotated_count++
+                        annotated_step = candidate
+                    }
+                }
+                if (checkout_count != 1 || fetch_count != 1 || annotated_count != 1) exit 1
+                if (fetch_step != checkout_step + 1 || fetch_step >= annotated_step) exit 1
+                if (env_count[fetch_step] != 1 || !tag_env[fetch_step]) exit 1
+                if (!strict[fetch_step] || !refspec[fetch_step] || !object_type[fetch_step]) exit 1
+            }
+        ' "$file"
+    fi
+}
+
 pages_matches_contract() {
     local file="$1"
     if [ -n "$HAVE_PYYAML" ]; then
@@ -424,14 +557,114 @@ write_missing_native_package_fixture() {
     sed 's/ mesa-vulkan-drivers//' "$source" > "$file"
 }
 
-TEST_WORK="$(mktemp -d "${TMPDIR:?}/ember-workflow-test.XXXXXX")"
+write_missing_release_tag_object_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: fetch the tag object" {
+            skipping = 1
+            next
+        }
+        skipping && /^      - / {
+            skipping = 0
+        }
+        !skipping {
+            print
+        }
+    ' "$source" > "$file"
+}
+
+write_extra_release_tag_env_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: fetch the tag object" {
+            fetch = 1
+        }
+        fetch && $0 == "          TAG: ${{ github.ref_name }}" {
+            print
+            print "          EXTRA: harmless"
+            fetch = 0
+            next
+        }
+        {
+            print
+        }
+    ' "$source" > "$file"
+}
+
+write_duplicate_release_tag_env_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: fetch the tag object" {
+            fetch = 1
+        }
+        fetch && $0 == "          TAG: ${{ github.ref_name }}" {
+            print "          TAG: wrong"
+            print
+            fetch = 0
+            next
+        }
+        {
+            print
+        }
+    ' "$source" > "$file"
+}
+
+write_named_release_checkout_fixture() {
+    local source="$1" file="$2"
+    awk '
+        !replaced && $0 == "      - uses: actions/checkout@v4" {
+            print "      - name: check out the release source"
+            print "        uses: actions/checkout@v4"
+            replaced = 1
+            next
+        }
+        {
+            print
+        }
+    ' "$source" > "$file"
+}
+
+TEST_WORK="$(mktemp -d -t ember-workflow-test-XXXXXX)" || {
+    echo "test-workflows: unable to create fixture directory" >&2
+    exit 1
+}
 trap 'rm -r -- "$TEST_WORK"' EXIT
 QUOTED_PROMOTE="$TEST_WORK/quoted-promote.yml"
 PERMISSIVE_REGEX="$TEST_WORK/permissive-regex.yml"
 MISSING_NATIVE_PACKAGE="$TEST_WORK/missing-native-package.yml"
+MISSING_RELEASE_TAG_OBJECT="$TEST_WORK/missing-release-tag-object.yml"
+EXTRA_RELEASE_TAG_ENV="$TEST_WORK/extra-release-tag-env.yml"
+DUPLICATE_RELEASE_TAG_ENV="$TEST_WORK/duplicate-release-tag-env.yml"
+NAMED_RELEASE_CHECKOUT="$TEST_WORK/named-release-checkout.yml"
 write_quoted_promote_fixture "$QUOTED_PROMOTE"
 write_permissive_regex_fixture "$PERMISSIVE_REGEX"
 write_missing_native_package_fixture .github/workflows/ci.yml "$MISSING_NATIVE_PACKAGE"
+write_missing_release_tag_object_fixture .github/workflows/release.yml "$MISSING_RELEASE_TAG_OBJECT"
+write_extra_release_tag_env_fixture .github/workflows/release.yml "$EXTRA_RELEASE_TAG_ENV"
+write_duplicate_release_tag_env_fixture .github/workflows/release.yml "$DUPLICATE_RELEASE_TAG_ENV"
+write_named_release_checkout_fixture .github/workflows/release.yml "$NAMED_RELEASE_CHECKOUT"
+
+FIXTURES_READY=1
+for fixture in \
+    "$QUOTED_PROMOTE" \
+    "$PERMISSIVE_REGEX" \
+    "$MISSING_NATIVE_PACKAGE" \
+    "$MISSING_RELEASE_TAG_OBJECT" \
+    "$EXTRA_RELEASE_TAG_ENV" \
+    "$DUPLICATE_RELEASE_TAG_ENV" \
+    "$NAMED_RELEASE_CHECKOUT"
+do
+    if [ -s "$fixture" ]; then
+        ok "$(basename "$fixture") fixture exists and is non-empty"
+    else
+        bad "$(basename "$fixture") fixture does not exist or is empty"
+        FIXTURES_READY=""
+    fi
+done
+if [ -z "$FIXTURES_READY" ]; then
+    summary workflows
+    exit 1
+fi
 
 echo "== workflow YAML =="
 if [ "${#WORKFLOWS[@]}" -eq 0 ]; then
@@ -523,6 +756,31 @@ if release_order_matches_contract .github/workflows/release.yml; then
     ok "release.yml queues tag runs and publishes only after promotion"
 else
     bad "release.yml does not preserve its queue, draft, promotion, cleanup and publication contract"
+fi
+if release_tag_object_matches_contract .github/workflows/release.yml; then
+    ok "release.yml fetches the annotated tag object immediately after checkout"
+else
+    bad "release.yml does not fetch the annotated tag object immediately after checkout"
+fi
+if release_tag_object_matches_contract "$MISSING_RELEASE_TAG_OBJECT"; then
+    bad "the release tag-object check accepted a fixture without the fetch step"
+else
+    ok "the release tag-object check rejects a fixture without the fetch step"
+fi
+if release_tag_object_matches_contract "$EXTRA_RELEASE_TAG_ENV"; then
+    bad "the release tag-object check accepted a fixture with an extra fetch environment entry"
+else
+    ok "the release tag-object check rejects a fixture with an extra fetch environment entry"
+fi
+if release_tag_object_matches_contract "$DUPLICATE_RELEASE_TAG_ENV"; then
+    bad "the release tag-object check accepted a fixture with duplicate fetch environment keys"
+else
+    ok "the release tag-object check rejects a fixture with duplicate fetch environment keys"
+fi
+if release_tag_object_matches_contract "$NAMED_RELEASE_CHECKOUT"; then
+    ok "the release tag-object check accepts checkout with name before uses"
+else
+    bad "the release tag-object check rejects checkout with name before uses"
 fi
 if pages_matches_contract .github/workflows/pages.yml; then
     ok "pages.yml waits for release success and selects a published asset at main"

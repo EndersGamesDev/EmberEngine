@@ -151,7 +151,10 @@ write_fixture_changelog() {
 self_test() {
     local started=$SECONDS fixture commit pending_commit notes release_line
     local pending_line pending_stamp expected_header output
-    fixture="$(mktemp -d "${TMPDIR:?}/ember-github-release-fixture.XXXXXX")"
+    fixture="$(mktemp -d -t ember-github-release-fixture-XXXXXX)" || {
+        echo "test-github-releases: unable to create self-test fixture directory" >&2
+        exit 1
+    }
     TEST_WORK="$fixture"
     mkdir -p "$fixture/web" "$fixture/notes"
     write_forbidden_gh "$fixture/gh-forbidden"
@@ -282,7 +285,10 @@ fi
 [ "$#" -eq 0 ] || { echo "usage: bash deploy/tests/test-github-releases.sh [--self-test]" >&2; exit 2; }
 
 started=$SECONDS
-TEST_WORK="$(mktemp -d "${TMPDIR:?}/ember-github-release-test.XXXXXX")"
+TEST_WORK="$(mktemp -d -t ember-github-release-test-XXXXXX)" || {
+    echo "test-github-releases: unable to create fixture directory" >&2
+    exit 1
+}
 mkdir -p "$TEST_WORK/notes"
 write_forbidden_gh "$TEST_WORK/gh-forbidden"
 

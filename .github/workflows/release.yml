@@ -38,6 +38,13 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - name: fetch the tag object
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+          test "$(git cat-file -t "refs/tags/$TAG")" = tag
       - name: validate tag shape and series
         id: tag
         env:

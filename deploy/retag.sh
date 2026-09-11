@@ -98,7 +98,7 @@ if [ -z "$apply" ]; then
     exit 0
 fi
 
-work="$(mktemp -d "${TMPDIR:?}/ember-retag.XXXXXX")"
+work="$(mktemp -d -t ember-retag-XXXXXX)" || die "unable to create temporary directory"
 trap 'rm -r -- "$work"' EXIT
 
 for index in "${!olds[@]}"; do
