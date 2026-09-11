@@ -420,7 +420,8 @@ main() {
     LATEST_TAG="$(latest_arena_tag)"
     [ -n "$LATEST_TAG" ] || die "no arena release tag found to mark latest"
 
-    work="$(mktemp -d "${TMPDIR:?}/ember-github-releases.XXXXXX")"
+    work="$(mktemp -d -t ember-github-releases-XXXXXX)" \
+        || die "unable to create temporary directory"
     GITHUB_RELEASES_WORK="$work"
     trap '[ -z "$GITHUB_RELEASES_WORK" ] || rm -r -- "$GITHUB_RELEASES_WORK"' EXIT
 

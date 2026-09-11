@@ -65,7 +65,10 @@ merge(arena): merge spectator controls
 feat(arena): add spectator controls that make this deliberately overlong subject fail validation
 BAD
 
-    fixture="$(mktemp -d "${TMPDIR:?}/ember-commit-message-fixture.XXXXXX")" || return 1
+    fixture="$(mktemp -d -t ember-commit-message-fixture-XXXXXX)" || {
+        printf 'test-commit-messages: unable to create fixture directory\n' >&2
+        exit 1
+    }
     git -C "$fixture" init -q
     git -C "$fixture" config user.name 'Commit Message Test'
     git -C "$fixture" config user.email 'commit-message-test@example.invalid'

@@ -624,7 +624,10 @@ write_named_release_checkout_fixture() {
     ' "$source" > "$file"
 }
 
-TEST_WORK="$(mktemp -d "${TMPDIR:?}/ember-workflow-test.XXXXXX")"
+TEST_WORK="$(mktemp -d -t ember-workflow-test-XXXXXX)" || {
+    echo "test-workflows: unable to create fixture directory" >&2
+    exit 1
+}
 trap 'rm -r -- "$TEST_WORK"' EXIT
 QUOTED_PROMOTE="$TEST_WORK/quoted-promote.yml"
 PERMISSIVE_REGEX="$TEST_WORK/permissive-regex.yml"
@@ -640,6 +643,28 @@ write_missing_release_tag_object_fixture .github/workflows/release.yml "$MISSING
 write_extra_release_tag_env_fixture .github/workflows/release.yml "$EXTRA_RELEASE_TAG_ENV"
 write_duplicate_release_tag_env_fixture .github/workflows/release.yml "$DUPLICATE_RELEASE_TAG_ENV"
 write_named_release_checkout_fixture .github/workflows/release.yml "$NAMED_RELEASE_CHECKOUT"
+
+FIXTURES_READY=1
+for fixture in \
+    "$QUOTED_PROMOTE" \
+    "$PERMISSIVE_REGEX" \
+    "$MISSING_NATIVE_PACKAGE" \
+    "$MISSING_RELEASE_TAG_OBJECT" \
+    "$EXTRA_RELEASE_TAG_ENV" \
+    "$DUPLICATE_RELEASE_TAG_ENV" \
+    "$NAMED_RELEASE_CHECKOUT"
+do
+    if [ -s "$fixture" ]; then
+        ok "$(basename "$fixture") fixture exists and is non-empty"
+    else
+        bad "$(basename "$fixture") fixture does not exist or is empty"
+        FIXTURES_READY=""
+    fi
+done
+if [ -z "$FIXTURES_READY" ]; then
+    summary workflows
+    exit 1
+fi
 
 echo "== workflow YAML =="
 if [ "${#WORKFLOWS[@]}" -eq 0 ]; then
