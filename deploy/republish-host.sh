@@ -3,10 +3,25 @@
 # explicit address-book mirror from a workstation that has that mirror's key.
 #
 #   bash deploy/republish-host.sh <ssh alias> --repo <url> --branch <branch>
+#                                  [--per-host]
 #
 # The host only needs to serve ~/ember-host/run/host.json over ssh. All Git
 # reads, commits and pushes happen here. Repeating the command with an
 # unchanged entry is a no-op, including its `updated` timestamp.
+#
+# `--per-host` writes the mirror as `<host name>.json` instead of `host.json`,
+# so ONE branch can carry every host's mirror instead of needing one branch per
+# host. That matters because branch names are governed by a repository ruleset:
+# a new host otherwise needs an owner-run ruleset change before its address can
+# be published at all. The file name is the host's own name, taken from the
+# entry it served, so no caller can name the file.
+#
+# One name is refused: a host called `server` would write `server.json`, and
+# publish-host.sh decides mirror mode by that exact basename, so this script
+# would hand a host's scheduler the whole address book to overwrite with a
+# single entry. The name is generated from a hash and 576 combinations do not
+# include it, but "cannot happen" is not a check, and the cost of being wrong
+# here is every other host's address.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,10 +33,12 @@ shift
 
 REPO=""
 BRANCH=""
+PER_HOST=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:-}"; shift 2 ;;
         --branch) BRANCH="${2:-}"; shift 2 ;;
+        --per-host) PER_HOST=1; shift ;;
         *) echo "republish-host: unknown argument '$1'" >&2; exit 2 ;;
     esac
 done
@@ -96,13 +113,24 @@ NAME="${FIELDS[0]}"
 VERSION="${FIELDS[1]}"
 COMMIT="${FIELDS[2]}"
 BY="${FIELDS[3]}"
+# Derived from the validated name, never from an argument — and `server` is
+# refused, because publish-host.sh reads that exact basename as "this file is
+# the whole book" and would replace every host's entry with this one.
+FILE="host.json"
+if [ -n "$PER_HOST" ]; then
+    if [ "$NAME" = server ]; then
+        echo "republish-host: host '$NAME' cannot use --per-host: server.json is the address book itself" >&2
+        exit 2
+    fi
+    FILE="$NAME.json"
+fi
 
 # A read-only comparison prevents `publish-host.sh` from refreshing `updated`
 # and creating a commit when the host's advertised state has not changed.
 git init -q "$WORK/book"
 git -C "$WORK/book" remote add origin "$REPO"
 if git -C "$WORK/book" fetch -q --depth 1 origin "$BRANCH" 2>/dev/null \
-        && git -C "$WORK/book" show FETCH_HEAD:host.json > "$MIRROR" 2>/dev/null \
+        && git -C "$WORK/book" show "FETCH_HEAD:$FILE" > "$MIRROR" 2>/dev/null \
         && "$PY" - "$ENTRY" "$MIRROR" <<'PY'
 import json, sys
 
@@ -129,6 +157,6 @@ done
 [ -n "$COMMIT" ] && ARGS+=(--commit "$COMMIT")
 [ -n "$BY" ] && ARGS+=(--by "$BY")
 
-echo "== merging $NAME into $REPO ($BRANCH) =="
+echo "== merging $NAME into $REPO ($BRANCH) as $FILE =="
 bash "$SELF_DIR/publish-host.sh" --repo "$REPO" --branch "$BRANCH" \
-    --file host.json --name "$NAME" "${ARGS[@]}"
+    --file "$FILE" --name "$NAME" "${ARGS[@]}"

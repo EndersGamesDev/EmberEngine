@@ -504,6 +504,109 @@ elif was != proto:
 """)
 EOF
 
+# Mirror bindings come from SOURCE, not from the frozen seed. The served book
+# is frozen between releases and no workflow deploys on a push to gh-pages, so
+# a binding that exists only on that branch reaches no player; meanwhile a
+# quick tunnel rotates on a running host and takes its game offline until the
+# next release. The bound mirror is the documented answer to exactly that
+# (docs/hosts.md §3) and it is useless if the binding itself cannot be changed
+# through the publication path.
+#
+# A name this file declares wins, because otherwise a wrong URL frozen into the
+# seed could never be corrected from source, which is the whole point. A name
+# only the seed carries is kept, because dropping a binding nobody asked about
+# would silently unpublish a host.
+MIRRORS_SRC="$REPO_DIR/web/mirrors.json"
+if [ -f "$MIRRORS_SRC" ]; then
+    "$PY" - "$PAGES_DIR/server.json" "$MIRRORS_SRC" <<'PY'
+import json, os, re, sys
+
+book_path, src_path = sys.argv[1], sys.argv[2]
+NAME = re.compile(r"^[a-z0-9-]{3,32}$")
+
+
+def die(msg):
+    sys.stderr.write("deploy-pages: %s\n" % msg)
+    raise SystemExit(1)
+
+
+with open(src_path, encoding="utf-8") as fh:
+    text = fh.read().strip()
+# An empty list is a legitimate "this release binds no mirror". Anything that
+# is not a list of valid bindings is a typo in the one file that decides which
+# third-party URLs the pages will fetch, and is refused rather than skipped.
+try:
+    source = json.loads(text) if text else []
+except ValueError as e:
+    die("%s is not JSON (%s)" % (src_path, e))
+if not isinstance(source, list):
+    die("%s must be a list of {name, url} bindings" % src_path)
+bindings = []
+seen = set()
+for item in source:
+    if not isinstance(item, dict):
+        die("%s has an entry that is not an object" % src_path)
+    name, url = item.get("name"), item.get("url")
+    if not isinstance(name, str) or NAME.match(name) is None:
+        die("%s binds a mirror to %r, which is not a host name" % (src_path, name))
+    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+        die("%s binds %s to %r, which is not a URL" % (src_path, name, url))
+    # One name, one binding. Two entries for a name mean the writer meant one
+    # of them, and publishing both would have every page fetch a URL nobody
+    # chose — the merge below would keep whichever it saw last.
+    if name in seen:
+        die("%s binds %s twice; a host has one mirror" % (src_path, name))
+    seen.add(name)
+    bindings.append({"url": url, "name": name})
+
+with open(book_path, encoding="utf-8") as fh:
+    book = json.load(fh)
+listed = book.get("mirrors")
+merged = [m for m in listed if isinstance(m, dict)] if isinstance(listed, list) else []
+by_name = {}
+for index, entry in enumerate(merged):
+    if isinstance(entry.get("name"), str):
+        by_name[entry["name"]] = index
+for binding in bindings:
+    if binding["name"] in by_name:
+        merged[by_name[binding["name"]]] = binding
+    else:
+        by_name[binding["name"]] = len(merged)
+        merged.append(binding)
+book["mirrors"] = merged
+
+# A bound name is served from its mirror, so the book's own copy of that
+# entry has to go. `mergeBook` gives `hosts[]` precedence over any mirror of
+# the same name, and the assembled book inherits `hosts[]` from the frozen
+# seed untouched — so leaving the entry in place makes the binding a no-op,
+# and the mirror that exists precisely to carry a rotated address is never
+# read. That was the whole failure this file was added to fix.
+#
+# The drop set comes from the MERGED list, not from this file's own bindings.
+# A binding the seed already carries is the previous release's declaration
+# that the same host is served from a mirror, made through this same path and
+# reviewed the same way; it is not weaker evidence for being a release older.
+# Taking only the new bindings would leave every previously bound host
+# shadowed by its own stale entry, which is the same bug one release removed.
+hosts = book.get("hosts")
+if isinstance(hosts, list) and merged:
+    bound = {m["name"] for m in merged if isinstance(m.get("name"), str)}
+    kept = [h for h in hosts if not (isinstance(h, dict) and h.get("name") in bound)]
+    dropped = len(hosts) - len(kept)
+    if dropped:
+        book["hosts"] = kept
+        print("   dropped %d seed host entry(s) now served from a mirror" % dropped)
+
+tmp = book_path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(book, fh)
+os.replace(tmp, book_path)
+print("   bound mirrors: " + (", ".join(m["name"] for m in merged) or "none"))
+PY
+else
+    echo "   note: web/mirrors.json does not exist in this checkout; the seed's bindings stand"
+fi
+
 # The top-level protocol keys just moved, and the legacy top-level ADDRESS
 # keys are defined against them: `ws` must name a host that speaks the
 # protocol the pages now ship. Recompute them from the host list immediately,

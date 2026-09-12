@@ -96,6 +96,7 @@ with open(p, "w", encoding="utf-8", newline="") as fh:
     fh.write(text.replace(old, 'doc["v"] = "recomputed-stamp"'))
 PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
+printf '[{"name":"lundi","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json"
 printf 'hub\n' > "$REPO/web/index.html"
 printf '{}\n' > "$REPO/web/version.json"
 printf 'arena live<script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
@@ -149,8 +150,8 @@ printf 'stale live asset\n' > "$SEED/$LEAGUE_LIVE/obsolete.css"
 printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
 printf 'frozen pong js\n' > "$SEED/games/pong/v1/pkg/pong.js"
 printf 'frozen pong wasm\n' > "$SEED/games/pong/v1/pkg/pong_bg.wasm"
-printf '{"v":"seed","proto":%s,"ws":"wss://old.example","league_proto":%s,"league_ws":"wss://old-league.example","hosts":[{"name":"new-host","ws":"wss://new.example","proto":%s,"version":"r2","league_ws":"wss://new-league.example","league_proto":%s}]}\n' \
-    "$ARENA_WAS" "$LEAGUE_WAS" "$ARENA_PROTO" "$LEAGUE_PROTO" > "$SEED/server.json"
+printf '{"v":"seed","proto":%s,"ws":"wss://old.example","league_proto":%s,"league_ws":"wss://old-league.example","mirrors":[{"url":"https://seed.example/quiet-egret.json","name":"quiet-egret"},{"url":"https://stale.example/lundi.json","name":"lundi"}],"hosts":[{"name":"new-host","ws":"wss://new.example","proto":%s,"version":"r2","league_ws":"wss://new-league.example","league_proto":%s},{"name":"lundi","ws":"wss://stale-lundi.example","proto":%s,"version":"r1"},{"name":"quiet-egret","ws":"wss://stale-egret.example","proto":%s,"version":"r1"}]}\n' \
+    "$ARENA_WAS" "$LEAGUE_WAS" "$ARENA_PROTO" "$LEAGUE_PROTO" "$ARENA_PROTO" "$ARENA_PROTO" > "$SEED/server.json"
 mkdir -p "$SEED/games/end-game/v1/pkg"
 printf 'original end game page\n' > "$SEED/games/end-game/v1/index.html"
 printf 'original end game bundle\n' > "$SEED/games/end-game/v1/pkg/end_game_bg.wasm"
@@ -223,6 +224,19 @@ STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "$LEAGUE_PROTO" "League ships its independent source protocol"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["name"] for m in d["mirrors"]]')" "['quiet-egret', 'lundi']" "the seed's bindings keep their order and the source binding merges by name"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["url"] for m in d["mirrors"] if m["name"] == "lundi"][0]')" "https://source.example/lundi.json" "source wins for the name it declares, so a frozen URL can be corrected"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["url"] for m in d["mirrors"] if m["name"] == "quiet-egret"][0]')" "https://seed.example/quiet-egret.json" "a binding only the seed carries is not dropped"
+# The seed's own binding is the previous release's declaration, made through
+# this same path: a host it binds is served from its mirror too, so its stale
+# entry goes with the rest. Taking only this release's bindings would leave
+# every previously bound host shadowed by its own entry.
+is "$(jget "$SHIM_PUBLISHED/server.json" '[h["name"] for h in d["hosts"] if h["name"] == "quiet-egret"]')" "[]" "a host bound by the seed's own mirrors list is dropped too"
+# Without this the binding is a no-op: mergeBook gives the book's own hosts[]
+# precedence over any mirror of the same name, so the seed's stale entry would
+# win on every page and the mirror would never be read at all.
+is "$(jget "$SHIM_PUBLISHED/server.json" '[h["name"] for h in d["hosts"]]')" "['new-host']" "every bound name's stale entry is removed, so the mirror is what pages read"
+contains "$(cat "$TMP/build.log")" "dropped 2 seed host entry" "both the source-bound and the seed-bound host were superseded"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_ws"]')" "wss://new-league.example" "League address recompute follows its shipped protocol"
 contains "$(cat "$TMP/build.log")" "LEAGUE PROTOCOL BUMP: v$LEAGUE_WAS -> v$LEAGUE_PROTO" "a League protocol change reports its required server restart"
 if cmp -s "$REPO/web/$ARENA_LIVE/settings.js" "$SHIM_PUBLISHED/$ARENA_LIVE/settings.js"; then
@@ -509,6 +523,38 @@ else
 fi
 contains "$(cat "$TMP/proto-nocrate.log")" "no crates/kings-core/src/proto.rs to check it against" "the refusal names the crate that went missing"
 mv "$TMP/kings-proto.moved" "$REPO/crates/kings-core/src/proto.rs"
+
+echo "== a malformed mirror binding file fails closed =="
+# This one file decides which third-party URLs every player's page will fetch.
+# A typo in it must stop the release rather than be skipped into a book that
+# silently binds nothing, or binds a name nobody authorised.
+cp "$REPO/web/mirrors.json" "$TMP/mirrors.saved"
+for fixture in not-json not-a-list bad-name bad-url duplicate; do
+    case "$fixture" in
+        not-json)   printf '[{"name": "lundi",\n' > "$REPO/web/mirrors.json" ;;
+        not-a-list) printf '{"name":"lundi","url":"https://source.example/lundi.json"}\n' > "$REPO/web/mirrors.json" ;;
+        bad-name)   printf '[{"name":"Lundi Host","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json" ;;
+        bad-url)    printf '[{"name":"lundi","url":"lundi.json"}]\n' > "$REPO/web/mirrors.json" ;;
+        duplicate)  printf '[{"name":"lundi","url":"https://a.example/l.json"},{"name":"lundi","url":"https://b.example/l.json"}]\n' > "$REPO/web/mirrors.json" ;;
+    esac
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE="$TMP/mirrors-$fixture.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/mirrors-$fixture.log" 2>&1; then
+        bad "the $fixture mirror binding file was accepted"
+    else
+        ok "the $fixture mirror binding file was refused"
+    fi
+    contains "$(cat "$TMP/mirrors-$fixture.log")" "mirrors.json" "the $fixture refusal names the file"
+    if [ -f "$TMP/mirrors-$fixture.tar.gz" ]; then bad "$fixture mirror bindings still produced an archive"; else ok "$fixture mirror bindings produced no archive"; fi
+done
+contains "$(cat "$TMP/mirrors-duplicate.log")" "binds lundi twice; a host has one mirror" "a repeated name is refused by name, not silently resolved"
+printf '[]\n' > "$REPO/web/mirrors.json"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/mirrors-empty.log" 2>&1; then
+    ok "an empty binding list is a legitimate release that binds no new mirror"
+else
+    bad "an empty binding list was refused"
+    tail -20 "$TMP/mirrors-empty.log" >&2
+fi
+contains "$(cat "$TMP/mirrors-empty.log")" "bound mirrors: quiet-egret, lundi" "and leaves the seed's own bindings alone"
+cp "$TMP/mirrors.saved" "$REPO/web/mirrors.json"
 
 echo "== a missing League page is refused before any archive =="
 mv "$REPO/web/$LEAGUE_LIVE/index.html" "$TMP/league-index.saved"
