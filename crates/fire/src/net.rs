@@ -1,4 +1,4 @@
-//! Fire protocol 1 adapter over the shared client WebSocket lifecycle.
+//! Fire protocol 2 adapter over the shared client WebSocket lifecycle.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -76,6 +76,7 @@ impl Net {
     pub fn connect(url: &str) -> Result<Self, String> {
         let codec = FireCodec;
         // A manual caller has not guaranteed Hello yet, so no keepalive may race it.
+        // V2 retains the V1 control-message tags; payloads and join gate are V2.
         let handshake = LegacyHandshake::manual(LegacyJsonTags::fire_v1(), None);
         let connection = ClientConnection::connect(url, config(), handshake)?;
         Ok(Self { connection, codec })

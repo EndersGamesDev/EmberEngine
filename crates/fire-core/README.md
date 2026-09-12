@@ -1,6 +1,6 @@
 # Fire Racer core
 
-`fire-core` is the renderer-free racing model shared by the Fire client’s prediction and `fire-server` authority: it owns car physics, the castle circuit, lap and race state, AI drivers, and protocol 1.
+`fire-core` is the renderer-free racing model shared by the Fire client’s prediction and `fire-server` authority: it owns car physics, the castle circuit, lap and race state, AI drivers, tactical items, and protocol 2.
 
 Its 60 Hz step, operation order, track sampling, and wire behavior are compatibility facts because both peers execute or encode them independently.
 

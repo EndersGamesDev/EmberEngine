@@ -73,6 +73,48 @@ pub const BOOST_SECS: f32 = 1.8;
 pub const BOOST_ACCEL_MULT: f32 = 1.9;
 pub const BOOST_SPEED_MULT: f32 = 1.3;
 
+/// Vehicle differences are shared physics, not just different paint.
+#[derive(Clone, Copy, Debug)]
+pub struct VehicleProfile {
+    pub name: &'static str,
+    pub top_speed: f32,
+    pub accel: f32,
+    pub brake: f32,
+    pub grip: f32,
+    pub steer: f32,
+    pub mass: f32,
+}
+
+pub const VEHICLES: [VehicleProfile; 3] = [
+    VehicleProfile {
+        name: "GT",
+        top_speed: MAX_SPEED,
+        accel: ENGINE_ACCEL,
+        brake: BRAKE_ACCEL,
+        grip: GRIP,
+        steer: 1.0,
+        mass: 1350.0,
+    },
+    VehicleProfile {
+        name: "Apex",
+        top_speed: 43.0,
+        accel: 16.8,
+        brake: 29.0,
+        grip: 10.6,
+        steer: 1.12,
+        mass: 1040.0,
+    },
+    VehicleProfile {
+        name: "Muscle",
+        top_speed: 49.0,
+        accel: 18.0,
+        brake: 24.5,
+        grip: 8.3,
+        steer: 0.92,
+        mass: 1620.0,
+    },
+];
+
 /// Held driver intents for one tick.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct CarInput {
@@ -87,6 +129,9 @@ pub struct CarInput {
     /// receives, which here would drain all charges in three frames. The
     /// client latches the rising edge; the sim consumes it in one tick.
     pub boost: bool,
+    /// A single press. Only the authoritative race consumes held items.
+    #[serde(default)]
+    pub use_item: bool,
 }
 
 impl CarInput {
@@ -126,6 +171,17 @@ pub struct Car {
     pub boost_charges: u8,
     /// Seconds of boost remaining; > 0 means boosting.
     pub boost_left: f32,
+    pub vehicle: u8,
+    /// 0 empty, 1 Nitro, 2 Shield, 3 Pulse, 4 Oil, 5 Grip.
+    pub item: u8,
+    /// Smoothed steering input, left positive. Shared with prediction.
+    pub steer_angle: f32,
+    pub shield_left: f32,
+    pub grip_left: f32,
+    /// Recovery protection following a hit; steering always remains available.
+    pub hit_left: f32,
+    pub oil_left: f32,
+    pub drift_charge: f32,
 }
 
 /// Unit forward vector for a heading. Matches `Quat::from_rotation_y(yaw)`
@@ -152,7 +208,20 @@ impl Car {
             drift: 0.0,
             boost_charges: BOOST_CHARGES,
             boost_left: 0.0,
+            vehicle: 0,
+            item: 0,
+            steer_angle: 0.0,
+            shield_left: 0.0,
+            grip_left: 0.0,
+            hit_left: 0.0,
+            oil_left: 0.0,
+            drift_charge: 0.0,
         }
+    }
+
+    #[must_use]
+    pub fn profile(&self) -> &'static VehicleProfile {
+        &VEHICLES[usize::from(self.vehicle).min(VEHICLES.len() - 1)]
     }
 
     #[must_use]
@@ -186,6 +255,11 @@ impl Car {
     /// knows the track.
     pub fn step(&mut self, input: &CarInput, surface_grip: f32, dt: f32) {
         let input = input.sanitized();
+        let profile = *self.profile();
+        self.shield_left = (self.shield_left - dt).max(0.0);
+        self.grip_left = (self.grip_left - dt).max(0.0);
+        self.hit_left = (self.hit_left - dt).max(0.0);
+        self.oil_left = (self.oil_left - dt).max(0.0);
 
         // 1. Boost: consume one charge on a press, then run the timer down.
         if input.boost && !self.boosting() && self.boost_charges > 0 {
@@ -212,7 +286,15 @@ impl Car {
         } else {
             1.0
         };
-        let mut rate = STEER_MAX / (1.0 + speed * STEER_FALLOFF);
+        // Keyboard presses build tyre angle over ~0.2 s. Return a little
+        // faster so releasing a key is a predictable way to straighten up.
+        let response = if input.steer.abs() < self.steer_angle.abs() {
+            11.0
+        } else {
+            7.0
+        };
+        self.steer_angle += (input.steer - self.steer_angle) * (1.0 - (-response * dt).exp());
+        let mut rate = STEER_MAX * profile.steer / (1.0 + speed * STEER_FALLOFF);
         if input.handbrake {
             rate *= STEER_DRIFT_BONUS;
         }
@@ -224,7 +306,7 @@ impl Car {
         // `+=` here would make the documented sign of `steer` a lie and send
         // anything that trusts it — the chase AI, the client's prediction —
         // the wrong way round every corner.
-        self.yaw -= input.steer * rate * authority * dt;
+        self.yaw -= self.steer_angle * rate * authority * dt;
 
         // 3. Decompose the (untouched) velocity into the car's NEW frame.
         let f = forward(self.yaw);
@@ -234,30 +316,47 @@ impl Car {
 
         // 3. Longitudinal. Throttle drives, brake opposes actual motion (so
         //    holding S at a standstill reverses rather than braking forever).
-        let drive = ENGINE_ACCEL * if boosting { BOOST_ACCEL_MULT } else { 1.0 } * surface_grip;
+        let recovery_drive = if self.hit_left > 1.5 { 0.7 } else { 1.0 };
+        let drive = profile.accel
+            * if boosting { BOOST_ACCEL_MULT } else { 1.0 }
+            * surface_grip
+            * recovery_drive;
         if input.throttle > 0.0 {
             v_fwd += drive * input.throttle * dt;
         } else if input.throttle < 0.0 {
             if v_fwd > 0.1 {
-                v_fwd -= BRAKE_ACCEL * -input.throttle * dt;
+                v_fwd -= profile.brake * -input.throttle * dt;
             } else {
-                v_fwd += ENGINE_ACCEL * input.throttle * dt * surface_grip;
+                v_fwd += profile.accel * input.throttle * dt * surface_grip;
             }
         }
 
         // 4. Resistances. Quadratic drag plus an exponential roll-off; the
         //    exponential form is dt-correct, unlike the `v *= 0.98` idiom
         //    which silently changes the car's feel with the frame rate.
-        v_fwd -= DRAG * v_fwd * v_fwd.abs() * dt;
+        let drag = profile.accel / (profile.top_speed * profile.top_speed);
+        v_fwd -= drag * v_fwd * v_fwd.abs() * dt;
         v_fwd *= (-ROLL_RESIST * dt * (1.0 - input.throttle.abs().min(1.0))).exp();
 
-        let top = MAX_SPEED * if boosting { BOOST_SPEED_MULT } else { 1.0 };
+        let top = profile.top_speed * if boosting { BOOST_SPEED_MULT } else { 1.0 };
         v_fwd = v_fwd.clamp(-REVERSE_MAX, top);
 
         // 5. Lateral grip. Exponential decay again, and again for the same
         //    reason. Handbrake swaps in the low coefficient: that, and only
         //    that, is what makes the car slide.
-        let grip = if input.handbrake { GRIP_DRIFT } else { GRIP } * surface_grip;
+        let oil_grip = if self.oil_left > 0.0 && self.grip_left <= 0.0 {
+            0.24
+        } else {
+            1.0
+        };
+        let grip_bonus = if self.grip_left > 0.0 { 1.65 } else { 1.0 };
+        let grip = if input.handbrake {
+            GRIP_DRIFT
+        } else {
+            profile.grip
+        } * surface_grip
+            * oil_grip
+            * grip_bonus;
         v_lat *= (-grip * dt).exp();
 
         // 6. Recompose in the same frame we decomposed in, then guard the
@@ -267,7 +366,7 @@ impl Car {
         self.vel = f * v_fwd + r * v_lat;
 
         let slip = self.slip_angle();
-        if slip.abs() > MAX_SLIP {
+        if v_fwd > 0.0 && slip.abs() > MAX_SLIP {
             // Mind the sign. `slip` is the counter-clockwise angle from the
             // nose to the velocity, but increasing `yaw` rotates the nose
             // CLOCKWISE (forward = (sin y, cos y), so d/dy = right). To bring
@@ -289,6 +388,21 @@ impl Car {
         // dt-correct smoothing toward the target.
         let k = (-6.0 * dt).exp();
         self.drift = target + (self.drift - target) * k;
+
+        // Only a moving, sustained slide earns charge. Releasing handbrake
+        // cashes it in once; parking with the handbrake cannot farm boost.
+        if input.handbrake {
+            if speed > 12.0 && slip.abs() > 0.22 && surface_grip > 0.7 {
+                self.drift_charge = (self.drift_charge + dt * 0.7).min(1.0);
+            } else {
+                self.drift_charge = (self.drift_charge - dt * 0.8).max(0.0);
+            }
+        } else {
+            if self.drift_charge >= 0.65 && speed > 10.0 && slip.abs() < MAX_SLIP + 0.1 {
+                self.boost_left = self.boost_left.max(0.45 + self.drift_charge * 0.5);
+            }
+            self.drift_charge = 0.0;
+        }
     }
 }
 
@@ -313,6 +427,7 @@ mod tests {
         steer: 0.0,
         handbrake: false,
         boost: false,
+        use_item: false,
     };
 
     #[test]
@@ -355,6 +470,7 @@ mod tests {
             steer: 1.0,
             handbrake: false,
             boost: false,
+            use_item: false,
         };
         let mut peak: f32 = 0.0;
         for _ in 0..120 {
@@ -377,6 +493,7 @@ mod tests {
             steer: 1.0,
             handbrake: true,
             boost: false,
+            use_item: false,
         };
         let mut peak: f32 = 0.0;
         for _ in 0..90 {
@@ -405,6 +522,7 @@ mod tests {
             steer: 1.0,
             handbrake: true,
             boost: false,
+            use_item: false,
         };
         run(&mut car, drifting, 90);
         assert!(
@@ -429,6 +547,7 @@ mod tests {
             steer: 1.0,
             handbrake: true,
             boost: false,
+            use_item: false,
         };
         for _ in 0..60 * 20 {
             car.step(&hard, 1.0, DT);
@@ -450,6 +569,7 @@ mod tests {
             steer: 0.0,
             handbrake: false,
             boost: true,
+            use_item: false,
         };
         run(&mut car, held, 30);
         assert_eq!(
@@ -467,6 +587,7 @@ mod tests {
             steer: 0.0,
             handbrake: false,
             boost: true,
+            use_item: false,
         };
         for _ in 0..10 {
             car.step(&press, 1.0, DT);
@@ -493,6 +614,7 @@ mod tests {
                 steer: 0.0,
                 handbrake: false,
                 boost: true,
+                use_item: false,
             },
             1.0,
             DT,
@@ -518,6 +640,7 @@ mod tests {
             steer: 0.5,
             handbrake: false,
             boost: false,
+            use_item: false,
         };
         for _ in 0..120 {
             coarse.step(&turning, 1.0, DT);
@@ -544,18 +667,21 @@ mod tests {
                 steer: 0.3,
                 handbrake: false,
                 boost: true,
+                use_item: false,
             },
             CarInput {
                 throttle: 0.2,
                 steer: -1.0,
                 handbrake: true,
                 boost: false,
+                use_item: false,
             },
             CarInput {
                 throttle: -1.0,
                 steer: 0.7,
                 handbrake: false,
                 boost: false,
+                use_item: false,
             },
         ];
         let play = || {
@@ -585,6 +711,7 @@ mod tests {
             steer: f32::INFINITY,
             handbrake: true,
             boost: true,
+            use_item: false,
         };
         run(&mut car, evil, 300);
         assert!(car.pos.is_finite(), "position went non-finite: {}", car.pos);
@@ -604,5 +731,105 @@ mod tests {
             grass.speed() < road.speed() * 0.85,
             "offroad was not slower"
         );
+    }
+
+    #[test]
+    fn keyboard_steering_builds_and_returns_smoothly() {
+        let mut car = Car::new(Vec2::ZERO, 0.0);
+        car.vel = forward(car.yaw) * 25.0;
+        let turning = CarInput {
+            steer: 1.0,
+            ..THROTTLE
+        };
+        car.step(&turning, 1.0, DT);
+        assert!(car.steer_angle > 0.0 && car.steer_angle < 0.2);
+        run(&mut car, turning, 30);
+        assert!(car.steer_angle > 0.9);
+        let held = car.steer_angle;
+        car.step(&THROTTLE, 1.0, DT);
+        assert!(car.steer_angle > 0.0 && car.steer_angle < held);
+        run(&mut car, THROTTLE, 30);
+        assert!(car.steer_angle < 0.01);
+    }
+
+    #[test]
+    fn reverse_steering_does_not_trigger_forward_spin_recovery() {
+        let mut car = Car::new(Vec2::ZERO, 0.0);
+        run(
+            &mut car,
+            CarInput {
+                throttle: -1.0,
+                ..CarInput::default()
+            },
+            120,
+        );
+        assert!(car.vel.dot(forward(car.yaw)) < -5.0);
+        run(
+            &mut car,
+            CarInput {
+                throttle: -1.0,
+                steer: 0.35,
+                ..CarInput::default()
+            },
+            20,
+        );
+        assert!(
+            car.yaw > 0.0,
+            "left input must turn the nose right in reverse"
+        );
+        assert!(
+            car.vel.dot(forward(car.yaw)) < -3.0,
+            "reverse became forward motion"
+        );
+    }
+
+    #[test]
+    fn chassis_have_distinct_acceleration_and_top_speed() {
+        let mut cars = [Car::new(Vec2::ZERO, 0.0); 3];
+        for (i, car) in cars.iter_mut().enumerate() {
+            car.vehicle = u8::try_from(i).unwrap();
+            run(car, THROTTLE, 600);
+        }
+        assert!(cars[2].speed() > cars[0].speed() + 3.0);
+        assert!(cars[0].speed() > cars[1].speed() + 1.0);
+        assert!(cars[1].profile().steer > cars[2].profile().steer);
+    }
+
+    #[test]
+    fn sustained_drift_rewards_exit_but_parked_handbrake_does_not() {
+        let mut car = Car::new(Vec2::ZERO, 0.0);
+        run(
+            &mut car,
+            CarInput {
+                handbrake: true,
+                ..CarInput::default()
+            },
+            600,
+        );
+        car.step(&CarInput::default(), 1.0, DT);
+        assert!(!car.boosting());
+        run(&mut car, THROTTLE, 150);
+        run(
+            &mut car,
+            CarInput {
+                throttle: 0.9,
+                steer: 0.6,
+                handbrake: true,
+                ..CarInput::default()
+            },
+            100,
+        );
+        assert!(
+            car.drift_charge >= 0.65,
+            "moving slide charge was {}",
+            car.drift_charge
+        );
+        car.step(&THROTTLE, 1.0, DT);
+        assert!(car.boosting(), "drift exit earned no boost");
+        assert_eq!(
+            car.boost_charges, BOOST_CHARGES,
+            "mini boost spent a driver charge"
+        );
+        assert_eq!(car.drift_charge, 0.0);
     }
 }

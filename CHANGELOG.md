@@ -134,6 +134,12 @@ League's V4-touched scene and core files now match the formatter of record, ever
 
 ### Fire Racer engineering
 
+Fire Racer V2 is the source develop builds. The live site has served protocol 2 since `86086a2`, a commit on a branch 1030 commits behind develop, while develop still declared protocol 1 and a launcher entry to match; `deploy/deploy-pages.sh` refuses to assemble a site whose Fire source is older than the published release, so the full build could not run and the `julibrot-1.2.0` release run stopped at its release asset. The port brings distinct GT vehicle profiles, deterministic five-item combat with authoritative pickups, projectiles and hazards, contact physics, drift-charge rewards, recovery, protocol 2 snapshots and vehicle selection, and rebuilds the garage, HUD, results screen, car and circuit presentation, camera and browser audio. `web/games.json` now advertises the protocol and the GT Circuit note its own published catalogue already carried, the release entry above drops the qualifier that recorded their disagreement, and the fire series advances to 1.0.1 (`963ec8d8`, `4e8b9154`). The Pages assembly copied only `index.html` from the Fire page directory, which was the whole page before V2 split it; it now ships the stylesheet and both modules, because a static import is resolved before the importing module runs and the assembly guard against a missing module reads only the assembled Julibrot lab (`e5186e21`).
+
+The V2 branch's other two commits are deliberately not integrated: `86086a2` adds a second, Windows-host deploy path and `f7195c0b` is its publication receipt, and the repository admits one engine and one deploy path. Leaving that path behind removed the only substituter of the page's `__FIRE_BUILD__` build stamp, so the page returns to the address book's deploy stamp and to the plain sibling-asset references the other live pages use, and it regains the `#release-version` label every live page carries. The branch's two plan documents are not integrated either, because finished work is recorded here.
+
+All 130 Fire tests pass — 61 fire-core unit, 45 fire unit, 12 fire-server unit, 4 fire online end-to-end and 8 fire-server WebSocket end-to-end — alongside the workspace build, the workspace test sweep, all-target Clippy, the formatter check and the release wasm build. The page itself is not proven by any of that: `index.html`, `race.js` and `garage.js` have no test in this repository, and the branch's own headless-browser smoke scripts were not integrated with the deploy path they belonged to.
+
 Fire's protocol sanitizer now uses the shared network implementation with the same fallback and bytes as before (`9501ec2b`).
 
 Fire client and server integration tests now wait for the exact racing, readiness and disconnect states they read instead of relying on fixed startup delays (`49b6518f`).
@@ -608,13 +614,13 @@ Verified at the source: 47 core tests and all-target core Clippy, all twenty abi
 
 ### v2 — 2026-09-05
 
-proto 2 (launcher says proto 1) · stamp — · source `86086a2` (not on main) · no tag · published `80cf00ef` (message)
+proto 2 · stamp — · source `86086a2` (not on main) · no tag · published `80cf00ef` (message)
 
 GT Circuit V2: three vehicles, tactical items, contact physics, garage and rematches.
 
 That is the release the published branch serves, and the note its own published catalogue carries. It was cut at `80cf00ef`, whose message names `86086a2` — a commit present in this object store but outside the integration history — so the bytes now serving can be tied to their source without making that source eligible for a release tag. There is no `fire-v2` tag because the integration line cannot reach its target. Two later publications, `917847ce` and `708d7265`, preserved those bytes rather than rebuilding them: a peer-preservation fix and an exact-LF retention fix, each carrying the root stamp of the hub deploy beside it.
 
-**The launcher and the published release disagree.** `web/games.json` on `main` still describes fire v2 as protocol 1, "castle circuit, drift + boost, online lobbies" — the earlier v2, first published on 2026-08-31 at `15b066e9` from r121 `671d187c`, with the 920 m gothic-bailey circuit, the handbrake that breaks traction to drift and three boost charges. The published catalogue at `80cf00ef` moved the entry to protocol 2 with the GT Circuit note; `main`'s copy did not follow. This entry states the published truth and names the launcher's value beside it, so the two can be told apart; correcting `web/games.json` is outside this ledger's scope and is recorded in `docs/plans/backlog.md`.
+**The launcher has caught up with the published release.** `web/games.json` described fire v2 as protocol 1, "castle circuit, drift + boost, online lobbies" — the earlier v2, first published on 2026-08-31 at `15b066e9` from r121 `671d187c`, with the 920 m gothic-bailey circuit, the handbrake that breaks traction to drift and three boost charges. The published catalogue at `80cf00ef` moved the entry to protocol 2 with the GT Circuit note and the launcher did not follow, so the release line above carried both values side by side for as long as they differed. They no longer differ: the V2 source is integrated and `web/games.json` advertises protocol 2 with that note, which is why that line now states one protocol. `main` keeps the older entry until this work reaches it.
 
 ### v1 — 2026-08-30
 

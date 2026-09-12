@@ -29,6 +29,7 @@ use ember_client_net::{
 use ember_engine::glam::Vec2;
 use fire_core::car::{Car, CarInput, DT, OFFROAD_FACTOR};
 use fire_core::castle;
+use fire_core::powerups::{Oil, Pickup, Pulse};
 use fire_core::proto::{C2S, CarState, LobbyInfo, Phase, PlayerMeta, S2C};
 use fire_core::sim::{Race, RaceState};
 
@@ -48,12 +49,16 @@ const fn apply_car_state(car: &mut Car, state: &CarState) {
     car.vel = Vec2::new(state.vx, state.vz);
     car.yaw = state.yaw;
     car.boost_charges = state.boost;
-    car.boost_left = if state.boosting {
-        car.boost_left.max(DT)
-    } else {
-        0.0
-    };
+    car.boost_left = state.boost_left;
     car.drift = state.drift;
+    car.vehicle = state.vehicle;
+    car.item = state.item;
+    car.steer_angle = state.steer_angle;
+    car.shield_left = state.shield_left;
+    car.grip_left = state.grip_left;
+    car.hit_left = state.hit_left;
+    car.drift_charge = state.drift_charge;
+    car.oil_left = state.oil_left;
 }
 
 struct FirePredictionHooks<'a> {
@@ -90,14 +95,23 @@ impl PredictionHooks for FirePredictionHooks<'_> {
         predicted: &mut Self::PredictedState,
         input: &Self::Input,
         _context: ReplayContext,
-        _authoritative: &Self::AuthoritativeState,
+        authoritative: &Self::AuthoritativeState,
     ) {
         let grip = if self.track.off_track(predicted.pos) {
             OFFROAD_FACTOR
         } else {
             1.0
         };
-        predicted.step(input, grip, DT);
+        let idle = CarInput::default();
+        predicted.step(
+            if authoritative.car.finish_tick.is_some() {
+                &idle
+            } else {
+                input
+            },
+            grip,
+            DT,
+        );
     }
 
     fn snap_or_smooth(
@@ -129,7 +143,11 @@ impl RemoteEntityHooks for FireRemoteHooks {
         let mut state = *to;
         state.x = from.x + (to.x - from.x) * alpha;
         state.z = from.z + (to.z - from.z) * alpha;
-        state.yaw = from.yaw + (to.yaw - from.yaw) * alpha;
+        let delta_yaw = (to.yaw - from.yaw + std::f32::consts::PI)
+            .rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        state.yaw = from.yaw + delta_yaw * alpha;
+        state.steer_angle = from.steer_angle + (to.steer_angle - from.steer_angle) * alpha;
         state.vx = from.vx + (to.vx - from.vx) * alpha;
         state.vz = from.vz + (to.vz - from.vz) * alpha;
         state.drift = from.drift + (to.drift - from.drift) * alpha;
@@ -142,6 +160,12 @@ impl RemoteEntityHooks for FireRemoteHooks {
         let mut state = *latest;
         state.x += state.vx * DT * f32::from(elapsed);
         state.z += state.vz * DT * f32::from(elapsed);
+        let dt = DT * f32::from(elapsed);
+        state.boost_left = (state.boost_left - dt).max(0.0);
+        state.shield_left = (state.shield_left - dt).max(0.0);
+        state.grip_left = (state.grip_left - dt).max(0.0);
+        state.hit_left = (state.hit_left - dt).max(0.0);
+        state.oil_left = (state.oil_left - dt).max(0.0);
         state
     }
 
@@ -237,6 +261,7 @@ impl Online {
             steer: input.steer,
             handbrake: input.handbrake,
             boost: input.boost,
+            use_item: input.use_item,
         }
     }
 
@@ -262,11 +287,18 @@ impl Online {
         if self.phase != Phase::Racing {
             return;
         }
+        self.race.elapsed += dt;
+        self.race.tick = self.race.tick.wrapping_add(1);
         for i in 0..self.race.racers.len() {
             let is_me = self.my_slot.is_some_and(|slot| usize::from(slot) == i);
             if is_me {
                 let grip = self.grip_at(self.race.racers[i].car.pos);
-                self.race.racers[i].car.step(&input, grip, dt);
+                let intent = if self.race.racers[i].finish_tick.is_some() {
+                    CarInput::default()
+                } else {
+                    input
+                };
+                self.race.racers[i].car.step(&intent, grip, dt);
             } else if !self.remote_snapshots[i].is_empty() {
                 // Straight-line extrapolation. Guessing at a remote driver's
                 // steering would look worse than a slightly stale heading.
@@ -304,6 +336,8 @@ impl Online {
                     return;
                 }
                 self.race = race;
+                self.phase = Phase::Waiting;
+                self.countdown = 0.0;
                 self.screen = Screen::InLobby;
                 self.lobby_name = Some(lobby);
                 self.my_slot = Some(slot);
@@ -338,10 +372,50 @@ impl Online {
                 }
             }
 
-            S2C::Results { order } => self.results = Some(order),
+            S2C::Results { order } => {
+                self.results = Some(order);
+                self.phase = Phase::Finished;
+                self.race.state = RaceState::Finished;
+            }
             S2C::Pong { .. } => {}
 
-            S2C::State { tick, cars } => self.apply_state(tick, &cars),
+            S2C::State {
+                tick,
+                cars,
+                elapsed,
+                pickups,
+                projectiles,
+                hazards,
+            } => {
+                self.race.elapsed = elapsed;
+                self.race.tick = tick;
+                self.race.pickups = pickups
+                    .into_iter()
+                    .map(|p| Pickup {
+                        id: p.id,
+                        pos: Vec2::new(p.x, p.z),
+                        respawn_left: p.respawn_left,
+                    })
+                    .collect();
+                self.race.projectiles = projectiles
+                    .into_iter()
+                    .map(|p| Pulse {
+                        owner: p.owner,
+                        target: p.target,
+                        pos: Vec2::new(p.x, p.z),
+                        life_left: p.life_left,
+                    })
+                    .collect();
+                self.race.hazards = hazards
+                    .into_iter()
+                    .map(|p| Oil {
+                        owner: p.owner,
+                        pos: Vec2::new(p.x, p.z),
+                        life_left: p.life_left,
+                    })
+                    .collect();
+                self.apply_state(tick, &cars);
+            }
         }
     }
 
@@ -353,6 +427,8 @@ impl Online {
             }
             self.race.racers[i].lap.lap = c.lap;
             self.race.racers[i].lap.progress = c.progress;
+            self.race.racers[i].finish_tick = c.finish_tick;
+            self.race.racers[i].finish_time = c.finish_time;
 
             // Reconcile the local car: drop everything the server has already
             // consumed, then re-apply the rest on top of its authoritative
@@ -399,7 +475,12 @@ mod tests {
                 boosting: false,
                 drift: 0.0,
                 ack,
+                ..CarState::default()
             }],
+            elapsed: 0.0,
+            pickups: vec![],
+            projectiles: vec![],
+            hazards: vec![],
         }
     }
 
@@ -415,6 +496,125 @@ mod tests {
                 slot,
             }],
         }
+    }
+
+    #[test]
+    fn v2_world_objects_and_exact_effect_timers_reach_the_render_mirror() {
+        use fire_core::proto::{HazardState, PickupState, ProjectileState};
+        let mut online = Online::new();
+        online.apply(joined(0));
+        online.apply(S2C::State {
+            tick: 42,
+            elapsed: 1.0,
+            cars: vec![CarState {
+                id: 0,
+                vehicle: 2,
+                item: 3,
+                steer_angle: 0.17,
+                boost: 1,
+                boosting: true,
+                boost_left: 1.2,
+                shield_left: 3.0,
+                grip_left: 4.0,
+                hit_left: 0.3,
+                drift_charge: 0.7,
+                oil_left: 0.4,
+                finish_tick: Some(42),
+                finish_time: Some(1.0),
+                ..CarState::default()
+            }],
+            pickups: vec![PickupState {
+                id: 8,
+                x: 5.0,
+                z: 7.0,
+                respawn_left: 2.0,
+            }],
+            projectiles: vec![ProjectileState {
+                owner: 1,
+                target: 0,
+                x: 2.0,
+                z: 3.0,
+                life_left: 0.5,
+            }],
+            hazards: vec![HazardState {
+                owner: 2,
+                x: 3.0,
+                z: 4.0,
+                life_left: 4.0,
+            }],
+        });
+        let car = online.my_car().unwrap();
+        assert_eq!((car.vehicle, car.item), (2, 3));
+        assert_eq!(
+            (car.boost_left, car.steer_angle, car.drift_charge),
+            (1.2, 0.17, 0.7)
+        );
+        assert_eq!(
+            (car.shield_left, car.grip_left, car.hit_left, car.oil_left),
+            (3.0, 4.0, 0.3, 0.4)
+        );
+        assert_eq!(online.race.racers[0].finish_time, Some(1.0));
+        assert_eq!(online.race.pickups[0].respawn_left, 2.0);
+        assert_eq!(online.race.projectiles[0].target, 0);
+        assert_eq!(online.race.hazards[0].pos, Vec2::new(3.0, 4.0));
+        assert_eq!(online.race.elapsed, 1.0);
+    }
+
+    #[test]
+    fn steering_and_boost_timer_replay_from_the_authoritative_duration() {
+        let mut online = Online::new();
+        online.apply(joined(0));
+        let mut authoritative = state_for(0, 0.0, 0.0, 0);
+        let S2C::State { cars, .. } = &mut authoritative else {
+            unreachable!()
+        };
+        cars[0].boost_left = 1.5;
+        cars[0].boosting = true;
+        cars[0].steer_angle = 0.2;
+        cars[0].vehicle = 2;
+        cars[0].grip_left = 0.7;
+        cars[0].shield_left = 1.0;
+        let mut expected = Car::new(Vec2::ZERO, 0.0);
+        apply_car_state(&mut expected, &cars[0]);
+        let input = CarInput {
+            throttle: 1.0,
+            steer: -0.5,
+            ..CarInput::default()
+        };
+        for _ in 0..5 {
+            online.make_input(input);
+            let grip = if online.race.track.off_track(expected.pos) {
+                OFFROAD_FACTOR
+            } else {
+                1.0
+            };
+            expected.step(&input, grip, DT);
+        }
+        online.apply(authoritative);
+        let actual = online.my_car().unwrap();
+        assert_eq!(actual.pos, expected.pos);
+        assert_eq!(actual.steer_angle, expected.steer_angle);
+        assert_eq!(actual.boost_left, expected.boost_left);
+        assert_eq!(actual.grip_left, expected.grip_left);
+        assert_eq!(actual.shield_left, expected.shield_left);
+        assert!(
+            actual.boost_left > 1.3,
+            "boost duration collapsed to one tick"
+        );
+    }
+
+    #[test]
+    fn remote_heading_interpolation_takes_the_short_path_across_pi() {
+        let from = CarState {
+            yaw: 3.1,
+            ..CarState::default()
+        };
+        let to = CarState {
+            yaw: -3.1,
+            ..CarState::default()
+        };
+        let halfway = FireRemoteHooks.interpolate_remote(&from, &to, 1, 2);
+        assert!((halfway.yaw.abs() - std::f32::consts::PI).abs() < 0.01);
     }
 
     #[test]
@@ -453,6 +653,7 @@ mod tests {
             steer: 0.0,
             handbrake: false,
             boost: false,
+            use_item: false,
         };
         // Five inputs sent, none acknowledged yet.
         for _ in 0..5 {
@@ -552,7 +753,12 @@ mod tests {
                 boosting: false,
                 drift: 0.0,
                 ack: 0,
+                ..CarState::default()
             }],
+            elapsed: 0.0,
+            pickups: vec![],
+            projectiles: vec![],
+            hazards: vec![],
         });
         o.predict_tick(CarInput::default());
         let p = o.race.racers[1].car.pos;
@@ -577,6 +783,7 @@ mod tests {
                 steer: 0.0,
                 handbrake: false,
                 boost: true,
+                use_item: false,
             });
         }
         assert_eq!(o.my_car().unwrap().pos, before, "a car jumped the start");

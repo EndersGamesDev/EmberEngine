@@ -233,7 +233,13 @@ fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_LIVE/settings.js" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
-cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
+# Fire's page is a shell plus its own stylesheet and two modules. A static
+# import is resolved before the importing module runs, so leaving one behind
+# is a blank page, not a status line. Generated bindings still come from the
+# verified root pkg below.
+for name in index.html race.js garage.js style.css; do
+    cp "web/$FIRE_LIVE/$name" "$PAGES_DIR/$FIRE_LIVE/"
+done
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 # Version-local UI, images and provenance sidecars are runtime assets too.
 # Never reuse a version-local pkg: the tested bindings come from web/pkg below.

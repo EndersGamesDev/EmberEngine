@@ -6,7 +6,8 @@
 //! a moving obstacle that behaves plausibly, and to exercise the same
 //! `Car::step` a human drives so the sim is tested by playing it.
 
-use crate::car::{Car, CarInput, MAX_SPEED, STEER_FALLOFF, STEER_MAX, forward};
+use crate::car::{Car, CarInput, STEER_FALLOFF, STEER_MAX, forward};
+use crate::powerups;
 use crate::track::Track;
 
 /// How far down the line to aim, metres. Too short and the car saws at the
@@ -46,9 +47,14 @@ fn radius_ahead(track: &Track, s: f32, span: f32) -> f32 {
 #[must_use]
 pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
     let speed = car.speed();
+    let profile = car.profile();
     let loc = track.locate(car.pos);
     let aim_s = loc.s + LOOKAHEAD + speed * LOOKAHEAD_PER_SPEED;
-    let (target, _) = track.at(aim_s);
+    let (centre, tangent) = track.at(aim_s);
+    // Different chassis favour slightly different lines, leaving room to
+    // pass instead of feeding eight cars into exactly the same tyre marks.
+    let lane = (f32::from(car.vehicle.min(2)) - 1.0) * 1.4;
+    let target = centre + glam::Vec2::new(-tangent.y, tangent.x) * lane;
 
     // Signed bearing from the nose to the target. Positive means the target
     // is to the left, and `steer` is left-positive, so no sign flip here.
@@ -60,7 +66,7 @@ pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
     // Look far enough ahead to brake in time: roughly the distance covered
     // in two seconds at the current speed.
     let radius = radius_ahead(track, loc.s + speed * 0.8, 24.0);
-    let limit = (corner_speed(radius) * skill).min(MAX_SPEED * skill);
+    let limit = (corner_speed(radius * profile.steer) * skill).min(profile.top_speed * skill);
 
     let throttle = if speed > limit * 1.08 {
         -1.0
@@ -76,14 +82,24 @@ pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
 
     // Spend a boost on anything that looks like a straight, but only when
     // there is room to use it.
-    let boost =
-        radius > 150.0 && speed > MAX_SPEED * 0.5 && car.boost_charges > 0 && !car.boosting();
+    let boost = radius > 150.0
+        && speed > profile.top_speed * 0.5
+        && car.boost_charges > 0
+        && !car.boosting();
+    let use_item = match car.item {
+        powerups::NITRO => radius > 100.0 && speed > 15.0 && !car.boosting(),
+        powerups::GRIP => radius < 110.0 || car.oil_left > 0.0,
+        powerups::SHIELD | powerups::PULSE => true,
+        powerups::OIL => speed > 12.0,
+        _ => false,
+    };
 
     CarInput {
         throttle,
         steer,
         handbrake,
         boost,
+        use_item,
     }
 }
 

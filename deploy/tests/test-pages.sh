@@ -79,7 +79,9 @@ printf '{}\n' > "$REPO/web/version.json"
 printf 'arena live<script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
 printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
-printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
+for name in index.html race.js garage.js style.css; do
+    printf "fire v2 fixture %s\n" "$name" > "$REPO/web/games/fire/v2/$name"
+done
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
 printf '<link href="./ui.css"><script src="./ui.js"></script><img src="./art/swarm.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
 printf 'league UI\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
@@ -271,6 +273,9 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     rm -rf "$EXPECTED/games/$live"
     mkdir -p "$EXPECTED/games/$live/pkg"
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
+    if [ "$bundle" = fire ]; then
+        cp "$REPO/web/games/$live/race.js" "$REPO/web/games/$live/garage.js" "$REPO/web/games/$live/style.css" "$EXPECTED/games/$live/"
+    fi
     if [ "$bundle" = league ]; then
         cp "$REPO/web/version.json" "$EXPECTED/games/$live/"
         cp "$REPO/web/games/$live/ui.js" "$REPO/web/games/$live/ui.css" "$EXPECTED/games/$live/"
