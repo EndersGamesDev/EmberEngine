@@ -21,7 +21,7 @@
 # Minting is rationed. A quick tunnel is a request to Cloudflare, which
 # rate-limits them per public IP (HTTP 429, error 1015) - and every host
 # behind the same router shares that IP. After a run that could not prove
-# all three tunnels this script backs off - 30 minutes, or 60 doubling to
+# every tunnel this script backs off - 30 minutes, or 60 doubling to
 # 240 when the tunnel logs show a 429 - before it lets anything mint again;
 # meanwhile host.sh runs with EMBER_NO_MINT=1, so servers are still updated
 # and restarted but no tunnel is requested. The first version of this file
@@ -98,9 +98,17 @@ note_result() {
     fi
 }
 
+# The same four games host.sh manages, and for the same reason they are
+# written out rather than asked for: host.sh cannot be sourced (its body
+# writes the configuration file and resolves the environment), so this list
+# is the one place the timer has to be kept in step with `game_ids`. A game
+# missing here is not a missing server - `cmd_update`'s own loop still
+# notices a dead one - but its dead TUNNEL is never repaired: `dead_tunnels`
+# stays empty, `update` finds the ref unmoved, and the host republishes the
+# dead address out of run/<id>.url. League was in exactly that state.
 dead_servers=""
 dead_tunnels=""
-for id in arena fire kings; do
+for id in arena fire kings league; do
     alive "server-$id" || dead_servers="$dead_servers server-$id"
     alive "tunnel-$id" || dead_tunnels="$dead_tunnels tunnel-$id"
 done

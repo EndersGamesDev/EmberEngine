@@ -101,9 +101,12 @@ nohup bash -c '
 child=$!
 printf '%s\n' "$child" >> "$TIMER_SCRATCH/owned-pids"
 if [ "$mode" = up ]; then
-    # All six liveness checks intentionally refer to one disposable child.
+    # All eight liveness checks intentionally refer to one disposable child.
     # '-' is the existing no-/proc fallback, usable by Git Bash as well.
-    for id in arena fire kings; do
+    # The list must cover every game host-tick.sh enumerates: a pid file it
+    # looks for and does not find reads as a dead server, and the tick would
+    # run `host.sh up` instead of the path under test.
+    for id in arena fire kings league; do
         printf '%s -\n' "$child" > "$EMBER_HOME/run/server-$id.pid"
         printf '%s -\n' "$child" > "$EMBER_HOME/run/tunnel-$id.pid"
     done
@@ -168,6 +171,22 @@ if [ -n "$REAL_FLOCK" ]; then
 else
     echo "SKIP: three native flock release/exclusion assertions require Linux; no kernel-lock claim is made on Git Bash."
 fi
+
+echo "== a dead tunnel on the newest game reaches the tunnel repair path =="
+# The regression this catches is a game the tick does not enumerate. A dead
+# SERVER is caught anyway, by cmd_update's own game_ids loop inside host.sh;
+# a dead TUNNEL is not, because nothing outside this script's list ever looks
+# at it. So the assertion has to be that a tunnel belonging to the last game
+# added is what sends the tick down the repair path. A pid no process holds
+# is the cheapest dead tunnel: `alive` reads pid and start time, and finds
+# neither.
+echo '2147483647 -' > "$EMBER_HOME/run/tunnel-league.pid"
+CALLS_BEFORE="$(wc -l < "$TMP/host-calls" | tr -d ' ')"
+run_tick
+is "$(tail -1 "$TMP/host-calls")" "tunnels" "a dead league tunnel is repaired rather than republished"
+is "$(wc -l < "$TMP/host-calls" | tr -d ' ')" "$((CALLS_BEFORE + 1))" "and it took exactly one host.sh call to do it"
+contains "$(cat "$EMBER_HOME/log/tick.log")" "tunnel-league" "the tick log names the dead tunnel"
+printf '%s -\n' "$MINE" > "$EMBER_HOME/run/tunnel-league.pid"
 
 echo "== an update resolution failure remains a timer failure =="
 if TIMER_FAIL_UPDATE=1 run_tick; then
