@@ -8,8 +8,7 @@
 //! Three renderer constraints shape everything here:
 //!   * the shader multiplies a per-instance colour in, so these are authored
 //!     near-grey and tinted at the call site — never pre-tinted;
-//!   * there are no mipmaps, so high-frequency detail shimmers at distance.
-//!     Every generator below is deliberately low-frequency;
+//!   * mipmaps keep the small texture detail stable at distance;
 //!   * UVs tile, so every pattern must wrap. All noise is evaluated on a
 //!     torus, which makes seams impossible by construction rather than by
 //!     careful authoring.
@@ -104,6 +103,59 @@ struct Canvas {
     w: u32,
     h: u32,
     px: Vec<u8>,
+}
+
+/// Baked sky/shoulder reflections work within the single-albedo renderer.
+#[must_use]
+pub fn car_finish(size: u32, glass: bool) -> TextureData {
+    let mut canvas = Canvas::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = (normalized_pixel(x, size), normalized_pixel(y, size));
+            if glass {
+                let reflection = (1.0 - ((v - 0.78 + u * 0.14) / 0.16).abs()).max(0.0);
+                canvas.set(
+                    x,
+                    y,
+                    0.045 + reflection * 0.23,
+                    0.09 + reflection * 0.31,
+                    0.14 + reflection * 0.38,
+                );
+            } else {
+                let shoulder = (-((v - 0.47) / 0.075).powi(2)).exp();
+                let k =
+                    0.42 + v * 0.47 + shoulder * 0.25 + hash2(u32_to_i32(x), u32_to_i32(y)) * 0.018;
+                canvas.set(x, y, k, k, k);
+            }
+        }
+    }
+    canvas.into_texture()
+}
+
+/// Equirectangular afternoon sky: blue zenith, warm haze, high cirrus and sun.
+#[must_use]
+pub fn sky(width: u32) -> TextureData {
+    let height = width / 2;
+    let mut canvas = Canvas::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let (u, v) = (normalized_pixel(x, width), normalized_pixel(y, height));
+            let horizon = (v * 2.0).min(1.0).powi(2);
+            let clouds = ((fbm(u * 2.0, v * 3.0, 8, 4) - 0.52) * 5.0).clamp(0.0, 0.7)
+                * (1.0 - ((v - 0.34) / 0.15).abs()).max(0.0);
+            let sun_distance = ((u - 0.16) * 2.0).hypot(v - 0.25);
+            let sun = (1.0 - sun_distance / 0.011).clamp(0.0, 1.0)
+                + (1.0 - sun_distance / 0.055).max(0.0) * 0.18;
+            canvas.set(
+                x,
+                y,
+                0.08 + horizon * 0.39 + clouds * 0.36 + sun,
+                0.20 + horizon * 0.37 + clouds * 0.30 + sun * 0.91,
+                0.40 + horizon * 0.25 + clouds * 0.20 + sun * 0.68,
+            );
+        }
+    }
+    canvas.into_texture()
 }
 
 impl Canvas {
@@ -289,7 +341,7 @@ pub fn turf(size: u32) -> TextureData {
         for x in 0..size {
             let (u, v) = (normalized_pixel(x, size), normalized_pixel(y, size));
             let k = 0.20 + fbm(u, v, 8, 4) * 0.18 + fbm(u * 0.5, v * 0.5, 4, 2) * 0.10;
-            c.set(x, y, k * 0.72, k * 1.10, k * 0.52);
+            c.set(x, y, k * 0.64, k * 0.84, k * 0.43);
         }
     }
     c.into_texture()
@@ -321,6 +373,69 @@ pub fn chequer(size: u32, squares: u32) -> TextureData {
     c.into_texture()
 }
 
+/// Fine aggregate and broad rubber wear, without glossy painted stones.
+#[must_use]
+pub fn asphalt(size: u32) -> TextureData {
+    let mut c = Canvas::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = (normalized_pixel(x, size), normalized_pixel(y, size));
+            let aggregate = hash2(u32_to_i32(x), u32_to_i32(y));
+            let rubber = ((u * std::f32::consts::TAU).cos() * 0.5 + 0.5).powi(8);
+            let k = 0.235 + aggregate * 0.06 + fbm(u, v, 4, 3) * 0.04 - rubber * 0.025;
+            c.set(x, y, k * 0.94, k * 0.98, k * 1.04);
+        }
+    }
+    c.into_texture()
+}
+
+/// Alternating red and white rumble strips, aligned along the ribbon.
+#[must_use]
+pub fn kerb(size: u32) -> TextureData {
+    let mut c = Canvas::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let shade = 0.86 + 0.14 * normalized_pixel(x, size);
+            if y < size / 2 {
+                c.set(x, y, 0.86 * shade, 0.075 * shade, 0.055 * shade);
+            } else {
+                c.set(x, y, 0.88 * shade, 0.90 * shade, 0.89 * shade);
+            }
+        }
+    }
+    c.into_texture()
+}
+
+/// Question-mark mystery-box faces, drawn as a crisp readable pixel glyph.
+#[must_use]
+pub fn mystery(size: u32) -> TextureData {
+    let glyph = [
+        0b01110_u8, 0b11011, 0b00011, 0b00110, 0b00100, 0b00000, 0b00100,
+    ];
+    let mut c = Canvas::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = (normalized_pixel(x, size), normalized_pixel(y, size));
+            let border = !(0.055..=0.945).contains(&u) || !(0.055..=0.945).contains(&v);
+            let gx = f32_to_i32((u - 0.25) * 10.0);
+            let gy = f32_to_i32((v - 0.15) * 10.0);
+            let ink = (0..5).contains(&gx)
+                && (0..7).contains(&gy)
+                && (0.25..0.75).contains(&u)
+                && (0.15..0.85).contains(&v)
+                && (glyph[usize::try_from(gy).unwrap_or(0)] & (1 << (4 - gx))) != 0;
+            if border {
+                c.set(x, y, 0.34, 0.94, 1.0);
+            } else if ink {
+                c.set(x, y, 1.0, 0.97, 0.74);
+            } else {
+                c.set(x, y, 0.025, 0.31 + v * 0.16, 0.52 + v * 0.14);
+            }
+        }
+    }
+    c.into_texture()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +445,9 @@ mod tests {
     #[test]
     fn textures_are_well_formed() {
         let cases: Vec<(&str, TextureData)> = vec![
+            ("asphalt", asphalt(128)),
+            ("kerb", kerb(64)),
+            ("mystery", mystery(64)),
             ("cobblestone", cobblestone(128, 8)),
             ("castle_stone", castle_stone(128, 4, 6)),
             ("slate", slate(64, 8, 10)),

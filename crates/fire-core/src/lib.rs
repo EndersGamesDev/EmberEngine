@@ -13,6 +13,7 @@
 pub mod ai;
 pub mod car;
 pub mod castle;
+pub mod powerups;
 pub mod proto;
 pub mod sim;
 pub mod track;
