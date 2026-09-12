@@ -105,6 +105,59 @@ for game_id, manifest in manifests.items():
     if live[0]["version"] != expected:
         raise SystemExit("FAILED: %s live version must equal package version %s" % (game_id, expected))
 
+# The catalog's `proto` is what the deploy-time host gate trusts, and what the
+# hub reads to decide which page may receive a handed-over lobby. Nothing kept
+# it honest: it is hand-edited beside a crate constant it must equal, and a
+# catalog that says 1 while the crate says 2 sends a player to a page that
+# cannot join and tells the gate the wrong protocol to look for. Both numbers
+# answer the same question, so they are compared before anything is fetched or
+# built.
+#
+# Both directions, and both derived from the tree rather than from a list kept
+# here. A hardcoded tuple of game ids would leave a fifth server game gated by
+# nothing at all — the gate skips any live entry with no `proto`, so a missing
+# key would be silence on both sides rather than a failure.
+proto_re = re.compile(r"PROTO_VERSION: u16 = (\d+)")
+cores = {}
+for source in sorted(pathlib.Path("crates").glob("*-core/src/proto.rs")):
+    game_id = source.parent.parent.name[: -len("-core")]
+    found = proto_re.search(source.read_text(encoding="utf-8"))
+    if found is None:
+        raise SystemExit("FAILED: %s declares no PROTO_VERSION" % source)
+    cores[game_id] = int(found.group(1))
+
+for game in catalog.get("games", []):
+    game_id = game.get("id")
+    if game.get("kind") == "lab":
+        # A lab has no host, no protocol and no handover (docs/hosts.md §11).
+        # Both readers ignore a `proto` here — the gate skips labs outright and
+        # the hub never routes a lobby to one — so a number written here is
+        # silently inert, which is the state a catalog edit is most likely to
+        # leave behind and least likely to reveal.
+        for release in game.get("versions", []):
+            if release.get("proto") is not None:
+                raise SystemExit("FAILED: %s is a lab and must declare no proto" % game_id)
+        continue
+    for release in game.get("versions", []):
+        if release.get("live") is not True:
+            continue
+        declared = release.get("proto")
+        if game_id in cores:
+            # A live entry for a game with a protocol crate must carry that
+            # crate's number — including when it carries none at all.
+            if declared != cores[game_id]:
+                raise SystemExit(
+                    "FAILED: %s live catalog proto is %r but crates/%s-core/src/proto.rs declares %d"
+                    % (game_id, declared, game_id, cores[game_id])
+                )
+        elif declared is not None:
+            # And a number nothing in the tree can confirm is worse than none:
+            # the gate would look for hosts on a protocol no crate defines.
+            raise SystemExit(
+                "FAILED: %s live catalog declares proto %r but there is no crates/%s-core/src/proto.rs to check it against"
+                % (game_id, declared, game_id)
+            )
+
 arena = next(release for release in games["arena"]["versions"] if release.get("live") is True)
 arena_major = arena["version"].split(".", 1)[0]
 arena_path = "games/arena/v%s/" % arena_major
