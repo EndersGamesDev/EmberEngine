@@ -39,11 +39,12 @@ case "$ARGS" in
         echo "SHIP arena_proto=22"
         echo "SHIP fire_proto=1"
         echo "SHIP kings_proto=1"
+        echo "SHIP league_proto=2"
         ;;
     *ember-host/run/host.json*)
         cat "${SHIP_HOST_JSON:-/dev/null}"
         ;;
-    *wsbot*|*fire-probe*|*kings-probe*)
+    *wsbot*|*fire-probe*|*kings-probe*|*league-probe*)
         [ -z "$DRAIN" ] || cat >/dev/null 2>&1 || true
         [ -z "${SHIP_PROBE_FAIL:-}" ] || exit 1
         ;;
