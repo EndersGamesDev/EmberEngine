@@ -98,29 +98,32 @@ PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf '[{"name":"lundi","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json"
 printf 'hub\n' > "$REPO/web/index.html"
+printf 'export function emberLoad() {}\n' > "$REPO/web/loader.js"
 printf '{}\n' > "$REPO/web/version.json"
-printf 'arena live<script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
+printf 'arena live<script src="./settings.js?v=1"></script><script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
 printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 for name in index.html race.js garage.js style.css; do
     printf "fire v2 fixture %s\n" "$name" > "$REPO/web/games/fire/v2/$name"
 done
+printf 'import { emberLoad } from "../../../loader.js?v=1";\n' >> "$REPO/web/games/fire/v2/race.js"
 mkdir -p "$REPO/web/games/fire/v2/fonts"
 for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
 done
-printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
+printf 'kings v1<script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/games/kings/v1/index.html"
 printf '<link href="./ui.css"><script src="./ui.js"></script><img src="./art/swarm.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
-printf 'league UI\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
+printf 'import { emberLoad } from "../../../loader.js?v=1";\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
 printf 'league CSS\n' > "$REPO/web/$LEAGUE_LIVE/ui.css"
 printf 'league portrait bytes\n' > "$REPO/web/$LEAGUE_LIVE/art/swarm.webp"
 printf '{"source":"fleet"}\n' > "$REPO/web/$LEAGUE_LIVE/art/nested/manifest.json"
 printf 'stale source bundle\n' > "$REPO/web/$LEAGUE_LIVE/pkg/arena.js"
 printf 'stale source stamp\n' > "$REPO/web/$LEAGUE_LIVE/version.json"
-printf 'what is this v1\n' > "$REPO/web/games/what-is-this/v1/index.html"
+printf 'what is this v1<script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/games/what-is-this/v1/index.html"
 for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
     printf "End Game fixture %s\n" "$name" > "$REPO/web/$END_GAME_LIVE/$name"
 done
+printf 'import { emberLoad } from "../../../loader.js?v=1";\n' >> "$REPO/web/$END_GAME_LIVE/main.js"
 printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
 # fixture has to carry the same import for the assembly check to mean anything.
@@ -245,6 +248,55 @@ else
     bad "Arena settings.js was omitted or changed"
 fi
 contains "$(cat "$SHIM_PUBLISHED/$ARENA_LIVE/index.html")" "src=\"./settings.js?v=$STAMP\"" "Arena settings loader uses the final recomputed deploy stamp"
+# The shared loader: one copy at the root, one bundle under the root pkg, and
+# the page's single cache token rewritten to the same stamp as everything else.
+if cmp -s "$REPO/web/loader.js" "$SHIM_PUBLISHED/loader.js"; then
+    ok "the shared loader ships at the pages root"
+else
+    bad "the shared loader is missing from the pages root"
+fi
+for f in pkg/ember_loader.js pkg/ember_loader_bg.wasm; do
+    if [ -f "$SHIM_PUBLISHED/$f" ]; then ok "assembled the shared loader $f"; else bad "missing the shared loader $f"; fi
+done
+if [ -f "$SHIM_PUBLISHED/$ARENA_LIVE/pkg/ember_loader.js" ]; then
+    bad "the shared loader was copied into a game directory as well as the root"
+else
+    ok "the shared loader is shipped once, not once per game"
+fi
+contains "$ARGV" "[-p] [ember-loader] [--lib]" "the shared loader is built as a wasm library"
+contains "$ARGV" "release/ember_loader.wasm" "the shared loader is passed to wasm-bindgen"
+contains "$(cat "$SHIM_PUBLISHED/$ARENA_LIVE/index.html")" "../../../loader.js?v=$STAMP" "the page's loader import carries the deploy stamp"
+contains "$(cat "$TMP/build.log")" "stamped the shared loader into 6 live game page" "the assembly reports one stamp per live game page"
+if grep -qE 'loader\.js\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/$ARENA_LIVE/index.html"; then
+    bad "the assembled page kept a stale loader cache key"
+else
+    ok "the assembled page has no stale loader cache key"
+fi
+contains "$(cat "$REPO/web/$ARENA_LIVE/index.html")" 'loader.js?v=1' "the Arena source loader import remains pinned at v=1"
+cp "$REPO/web/games/fire/v2/race.js" "$TMP/fire-race.saved"
+sed -i '/loader\.js?v=1/d' "$REPO/web/games/fire/v2/race.js"
+if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 EMBER_PAGES_ARCHIVE="$TMP/loader-missing.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/loader-missing.log" 2>&1; then
+    bad "a live game page with no loader import was accepted"
+else
+    ok "a live game page with no loader import was refused"
+fi
+contains "$(cat "$TMP/loader-missing.log")" "missing: games/fire/v2" "the loader stamp mismatch names the missing live page"
+mv "$TMP/fire-race.saved" "$REPO/web/games/fire/v2/race.js"
+if grep -q '"bytes"' "$REPO/web/games.json"; then
+    bad "the tracked catalog carries a generated bundle size"
+else
+    ok "the tracked catalog leaves generated bundle sizes to the deploy"
+fi
+for spec in "$ARENA_LIVE arena arena" "$END_GAME_LIVE end-game end_game" "$LEAGUE_LIVE league league" "games/fire/v2 fire fire" "games/kings/v1 kings kings" "games/what-is-this/v1 what-is-this what_is_this"; do
+    # shellcheck disable=SC2086
+    set -- $spec
+    live_path="$1"
+    game_id="$2"
+    bundle="$3"
+    expected_bytes="$(wc -c < "$SHIM_PUBLISHED/$live_path/pkg/${bundle}_bg.wasm" | tr -d ' ')"
+    served_bytes="$(jget "$SHIM_PUBLISHED/games.json" '[v["bytes"] for g in d["games"] if g["id"] == "'"$game_id"'" for v in g["versions"] if v.get("live") is True][0]')"
+    is "$served_bytes" "$expected_bytes" "$game_id live catalog bytes match its decoded wasm file"
+done
 if grep -qE '\./settings\.js\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/$ARENA_LIVE/index.html"; then
     bad "assembled Arena settings loader retained its stale cache key"
 else
@@ -327,11 +379,14 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     fi
     if [ "games/$live" = "$ARENA_LIVE" ]; then
         # Expected output is authored independently of the publisher's rewrite.
-        printf 'arena live<script src="./settings.js?v=%s"></script>\n' "$STAMP" > "$EXPECTED/games/$live/index.html"
+        printf 'arena live<script src="./settings.js?v=%s"></script><script type="module">import { emberLoad } from "../../../loader.js?v=%s";</script>\n' "$STAMP" "$STAMP" > "$EXPECTED/games/$live/index.html"
         cp "$REPO/web/games/$live/settings.js" "$EXPECTED/games/$live/"
     fi
     printf 'shim js for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/$bundle.js"
     printf 'shim wasm for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/${bundle}_bg.wasm"
+done
+for page in games/fire/v2/race.js games/kings/v1/index.html "$LEAGUE_LIVE/ui.js"; do
+    sed -i "s/loader\\.js?v=1/loader.js?v=$STAMP/" "$EXPECTED/$page"
 done
 for game in arena fire kings league; do
     if diff -r "$EXPECTED/games/$game" "$SHIM_PUBLISHED/games/$game" > "$TMP/$game.diff"; then
@@ -343,7 +398,7 @@ for game in arena fire kings league; do
 done
 
 echo "== prebuilt mode fails closed on missing game and Julibrot artifacts =="
-rm "$REPO/web/pkg/what_is_this_bg.wasm" "$REPO/web/pkg/league.js" "$REPO/web/pkg/league_bg.wasm" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
+rm "$REPO/web/pkg/what_is_this_bg.wasm" "$REPO/web/pkg/league.js" "$REPO/web/pkg/league_bg.wasm" "$REPO/web/pkg/ember_loader.js" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js" "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/missing.log" 2>&1; then
     bad "prebuilt mode accepted a missing artifact"
@@ -355,6 +410,7 @@ contains "$(cat "$TMP/missing.log")" "web/labs/julibrot/pkg/ember_lab_julibrot_b
 contains "$(cat "$TMP/missing.log")" "web/pkg/what_is_this_bg.wasm" "the failure lists the missing game wasm"
 contains "$(cat "$TMP/missing.log")" "web/pkg/league.js" "the failure lists the missing League JavaScript"
 contains "$(cat "$TMP/missing.log")" "web/pkg/league_bg.wasm" "the failure lists the missing League wasm"
+contains "$(cat "$TMP/missing.log")" "web/pkg/ember_loader.js" "the failure lists the missing shared loader"
 if grep -q '^cargo' "$SHIM_LOG"; then bad "the refused prebuilt run invoked cargo"; else ok "the refused prebuilt run invoked no cargo"; fi
 if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "missing prebuilt artifacts reached Pages assembly"; else ok "missing prebuilt artifacts stopped before Pages assembly"; fi
 
@@ -362,6 +418,7 @@ echo "== complete prebuilt mode skips every build tool =="
 printf 'shim wasm for what_is_this\n' > "$REPO/web/pkg/what_is_this_bg.wasm"
 printf 'shim js for league\n' > "$REPO/web/pkg/league.js"
 printf 'shim wasm for league\n' > "$REPO/web/pkg/league_bg.wasm"
+printf 'shim js for ember_loader\n' > "$REPO/web/pkg/ember_loader.js"
 printf 'shim js for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js"
 printf 'shim wasm for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
 : > "$SHIM_LOG"

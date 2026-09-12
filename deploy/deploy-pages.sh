@@ -9,12 +9,14 @@
 # fail unless the assembled files are byte-identical to an existing archive.
 #
 # Server-build/workstation dry-run recipe:
-#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p ember-julibrot-app --lib
+#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p end-game -p ember-loader -p ember-julibrot-app --lib
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/league.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/end_game.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/ember_loader.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 # Copy web/pkg from the server into this checkout, then assemble without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
@@ -39,7 +41,9 @@
 #   games/fire/v1/        archived first fire build; already on the branch and
 #                         deliberately never touched again — only $FIRE_LIVE is
 #                         removed and rewritten below
-#   pkg/                  legacy root bundle, kept fresh for old cached pages
+#   loader.js             the shared loader every live page imports first
+#   pkg/                  legacy root bundle plus the shared loader bundle,
+#                         kept fresh for old cached pages
 set -euo pipefail
 
 die() { echo "deploy-pages: $*" >&2; exit 1; }
@@ -178,7 +182,10 @@ END_GAME_LIVE="${END_GAME_LIVE//$'\r'/}"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     missing=()
-    for bundle in fire arena kings league what_is_this end_game; do
+    # The loader is not a game bundle: it is the one shared bundle every live
+    # page imports before its own, so a prebuilt tree without it assembles
+    # pages whose first import is not there.
+    for bundle in fire arena kings league what_is_this end_game ember_loader; do
         for artifact in "$bundle.js" "${bundle}_bg.wasm"; do
             [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
         done
@@ -187,7 +194,7 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
         [ -f "web/labs/julibrot/pkg/$artifact" ] || missing+=("web/labs/julibrot/pkg/$artifact")
     done
     if [ "${#missing[@]}" -ne 0 ]; then
-        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all six game bundles and the Julibrot lab bundle; missing:" >&2
+        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all six game bundles, the shared loader and the Julibrot lab bundle; missing:" >&2
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
@@ -197,7 +204,7 @@ echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
-    echo "== using six prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
+    echo "== using six prebuilt game bundles, the shared loader and the Julibrot lab bundle from web/pkg =="
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p fire --lib
@@ -206,6 +213,7 @@ else
     cargo build --target wasm32-unknown-unknown --release -p league --lib
     cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
     cargo build --target wasm32-unknown-unknown --release -p end-game --lib
+    cargo build --target wasm32-unknown-unknown --release -p ember-loader --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/fire.wasm
@@ -219,6 +227,8 @@ else
         target/wasm32-unknown-unknown/release/what_is_this.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/end_game.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/ember_loader.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
         target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 fi
@@ -277,6 +287,13 @@ if [ -f web/hosts.js ]; then
 else
     echo "   note: web/hosts.js does not exist in this checkout; not copying it"
 fi
+# The shared loader's page-side half. One copy at the root beside hosts.js,
+# because it imports both that file and its own bundle relative to itself: a
+# per-game copy would be a second module instance and a second wasm download
+# for every player. Unguarded, unlike hosts.js: every live page imports this
+# first, so a tree assembled without it is a set of blank pages, and failing
+# here is how that is found by a build rather than by a player.
+cp web/loader.js "$PAGES_DIR"/
 # The developer landing page (marketing): one static file with no build of its
 # own. Guarded for the same reason as hosts.js: an older checkout must still
 # deploy.
@@ -369,6 +386,32 @@ copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
 copy_pkg "$PAGES_DIR/$LEAGUE_LIVE/pkg" league
 copy_pkg "$PAGES_DIR/$WHAT_LIVE/pkg" what_is_this
 copy_pkg "$PAGES_DIR/$END_GAME_LIVE/pkg" end_game
+
+# Fetch reports decoded wasm chunks, while Pages may transfer those bytes
+# compressed. Stamp the decoded file size into the SERVED catalog after every
+# live bundle has been copied; the tracked catalog remains release metadata
+# only, and a stale hand-written size can never enter source.
+"$PY" - "$PAGES_DIR" <<'PY'
+import json, pathlib, sys
+
+root = pathlib.Path(sys.argv[1])
+catalog_path = root / "games.json"
+catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+for game in catalog.get("games", []):
+    if game.get("kind") == "lab":
+        continue
+    live = [release for release in game.get("versions", []) if release.get("live") is True]
+    if len(live) != 1:
+        raise SystemExit("FAILED: %s must have one live release before its bundle size is stamped" % game.get("id"))
+    release = live[0]
+    bundle_dir = root / release["path"] / "pkg"
+    bundles = sorted(bundle_dir.glob("*_bg.wasm"))
+    if len(bundles) != 1:
+        raise SystemExit("FAILED: %s must contain one live wasm bundle, found %d" % (release["path"], len(bundles)))
+    release["bytes"] = bundles[0].stat().st_size
+catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="")
+PY
+
 cp -r web/pkg "$PAGES_DIR"/pkg
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
 cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"
@@ -649,6 +692,79 @@ PY
         exit 1
     fi
 done
+
+# The shared loader is one file at the pages root, and a page that imports it
+# carries exactly one cache token: the `?v=` on that import. The deploy owns
+# that token the way it owns Arena's settings key, so a page and the bundle it
+# loads can only ever come from the same build — stricter than reading the
+# stamp out of the address book at runtime, which the next deploy rewrites and
+# which would let a cached page ask for a bundle newer than itself.
+#
+# The same pass proves the reference resolves. A static import the assembly
+# does not place is not an error anyone sees: it is a blank page with a console
+# entry nobody is watching, and this is the FIRST import on a live page.
+"$PY" - "$PAGES_DIR" "$DEPLOY_STAMP" "$REPO_DIR/web/games.json" <<'LOADER'
+import json, pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+stamp = sys.argv[2]
+catalog = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+live = [
+    release["path"].rstrip("/")
+    for game in catalog.get("games", [])
+    for release in game.get("versions", [])
+    if release.get("live") is True
+]
+game_live = {
+    release["path"].rstrip("/")
+    for game in catalog.get("games", [])
+    for release in game.get("versions", [])
+    if game.get("kind") != "lab" and release.get("live") is True
+}
+
+token = re.compile(r"(loader\.js)\?v=1(?![0-9])")
+reference = re.compile(r"""["']([^"']*loader\.js)(\?[^"']*)?["']""")
+stamped_pages = set()
+problems = []
+for path in live:
+    base = root / path
+    for page in sorted(base.rglob("*")):
+        if not page.is_file() or page.suffix not in {".js", ".html"}:
+            continue
+        text = page.read_text(encoding="utf-8")
+        if "loader.js" not in text:
+            continue
+        fixed = token.sub(lambda found: "%s?v=%s" % (found.group(1), stamp), text)
+        if fixed != text:
+            with open(page, "w", encoding="utf-8", newline="") as handle:
+                handle.write(fixed)
+            if path in game_live:
+                stamped_pages.add(path)
+            text = fixed
+        where = page.relative_to(root).as_posix()
+        for target, query in reference.findall(text):
+            if not (page.parent / target).is_file():
+                problems.append("%s imports %s, which this deploy did not place" % (where, target))
+            if not query.startswith("?v=") or query == "?v=1":
+                problems.append("%s imports %s with no deploy stamp" % (where, target))
+if problems:
+    print("FAILED: the assembled pages cannot load the shared loader:", file=sys.stderr)
+    for line in problems:
+        print("  " + line, file=sys.stderr)
+    raise SystemExit(1)
+for needed in ("loader.js", "pkg/ember_loader.js", "pkg/ember_loader_bg.wasm"):
+    if not (root / needed).is_file():
+        raise SystemExit("FAILED: the release tree is missing the shared loader: %s" % needed)
+if stamped_pages != game_live:
+    missing = ", ".join(sorted(game_live - stamped_pages)) or "(none)"
+    unexpected = ", ".join(sorted(stamped_pages - game_live)) or "(none)"
+    raise SystemExit(
+        "FAILED: stamped the shared loader into %d of %d live game page(s); "
+        "missing: %s; unexpected: %s"
+        % (len(stamped_pages), len(game_live), missing, unexpected)
+    )
+print("   stamped the shared loader into %d live game page(s)" % len(stamped_pages))
+LOADER
 
 # A module the assembly does not place is a page that never runs. A static
 # import is resolved before any code in the importing module executes, so a
