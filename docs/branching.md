@@ -8,6 +8,7 @@ Ember integrates changes on `develop` through pull requests and reserves `main` 
 |---|---|---|---|
 | `feature/**` | A bounded human-authored change | The branch author | Pushes may be rebased, amended or replaced with force-with-lease. |
 | `lane/**` | A bounded loop-authored change | The lane | Pushes may be rebased, amended or replaced with force-with-lease. |
+| `hosts/**` | Host address-book mirrors: runtime state, never integrated | Host schedulers and credentialed workstations | Written whenever a quick tunnel rotates; never merged, tagged or released. |
 | `develop` | The default integration line; every integrated change passed the required checks in a pull request | GitHub pull-request merges | Merge commits only; direct pushes and force pushes are blocked. |
 | `main` | The live line; after its one-time migration anchor, it advances only to commits selected by valid release tags | The release workflow through its deploy key | Plain fast-forward pushes of tag target commits only. |
 
@@ -86,7 +87,9 @@ The files under `deploy/rulesets/` are complete request bodies for GitHub's repo
 
 ### `branch-names.json`
 
-This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**` and `lane/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
+This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**`, `lane/**` and `hosts/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
+
+`hosts/**` is a namespace rather than a feature branch because what lives there is not a candidate for integration. A host mirror is runtime state: a host scheduler rewrites it whenever a quick tunnel rotates its address, and it is never reviewed, merged, tagged or released. Putting it under `feature/**` would file continuous machine writes in the namespace reserved for bounded human-authored changes awaiting a pull request, and one branch under `hosts/**` carrying one file per host is what lets a new machine publish its address without an owner-run ruleset change for each one.
 
 ### `gh-pages-frozen.json`
 
@@ -182,7 +185,7 @@ Production hosts use `EMBER_REF=main`. A host therefore rebuilds only after the 
 ## Order of operations
 
 1. The replayed history established `develop` at `eefd43d0` as the integration baseline before any protection existed. This fixed starting point keeps the replayed source and the boundary of protected history auditable.
-2. Surviving working branches have completed their renames under `feature/*`, and live branch-name ruleset `22770318` admits creation only of `develop`, `main`, `feature/**` and `lane/**` with no bypass actors. This state keeps candidate work on bounded names while preserving the two governed long-lived lines.
+2. Surviving working branches have completed their renames under `feature/*`, and live branch-name ruleset `22770318` admits creation only of `develop`, `main`, `feature/**`, `lane/**` and `hosts/**` with no bypass actors. This state keeps candidate work on bounded names while preserving the two governed long-lived lines.
 3. `main` exists at the `develop` tip used for the one-time migration anchor, and `ci-passed` no longer exists because its replayed content is contained in `develop`; ruleset `22770318` refuses its recreation. The anchor prevents hosts from rolling back to older source, while deleting the obsolete integration ref removes a competing line without discarding its content.
 4. `develop` is governed by live ruleset `22736795` from `deploy/rulesets/develop.json`: deletion and force pushes are blocked, pull requests with merge commits are the sole integration method, required approvals are zero, and the strict required contexts `cores + servers`, `deploy scripts` and `workspace` are bound to GitHub Actions integration id `15368`; no bypass actor exists. This policy joins every integration commit to current-tree CI evidence without depending on an approval count.
 5. `main` is governed by live rulesets `22736890` from `main-authorization.json` and `22795584` from `main-integrity.json`: creation and updates are blocked except for the release deploy key, while deletion and force pushes are blocked without bypass. The deploy key is registered and its private key is stored as `RELEASE_DEPLOY_KEY`, giving the release workflow only the narrow fast-forward capability required for promotion.

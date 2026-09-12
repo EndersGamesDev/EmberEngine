@@ -166,6 +166,10 @@ expected_branches = {
     "refs/heads/main",
     "refs/heads/feature/**",
     "refs/heads/lane/**",
+    # Host address-book mirrors: runtime state written by host schedulers,
+    # never integrated or released, so they get a namespace of their own
+    # rather than continuous machine writes under the feature prefix.
+    "refs/heads/hosts/**",
 }
 if documented_branches != expected_branches:
     raise SystemExit(f"documented branch names differ from policy: {sorted(documented_branches)}")

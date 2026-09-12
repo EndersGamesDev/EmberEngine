@@ -5,11 +5,21 @@
   "bypass_actors": [],
   "conditions": {
     "ref_name": {
-      "include": ["~ALL"],
-      "exclude": ["refs/heads/develop", "refs/heads/main", "refs/heads/feature/**", "refs/heads/lane/**"]
+      "include": [
+        "~ALL"
+      ],
+      "exclude": [
+        "refs/heads/develop",
+        "refs/heads/main",
+        "refs/heads/feature/**",
+        "refs/heads/lane/**",
+        "refs/heads/hosts/**"
+      ]
     }
   },
   "rules": [
-    { "type": "creation" }
+    {
+      "type": "creation"
+    }
   ]
 }
