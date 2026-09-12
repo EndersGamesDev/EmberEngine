@@ -82,6 +82,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pages-site"
           tar -xzf "$archive" -C "$RUNNER_TEMP/pages-site"
           test -f "$RUNNER_TEMP/pages-site/index.html"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: prove every live game has a host to join
+        run: |
+          set -euo pipefail
+          node deploy/check-hosts.mjs --tree "$RUNNER_TEMP/pages-site"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
