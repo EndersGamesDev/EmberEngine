@@ -36,11 +36,35 @@ const probeFrom = (table) => async (url) => {
   return { ok: true, rttMs: r.rttMs ?? 7, welcome };
 };
 
+/// A probe that is silent for the first `failFor` attempts on an address and
+/// answers after that, so a host can be made to flake rather than to fail.
+/// `reasons` gives each silent attempt its own word where the difference is
+/// the point; a missing one is a timeout. `count(url)` is how many sockets
+/// that address was actually asked for.
+const flakyProbe = (table) => {
+  const asked = new Map();
+  const probe = async (url) => {
+    const n = (asked.get(url) ?? 0) + 1;
+    asked.set(url, n);
+    const r = table[url];
+    if (!r) return { ok: false, reason: 'timeout' };
+    if (n <= (r.failFor ?? 0)) return { ok: false, reason: (r.reasons ?? [])[n - 1] ?? 'timeout' };
+    const welcome = { host: r.host };
+    if (r.proto !== null && r.proto !== undefined) welcome.proto = r.proto;
+    return { ok: true, rttMs: r.rttMs ?? 7, welcome };
+  };
+  probe.count = (url) => asked.get(url) ?? 0;
+  return probe;
+};
+
 /// Mirrors, likewise: a URL the table does not carry is a mirror that did not
 /// answer, which `hosts.js` treats as an absence rather than an error.
 const mirrorsFrom = (table) => async (url) => table[url] ?? null;
 
-const run = (opts) => checkHosts({ hosts, timeoutMs: 50, ...opts });
+/// The retry's pauses are spent instantly unless a test is about the schedule
+/// itself. A suite that actually waited would pay three seconds for every
+/// host that never answers, to prove nothing a recorded schedule does not.
+const run = (opts) => checkHosts({ hosts, timeoutMs: 50, sleep: async () => {}, ...opts });
 
 const catalog = (games) => ({ games });
 const server = (proto, live = true) => ({ v: `v${proto}`, version: '1.0.0', live, proto });
@@ -219,9 +243,146 @@ test('every host running the game is probed, and each is named when none carries
     probe: async (url) => { seen.push(url); return { ok: false, reason: 'timeout' }; },
   });
   assert.equal(out.ok, false);
-  // Newest build first (docs/hosts.md §5 step 3), and both were actually tried.
-  assert.deepEqual(seen.sort(), ['wss://newer', 'wss://older']);
-  assert.match(formatResult(out.results[0]), /newer timeout; older timeout/);
+  // Newest build first (docs/hosts.md §5 step 3), and both were actually tried
+  // — three times each, because neither ever answered.
+  assert.deepEqual([...new Set(seen)].sort(), ['wss://newer', 'wss://older']);
+  assert.equal(seen.length, 6);
+  assert.match(formatResult(out.results[0]), /newer timeout, timeout, timeout; older timeout, timeout, timeout/);
+});
+
+// ---- the retry -------------------------------------------------------------
+//
+// One socket is a sample, and this gate blocks a release on it. At the
+// Julibrot 1.3.0 release every Four Kings host timed out inside one window
+// and answered on a rerun 1.3 s later, so the single probe reported "no host"
+// about a site that had one. These cases are the blip and its neighbours: the
+// host that comes back, the host that really is gone, and the host that
+// answered the first time and must not be asked twice.
+
+const oneHost = (probe, extra = {}) => run({
+  games: catalog([{ id: 'arena', versions: [server(24)] }]),
+  book: { hosts: [{ name: 'lundi', ws: 'wss://arena', proto: 24, version: 'r1490' }] },
+  mirrors: mirrorsFrom({}),
+  probe,
+  ...extra,
+});
+
+test('a host that is silent once and answers on the second attempt carries the check', async () => {
+  const probe = flakyProbe({ 'wss://arena': { failFor: 1, proto: 24, host: 'lundi', rttMs: 12 } });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, true);
+  assert.equal(probe.count('wss://arena'), 2);
+  // The pass says which attempt paid for it. A deploy that proceeded on the
+  // second socket is a deploy to look at the host after.
+  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 12 ms (attempt 2)');
+});
+
+test('a host that answers only on the third attempt still carries the check', async () => {
+  const probe = flakyProbe({ 'wss://arena': { failFor: 2, proto: 24, host: 'lundi', rttMs: 30 } });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, true);
+  assert.equal(probe.count('wss://arena'), 3);
+  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 30 ms (attempt 3)');
+});
+
+test('three silent attempts is a hostless game, and every attempt is named', async () => {
+  const probe = flakyProbe({ 'wss://arena': { failFor: 3, reasons: ['timeout', 'error', 'closed'] } });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, false);
+  assert.equal(probe.count('wss://arena'), 3);
+  // Three different words are three different machines to go and look at, so
+  // the line carries all of them rather than only the last.
+  assert.equal(formatResult(out.results[0]), 'FAILED arena v24 proto 24: lundi timeout, error, closed');
+});
+
+test('a host that answers the first time is asked once, and its line is unchanged', async () => {
+  const probe = flakyProbe({ 'wss://arena': { proto: 24, host: 'lundi', rttMs: 8 } });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, true);
+  assert.equal(probe.count('wss://arena'), 1);
+  // No attempt count on a clean pass: a healthy deploy log says what it said
+  // before this retry existed.
+  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 8 ms');
+});
+
+test('a host that answers on another protocol is not asked again', async () => {
+  // It gave its answer. Repeating the question buys the same answer for three
+  // times the wall, and the 2026-09-11 state — every host up, every host on
+  // the old build — is exactly the one a release must hear about quickly.
+  const probe = flakyProbe({ 'wss://arena': { proto: 23, host: 'lundi' } });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, false);
+  assert.equal(probe.count('wss://arena'), 1);
+  assert.match(formatResult(out.results[0]), /lundi answered on proto 23/);
+});
+
+test('a wrong-protocol answer reports the silent attempts before it', async () => {
+  const probe = flakyProbe({
+    'wss://arena': { failFor: 1, reasons: ['timeout'], proto: 23, host: 'lundi' },
+  });
+  const out = await oneHost(probe);
+  assert.equal(out.ok, false);
+  assert.equal(probe.count('wss://arena'), 2);
+  assert.equal(formatResult(out.results[0]), 'FAILED arena v24 proto 24: lundi answered on proto 23 after timeout');
+});
+
+test('the pauses are 1 s before the second attempt and 2 s before the third', async () => {
+  // Longer than the 1.3 s blip that started this, because a retry inside the
+  // window that failed samples the same window twice. Nothing is waited after
+  // the last attempt, which is why two pauses buy three sockets.
+  const slept = [];
+  const out = await oneHost(
+    flakyProbe({ 'wss://arena': { failFor: 3 } }),
+    { sleep: async (ms) => { slept.push(ms); } },
+  );
+  assert.equal(out.ok, false);
+  assert.deepEqual(slept, [1000, 2000]);
+});
+
+test('the attempt count and the pauses are parameters, not a schedule in the loop', async () => {
+  // One attempt is the single probe this gate used to be, and it fails on a
+  // host the default would have recovered.
+  const once = await oneHost(
+    flakyProbe({ 'wss://arena': { failFor: 1, proto: 24, host: 'lundi' } }),
+    { attempts: 1 },
+  );
+  assert.equal(once.ok, false);
+
+  // A longer schedule needs no new code, and the last pause stands for every
+  // attempt past the end of the list.
+  const slept = [];
+  const patient = flakyProbe({ 'wss://arena': { failFor: 3, proto: 24, host: 'lundi', rttMs: 4 } });
+  const out = await oneHost(patient, {
+    attempts: 5,
+    pauseMs: [10, 20],
+    sleep: async (ms) => { slept.push(ms); },
+  });
+  assert.equal(out.ok, true);
+  assert.equal(patient.count('wss://arena'), 4);
+  assert.deepEqual(slept, [10, 20, 20]);
+  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 4 ms (attempt 4)');
+});
+
+test('each host keeps its own attempts, and one flake does not spend another host’s', async () => {
+  const probe = flakyProbe({
+    'wss://older': { failFor: 3 },
+    'wss://newer': { failFor: 1, proto: 24, host: 'newer', rttMs: 3 },
+  });
+  const out = await run({
+    games: catalog([{ id: 'arena', versions: [server(24)] }]),
+    book: {
+      hosts: [
+        { name: 'older', ws: 'wss://older', proto: 24, version: 'r100' },
+        { name: 'newer', ws: 'wss://newer', proto: 24, version: 'r200' },
+      ],
+    },
+    mirrors: mirrorsFrom({}),
+    probe,
+  });
+  assert.equal(out.ok, true);
+  assert.equal(probe.count('wss://older'), 3);
+  assert.equal(probe.count('wss://newer'), 2);
+  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host newer 3 ms (attempt 2)');
 });
 
 // ---- the mirrors -----------------------------------------------------------
@@ -314,7 +475,7 @@ test('several games are resolved together and each reports its own verdict', asy
   assert.equal(out.ok, false);
   assert.deepEqual(out.results.map(formatResult), [
     'ok arena v24 proto 24 host lundi 20 ms',
-    'FAILED fire v2 proto 2: lundi timeout',
+    'FAILED fire v2 proto 2: lundi timeout, timeout, timeout',
     'skip julibrot v1: lab, no server needed',
   ]);
 });
@@ -422,6 +583,9 @@ test('CLI: a file-bound mirror is read, so the whole path runs with no network',
     // The mirror's host is real enough to be ranked and probed; nothing is
     // listening on port 9, so the verdict is a named unreachable host rather
     // than "no host runs this game", which is what proves the merge happened.
+    // This is the one case that spends the retry's real 3 s of pauses: the
+    // CLI is exercised as a process, so there is nothing to inject a sleep
+    // into, and the schedule a deploy actually waits is worth proving once.
     assert.equal(r.code, 1);
     assert.match(r.stdout, /FAILED arena v24 proto 24: lundi /);
   } finally {
