@@ -14,7 +14,7 @@
       "versions": [
         {
           "v": "v31",
-          "version": "31.0.0",
+          "version": "31.0.1",
           "path": "games/arena/v31/",
           "live": true,
           "proto": 24,
@@ -280,7 +280,7 @@
       "versions": [
         {
           "v": "v12",
-          "version": "12.0.0",
+          "version": "12.0.1",
           "path": "games/end-game/v12/",
           "live": true,
           "note": "Parry and Impact — tap guard to deflect a strike inside a 120 ms window; sword soldiers and the Castellan turn a cut aside during their own windup"
@@ -372,7 +372,7 @@
       "versions": [
         {
           "v": "v4",
-          "version": "2.0.0",
+          "version": "2.0.1",
           "path": "games/league/v4/",
           "live": true,
           "proto": 2,
@@ -416,7 +416,7 @@
       "versions": [
         {
           "v": "v2",
-          "version": "1.0.2",
+          "version": "1.0.3",
           "path": "games/fire/v2/",
           "live": true,
           "proto": 2,
@@ -440,7 +440,7 @@
       "versions": [
         {
           "v": "v1",
-          "version": "1.0.0",
+          "version": "1.0.1",
           "path": "games/kings/v1/",
           "live": true,
           "proto": 1,
@@ -456,7 +456,7 @@
       "versions": [
         {
           "v": "v1",
-          "version": "1.0.0",
+          "version": "1.0.1",
           "path": "games/what-is-this/v1/",
           "live": true,
           "note": "nine-stage diagnostic suite, now with a Julibrot fast-slide test; report submission remains optional"

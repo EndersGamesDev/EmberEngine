@@ -473,7 +473,11 @@ if sys.argv[3] == "missing":
 elif sys.argv[3] == "malformed":
     arena["versions"][-1]["version"] = "v1"
 else:
-    live["version"] = "31.0.1"
+    # Derived, never frozen, for the reason the protocol fixtures above are:
+    # a hardcoded "wrong" version becomes the RIGHT one the day the series
+    # reaches it, and the suite then proves the opposite of what it says.
+    major, minor, patch = live["version"].split(".")
+    live["version"] = "%d.%s.%s" % (int(major) + 1, minor, patch)
 with open(sys.argv[2], "w", encoding="utf-8") as fh:
     json.dump(catalog, fh)
 PY
