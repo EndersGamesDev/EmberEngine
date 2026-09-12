@@ -3,6 +3,7 @@ import { VoiceAudio, WardenDialogue } from './dialogue.js';
 import { CastleDialogue } from './castle-audio.js';
 import { CASTLE_LINES } from './voice-lines.js';
 import { renderCastle } from './castle-ui.js';
+import { emberLoad } from '../../../loader.js?v=1';
 const $ = id => document.getElementById(id);
 const coarse = matchMedia('(pointer:coarse)').matches;
 let api, started = false, paused = false, ended = false, loading = false;
@@ -224,14 +225,34 @@ function openSettings() {
   $('settings').showModal(); $('resume').focus();
 }
 function closeSettings(button = null) { $('settings').close(); if (started && !ended) { if (Number.isInteger(button)) releaseGate = button; else setPause(false); } }
+function paintLoad(event) {
+  const detail = $('boot-detail');
+  if (detail) detail.textContent = event.text;
+  const bar = $('boot').querySelector('progress');
+  if (!bar) return;
+  // A response with no declared length leaves the bar indeterminate rather
+  // than inventing a position for it.
+  if (typeof event.percent === 'number') bar.value = event.percent;
+  else bar.removeAttribute('value');
+}
 async function begin() {
   if (started || loading) return;
   loading = true; $('begin').disabled = true; $('boot').hidden = false; unlockAudio();
   try {
-    api = await import('./pkg/end_game.js');
-    await api.default();
-    // Engine installs its canvas and returns; renderer initialization is asynchronous.
-    api.start(); started = true; loading = false;
+    // The boot panel already had a bar with nothing driving it and a line that
+    // said "Loading the dungeon" for the whole download. The loader fills both:
+    // the castle is the largest thing this site asks anyone to wait for.
+    const ember = await emberLoad({
+      game: 'end-game',
+      version: 'v12',
+      bundle: './pkg/end_game.js',
+      discover: false, // single player: there is no host to find
+      onEvent: paintLoad,
+      // Engine installs its canvas and returns; renderer initialization is
+      // asynchronous, so this is the start of the game, not of the drawing.
+      start: exports => { exports.start(); },
+    });
+    api = ember.exports; started = true; loading = false;
     if (releaseGate !== null) setPause(true);
     $('title-screen').hidden = true; $('menu-button').hidden = false; $('restart').hidden = false;
     $('boot-detail').textContent = 'Lighting the torches…';

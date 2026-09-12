@@ -171,6 +171,8 @@
     </section>
   </main>
   <script type="module">
+    import { emberLoad } from '../../../loader.js?v=1';
+
     const ROOT = new URL('../../../', location);
     const RAW_SAMPLE_CAP = 120;
     const REPORT_BYTE_CAP = 52 * 1024;
@@ -2088,9 +2090,19 @@
     async function loadWasm(run) {
       if (!wasmLoadPromise) {
         wasmLoadPromise = (async () => {
-          const module = await import('./pkg/what_is_this.js?v=6');
-          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=6' });
-          const fullVersion = module.package_version();
+          // The diagnostic's own bundle is the first thing a run waits for,
+          // and the page's progress line said nothing about it. The cache key
+          // is no longer hand-bumped either: the loader stamps every URL it
+          // builds from this page's own `?v=`, which the deploy owns.
+          const ember = await emberLoad({
+            game: 'what-is-this',
+            version: 'v1',
+            bundle: './pkg/what_is_this.js',
+            discover: false, // a local diagnostic: there is no host to find
+            onEvent: event => { progressLabel.textContent = event.text; },
+          });
+          const module = ember.exports;
+          const fullVersion = ember.version || module.package_version();
           const versionLabel = `Version ${fullVersion.split('.')[0]}`;
           document.querySelector('#release-version').textContent = versionLabel;
           document.querySelector('#release-version').title = `Full version ${fullVersion}`;
