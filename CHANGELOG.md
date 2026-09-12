@@ -672,7 +672,7 @@ The first publication, `070e4cd9`, was stamped r583 `b9ae7bb1` — a commit that
 
 ### v1 — 2026-09-11
 
-no proto · stamp — · source `ff294e62` · tag `julibrot-1.3.0` (pending)
+no proto · stamp r2304 · source `a322c11f` · tag `julibrot-1.3.0`
 
 Deep navigation keeps retained and pending views anchored as sampled-reference frames arrive, while relief zoom transitions preserve covering imagery and GPU scene completion remains reliable on slower software adapters.
 
