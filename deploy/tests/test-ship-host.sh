@@ -188,7 +188,10 @@ contains "$DEPLOY_OUT" "republish-host.sh lundi-ember" "and it names the separat
 echo "== a builder that stamped something else is refused =="
 : > "$SHIM_LOG"
 set +e
-SHIP_BUILT_COMMIT="deadbee1" bash "$DEPLOY/ship-host.sh" deploy > "$TMP/wrong.log" 2>&1
+# The builder resolved and stamped the same commit, so the only disagreement
+# left is with version.json — which is the rule this case is about.
+SHIP_BUILT_COMMIT="deadbee1" SHIP_RESOLVED_COMMIT="deadbee1000000000000000000000000000000ff" \
+    bash "$DEPLOY/ship-host.sh" deploy > "$TMP/wrong.log" 2>&1
 WRONG_RC=$?
 set -e
 is "$WRONG_RC" "2" "a mismatched build is a configuration failure"
@@ -236,6 +239,145 @@ SHIP_VERSION=missing bash "$DEPLOY/ship-host.sh" check > "$TMP/check-blind.log" 
 BLIND_RC=$?
 set -e
 is "$BLIND_RC" "4" "4 when the pages cannot be read, which is not the same as a redeploy"
+
+echo "== the builder resolves once and checks out the resolution =="
+# rev-parse and checkout are two independent lookups. For an ambiguous ref —
+# a branch and a tag of the same name — they disagree silently, and the stamp
+# then names a commit that is not the one that was built. EMBER_SHIP_REF makes
+# symbolic refs the normal input, so the resolution is taken once and used.
+contains "$BUILD" 'RESOLVED="$(git rev-parse --verify "$COMMIT^{commit}")"' "the ref is resolved once, without -q so an ambiguity warning is visible"
+contains "$BUILD" 'git checkout -q --detach "$RESOLVED"' "and the resolution is what is checked out, not the name again"
+contains "$BUILD" 'echo "SHIP ref_commit=$RESOLVED"' "the builder reports what it resolved"
+is "$(grep '^ref_commit=' "$TMP/stage/products/stamp" | cut -d= -f2)" "$PUB_FULL" "and the stamp records it beside the build"
+
+echo "== a stamp that does not match the resolution is refused =="
+: > "$SHIM_LOG"
+set +e
+SHIP_RESOLVED_COMMIT="0f0f0f0f000000000000000000000000000000ff" bash "$DEPLOY/ship-host.sh" deploy > "$TMP/resolve-mismatch.log" 2>&1
+RESOLVE_RC=$?
+set -e
+is "$RESOLVE_RC" "2" "a build whose stamp is not the resolved commit is a configuration failure"
+contains "$(cat "$TMP/resolve-mismatch.log")" "the builder resolved 0f0f0f0f" "and names both sides"
+case "$(cat "$SHIM_LOG")" in
+    *"host.sh\" up"*) bad "the mismatched build was shipped anyway" ;;
+    *) ok "nothing was shipped" ;;
+esac
+
+echo "== EMBER_SHIP_REF ships a named ref instead of what the pages publish =="
+# The release order: the hosts go onto the release commit BEFORE the tag is
+# pushed, so the Pages deploy never lands on a site with no host on its
+# protocol. Until that deploy, the host is deliberately ahead of the site.
+REF_COMMIT="0a0a0a0a"
+REF_FULL="0a0a0a0a000000000000000000000000000000ff"
+: > "$SHIM_LOG"
+if EMBER_SHIP_REF="refs/tags/arena-31.1.0" SHIP_BUILT_COMMIT="$REF_COMMIT" SHIP_BUILT_FULL="$REF_FULL" \
+        bash "$DEPLOY/ship-host.sh" deploy > "$TMP/ref.log" 2>&1; then
+    ok "a named ref that the builder resolves is shipped"
+else
+    bad "shipping a named ref failed"
+    tail -30 "$TMP/ref.log" >&2
+fi
+REF_OUT="$(cat "$TMP/ref.log")"
+contains "$(cat "$SHIP_BUILD_SCRIPT")" "COMMIT=\"refs/tags/arena-31.1.0\"" "the builder was handed the ref, which it resolves after its own fetch"
+contains "$REF_OUT" "building refs/tags/arena-31.1.0 on $EMBER_SHIP_BUILDER" "and the run says what it is building"
+contains "$REF_OUT" "This host now runs AHEAD of the live site" "the divergence from the published commit is announced"
+contains "$REF_OUT" "resolved to $REF_COMMIT, and the pages publish $PUB_COMMIT" "with both commits named"
+contains "$(cat "$SHIM_LOG")" "[lundi-ember:ember-prebuilt/$REF_COMMIT.incoming/]" "the products went to the directory named by the ref's commit"
+is "$(grep '^commit=' "$TMP/stage/products/stamp" | cut -d= -f2)" "$REF_COMMIT" "the stamp carries the ref's commit, not the published one"
+is "$(grep '^ref=' "$TMP/stage/products/stamp" | cut -d= -f2)" "refs/tags/arena-31.1.0" "and the ref it was asked for"
+
+echo "== the resolution check survives a named ref =="
+: > "$SHIM_LOG"
+set +e
+EMBER_SHIP_REF="refs/tags/arena-31.1.0" SHIP_BUILT_COMMIT="$REF_COMMIT" SHIP_RESOLVED_COMMIT="$PUB_FULL" \
+    bash "$DEPLOY/ship-host.sh" deploy > "$TMP/ref-mismatch.log" 2>&1
+REF_MISMATCH_RC=$?
+set -e
+is "$REF_MISMATCH_RC" "2" "naming a ref does not remove the check that the stamp describes the checkout"
+contains "$(cat "$TMP/ref-mismatch.log")" "the builder resolved $PUB_FULL but stamped $REF_COMMIT" "and it names the disagreement"
+
+echo "== without the ref, a build that is not the published commit is still refused =="
+: > "$SHIM_LOG"
+set +e
+SHIP_BUILT_COMMIT="$REF_COMMIT" SHIP_BUILT_FULL="$REF_FULL" bash "$DEPLOY/ship-host.sh" deploy > "$TMP/noref.log" 2>&1
+NOREF_RC=$?
+set -e
+is "$NOREF_RC" "2" "the published-commit rule is unchanged when no ref is named"
+contains "$(cat "$TMP/noref.log")" "but version.json names $PUB_COMMIT" "and it is the published commit it names"
+
+echo "== check asks the BUILDER about the ref, not this workstation =="
+# A tag or an origin/-prefixed branch names whatever the repository it is read
+# from says it names, and this workstation's clone is a different repository
+# from the builder's. Resolving here would report a correctly shipped host as
+# needing a redeploy.
+host_entry "$REF_COMMIT"
+: > "$SHIM_LOG"
+set +e
+EMBER_SHIP_REF="refs/tags/arena-31.1.0" SHIP_REF_COMMIT="$REF_FULL" bash "$DEPLOY/ship-host.sh" check > "$TMP/check-ref.log" 2>&1
+REF_OK_RC=$?
+set -e
+is "$REF_OK_RC" "0" "0 when the host runs what the BUILDER says the ref is, though version.json names another"
+contains "$(cat "$SHIM_LOG")" "rev-parse" "the resolution was asked of the builder"
+contains "$(cat "$SHIM_LOG")" "[sokol-worker]" "over the builder's own connection"
+contains "$(cat "$TMP/check-ref.log")" "runs refs/tags/arena-31.1.0 at $REF_FULL" "and the verdict names the ref it was asked about"
+
+host_entry "$PUB_COMMIT"
+set +e
+EMBER_SHIP_REF="refs/tags/arena-31.1.0" SHIP_REF_COMMIT="$REF_FULL" bash "$DEPLOY/ship-host.sh" check > "$TMP/check-ref-stale.log" 2>&1
+REF_STALE_RC=$?
+set -e
+is "$REF_STALE_RC" "3" "3 when the host is on the published commit but the ref moved past it"
+contains "$(cat "$TMP/check-ref-stale.log")" "EMBER_SHIP_REF resolves to '$REF_FULL'" "and says which side it compared against"
+
+set +e
+EMBER_SHIP_REF="refs/heads/no-such-branch" SHIP_REF_COMMIT="" bash "$DEPLOY/ship-host.sh" check > "$TMP/check-ref-bad.log" 2>&1
+REF_BAD_RC=$?
+set -e
+is "$REF_BAD_RC" "4" "4 when the builder resolves the ref to nothing, which is not a redeploy"
+contains "$(cat "$TMP/check-ref-bad.log")" "to nothing" "and says so rather than guessing"
+
+host_entry "$PUB_COMMIT"
+
+echo "== check resolves against a freshly fetched builder =="
+# deploy fetches before it resolves, so a ref pushed since the last ship
+# resolves there. Without the same fetch here the question is asked of
+# whatever the builder last happened to see, and a moved ref reads as
+# "nothing to do" exactly when a redeploy is due.
+contains "$(cat "$SHIM_LOG")" "git fetch -q --tags --prune origin" "check fetches on the builder before it resolves"
+
+echo "== EMBER_SHIP_REF has to be a ref name before it reaches the builder =="
+# The value is interpolated into the unquoted remote heredoc as COMMIT="<ref>"
+# and into a one-line remote command; both are shell on the other machine.
+for hostile in 'main"; touch /tmp/ember-ship-pwned; #' 'main$(touch /tmp/ember-ship-pwned2)' '--upload-pack=touch' 'main branch' 'main`id`'; do
+    : > "$SHIM_LOG"
+    set +e
+    EMBER_SHIP_REF="$hostile" bash "$DEPLOY/ship-host.sh" deploy > "$TMP/hostile.log" 2>&1
+    HOSTILE_RC=$?
+    set -e
+    is "$HOSTILE_RC" "2" "a ref carrying shell metacharacters is refused before any build"
+    if [ -s "$SHIM_LOG" ]; then bad "the hostile ref still reached a machine"; else ok "nothing was sent to either machine"; fi
+done
+if [ -e /tmp/ember-ship-pwned ] || [ -e /tmp/ember-ship-pwned2 ]; then
+    bad "a hostile ref executed on this machine"
+    rm -f /tmp/ember-ship-pwned /tmp/ember-ship-pwned2
+else
+    ok "and nothing ran here either"
+fi
+contains "$(cat "$TMP/hostile.log")" "is not a ref name" "the refusal says what is wrong"
+set +e
+EMBER_SHIP_REF="-x" bash "$DEPLOY/ship-host.sh" deploy > "$TMP/dashref.log" 2>&1
+DASH_RC=$?
+set -e
+is "$DASH_RC" "2" "a leading dash is refused too, because git would read it as an option"
+contains "$(cat "$TMP/dashref.log")" "starts with a dash" "and says so specifically"
+for good in refs/tags/arena-31.1.0 origin/main 129bcac4 refs/heads/hosts/book; do
+    : > "$SHIM_LOG"
+    if EMBER_SHIP_REF="$good" SHIP_REF_COMMIT="$PUB_FULL" bash "$DEPLOY/ship-host.sh" check > /dev/null 2>&1; then
+        ok "the ordinary ref shape '$good' is accepted"
+    else
+        bad "the ordinary ref shape '$good' was refused"
+    fi
+done
 
 echo "== a short sha that grew a digit is still the same commit =="
 host_entry "129bcac"

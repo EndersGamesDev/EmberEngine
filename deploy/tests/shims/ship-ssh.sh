@@ -16,6 +16,8 @@
 #   SHIP_BUILT_COMMIT   the short sha the builder reports (default 129bcac4)
 #   SHIP_HOST_JSON      the file served as the host's run/host.json
 #   SHIP_PROBE_FAIL     non-empty: every probe on the host fails
+#   SHIP_RESOLVED_COMMIT  what the builder resolved the ref to when building
+#   SHIP_REF_COMMIT     what the builder resolves EMBER_SHIP_REF to for check
 set -uo pipefail
 
 LOG="${SHIM_LOG:-/dev/null}"
@@ -28,6 +30,12 @@ ARGS="$*"
 DRAIN=1
 for a in "$@"; do [ "$a" = "-n" ] && DRAIN=""; done
 case "$ARGS" in
+    *rev-parse*)
+        # The builder resolving EMBER_SHIP_REF for `check`. Empty by default,
+        # so a shim that was never told the answer produces "cannot tell"
+        # rather than a confident wrong one.
+        printf '%s\n' "${SHIP_REF_COMMIT:-}"
+        ;;
     *"bash -s"*)
         # The builder. Keep the script it was handed, then report the build.
         cat > "${SHIP_BUILD_SCRIPT:-/dev/null}"
@@ -36,6 +44,10 @@ case "$ARGS" in
         echo "SHIP version=${SHIP_BUILT_VERSION:-r1490}"
         echo "SHIP commit=$commit"
         echo "SHIP full_commit=${SHIP_BUILT_FULL:-129bcac4000000000000000000000000000000ff}"
+        # What the builder RESOLVED the ref to, which the real script compares
+        # against what it stamped. It agrees by default, so only a test about
+        # that disagreement has to say anything.
+        echo "SHIP ref_commit=${SHIP_RESOLVED_COMMIT:-${SHIP_BUILT_FULL:-129bcac4000000000000000000000000000000ff}}"
         echo "SHIP arena_proto=22"
         echo "SHIP fire_proto=1"
         echo "SHIP kings_proto=1"
