@@ -16,6 +16,7 @@ import {
   listLobbies,
   loadBook,
   mergeBook,
+  mirrorRefs,
   parseVersion,
   probeHost,
   rankHosts,
@@ -57,6 +58,29 @@ test('parseVersion: r<N> is an integer, anything else is zero', () => {
 // ---- merging -------------------------------------------------------------
 
 const mirror = (name, entry) => ({ name, entry });
+
+test('mirrorRefs: only a binding that names a host is a reference', () => {
+  assert.deepEqual(
+    mirrorRefs({
+      mirrors: [
+        { url: 'https://m/lundi.json', name: 'lundi' },
+        'https://m/unbound.json',
+        { url: 'https://m/nameless.json' },
+        { url: 'https://m/bad.json', name: 'Not A Name' },
+        { name: 'urlless' },
+      ],
+    }),
+    [{ url: 'https://m/lundi.json', name: 'lundi' }],
+  );
+  assert.deepEqual(mirrorRefs({}), []);
+  assert.deepEqual(mirrorRefs(null), []);
+  assert.deepEqual(mirrorRefs({ mirrors: 'nonsense' }), []);
+});
+
+test('mirrorRefs: the list is capped, because nothing bounds a third party\u2019s list', () => {
+  const many = Array.from({ length: 64 }, (_, i) => ({ url: `https://m/${i}.json`, name: `host-${i}` }));
+  assert.equal(mirrorRefs({ mirrors: many }).length, 32);
+});
 
 test('mergeBook: entries merge by name and the later one wins', () => {
   const book = {
