@@ -21,9 +21,13 @@ done
 
 case "$src" in
     *:*ember-ship-products*)
-        # Products off the builder: six files, inert but executable.
+        # Products off the builder: eight files, inert but executable. The
+        # list models what the build script stages, so it has to move with
+        # it — a shim that fabricates fewer products than ship-host.sh
+        # stages is a fixture that stopped describing the builder.
         mkdir -p "$dest"
-        for product in arena-server fire-server kings-server wsbot fire-probe kings-probe; do
+        for product in arena-server fire-server kings-server league-server \
+                       wsbot fire-probe kings-probe league-probe; do
             printf '#!/bin/sh\nexit 0\n' > "$dest/$product"
             chmod 0755 "$dest/$product"
         done

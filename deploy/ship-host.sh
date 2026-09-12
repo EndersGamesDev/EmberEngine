@@ -208,7 +208,7 @@ require_builder() {
 # --- the build --------------------------------------------------------------
 # One remote script, sent whole. It resolves the commit, stamps from THAT
 # commit rather than from whatever the builder's working tree happens to be
-# (docs/hosts.md §7), builds the six products, and prints its findings as
+# (docs/hosts.md §7), builds the eight products, and prints its findings as
 # `SHIP key=value` lines so a run wrapper's own output can be interleaved
 # without confusing the caller.
 #
@@ -244,20 +244,24 @@ if [ -z "\$WRAP" ] && command -v chrt >/dev/null 2>&1 && command -v ionice >/dev
 fi
 if [ -d crates/arena-core ]; then ARENA=arena-server; else ARENA=pong-server; fi
 export EMBER_BUILD_VERSION="\$VERSION" EMBER_BUILD_COMMIT="\$SHORT"
-\$WRAP cargo build --release -p "\$ARENA" -p fire-server -p kings-server
+\$WRAP cargo build --release -p "\$ARENA" -p fire-server -p kings-server -p league-server
 \$WRAP cargo build --release -p "\$ARENA" --example wsbot
 \$WRAP cargo build --release -p fire-server --example probe
 cp "\$TD/release/examples/probe" "\$TD/release/examples/fire-probe"
 \$WRAP cargo build --release -p kings-server --example probe
 cp "\$TD/release/examples/probe" "\$TD/release/examples/kings-probe"
+\$WRAP cargo build --release -p league-server --example wsprobe
+cp "\$TD/release/examples/wsprobe" "\$TD/release/examples/league-probe"
 rm -rf "\$STAGE"
 mkdir -p "\$STAGE"
 cp "\$TD/release/\$ARENA" "\$STAGE/arena-server"
 cp "\$TD/release/fire-server" "\$STAGE/fire-server"
 cp "\$TD/release/kings-server" "\$STAGE/kings-server"
+cp "\$TD/release/league-server" "\$STAGE/league-server"
 cp "\$TD/release/examples/wsbot" "\$STAGE/wsbot"
 cp "\$TD/release/examples/fire-probe" "\$STAGE/fire-probe"
 cp "\$TD/release/examples/kings-probe" "\$STAGE/kings-probe"
+cp "\$TD/release/examples/league-probe" "\$STAGE/league-probe"
 chmod 0755 "\$STAGE"/*
 proto() {
     grep -oE 'PROTO_VERSION: u16 = [0-9]+' "crates/\$1/src/proto.rs" | grep -oE '[0-9]+\$' | head -1
@@ -273,6 +277,7 @@ echo "SHIP full_commit=\$FULL"
 echo "SHIP arena_proto=\$(proto "\$ARENA_CRATE")"
 echo "SHIP fire_proto=\$(proto fire-core)"
 echo "SHIP kings_proto=\$(proto kings-core)"
+echo "SHIP league_proto=\$(proto league-core)"
 REMOTE
 }
 
@@ -298,7 +303,7 @@ cmd_deploy() {
     printf '%s\n' "$out"
     echo "   built in $(( $(date +%s) - tb ))s"
 
-    local version commit full arena_proto fire_proto kings_proto stage_path
+    local version commit full arena_proto fire_proto kings_proto league_proto stage_path
     ship_field() { printf '%s' "$out" | grep -E "^SHIP $1=" | head -1 | sed "s/^SHIP $1=//"; }
     stage_path="$(ship_field stage)"
     version="$(ship_field version)"
@@ -307,7 +312,8 @@ cmd_deploy() {
     arena_proto="$(ship_field arena_proto)"
     fire_proto="$(ship_field fire_proto)"
     kings_proto="$(ship_field kings_proto)"
-    for field in stage_path version commit full arena_proto fire_proto kings_proto; do
+    league_proto="$(ship_field league_proto)"
+    for field in stage_path version commit full arena_proto fire_proto kings_proto league_proto; do
         [ -n "${!field}" ] || die "the builder did not report $field"
     done
     # The stamp must name the commit the PAGES name. A builder that resolved
@@ -330,6 +336,7 @@ cmd_deploy() {
         echo "arena_proto=$arena_proto"
         echo "fire_proto=$fire_proto"
         echo "kings_proto=$kings_proto"
+        echo "league_proto=$league_proto"
         echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "builder=$EMBER_SHIP_BUILDER"
     } > "$stage/products/stamp"
@@ -444,6 +451,10 @@ for key, url in sorted(entry.items()):
             arena) remote="\"\$HOME/$dir/wsbot\" '$url' create ship-check - ship-check 6" ;;
             fire)  remote="\"\$HOME/$dir/fire-probe\" '$url'" ;;
             kings) remote="\"\$HOME/$dir/kings-probe\" '$url' --expect-commit '$running'" ;;
+            # League's probe takes its lobby name positionally; `ship-check`
+            # keeps it distinct from the `health-*` names host.sh's own probes
+            # hold, so a check run beside a deploy is not refused the name.
+            league) remote="\"\$HOME/$dir/league-probe\" '$url' ship-check --expect-commit '$running'" ;;
             *)     echo "check: no probe for '$game'; treating it as unanswered" >&2; rc=3; continue ;;
         esac
         if host_ssh_t 90 "$remote" >/dev/null 2>&1; then

@@ -18,7 +18,7 @@
 # later ones seconds.
 #
 # EMBER_PREBUILT=<dir> is the mode for a host that cannot build (docs/hosts.md
-# §8). The six products and a `stamp` file come from that directory, no
+# §8). The eight products and a `stamp` file come from that directory, no
 # repository is cloned and no compiler is required; everything downstream —
 # the tunnel retention below, the loopback-then-public probe order, the pid
 # files, run/host.json — is the same code. Unset, which is the default,
@@ -26,8 +26,9 @@
 #
 # WHY THE ARENA AND FIRE NAMES GO THROUGH THE ENVIRONMENT. Those servers are
 # started with EMBER_HOST_NAME rather than a `--name` flag, because a host may
-# stay on an older commit (§7) whose binary never heard of the flag. Kings was
-# introduced with `--name`, so its argv follows its standalone recipe.
+# stay on an older commit (§7) whose binary never heard of the flag. Kings and
+# League were both introduced with `--name`, so their argv follows their
+# standalone recipes: no ref this host may sit on has a binary without it.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -57,15 +58,17 @@ if [ ! -f "$CONF" ]; then
 #   <git url>#<branch>  write host.json to a separate address-book mirror
 #EMBER_PUBLISH=none
 
-# Loopback ports the three servers bind. The tunnels are what the world sees.
+# Loopback ports the four servers bind. The tunnels are what the world sees.
 #EMBER_ARENA_PORT=7780
 #EMBER_FIRE_PORT=7781
 #EMBER_KINGS_PORT=7782
+#EMBER_LEAGUE_PORT=7783
 
 # Run binaries somebody else built, instead of cloning and building. The
-# directory holds arena-server, fire-server, kings-server, wsbot, fire-probe,
-# kings-probe and a `stamp` file naming the build. deploy/ship-host.sh fills
-# it. Leave unset on a host that has a toolchain.
+# directory holds arena-server, fire-server, kings-server, league-server,
+# wsbot, fire-probe, kings-probe, league-probe and a `stamp` file naming the
+# build. deploy/ship-host.sh fills it. Leave unset on a host that has a
+# toolchain.
 #EMBER_PREBUILT=
 
 # Working directory: source checkout, logs, pid files.
@@ -91,6 +94,7 @@ EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 EMBER_ARENA_PORT="${EMBER_ARENA_PORT:-7780}"
 EMBER_FIRE_PORT="${EMBER_FIRE_PORT:-7781}"
 EMBER_KINGS_PORT="${EMBER_KINGS_PORT:-7782}"
+EMBER_LEAGUE_PORT="${EMBER_LEAGUE_PORT:-7783}"
 EMBER_HOME="${EMBER_HOME:-$HOME/ember-host}"
 EMBER_PREBUILT="${EMBER_PREBUILT:-}"
 DEFAULT_TUNNEL_BIN="$HOME/bin/cloudflared"
@@ -158,7 +162,7 @@ helper() {
 # waiting in the directory to be deployed.
 prebuilt() { [ -n "$EMBER_PREBUILT" ]; }
 
-PREBUILT_PRODUCTS="arena-server fire-server kings-server wsbot fire-probe kings-probe"
+PREBUILT_PRODUCTS="arena-server fire-server kings-server league-server wsbot fire-probe kings-probe league-probe"
 DEPLOYED_STAMP="$RUN/deployed-stamp"
 
 field_of() {  # <file> <key>
@@ -183,14 +187,14 @@ require_prebuilt() {
         [ -x "$EMBER_PREBUILT/$product" ] \
             || die "$EMBER_PREBUILT/$product is missing or not executable"
     done
-    for field in version commit full_commit arena_proto fire_proto kings_proto; do
+    for field in version commit full_commit arena_proto fire_proto kings_proto league_proto; do
         [ -n "$(stamp_field "$field")" ] || die "the stamp in $EMBER_PREBUILT has no $field"
     done
 }
 
-# --- the three games -------------------------------------------------------
+# --- the four games --------------------------------------------------------
 # id, crate the protocol number lives in, binary, and how that binary wants
-# its bind address. The three servers disagree about the flag, which is exactly
+# its bind address. The servers disagree about the flag, which is exactly
 # the kind of thing that must be stated once rather than remembered twice.
 #
 # The arena's names are read from the CHECKOUT rather than fixed here. It was
@@ -198,14 +202,15 @@ require_prebuilt() {
 # older than that (§7) — every published arena build up to v11 is on the far
 # side of it. A fixed table meant such a ref could not be built at all:
 # `cargo build -p arena-server` in a tree whose package is `pong-server` dies
-# with "package ID specification did not match any packages". Fire and Kings
-# were never renamed, so their names stay literal.
-game_ids() { echo "arena fire kings"; }
+# with "package ID specification did not match any packages". Fire, Kings and
+# League were never renamed, so their names stay literal.
+game_ids() { echo "arena fire kings league"; }
 game_port() {
     case "$1" in
         arena) echo "$EMBER_ARENA_PORT" ;;
         fire) echo "$EMBER_FIRE_PORT" ;;
         kings) echo "$EMBER_KINGS_PORT" ;;
+        league) echo "$EMBER_LEAGUE_PORT" ;;
     esac
 }
 arena_is_renamed() { [ -d "$SRC/crates/arena-core" ]; }
@@ -214,6 +219,7 @@ game_crate() {
         arena) if arena_is_renamed; then echo arena-core; else echo pong-core; fi ;;
         fire)  echo fire-core ;;
         kings) echo kings-core ;;
+        league) echo league-core ;;
     esac
 }
 game_pkg() {
@@ -221,6 +227,7 @@ game_pkg() {
         arena) if arena_is_renamed; then echo arena-server; else echo pong-server; fi ;;
         fire)  echo fire-server ;;
         kings) echo kings-server ;;
+        league) echo league-server ;;
     esac
 }
 game_bin() { game_pkg "$1"; }
@@ -229,6 +236,7 @@ game_bind()  {
         arena) echo "--bind 127.0.0.1:$(game_port arena)" ;;
         fire)  echo "127.0.0.1:$(game_port fire)" ;;
         kings) echo "127.0.0.1:$(game_port kings)" ;;
+        league) echo "127.0.0.1:$(game_port league)" ;;
     esac
 }
 
@@ -250,6 +258,7 @@ probe_bin() {
         arena) name=wsbot ;;
         fire)  name=fire-probe ;;
         kings) name=kings-probe ;;
+        league) name=league-probe ;;
     esac
     if prebuilt; then
         echo "$EMBER_PREBUILT/$name"
@@ -304,6 +313,21 @@ probe_game() {
         kings)
             [ -n "$expect_commit" ] || die "the kings probe needs the deployed commit"
             "$bin" "$url" --expect-commit "$expect_commit" >/dev/null
+            ;;
+        league)
+            [ -n "$expect_commit" ] || die "the league probe needs the deployed commit"
+            # The lobby name is positional, and the label is what keeps it
+            # distinct per probe. Two probes that both FINISH can reuse a
+            # name: wsprobe sends LeaveLobby before closing and the server
+            # drops a lobby whose members are empty (league-server's
+            # lib.rs:959). The hazard is a probe that did NOT finish —
+            # probe_public retries the same `public` label up to 24 times,
+            # so a killed or timed-out attempt leaves its lobby held and the
+            # next attempt is refused a name for a reason that has nothing
+            # to do with the server's health. A concurrent
+            # `ship-host.sh check` is the same collision from another
+            # process, which is why it uses `ship-check` and not these.
+            "$bin" "$url" "health-$label" --expect-commit "$expect_commit" >/dev/null
             ;;
     esac
 }
@@ -474,7 +498,7 @@ probe_public() {  # <id> <url> <commit>: up to two minutes of retries
 
 # ensure_tunnels <commit>: on return every game has either a proven tunnel
 # (its address in $RUN/<id>.url) or none, and TUNNELS_MISSING names the games
-# without one. At most one mint per game per call. Returns 0 when all three
+# without one. At most one mint per game per call. Returns 0 when all four
 # are proven, 3 when at least one is missing.
 TUNNELS_MISSING=""
 ensure_tunnels() {
@@ -735,7 +759,8 @@ cmd_up() {
             # has to resolve the target name across packages and is easy to
             # get subtly wrong.
             # shellcheck disable=SC2086
-            $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)" -p "$(game_pkg kings)"
+            $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)" \
+                -p "$(game_pkg kings)" -p "$(game_pkg league)"
             # shellcheck disable=SC2086
             $NICE cargo build --release -p "$(game_pkg arena)" --example wsbot
             # shellcheck disable=SC2086
@@ -744,6 +769,12 @@ cmd_up() {
             # shellcheck disable=SC2086
             $NICE cargo build --release -p "$(game_pkg kings)" --example probe
             cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/kings-probe"
+            # League's example is `wsprobe`, not `probe`: the copy still gives
+            # it the per-game name the host side looks for, but the source
+            # path is the one its own crate declares.
+            # shellcheck disable=SC2086
+            $NICE cargo build --release -p "$(game_pkg league)" --example wsprobe
+            cp "$(target_dir)/release/examples/wsprobe" "$(target_dir)/release/examples/league-probe"
         ) || die "build failed"
         echo "   built in $(( $(date +%s) - tb ))s"
     fi
@@ -759,9 +790,10 @@ cmd_up() {
         [ -x "$bin" ] || die "$bin was not built"
         bind="$(game_bind "$id")"
         say "starting $id on 127.0.0.1:$port"
-        if [ "$id" = kings ]; then
-            # Kings was born with this flag; its standalone recipe uses it and
-            # the explicit argv is the clearest identity evidence in a ps row.
+        if [ "$id" = kings ] || [ "$id" = league ]; then
+            # Both were born with this flag; their standalone recipes use it
+            # and the explicit argv is the clearest identity evidence in a ps
+            # row.
             # shellcheck disable=SC2086
             RUST_LOG=info nohup "$bin" $bind --name "$name" \
                 >> "$LOGS/$id-server.log" 2>&1 &
@@ -847,8 +879,8 @@ cmd_tunnels() {
         alive "server-$id" || die "the $id server is not running; run host.sh up"
     done
     # The RUNNING build, not the checkout's HEAD: the two differ whenever the
-    # source moved ahead of a deploy, and the kings probe asks the server for
-    # its commit. A prebuilt host has no checkout to ask and the same gap to
+    # source moved ahead of a deploy, and the kings and league probes ask the
+    # server for its commit. A prebuilt host has no checkout to ask and the same gap to
     # avoid — a shipper may have left a newer directory beside these live
     # servers — so it answers from the stamp recorded when they were started.
     local rev name version commit trc=0
@@ -903,7 +935,7 @@ cmd_update() {
         # than written at an empty address (which publish-host.sh refuses).
         build_entry_args "$version" "$commit"
         write_local_entry "$name" "${ENTRY_ARGS[@]}"
-        echo "up to date at ${rev:0:7} and all three servers are running; nothing to do"
+        echo "up to date at ${rev:0:7} and all four servers are running; nothing to do"
         return 0
     fi
     if [ "$rev" = "$deployed" ]; then

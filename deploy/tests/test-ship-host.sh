@@ -55,6 +55,8 @@ host_entry() {
   "fire_proto": 1,
   "kings_ws": "wss://kings.example",
   "kings_proto": 1,
+  "league_ws": "wss://league.example",
+  "league_proto": 2,
   "version": "r1490",
   "commit": "$1",
   "updated": "2026-09-06T17:00:00Z",
@@ -122,10 +124,15 @@ contains "$BUILD" "git checkout -q --detach" "the builder checks the commit out 
 contains "$BUILD" 'VERSION="r$(git rev-list --count HEAD)"' "the version is the commit's own count"
 contains "$BUILD" 'export EMBER_BUILD_VERSION="$VERSION" EMBER_BUILD_COMMIT="$SHORT"' "the stamp reaches the compiler"
 contains "$BUILD" 'WRAP="/workspace/run-report.sh chrt --idle 0 ionice -c3"' "the configured run wrapper is used"
-contains "$BUILD" '$WRAP cargo build --release -p "$ARENA" -p fire-server -p kings-server' "the three servers are one wrapped build"
+contains "$BUILD" '$WRAP cargo build --release -p "$ARENA" -p fire-server -p kings-server -p league-server' "the four servers are one wrapped build"
 contains "$BUILD" '$WRAP cargo build --release -p "$ARENA" --example wsbot' "the arena probe is built too"
 contains "$BUILD" 'cp "$TD/release/examples/probe" "$TD/release/examples/kings-probe"' "each probe is named apart, as host.sh does"
 contains "$BUILD" 'cp "$TD/release/examples/kings-probe" "$STAGE/kings-probe"' "and staged under the name the host looks for"
+contains "$BUILD" '$WRAP cargo build --release -p league-server --example wsprobe' "League's probe is built from the example its own crate declares"
+contains "$BUILD" 'cp "$TD/release/examples/wsprobe" "$TD/release/examples/league-probe"' "and renamed from wsprobe to the per-game name"
+contains "$BUILD" 'cp "$TD/release/league-server" "$STAGE/league-server"' "the league server is staged too"
+contains "$BUILD" 'cp "$TD/release/examples/league-probe" "$STAGE/league-probe"' "and its probe beside it"
+is "$(grep -c '"\$STAGE/' "$SHIP_BUILD_SCRIPT")" "8" "exactly eight products are staged"
 contains "$BUILD" 'if [ -d crates/arena-core ]; then ARENA=arena-server; else ARENA=pong-server; fi' "a pre-rename commit is still buildable"
 contains "$BUILD" 'echo "SHIP full_commit=$FULL"' "the builder reports the full commit"
 contains "$BUILD" 'echo "SHIP stage=$(cd "$STAGE" && pwd)"' "and the resolved staging path, because scp expands no remote variable"
@@ -140,10 +147,19 @@ is "$(grep '^commit=' "$STAMP" | cut -d= -f2)" "$PUB_COMMIT" "the stamp carries 
 is "$(grep '^full_commit=' "$STAMP" | cut -d= -f2)" "$PUB_FULL" "and the full one, which is what update compares"
 is "$(grep '^version=' "$STAMP" | cut -d= -f2)" "r1490" "and the version the pages name"
 is "$(grep '^arena_proto=' "$STAMP" | cut -d= -f2)" "22" "and the arena protocol read at that commit"
+is "$(grep '^league_proto=' "$STAMP" | cut -d= -f2)" "2" "and League's, which a prebuilt host has no crate to read"
 
 echo "== the copy list =="
 contains "$LOG" "scp [-F] [$EMBER_SHIP_BUILDER_SSH_CONFIG]" "the builder is reached through its own ssh config"
 contains "$LOG" "[sokol-worker:/workspace/loops/ember/ember-ship-products] [$TMP/stage/products]" "the products came off the path the builder resolved"
+# What landed, not just what was asked for. host.sh refuses a directory that
+# is missing any product, so the set the shipper collects is the set the host
+# will accept or reject; the shim fabricates the builder's output and this is
+# what keeps the two descriptions of it together.
+is "$(find "$TMP/stage/products" -maxdepth 1 -type f ! -name stamp | wc -l | tr -d ' ')" "8" "eight products were collected onto the workstation"
+for product in arena-server fire-server kings-server league-server wsbot fire-probe kings-probe league-probe; do
+    if [ -x "$TMP/stage/products/$product" ]; then ok "$product arrived executable"; else bad "$product is missing or not executable"; fi
+done
 contains "$LOG" "[lundi-ember:ember-prebuilt/$PUB_COMMIT.incoming/]" "and went to a sibling of the directory named by the commit"
 contains "$LOG" "mv 'ember-prebuilt/$PUB_COMMIT.incoming' 'ember-prebuilt/$PUB_COMMIT'" "which is then renamed over it, because a running binary cannot be written to"
 contains "$LOG" "[$DEPLOY/host.sh]" "deploy/ travelled with them"
@@ -192,9 +208,12 @@ is "$OK_RC" "0" "0 when the host runs the published commit and every game answer
 contains "$(cat "$TMP/check-ok.log")" "arena answered through wss://arena.example" "each game is probed by its own address"
 contains "$(cat "$TMP/check-ok.log")" "fire answered through wss://fire.example" "fire included"
 contains "$(cat "$TMP/check-ok.log")" "kings answered through wss://kings.example" "Kings included"
-is "$(grep -c 'answered through' "$TMP/check-ok.log")" "3" "all three were probed, not one and a swallowed list"
+contains "$(cat "$TMP/check-ok.log")" "league answered through wss://league.example" "League included"
+is "$(grep -c 'answered through' "$TMP/check-ok.log")" "4" "all four were probed, not one and a swallowed list"
 contains "$(cat "$SHIM_LOG")" "ember-prebuilt/$PUB_COMMIT/kings-probe" "the probe that runs is the one already on the host"
 contains "$(cat "$SHIM_LOG")" "--expect-commit" "and Kings is asked which build answered"
+contains "$(cat "$SHIM_LOG")" "ember-prebuilt/$PUB_COMMIT/league-probe" "League's probe is the shipped one too"
+contains "$(cat "$SHIM_LOG")" "league-probe\" 'wss://league.example' ship-check --expect-commit" "and it is given a lobby name of its own beside the commit"
 
 host_entry "0000aaa1"
 set +e
