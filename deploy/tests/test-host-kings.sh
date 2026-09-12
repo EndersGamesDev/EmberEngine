@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
-# host.sh's three-game wiring with fake build products: no compiler or network.
+# host.sh's whole-game wiring with fake build products: no compiler or network.
 #
 #   bash deploy/tests/test-host-kings.sh
 #
-# This pins the historical arena/fire argv beside Kings' port, explicit name,
-# commit-aware probes, pid/url files, local host.json and exact six-process
-# shutdown contract. The source fixture models CI's detached checkout before
-# publishing the tested commit as a branch, because deployed hosts track a
-# branch rather than a bare HEAD.
+# This pins the historical arena/fire argv beside the ports, explicit names and
+# commit-aware probes of the two games that were born with `--name` — Kings and
+# League — together with the pid/url files, the local host.json and the exact
+# eight-process shutdown contract. The source fixture models CI's detached
+# checkout before publishing the tested commit as a branch, because deployed
+# hosts track a branch rather than a bare HEAD.
+#
+# The file keeps its Kings name because it is one fixture running one host
+# lifecycle: a separate league suite would clone the same bare repository,
+# stand up the same shims and repeat the same up/update/down to assert two
+# more argv lines. Each game added here costs a handful of assertions inside
+# a lifecycle that already runs.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -59,6 +66,7 @@ export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
 export EMBER_ARENA_PORT=17780
 export EMBER_FIRE_PORT=17781
 export EMBER_KINGS_PORT=17782
+export EMBER_LEAGUE_PORT=17783
 
 echo "== detached CI source becomes a tracked host branch =="
 is "$(git --git-dir="$TMP/source.git" symbolic-ref HEAD)" "refs/heads/main" "source fixture publishes a default branch"
@@ -79,16 +87,21 @@ WIRE="$(cat "$SHIM_LOG")"
 contains "$WIRE" "arena-server [--bind] [127.0.0.1:17780]" "arena launch argv is unchanged"
 contains "$WIRE" "fire-server [127.0.0.1:17781]" "fire launch argv is unchanged"
 contains "$WIRE" "kings-server [127.0.0.1:17782] [--name] [quiet-egret]" "Kings launches on 7782's override with its name"
+contains "$WIRE" "league-server [127.0.0.1:17783] [--name] [quiet-egret]" "League launches on 7783's override with its name"
 contains "$WIRE" "wsbot [ws://127.0.0.1:17780]" "arena keeps its wsbot probe"
 contains "$WIRE" "fire-probe [ws://127.0.0.1:17781]" "fire keeps its own probe binary"
 COMMIT="$(git --git-dir="$TMP/source.git" rev-parse --short HEAD)"
 contains "$WIRE" "kings-probe [ws://127.0.0.1:17782] [--expect-commit] [$COMMIT]" "Kings loopback probe checks the deployed commit"
 is "$(grep -c '^kings-probe .*--expect-commit' "$SHIM_LOG")" "2" "Kings checks the commit locally and publicly"
+contains "$WIRE" "league-probe [ws://127.0.0.1:17783] [health-local] [--expect-commit] [$COMMIT]" "League loopback probe names its lobby and checks the deployed commit"
+is "$(grep -c '^league-probe .*--expect-commit' "$SHIM_LOG")" "2" "League checks the commit locally and publicly"
+is "$(grep -c '^league-probe \[ws://127.0.0.1:17783\] \[health-public\]' "$SHIM_LOG")" "1" "the public League probe uses a lobby name the loopback one is not holding"
+contains "$WIRE" "cargo [build] [--release] [-p] [league-server] [--example] [wsprobe]" "League's probe is built from the example its own crate declares"
 
-echo "== three pid/url pairs and the local entry =="
-is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "6" "exactly three server/tunnel pid pairs exist"
-is "$(find "$EMBER_HOME/run" -name '*.url' -type f | wc -l | tr -d ' ')" "3" "exactly three game URL files exist"
-for game in arena fire kings; do
+echo "== four pid/url pairs and the local entry =="
+is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "8" "exactly four server/tunnel pid pairs exist"
+is "$(find "$EMBER_HOME/run" -name '*.url' -type f | wc -l | tr -d ' ')" "4" "exactly four game URL files exist"
+for game in arena fire kings league; do
     if [ -s "$EMBER_HOME/run/server-$game.pid" ]; then ok "$game server pid recorded"; else bad "$game server pid missing"; fi
     if [ -s "$EMBER_HOME/run/tunnel-$game.pid" ]; then ok "$game tunnel pid recorded"; else bad "$game tunnel pid missing"; fi
 done
@@ -97,12 +110,17 @@ is "$(jget "$LOCAL" 'd["name"]')" "quiet-egret" "local entry names the host"
 is "$(jget "$LOCAL" 'd["kings_ws"]')" "ws://127.0.0.1:17782" "local entry carries Kings' address"
 is "$(jget "$LOCAL" 'd["kings_proto"]')" "1" "local entry carries Kings' protocol"
 is "$(jget "$LOCAL" 'd["kings_commit"]')" "$COMMIT" "local entry carries Kings' build stamp"
+is "$(jget "$LOCAL" 'd["league_ws"]')" "ws://127.0.0.1:17783" "local entry carries League's address"
+is "$(jget "$LOCAL" 'd["league_proto"]')" "2" "local entry carries League's protocol"
+is "$(jget "$LOCAL" 'd["league_commit"]')" "$COMMIT" "local entry carries League's build stamp"
 
-echo "== unchanged update preserves all three servers and refreshes host.json =="
+echo "== unchanged update preserves all four servers and refreshes host.json =="
 BEFORE="$(pidof_file "$EMBER_HOME/run/server-kings.pid")"
+LEAGUE_BEFORE="$(pidof_file "$EMBER_HOME/run/server-league.pid")"
 bash "$DEPLOY/host.sh" update > "$TMP/update.log" 2>&1 || bad "unchanged update failed"
-contains "$(cat "$TMP/update.log")" "all three servers are running" "update requires all three servers"
+contains "$(cat "$TMP/update.log")" "all four servers are running" "update requires all four servers"
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$BEFORE" "unchanged update did not restart Kings"
+is "$(pidof_file "$EMBER_HOME/run/server-league.pid")" "$LEAGUE_BEFORE" "unchanged update did not restart League"
 if [ -s "$LOCAL" ]; then ok "unchanged update left host.json current"; else bad "unchanged update lost host.json"; fi
 
 echo "== a missing remote main never falls back to stale local main =="
@@ -122,9 +140,9 @@ is "$(cat "$EMBER_HOME/run/deployed")" "$DEPLOYED_BEFORE" "the deployed marker i
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$SERVER_BEFORE" "the last server remains live after ref resolution fails"
 export EMBER_REF=main
 
-echo "== down stops exactly the three pairs =="
+echo "== down stops exactly the four pairs =="
 PIDS=()
-for game in arena fire kings; do
+for game in arena fire kings league; do
     PIDS+=("$(pidof_file "$EMBER_HOME/run/server-$game.pid")")
     PIDS+=("$(pidof_file "$EMBER_HOME/run/tunnel-$game.pid")")
 done
@@ -132,6 +150,6 @@ bash "$DEPLOY/host.sh" down > "$TMP/down.log" 2>&1 || bad "down failed"
 for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then bad "pid $pid survived down"; else ok "pid $pid stopped"; fi
 done
-is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "0" "all six pid files were removed"
+is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "0" "all eight pid files were removed"
 
 summary host-kings

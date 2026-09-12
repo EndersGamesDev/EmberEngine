@@ -11,7 +11,7 @@
 #
 # The rest is the same contract test-host-kings.sh applies to the default
 # mode, against the same fake products: the launch argv, the commit-aware
-# probes, the six pid files, the local entry, the redeploy rule and the exact
+# probes, the eight pid files, the local entry, the redeploy rule and the exact
 # shutdown — plus the tunnel rules, which a prebuilt host needs exactly as
 # much as a building one and gets from the same code: a live tunnel kept
 # across a redeploy, `tunnels` repairing one without touching a server, and
@@ -53,10 +53,10 @@ done
 
 write_prebuilt() {
     local full="$1"
-    for product in arena-server fire-server kings-server; do
+    for product in arena-server fire-server kings-server league-server; do
         cp "$HERE/shims/host-server-stub.sh" "$TMP/prebuilt/$product"
     done
-    for product in wsbot fire-probe kings-probe; do
+    for product in wsbot fire-probe kings-probe league-probe; do
         cp "$HERE/shims/host-probe-stub.sh" "$TMP/prebuilt/$product"
     done
     chmod +x "$TMP/prebuilt"/*
@@ -67,6 +67,7 @@ full_commit=$full
 arena_proto=22
 fire_proto=1
 kings_proto=1
+league_proto=2
 STAMP
 }
 write_prebuilt "$FULL"
@@ -83,15 +84,36 @@ export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
 export EMBER_ARENA_PORT=17790
 export EMBER_FIRE_PORT=17791
 export EMBER_KINGS_PORT=17792
+export EMBER_LEAGUE_PORT=17793
 
 echo "== an incomplete directory is refused before anything is stopped =="
-rm -f "$TMP/prebuilt/kings-probe"
+rm -f "$TMP/prebuilt/league-probe"
 if bash "$DEPLOY/host.sh" up > "$TMP/refuse.log" 2>&1; then
     bad "up accepted a directory with a missing product"
 else
-    contains "$(cat "$TMP/refuse.log")" "kings-probe is missing" "the missing product is named"
+    contains "$(cat "$TMP/refuse.log")" "league-probe is missing" "the missing product is named"
 fi
 is "$(find "$EMBER_HOME/run" -name '*.pid' -type f 2>/dev/null | wc -l | tr -d ' ')" "0" "nothing was started on the refusal"
+write_prebuilt "$FULL"
+
+echo "== a stamp missing a game's protocol is refused the same way =="
+# This is the upgrade path, not a hypothetical: a directory shipped by a
+# six-product shipper carries no league_proto, and the number is the only
+# place a node with no checkout can answer `proto_of` from. Refusing here
+# means the host keeps serving the build it has; accepting would publish a
+# league address with no protocol beside it, which the book cannot rank.
+grep -v '^league_proto=' "$TMP/prebuilt/stamp" > "$TMP/stamp.old"
+mv "$TMP/stamp.old" "$TMP/prebuilt/stamp"
+if bash "$DEPLOY/host.sh" up > "$TMP/refuse-stamp.log" 2>&1; then
+    bad "up accepted a stamp with no league_proto"
+else
+    contains "$(cat "$TMP/refuse-stamp.log")" "has no league_proto" "the missing stamp field is named"
+fi
+is "$(find "$EMBER_HOME/run" -name '*.pid' -type f 2>/dev/null | wc -l | tr -d ' ')" "0" "nothing was started on the stamp refusal"
+# `status` answers from the same stamp and must stay usable: an operator
+# diagnosing the refusal has nothing else to ask.
+bash "$DEPLOY/host.sh" status > "$TMP/status-stamp.log" 2>&1 || bad "status failed on an incomplete stamp"
+contains "$(cat "$TMP/status-stamp.log")" "prebuilt:  $TMP/prebuilt -> $SHORT" "status still names the directory and its commit"
 write_prebuilt "$FULL"
 
 echo "== prebuilt up =="
@@ -108,10 +130,14 @@ WIRE="$(cat "$SHIM_LOG")"
 contains "$WIRE" "arena-server [--bind] [127.0.0.1:17790]" "the arena launch argv is unchanged in prebuilt mode"
 contains "$WIRE" "fire-server [127.0.0.1:17791]" "the fire launch argv is unchanged in prebuilt mode"
 contains "$WIRE" "kings-server [127.0.0.1:17792] [--name] [quiet-egret]" "Kings still launches with its name"
+contains "$WIRE" "league-server [127.0.0.1:17793] [--name] [quiet-egret]" "League still launches with its name"
 contains "$WIRE" "wsbot [ws://127.0.0.1:17790]" "the arena is probed with the shipped wsbot"
 contains "$WIRE" "fire-probe [ws://127.0.0.1:17791]" "fire is probed with the shipped probe"
 contains "$WIRE" "kings-probe [ws://127.0.0.1:17792] [--expect-commit] [$SHORT]" "the Kings probe checks the stamp's commit"
 is "$(grep -c '^kings-probe .*--expect-commit' "$SHIM_LOG")" "2" "Kings is checked locally and publicly"
+contains "$WIRE" "league-probe [ws://127.0.0.1:17793] [health-local] [--expect-commit] [$SHORT]" "the League probe names its lobby and checks the stamp's commit"
+is "$(grep -c '^league-probe .*--expect-commit' "$SHIM_LOG")" "2" "League is checked locally and publicly"
+is "$(grep -c '^league-probe \[ws://127.0.0.1:17793\] \[health-public\]' "$SHIM_LOG")" "1" "the public League probe uses a lobby name the loopback one is not holding"
 is "$(grep -cE '^(git|cargo) ' "$SHIM_LOG")" "0" "neither git nor cargo was called"
 if [ -e "$EMBER_HOME/src" ]; then bad "prebuilt mode created a source checkout"; else ok "no source checkout was created"; fi
 
@@ -123,8 +149,9 @@ is "$(jget "$LOCAL" 'd["commit"]')" "$SHORT" "the entry carries the stamp's comm
 is "$(jget "$LOCAL" 'd["proto"]')" "22" "the arena protocol came from the stamp"
 is "$(jget "$LOCAL" 'd["fire_proto"]')" "1" "the fire protocol came from the stamp"
 is "$(jget "$LOCAL" 'd["kings_proto"]')" "1" "the Kings protocol came from the stamp"
+is "$(jget "$LOCAL" 'd["league_proto"]')" "2" "the League protocol came from the stamp"
 is "$(cat "$EMBER_HOME/run/deployed")" "$FULL" "the full commit is what was recorded as deployed"
-is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "6" "three server/tunnel pid pairs exist"
+is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "8" "four server/tunnel pid pairs exist"
 
 echo "== status reads the stamp, not a checkout =="
 bash "$DEPLOY/host.sh" status > "$TMP/status.log" 2>&1 || bad "status failed"
@@ -134,7 +161,7 @@ contains "$(cat "$TMP/status.log")" "arena server: running" "status still report
 echo "== an unchanged stamp is not a redeploy =="
 BEFORE="$(pidof_file "$EMBER_HOME/run/server-kings.pid")"
 bash "$DEPLOY/host.sh" update > "$TMP/update.log" 2>&1 || bad "unchanged update failed"
-contains "$(cat "$TMP/update.log")" "all three servers are running" "update requires all three servers"
+contains "$(cat "$TMP/update.log")" "all four servers are running" "update requires all four servers"
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$BEFORE" "an unchanged stamp restarted nothing"
 is "$(grep -cE '^(git|cargo) ' "$SHIM_LOG")" "0" "update asked no git either"
 
@@ -191,13 +218,13 @@ else
     bad "the entry still names the dead fire address"
 fi
 
-# Put fire back so the shutdown contract below still has three pairs.
+# Put fire back so the shutdown contract below still has four pairs.
 write_prebuilt "$MOVED"
 bash "$DEPLOY/host.sh" tunnels > "$TMP/repair.log" 2>&1 || bad "repairing fire failed"
 
-echo "== down stops exactly the three pairs =="
+echo "== down stops exactly the four pairs =="
 PIDS=()
-for game in arena fire kings; do
+for game in arena fire kings league; do
     PIDS+=("$(pidof_file "$EMBER_HOME/run/server-$game.pid")")
     PIDS+=("$(pidof_file "$EMBER_HOME/run/tunnel-$game.pid")")
 done
@@ -205,7 +232,7 @@ bash "$DEPLOY/host.sh" down > "$TMP/down.log" 2>&1 || bad "down failed"
 for pid in "${PIDS[@]}"; do
     if kill -0 "$pid" 2>/dev/null; then bad "pid $pid survived down"; else ok "pid $pid stopped"; fi
 done
-is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "0" "all six pid files were removed"
+is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "0" "all eight pid files were removed"
 
 echo "== bootstrap needs a toolchain, unless it is preparing a prebuilt host =="
 # Only python3, curl and sha256sum on PATH: the state a bare pod is actually
