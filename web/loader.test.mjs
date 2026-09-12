@@ -299,7 +299,7 @@ test('a silent catalog is bounded and discovery continues without it', async () 
   const result = await emberLoad(h.options);
   const settled = await result.hostSettled;
   assert.deepEqual(fleet.asked, [null, 24]);
-  assert.equal(result.proto, null);
+  assert.equal(result.proto, 24);
   assert.equal(settled.host, fleet.chosen);
 });
 
@@ -659,7 +659,7 @@ test('an unreadable catalog ranks unfiltered and re-ranks once the bundle can sa
   const result = await emberLoad(h.options);
   const settled = await result.hostSettled;
   assert.deepEqual(fleet.asked, [null, 24], 'unfiltered first, then the bundle protocol');
-  assert.equal(result.proto, null);
+  assert.equal(result.proto, 24);
   assert.equal(settled.proto, 24);
   const hostPhases = phases(h.rules.calls).filter((p) => p.endsWith(':host'));
   assert.deepEqual(hostPhases, ['enter:host', 'done:host', 'rerank:host', 'done:host']);
@@ -730,9 +730,50 @@ test('all multiplayer pages connect late host events to their online controls', 
     readFile(new URL('./games/league/v4/ui.js', import.meta.url), 'utf8'),
   ]);
   assert.ok(arena.includes('chosen = e.host || null;') && arena.includes('const wanted = target || chosen;'));
+  assert.ok(arena.includes("if (typeof e.proto === 'number') PROTO = e.proto;"));
   assert.ok(fire.includes('chosen = e.host || null;') && fire.includes("$('btn-online').disabled = false;"));
+  assert.ok(fire.includes("if (typeof e.proto === 'number') PROTO = e.proto;"));
   assert.ok(kings.includes('chosen = e.host || null;') && kings.includes("const kingsWs = () => (chosen ? chosen.url : '');"));
   assert.ok(league.includes('adoptHosts({') && league.includes("for (const id of ['btn-create', 'btn-quick'])"));
+  assert.ok(league.includes("if (typeof e.proto === 'number') PROTO = e.proto;"));
+});
+
+// The deploy proves a LIVE entry's protocol equals its crate constant, but a
+// page frozen by a later release keeps this code and loses that proof.
+test('a catalog that disagrees with the bundle is corrected by the bundle', async () => {
+  const fleet = withHosts();
+  const h = harness({
+    glue: { proto: 25 },
+    options: {
+      discover: true,
+      hosts: fleet.hosts,
+      fetchImpl: async (url) => (String(url).endsWith('games.json')
+        ? new Response(JSON.stringify({ games: [{ id: 'arena', versions: [{ v: 'v31', live: true, proto: 24 }] }] }))
+        : bundleResponse()),
+    },
+  });
+  const result = await emberLoad(h.options);
+  const settled = await result.hostSettled;
+  assert.deepEqual(fleet.asked, [24, 25], 'the catalog ranked first, the bundle corrected it');
+  assert.equal(result.proto, 25);
+  assert.equal(settled.proto, 25);
+});
+
+test('a catalog that agrees with the bundle is ranked once', async () => {
+  const fleet = withHosts();
+  const h = harness({
+    glue: { proto: 24 },
+    options: {
+      discover: true,
+      hosts: fleet.hosts,
+      fetchImpl: async (url) => (String(url).endsWith('games.json')
+        ? new Response(JSON.stringify({ games: [{ id: 'arena', versions: [{ v: 'v31', live: true, proto: 24 }] }] }))
+        : bundleResponse()),
+    },
+  });
+  const result = await emberLoad(h.options);
+  await result.hostSettled;
+  assert.deepEqual(fleet.asked, [24]);
 });
 
 test('a manual override replaces the book with one probed address', async () => {

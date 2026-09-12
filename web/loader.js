@@ -485,22 +485,22 @@ export async function emberLoad(options) {
   }
 
   let host = await hostPromise;
-  // The early ranking shares the link with the bundle download. Once the
-  // bundle is up, retry an empty result in the background on an idle link. An
-  // unfiltered result is also re-ranked once the bundle can say which protocol
-  // it speaks. Neither safety pass holds the playable engine behind another
-  // probe window.
-  let retryProto = null;
+  // The bundle confirms the catalog. Ranking on the catalog's protocol is what
+  // lets discovery start at page load, and for a LIVE entry the deploy proves
+  // that number equals the game's own constant — but a page that is frozen by
+  // a later release keeps this code and loses that proof. The early pass also
+  // shares the link with the bundle download, so an empty result gets one
+  // background pass after init on an idle link. That safety pass reports host
+  // events but never holds the now-playable engine behind another probe window.
+  let bundleProto = null;
   let needsRetry = false;
+  try {
+    bundleProto = loaded.glue.proto_version ? loaded.glue.proto_version() : null;
+  } catch {
+    bundleProto = null;
+  }
   if (host) {
-    let proto = host.proto;
-    try {
-      proto = loaded.glue.proto_version ? loaded.glue.proto_version() : proto;
-    } catch {
-      proto = host.proto;
-    }
-    if (!host.chosen || (host.provisional && typeof proto === 'number')) {
-      retryProto = proto;
+    if (!host.chosen || (typeof bundleProto === 'number' && bundleProto !== host.proto)) {
       needsRetry = true;
     }
   }
@@ -522,7 +522,7 @@ export async function emberLoad(options) {
     host = await discover(
       o,
       drive,
-      Promise.resolve(retryProto),
+      Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host.proto),
       true,
       host,
     );
@@ -533,7 +533,9 @@ export async function emberLoad(options) {
     host: settled ? settled.chosen : null,
     candidates: settled ? settled.candidates : [],
     wrongProto: settled ? settled.wrongProto : [],
-    proto: settled ? settled.proto : o.proto,
+    proto: typeof bundleProto === 'number'
+      ? bundleProto
+      : (settled ? settled.proto : o.proto),
     book: settled ? settled.book : null,
   });
   const first = hostView(host);
@@ -546,7 +548,7 @@ export async function emberLoad(options) {
       .then(() => discover(
         o,
         drive,
-        Promise.resolve(retryProto),
+        Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host.proto),
         true,
         host,
       ))
