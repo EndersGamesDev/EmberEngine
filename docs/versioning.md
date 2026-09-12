@@ -30,7 +30,7 @@ Every crate that is not dedicated to a game or lab remains an engine or shared c
 
 The major is the release line a player sees and the launcher retains. Historical directory slots such as `v31` remain stable locators even after the catalog gains a full version. A label may say `Version 31`, meaning the most recent minor and patch in major 31, but a build stamp, tooltip, settings page, release record, or other precise identity shows all three grades.
 
-A minor bump is a deliberate release. It always receives an annotated, signed tag named `<series>-MAJOR.MINOR.PATCH`, where the series is the game or lab id, or `ember` for the engine and workspace. Examples are `arena-31.1.0`, `league-2.1.0`, `julibrot-1.2.0`, and `ember-1.1.0`. New tags never use a bare name or a `v` prefix.
+A minor bump is a deliberate release. It always receives an annotated, signed tag named `<series>-MAJOR.MINOR.PATCH`, where the series is the game or lab id, or `ember` for the engine and workspace. Examples are `arena-31.1.0`, `league-2.1.0`, `julibrot-1.3.0`, and `ember-1.1.0`. New tags never use a bare name or a `v` prefix.
 
 A release row authored in the release's own pull request names the complete tag as pending with ``tag `<series>-MAJOR.MINOR.PATCH` (pending)``, records the authored version commit as its source and uses `stamp —`. Before integration the absent tag is valid; once the tag exists, it must be annotated and target the two-parent merge commit that integrated the row, with a first parent that lacks the exact release line, a merged tree that contains it and a second parent that contains the recorded source.
 
