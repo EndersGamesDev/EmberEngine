@@ -20,7 +20,9 @@ This is the repository's only ledger for finished work that has not yet been ass
 
 The release workflow now force-fetches the triggering tag object after checkout so annotated-tag and signature validation sees the signed annotation rather than the peeled commit materialised by the checkout action; workflow policy tests enforce the immediate step order, exact refspec and object-type proof in both parser modes, which reject missing-fetch, extra-environment and duplicate-key fixtures while accepting checkout key reordering (`21881b2c`); the policy suites now allocate fixtures through the system temporary-directory fallback, stop on allocation or empty fixture output, and give the release publisher and retag apply path the same fallback because GitHub's draft and publish jobs do not provide `TMPDIR`, preventing vacuous fixture rejections and the publisher's later draft-job abort (`6ff7e144`).
 
-The `julibrot-1.1.0` tag was cut on `0999fae7` and `9fa9b2bb` and validated by neither: the first workflow saw a peeled tag, while the second run failed the ledger's first-parent rule because `0999fae7` had already integrated the exact release line. Nothing was published under the name, and release tags are immutable, so the corrected release is `julibrot-1.2.0` with source `ed1c07a9`.
+The `julibrot-1.2.0` tag was cut on `dadf381b` and published nothing. Its release run reached the release-asset build and stopped there: `deploy/deploy-pages.sh` refuses to assemble a site whose Fire source is older than the live published Fire release, and develop declared Fire protocol 1 at the time while the site served protocol 2, so the one artifact the release exists to produce could not be built from the commit the tag named. Release tags are immutable, so that name stays retired rather than being moved to a commit that can build, and the corrected release is `julibrot-1.3.0`. What makes it producible is the Fire Racer V2 integration since: develop now carries the protocol 2 source the site was already serving, so the assembly has nothing left to refuse.
+
+The `julibrot-1.1.0` tag was cut on `0999fae7` and `9fa9b2bb` and validated by neither: the first workflow saw a peeled tag, while the second run failed the ledger's first-parent rule because `0999fae7` had already integrated the exact release line. Nothing was published under the name, and release tags are immutable, so the correction chosen then was `julibrot-1.2.0` with source `ed1c07a9`.
 
 The release ledger now accepts a pending tag before its GitHub merge commit exists, then requires an existing annotated tag to target the exact two-parent merge that introduced the release line from a second parent containing its authored source. `deploy/tests/test-changelog.sh` is the full definition of the closed positional ledger syntax that keeps the line-oriented checker and GitHub renderer from disagreeing about hidden entries; completed Actions-era rows require their deterministic commit-count stamp except for the eight named pre-stamp Arena tags. Tag-specific validation binds the row to its series section and launcher version, and GitHub release notes select only the release line while replacing pending provenance with the peeled tag commit and deterministic stamp; the later ledger update records that stamped merge commit as the plain tag's source (`6e6fffac`).
 
@@ -670,7 +672,7 @@ The first publication, `070e4cd9`, was stamped r583 `b9ae7bb1` — a commit that
 
 ### v1 — 2026-09-11
 
-no proto · stamp — · source `ed1c07a9` · tag `julibrot-1.2.0` (pending)
+no proto · stamp — · source `ff294e62` · tag `julibrot-1.3.0` (pending)
 
 Deep navigation keeps retained and pending views anchored as sampled-reference frames arrive, while relief zoom transitions preserve covering imagery and GPU scene completion remains reliable on slower software adapters.
 
