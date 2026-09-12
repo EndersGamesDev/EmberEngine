@@ -16,6 +16,7 @@ import {
   listLobbies,
   loadBook,
   mergeBook,
+  mirrorRefs,
   parseVersion,
   probeHost,
   rankHosts,
@@ -57,6 +58,29 @@ test('parseVersion: r<N> is an integer, anything else is zero', () => {
 // ---- merging -------------------------------------------------------------
 
 const mirror = (name, entry) => ({ name, entry });
+
+test('mirrorRefs: only a binding that names a host is a reference', () => {
+  assert.deepEqual(
+    mirrorRefs({
+      mirrors: [
+        { url: 'https://m/lundi.json', name: 'lundi' },
+        'https://m/unbound.json',
+        { url: 'https://m/nameless.json' },
+        { url: 'https://m/bad.json', name: 'Not A Name' },
+        { name: 'urlless' },
+      ],
+    }),
+    [{ url: 'https://m/lundi.json', name: 'lundi' }],
+  );
+  assert.deepEqual(mirrorRefs({}), []);
+  assert.deepEqual(mirrorRefs(null), []);
+  assert.deepEqual(mirrorRefs({ mirrors: 'nonsense' }), []);
+});
+
+test('mirrorRefs: the list is capped, because nothing bounds a third party\u2019s list', () => {
+  const many = Array.from({ length: 64 }, (_, i) => ({ url: `https://m/${i}.json`, name: `host-${i}` }));
+  assert.equal(mirrorRefs({ mirrors: many }).length, 32);
+});
 
 test('mergeBook: entries merge by name and the later one wins', () => {
   const book = {
@@ -716,16 +740,17 @@ test('games.json: every launcher entry has a three-grade semantic version', () =
       assert.match(entry.version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} ${entry.v} has no three-grade version`);
     }
   }
-  const liveVersions = Object.fromEntries(catalog.games.map((g) => [g.id, g.versions.find((entry) => entry.live).version]));
-  assert.deepEqual(liveVersions, {
-    arena: '31.0.0',
-    'end-game': '12.0.0',
-    league: '2.0.0',
-    fire: '1.0.0',
-    kings: '1.0.0',
-    'what-is-this': '1.0.0',
-    julibrot: '1.0.6',
-  });
+  // The invariant is that every game selects exactly one live release and
+  // that release carries a real version — not that the versions are any
+  // particular numbers. A frozen copy of them here says nothing the lines
+  // above do not, and goes stale the moment a game is released: this list
+  // still read julibrot 1.0.6 against a 1.2.0 catalog, and because nothing
+  // runs these tests in CI the failure sat unseen through a release.
+  for (const g of catalog.games) {
+    const live = g.versions.filter((entry) => entry.live === true);
+    assert.equal(live.length, 1, `${g.id} must select exactly one live release`);
+    assert.match(live[0].version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} live release has no three-grade version`);
+  }
 });
 
 test('launcher labels use semantic versions rather than directory slots', () => {

@@ -511,13 +511,76 @@ if "isDraft" not in runs or "publishedAt" not in runs or "ember-pages.tar.gz" no
     raise SystemExit(1)
 if "refs/tags/*-[0-9]*.[0-9]*.[0-9]*" not in runs:
     raise SystemExit(1)
+# The host gate deploys nothing by itself, so two things about it are the
+# contract and neither is its presence: WHERE it runs and whether it can stop
+# the job. It has to run after the asset is on disk, because it reads that
+# tree's own games.json, server.json and hosts.js, and before anything
+# publishes, because a site whose pages have no host to join must not reach a
+# player. And it has to be able to fail the job: `continue-on-error` or an `if`
+# turns the same step, in the same place, into a log line — which is the exact
+# shape a green build with a broken site would have.
+steps = job.get("steps", [])
+
+
+def step_index(predicate):
+    for index, step in enumerate(steps):
+        if predicate(step):
+            return index
+    return -1
+
+
+extract = step_index(lambda s: s.get("name") == "extract the release asset")
+gate = step_index(lambda s: "check-hosts.mjs" in str(s.get("run", "")))
+configure = step_index(lambda s: str(s.get("uses", "")).startswith("actions/configure-pages@"))
+upload = step_index(lambda s: str(s.get("uses", "")).startswith("actions/upload-pages-artifact@"))
+deploy = step_index(lambda s: str(s.get("uses", "")).startswith("actions/deploy-pages@"))
+if min(extract, gate, configure, upload, deploy) < 0:
+    raise SystemExit(1)
+if not extract < gate < configure < upload < deploy:
+    raise SystemExit(1)
+if steps[gate].get("continue-on-error") is not None or steps[gate].get("if") is not None:
+    raise SystemExit(1)
+# It must read the EXTRACTED tree rather than this checkout's own web/
+# directory: the asset is what ships, and the two differ by every commit made
+# since the tag.
+gate_run = str(steps[gate].get("run", ""))
+if "--tree" not in gate_run or "pages-site" not in gate_run:
+    raise SystemExit(1)
+# node 22 or newer, pinned before the gate: the probe opens a real WebSocket
+# from the global, and a runtime without one would fail every game for a
+# reason that has nothing to do with the hosts.
+setup = step_index(lambda s: str(s.get("uses", "")).startswith("actions/setup-node@"))
+if setup < 0 or setup > gate:
+    raise SystemExit(1)
+if int(str(steps[setup].get("with", {}).get("node-version", "0")).split(".")[0]) < 22:
+    raise SystemExit(1)
 PY
     else
         grep -Fq 'workflows: [release]' "$file" \
             && grep -Fq 'types: [completed]' "$file" \
             && grep -Fq 'ref: main' "$file" \
             && grep -Fq 'publishedAt' "$file" \
-            && grep -Fq 'refs/tags/*-[0-9]*.[0-9]*.[0-9]*' "$file"
+            && grep -Fq 'refs/tags/*-[0-9]*.[0-9]*.[0-9]*' "$file" \
+            && awk '
+                # A step is a block: `continue-on-error` sits beside `run`, not
+                # inside it, and may come either side of it, so the flag is
+                # collected per step and judged when the step ends.
+                function flush() { if (isgate && soft_here) soft = 1 }
+                /^      - / { flush(); isgate = 0; soft_here = 0 }
+                /^      - name: extract the release asset$/ { extract = NR }
+                /uses: actions\/setup-node@/ { setup = NR }
+                /check-hosts\.mjs/ { gate = NR; isgate = 1 }
+                /^        (continue-on-error|if):/ { soft_here = 1 }
+                /uses: actions\/configure-pages@/ { configure = NR }
+                /uses: actions\/deploy-pages@/ { deploy = NR }
+                END {
+                    flush()
+                    exit !(extract && setup && gate && configure && deploy \
+                        && !soft \
+                        && extract < gate && setup < gate \
+                        && gate < configure && configure < deploy)
+                }
+            ' "$file"
     fi
 }
 
@@ -624,6 +687,62 @@ write_named_release_checkout_fixture() {
     ' "$source" > "$file"
 }
 
+write_missing_host_gate_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: prove every live game has a host to join" {
+            skipping = 1
+            next
+        }
+        skipping && /^      - / {
+            skipping = 0
+        }
+        !skipping {
+            print
+        }
+    ' "$source" > "$file"
+}
+
+# The gate moved to the END of the job: every step still present, every name
+# still spelled the same, and the site already deployed by the time it runs.
+# This is the fixture that separates "the step exists" from "the step gates".
+#
+# The step is captured to the next step boundary rather than by a line count,
+# because a writer that assumed a fixed length would silently produce a
+# fixture missing half the step — and a malformed fixture that fails the
+# contract for the wrong reason is a test that proves nothing.
+write_late_host_gate_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: prove every live game has a host to join" {
+            holding = 1
+            held = $0
+            next
+        }
+        holding && /^      - / { holding = 0 }
+        holding { held = held "\n" $0; next }
+        { print }
+        END {
+            if (held == "") exit 1
+            print held
+        }
+    ' "$source" > "$file" || return 1
+}
+
+# The gate in its right place, doing nothing: `continue-on-error` makes a
+# failing check a log line, and the deploy proceeds over it.
+write_soft_host_gate_fixture() {
+    local source="$1" file="$2"
+    awk '
+        $0 == "      - name: prove every live game has a host to join" {
+            print
+            print "        continue-on-error: true"
+            next
+        }
+        { print }
+    ' "$source" > "$file"
+}
+
 TEST_WORK="$(mktemp -d -t ember-workflow-test-XXXXXX)" || {
     echo "test-workflows: unable to create fixture directory" >&2
     exit 1
@@ -636,6 +755,9 @@ MISSING_RELEASE_TAG_OBJECT="$TEST_WORK/missing-release-tag-object.yml"
 EXTRA_RELEASE_TAG_ENV="$TEST_WORK/extra-release-tag-env.yml"
 DUPLICATE_RELEASE_TAG_ENV="$TEST_WORK/duplicate-release-tag-env.yml"
 NAMED_RELEASE_CHECKOUT="$TEST_WORK/named-release-checkout.yml"
+MISSING_HOST_GATE="$TEST_WORK/missing-host-gate.yml"
+LATE_HOST_GATE="$TEST_WORK/late-host-gate.yml"
+SOFT_HOST_GATE="$TEST_WORK/soft-host-gate.yml"
 write_quoted_promote_fixture "$QUOTED_PROMOTE"
 write_permissive_regex_fixture "$PERMISSIVE_REGEX"
 write_missing_native_package_fixture .github/workflows/ci.yml "$MISSING_NATIVE_PACKAGE"
@@ -643,6 +765,10 @@ write_missing_release_tag_object_fixture .github/workflows/release.yml "$MISSING
 write_extra_release_tag_env_fixture .github/workflows/release.yml "$EXTRA_RELEASE_TAG_ENV"
 write_duplicate_release_tag_env_fixture .github/workflows/release.yml "$DUPLICATE_RELEASE_TAG_ENV"
 write_named_release_checkout_fixture .github/workflows/release.yml "$NAMED_RELEASE_CHECKOUT"
+write_missing_host_gate_fixture .github/workflows/pages.yml "$MISSING_HOST_GATE"
+write_late_host_gate_fixture .github/workflows/pages.yml "$LATE_HOST_GATE" \
+    || bad "the late host-gate fixture writer captured no step"
+write_soft_host_gate_fixture .github/workflows/pages.yml "$SOFT_HOST_GATE"
 
 FIXTURES_READY=1
 for fixture in \
@@ -652,7 +778,10 @@ for fixture in \
     "$MISSING_RELEASE_TAG_OBJECT" \
     "$EXTRA_RELEASE_TAG_ENV" \
     "$DUPLICATE_RELEASE_TAG_ENV" \
-    "$NAMED_RELEASE_CHECKOUT"
+    "$NAMED_RELEASE_CHECKOUT" \
+    "$MISSING_HOST_GATE" \
+    "$LATE_HOST_GATE" \
+    "$SOFT_HOST_GATE"
 do
     if [ -s "$fixture" ]; then
         ok "$(basename "$fixture") fixture exists and is non-empty"
@@ -787,10 +916,30 @@ if pages_matches_contract .github/workflows/pages.yml; then
 else
     bad "pages.yml does not enforce its release-success and main-asset contract"
 fi
+if pages_matches_contract "$MISSING_HOST_GATE"; then
+    bad "the pages check accepted a fixture with no host gate at all"
+else
+    ok "the pages check rejects a fixture with no host gate"
+fi
+if pages_matches_contract "$LATE_HOST_GATE"; then
+    bad "the pages check accepted a host gate that runs after the deploy"
+else
+    ok "the pages check rejects a host gate that runs after the deploy"
+fi
+if pages_matches_contract "$SOFT_HOST_GATE"; then
+    bad "the pages check accepted a host gate that cannot fail the job"
+else
+    ok "the pages check rejects a host gate marked continue-on-error"
+fi
 if grep -Fq "\`.github/workflows/pages.yml\` runs after the \`release\` workflow completes successfully" docs/branching.md; then
     ok "branching.md states the release-completion Pages trigger"
 else
     bad "branching.md does not state the release-completion Pages trigger"
+fi
+if grep -Fq "\`node deploy/check-hosts.mjs --tree\` against the extracted asset and fails the deploy" docs/branching.md; then
+    ok "branching.md states the host gate between extraction and deployment"
+else
+    bad "branching.md does not state the host gate between extraction and deployment"
 fi
 
 summary workflows

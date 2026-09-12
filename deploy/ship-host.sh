@@ -74,6 +74,16 @@ if [ ! -f "$CONF" ]; then
 # Where the published build is announced.
 #EMBER_SHIP_VERSION_URL=https://endersgamesdev.github.io/EmberEngine/version.json
 
+# Ship a NAMED ref instead of whatever version.json currently publishes. This
+# is the release order: the hosts are put on the release commit BEFORE the tag
+# is pushed, so the deploy never lands on a site with no host on its protocol.
+# While it is set the host runs ahead of the live pages, and the old pages lose
+# it until the deploy lands; `deploy` says so when it happens.
+# A commit id, a tag, or an `origin/`-prefixed branch. A bare branch name
+# resolves against the builder's own clone-local branch, which its fetch does
+# not advance, so it can silently mean an old commit.
+#EMBER_SHIP_REF=
+
 # This machine's staging directory, and the host's root for shipped products.
 #EMBER_SHIP_STAGE=$HOME/.ember/ship-stage
 #EMBER_SHIP_REMOTE_ROOT=ember-prebuilt
@@ -102,6 +112,7 @@ EMBER_SHIP_REPO="${EMBER_SHIP_REPO:-https://github.com/EndersGamesDev/EmberEngin
 EMBER_SHIP_BUILD_ENV="${EMBER_SHIP_BUILD_ENV:-}"
 EMBER_SHIP_BUILD_WRAP="${EMBER_SHIP_BUILD_WRAP:-}"
 EMBER_SHIP_VERSION_URL="${EMBER_SHIP_VERSION_URL:-https://endersgamesdev.github.io/EmberEngine/version.json}"
+EMBER_SHIP_REF="${EMBER_SHIP_REF:-}"
 EMBER_SHIP_STAGE="${EMBER_SHIP_STAGE:-$HOME/.ember/ship-stage}"
 EMBER_SHIP_REMOTE_ROOT="${EMBER_SHIP_REMOTE_ROOT:-ember-prebuilt}"
 EMBER_SHIP_HOST_NAME="${EMBER_SHIP_HOST_NAME:-}"
@@ -114,6 +125,20 @@ unknown() { echo "ship-host.sh: $*" >&2; exit 4; }
 # An alias, never an address: a network address in a repository is a fact that
 # rots, and the ssh config is where it belongs.
 alias_ok() { [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; }
+
+# EMBER_SHIP_REF reaches the builder twice: interpolated into the unquoted
+# heredoc as COMMIT="<ref>", and into a one-line remote command. Both are shell
+# on the other machine, so a value carrying a quote or a command substitution
+# would run there. Git ref names are a small character set and nothing
+# legitimate falls outside it; a leading dash is refused too, because git would
+# read it as an option rather than a ref.
+require_ref_name() {
+    case "$EMBER_SHIP_REF" in
+        '') return 0 ;;
+        -*) die "EMBER_SHIP_REF='$EMBER_SHIP_REF' starts with a dash, which git reads as an option" ;;
+        *[!A-Za-z0-9./_-]*) die "EMBER_SHIP_REF='$EMBER_SHIP_REF' is not a ref name" ;;
+    esac
+}
 
 PY=""
 for cand in python3 python; do
@@ -231,9 +256,18 @@ else
     git clone -q "${EMBER_SHIP_REPO}" "\$BUILD_DIR"
 fi
 cd "\$BUILD_DIR"
-git rev-parse --verify -q "\$COMMIT^{commit}" >/dev/null \
-    || { echo "ship: the builder does not have commit \$COMMIT" >&2; exit 1; }
-git checkout -q --detach "\$COMMIT"
+# Resolve ONCE and check out the resolution, not the name. rev-parse and
+# checkout are two independent lookups, and for an ambiguous symbolic ref --
+# a branch and a tag of the same name at different commits -- they disagree
+# silently: rev-parse answers the tag, checkout takes the branch, and the
+# stamp then names a commit that is not the one that was built. EMBER_SHIP_REF
+# makes symbolic refs the normal input, so this stops being a corner case.
+# No -q, so git own ambiguity warning reaches the operator.
+# (No backticks in this script: it is built by an unquoted heredoc, where a
+# backtick is command substitution run on the WORKSTATION.)
+RESOLVED="\$(git rev-parse --verify "\$COMMIT^{commit}")" \
+    || { echo "ship: the builder cannot resolve \$COMMIT" >&2; exit 1; }
+git checkout -q --detach "\$RESOLVED"
 VERSION="r\$(git rev-list --count HEAD)"
 SHORT="\$(git rev-parse --short HEAD)"
 FULL="\$(git rev-parse HEAD)"
@@ -274,6 +308,7 @@ echo "SHIP stage=\$(cd "\$STAGE" && pwd)"
 echo "SHIP version=\$VERSION"
 echo "SHIP commit=\$SHORT"
 echo "SHIP full_commit=\$FULL"
+echo "SHIP ref_commit=\$RESOLVED"
 echo "SHIP arena_proto=\$(proto "\$ARENA_CRATE")"
 echo "SHIP fire_proto=\$(proto fire-core)"
 echo "SHIP kings_proto=\$(proto kings-core)"
@@ -286,6 +321,7 @@ cmd_deploy() {
     local t0; t0="$(date +%s)"
     require_host
     require_builder
+    require_ref_name
 
     say "reading $EMBER_SHIP_VERSION_URL"
     local pub; pub="$(published_json)" || unknown "could not read the published version.json"
@@ -295,32 +331,57 @@ cmd_deploy() {
     [ -n "$pub_commit" ] || unknown "version.json carries no commit"
     echo "   the pages publish $pub_version · $pub_commit"
 
-    say "building $pub_commit on $EMBER_SHIP_BUILDER"
+    # The builder resolves the ref itself, after its own fetch, so a ref it
+    # cannot see stops the ship rather than shipping something else.
+    local target="${EMBER_SHIP_REF:-$pub_commit}"
+    say "building $target on $EMBER_SHIP_BUILDER"
     local tb; tb="$(date +%s)"
     local out
-    out="$(build_remote_script "$pub_commit" | builder_ssh 'bash -s')" \
+    out="$(build_remote_script "$target" | builder_ssh 'bash -s')" \
         || die "the build on $EMBER_SHIP_BUILDER failed"
     printf '%s\n' "$out"
     echo "   built in $(( $(date +%s) - tb ))s"
 
-    local version commit full arena_proto fire_proto kings_proto league_proto stage_path
+    local version commit full ref_commit arena_proto fire_proto kings_proto league_proto stage_path
     ship_field() { printf '%s' "$out" | grep -E "^SHIP $1=" | head -1 | sed "s/^SHIP $1=//"; }
     stage_path="$(ship_field stage)"
     version="$(ship_field version)"
     commit="$(ship_field commit)"
     full="$(ship_field full_commit)"
+    ref_commit="$(ship_field ref_commit)"
     arena_proto="$(ship_field arena_proto)"
     fire_proto="$(ship_field fire_proto)"
     kings_proto="$(ship_field kings_proto)"
     league_proto="$(ship_field league_proto)"
-    for field in stage_path version commit full arena_proto fire_proto kings_proto league_proto; do
+    for field in stage_path version commit full ref_commit arena_proto fire_proto kings_proto league_proto; do
         [ -n "${!field}" ] || die "the builder did not report $field"
     done
-    # The stamp must name the commit the PAGES name. A builder that resolved
-    # something else — a stale checkout, a ref that moved under it — would put
-    # a build in front of players that the live pages were not made from.
-    sha_agrees "$commit" "$pub_commit" \
-        || die "the builder stamped $commit but version.json names $pub_commit"
+    # What was BUILT must be what the ref resolved to, whether or not a ref was
+    # named. This is the comparison that survives EMBER_SHIP_REF: without it,
+    # naming a ref would remove the only check that the stamp describes the
+    # checkout, and a builder that resolved one commit and checked out another
+    # would ship a binary whose Welcome names a commit it was not built from.
+    sha_agrees "$commit" "$ref_commit" \
+        || die "the builder resolved $ref_commit but stamped $commit"
+    if [ -z "$EMBER_SHIP_REF" ]; then
+        # And with no ref named, the stamp must be the commit the PAGES name.
+        # A builder that resolved something else — a stale checkout, a ref that
+        # moved under it — would put a build in front of players that the live
+        # pages were not made from.
+        sha_agrees "$commit" "$pub_commit" \
+            || die "the builder stamped $commit but version.json names $pub_commit"
+    elif ! sha_agrees "$commit" "$pub_commit"; then
+        # Deliberate, and the whole reason the setting exists — but it is a
+        # window in which the CURRENT live pages have no host on their
+        # protocol, and that is announced rather than discovered by a player.
+        echo
+        echo "!! EMBER_SHIP_REF=$EMBER_SHIP_REF resolved to $commit, and the pages publish $pub_commit."
+        echo "!! This host now runs AHEAD of the live site. The live pages keep their"
+        echo "!! own protocol, so they lose this host until the release deploys; the"
+        echo "!! window is the release run's length unless a second host keeps the"
+        echo "!! old build. Announce it rather than leaving it to be discovered."
+        echo
+    fi
 
     say "collecting the products"
     local stage="$EMBER_SHIP_STAGE"
@@ -333,6 +394,8 @@ cmd_deploy() {
         echo "version=$version"
         echo "commit=$commit"
         echo "full_commit=$full"
+        echo "ref=${EMBER_SHIP_REF:-}"
+        echo "ref_commit=$ref_commit"
         echo "arena_proto=$arena_proto"
         echo "fire_proto=$fire_proto"
         echo "kings_proto=$kings_proto"
@@ -414,9 +477,35 @@ cmd_deploy() {
 # anywhere. It never touches a pid file, and never a pattern kill.
 cmd_check() {
     require_host
-    local pub; pub="$(published_json)" || { echo "check: the published version.json is unreadable" >&2; exit 4; }
-    local pub_commit; pub_commit="$(published_field "$pub" commit)"
-    [ -n "$pub_commit" ] || { echo "check: version.json carries no commit" >&2; exit 4; }
+    require_ref_name
+    local pub_commit
+    if [ -n "$EMBER_SHIP_REF" ]; then
+        # The ref is what this host was told to run, so it is what `check`
+        # compares against: asking about version.json instead would report a
+        # redeploy as due for the whole release window the ref exists to cover.
+        #
+        # Resolved ON THE BUILDER, where `deploy` resolves it and after the
+        # same fetch. A tag or an `origin/`-prefixed branch names whatever the
+        # repository it is read from says it names, and this workstation's
+        # clone is a different repository: resolving here would answer a
+        # different commit than the one that was built and report a correctly
+        # shipped host as needing a redeploy.
+        #
+        # The fetch is part of that sameness and not a flourish. `deploy`
+        # fetches before it resolves, so a ref pushed since the last ship
+        # resolves there; without one here the question would be asked of
+        # whatever the builder last happened to see, and a moved ref would
+        # read as "nothing to do" precisely when a redeploy is due.
+        require_builder
+        pub_commit="$(builder_ssh "cd '$EMBER_SHIP_BUILD_DIR' 2>/dev/null && git fetch -q --tags --prune origin && git rev-parse --verify '$EMBER_SHIP_REF^{commit}'" 2>/dev/null)" \
+            || { echo "check: $EMBER_SHIP_BUILDER could not resolve EMBER_SHIP_REF='$EMBER_SHIP_REF'" >&2; exit 4; }
+        pub_commit="$(printf '%s' "$pub_commit" | tr -d '[:space:]')"
+        [ -n "$pub_commit" ] || { echo "check: $EMBER_SHIP_BUILDER resolved EMBER_SHIP_REF='$EMBER_SHIP_REF' to nothing" >&2; exit 4; }
+    else
+        local pub; pub="$(published_json)" || { echo "check: the published version.json is unreadable" >&2; exit 4; }
+        pub_commit="$(published_field "$pub" commit)"
+        [ -n "$pub_commit" ] || { echo "check: version.json carries no commit" >&2; exit 4; }
+    fi
 
     local entry
     entry="$(host_ssh 'cat "$HOME/ember-host/run/host.json"' 2>/dev/null)" || {
@@ -426,7 +515,11 @@ cmd_check() {
 
     local running; running="$(published_field "$entry" commit)"
     if ! sha_agrees "$running" "$pub_commit"; then
-        echo "check: the host runs '${running:-nothing}' and the pages publish '$pub_commit'"
+        if [ -n "$EMBER_SHIP_REF" ]; then
+            echo "check: the host runs '${running:-nothing}' and EMBER_SHIP_REF resolves to '$pub_commit'"
+        else
+            echo "check: the host runs '${running:-nothing}' and the pages publish '$pub_commit'"
+        fi
         exit 3
     fi
 
@@ -465,7 +558,11 @@ for key, url in sorted(entry.items()):
         fi
     done <<< "$rows"
     [ "$rc" -eq 0 ] || exit 3
-    echo "check: $EMBER_SHIP_HOST runs the published $pub_commit and all games answered"
+    if [ -n "$EMBER_SHIP_REF" ]; then
+        echo "check: $EMBER_SHIP_HOST runs $EMBER_SHIP_REF at $pub_commit and all games answered"
+    else
+        echo "check: $EMBER_SHIP_HOST runs the published $pub_commit and all games answered"
+    fi
 }
 
 case "$CMD" in

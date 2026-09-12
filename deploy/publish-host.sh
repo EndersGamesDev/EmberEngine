@@ -10,7 +10,7 @@
 #   publish-host.sh --name amber-otter --remove --book …/server.json
 #   publish-host.sh --recompute --book …/server.json
 #   publish-host.sh --name amber-otter --game fire … --repo git@…:me/x.git \
-#       --branch host-book --file host.json
+#       --branch hosts/book --file host.json
 #
 # Flags:
 #   --name <host>      the entry's merge key, [a-z0-9-]{3,32}

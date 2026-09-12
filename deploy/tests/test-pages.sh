@@ -29,6 +29,28 @@ fi
 END_GAME_LIVE="$("$PY" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(next(v["path"].rstrip("/") for g in d["games"] if g["id"] == "end-game" for v in g["versions"] if v.get("live") is True))' "$DEPLOY/../web/games.json" | tr -d '\r')"
 [[ "$END_GAME_LIVE" =~ ^games/end-game/v[1-9][0-9]*$ ]] || exit 1
 
+# deploy-pages.sh refuses a catalog whose live `proto` disagrees with the crate
+# constant, so the fixture's proto.rs files are written FROM the catalog rather
+# than frozen beside it. Freezing them would make this suite fail on the day a
+# game legitimately bumps its protocol, which is the day it is most needed. The
+# seed then sits one below each, so the bump-warning paths still fire and their
+# assertions stay honest about which numbers they saw.
+live_proto() {
+    "$PY" -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(next(v["proto"] for g in d["games"] if g["id"] == sys.argv[2] for v in g["versions"] if v.get("live") is True))' "$DEPLOY/../web/games.json" "$1" | tr -d '\r'
+}
+ARENA_PROTO="$(live_proto arena)"
+FIRE_PROTO="$(live_proto fire)"
+KINGS_PROTO="$(live_proto kings)"
+LEAGUE_PROTO="$(live_proto league)"
+for value in "$ARENA_PROTO" "$FIRE_PROTO" "$KINGS_PROTO" "$LEAGUE_PROTO"; do
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        echo "pages fixture: cannot read a live catalog protocol" >&2
+        exit 1
+    fi
+done
+ARENA_WAS="$((ARENA_PROTO - 1))"
+LEAGUE_WAS="$((LEAGUE_PROTO - 1))"
+
 TMP="$(mktemp -d -t ember-pagestest-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
@@ -74,6 +96,7 @@ with open(p, "w", encoding="utf-8", newline="") as fh:
     fh.write(text.replace(old, 'doc["v"] = "recomputed-stamp"'))
 PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
+printf '[{"name":"lundi","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json"
 printf 'hub\n' > "$REPO/web/index.html"
 printf '{}\n' > "$REPO/web/version.json"
 printf 'arena live<script src="./settings.js?v=1"></script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
@@ -106,10 +129,10 @@ printf 'globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1"; import("./pkg/ember_
 printf '<canvas id="julibrot"></canvas><script type="module">import { openLab } from "./lab.js?v=1";</script>\n' > "$REPO/web/labs/julibrot/drive.html"
 printf 'import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1");\n' > "$REPO/web/labs/julibrot/worker.js"
 printf 'julibrot style\n' > "$REPO/web/labs/julibrot/style.css"
-printf 'pub const PROTO_VERSION: u16 = 15;\n' > "$REPO/crates/arena-core/src/proto.rs"
-printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/fire-core/src/proto.rs"
-printf 'pub const PROTO_VERSION: u16 = 1;\n' > "$REPO/crates/kings-core/src/proto.rs"
-printf 'pub const PROTO_VERSION: u16 = 3;\n' > "$REPO/crates/league-core/src/proto.rs"
+printf 'pub const PROTO_VERSION: u16 = %s;\n' "$ARENA_PROTO" > "$REPO/crates/arena-core/src/proto.rs"
+printf 'pub const PROTO_VERSION: u16 = %s;\n' "$FIRE_PROTO" > "$REPO/crates/fire-core/src/proto.rs"
+printf 'pub const PROTO_VERSION: u16 = %s;\n' "$KINGS_PROTO" > "$REPO/crates/kings-core/src/proto.rs"
+printf 'pub const PROTO_VERSION: u16 = %s;\n' "$LEAGUE_PROTO" > "$REPO/crates/league-core/src/proto.rs"
 
 mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
 mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg" "$SEED/$LEAGUE_LIVE/pkg"
@@ -127,7 +150,8 @@ printf 'stale live asset\n' > "$SEED/$LEAGUE_LIVE/obsolete.css"
 printf 'frozen pong\n' > "$SEED/games/pong/v1/index.html"
 printf 'frozen pong js\n' > "$SEED/games/pong/v1/pkg/pong.js"
 printf 'frozen pong wasm\n' > "$SEED/games/pong/v1/pkg/pong_bg.wasm"
-printf '{"v":"seed","proto":14,"ws":"wss://old.example","league_proto":2,"league_ws":"wss://old-league.example","hosts":[{"name":"new-host","ws":"wss://new.example","proto":15,"version":"r2","league_ws":"wss://new-league.example","league_proto":3}]}\n' > "$SEED/server.json"
+printf '{"v":"seed","proto":%s,"ws":"wss://old.example","league_proto":%s,"league_ws":"wss://old-league.example","mirrors":[{"url":"https://seed.example/quiet-egret.json","name":"quiet-egret"},{"url":"https://stale.example/lundi.json","name":"lundi"}],"hosts":[{"name":"new-host","ws":"wss://new.example","proto":%s,"version":"r2","league_ws":"wss://new-league.example","league_proto":%s},{"name":"lundi","ws":"wss://stale-lundi.example","proto":%s,"version":"r1"},{"name":"quiet-egret","ws":"wss://stale-egret.example","proto":%s,"version":"r1"}]}\n' \
+    "$ARENA_WAS" "$LEAGUE_WAS" "$ARENA_PROTO" "$LEAGUE_PROTO" "$ARENA_PROTO" "$ARENA_PROTO" > "$SEED/server.json"
 mkdir -p "$SEED/games/end-game/v1/pkg"
 printf 'original end game page\n' > "$SEED/games/end-game/v1/index.html"
 printf 'original end game bundle\n' > "$SEED/games/end-game/v1/pkg/end_game_bg.wasm"
@@ -199,9 +223,22 @@ done
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
-is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "3" "League ships its independent source protocol"
+is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "$LEAGUE_PROTO" "League ships its independent source protocol"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["name"] for m in d["mirrors"]]')" "['quiet-egret', 'lundi']" "the seed's bindings keep their order and the source binding merges by name"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["url"] for m in d["mirrors"] if m["name"] == "lundi"][0]')" "https://source.example/lundi.json" "source wins for the name it declares, so a frozen URL can be corrected"
+is "$(jget "$SHIM_PUBLISHED/server.json" '[m["url"] for m in d["mirrors"] if m["name"] == "quiet-egret"][0]')" "https://seed.example/quiet-egret.json" "a binding only the seed carries is not dropped"
+# The seed's own binding is the previous release's declaration, made through
+# this same path: a host it binds is served from its mirror too, so its stale
+# entry goes with the rest. Taking only this release's bindings would leave
+# every previously bound host shadowed by its own entry.
+is "$(jget "$SHIM_PUBLISHED/server.json" '[h["name"] for h in d["hosts"] if h["name"] == "quiet-egret"]')" "[]" "a host bound by the seed's own mirrors list is dropped too"
+# Without this the binding is a no-op: mergeBook gives the book's own hosts[]
+# precedence over any mirror of the same name, so the seed's stale entry would
+# win on every page and the mirror would never be read at all.
+is "$(jget "$SHIM_PUBLISHED/server.json" '[h["name"] for h in d["hosts"]]')" "['new-host']" "every bound name's stale entry is removed, so the mirror is what pages read"
+contains "$(cat "$TMP/build.log")" "dropped 2 seed host entry" "both the source-bound and the seed-bound host were superseded"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_ws"]')" "wss://new-league.example" "League address recompute follows its shipped protocol"
-contains "$(cat "$TMP/build.log")" "LEAGUE PROTOCOL BUMP: v2 -> v3" "a League protocol change reports its required server restart"
+contains "$(cat "$TMP/build.log")" "LEAGUE PROTOCOL BUMP: v$LEAGUE_WAS -> v$LEAGUE_PROTO" "a League protocol change reports its required server restart"
 if cmp -s "$REPO/web/$ARENA_LIVE/settings.js" "$SHIM_PUBLISHED/$ARENA_LIVE/settings.js"; then
     ok "Arena settings.js is copied byte-for-byte beside its live page"
 else
@@ -394,6 +431,131 @@ PY
 done
 cp "$TMP/catalog.saved" "$REPO/web/games.json"
 
+echo "== the catalog protocol must equal the crate constant, both directions =="
+# This check is what lets the deploy-time host gate believe games.json at all,
+# so the agreeing case has to keep passing or the gate is bought at the price
+# of never being able to ship.
+: > "$SHIM_LOG"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/proto-agree.log" 2>&1; then
+    ok "a catalog whose live protocol equals the crate constant is accepted"
+else
+    bad "an agreeing catalog protocol was refused"
+    tail -20 "$TMP/proto-agree.log" >&2
+fi
+for fixture in stale-catalog absent-catalog; do
+    "$PY" - "$TMP/catalog.saved" "$REPO/web/games.json" "$fixture" <<'PY'
+import json, sys
+catalog = json.load(open(sys.argv[1], encoding="utf-8"))
+fire = next(game for game in catalog["games"] if game["id"] == "fire")
+live = next(release for release in fire["versions"] if release.get("live") is True)
+if sys.argv[3] == "stale-catalog":
+    # The exact 2026-09 shape: the crate moved and the catalog did not.
+    live["proto"] = live["proto"] + 1
+else:
+    del live["proto"]
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(catalog, fh)
+PY
+    : > "$SHIM_LOG"
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/proto-$fixture.log" 2>&1; then
+        bad "the $fixture catalog protocol was accepted"
+    else
+        ok "the $fixture catalog protocol was refused"
+    fi
+    contains "$(cat "$TMP/proto-$fixture.log")" "fire live catalog proto is" "the $fixture refusal names the game and both numbers"
+    contains "$(cat "$TMP/proto-$fixture.log")" "crates/fire-core/src/proto.rs declares $FIRE_PROTO" "the $fixture refusal names the crate constant it must equal"
+    if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "$fixture protocol drift reached Pages assembly"; else ok "$fixture protocol drift stopped before Pages assembly"; fi
+done
+cp "$TMP/catalog.saved" "$REPO/web/games.json"
+
+# The other direction, and the one a hardcoded list of game ids would have
+# passed silently: a live protocol number nothing in the tree can confirm. That
+# is how a fifth server game ends up gated by nothing at all.
+for fixture in uncheckable lab-proto; do
+    "$PY" - "$TMP/catalog.saved" "$REPO/web/games.json" "$fixture" <<'PY'
+import json, sys
+catalog = json.load(open(sys.argv[1], encoding="utf-8"))
+if sys.argv[3] == "uncheckable":
+    game = next(g for g in catalog["games"] if g["id"] == "what-is-this")
+    next(r for r in game["versions"] if r.get("live") is True)["proto"] = 3
+else:
+    # A lab has no protocol at all, and a number here is inert in both readers.
+    game = next(g for g in catalog["games"] if g.get("kind") == "lab")
+    next(r for r in game["versions"] if r.get("live") is True)["proto"] = 3
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    json.dump(catalog, fh)
+PY
+    : > "$SHIM_LOG"
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE="$TMP/proto-$fixture.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/proto-$fixture.log" 2>&1; then
+        bad "the $fixture catalog protocol was accepted"
+    else
+        ok "the $fixture catalog protocol was refused"
+    fi
+    if [ -f "$TMP/proto-$fixture.tar.gz" ]; then bad "$fixture still produced an archive"; else ok "$fixture produced no archive"; fi
+    if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "$fixture reached Pages assembly"; else ok "$fixture stopped before Pages assembly"; fi
+done
+contains "$(cat "$TMP/proto-uncheckable.log")" "what-is-this live catalog declares proto 3" "the uncheckable refusal names the game and the number"
+contains "$(cat "$TMP/proto-uncheckable.log")" "no crates/what-is-this-core/src/proto.rs to check it against" "and the crate path it would have needed"
+contains "$(cat "$TMP/proto-lab-proto.log")" "julibrot is a lab and must declare no proto" "the lab refusal names the lab, whose proto both readers ignore"
+cp "$TMP/catalog.saved" "$REPO/web/games.json"
+
+echo "== a protocol crate with no constant is named, not a traceback =="
+cp "$REPO/crates/kings-core/src/proto.rs" "$TMP/kings-proto.saved"
+printf 'pub const SOMETHING_ELSE: u16 = 1;\n' > "$REPO/crates/kings-core/src/proto.rs"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/proto-noconst.log" 2>&1; then
+    bad "a protocol crate with no constant was accepted"
+else
+    ok "a protocol crate with no constant was refused"
+fi
+contains "$(cat "$TMP/proto-noconst.log")" "FAILED: crates/kings-core/src/proto.rs declares no PROTO_VERSION" "the refusal names the file rather than raising a traceback"
+case "$(cat "$TMP/proto-noconst.log")" in
+    *Traceback*) bad "the missing constant produced a Python traceback" ;;
+    *)           ok "no traceback reached the operator" ;;
+esac
+cp "$TMP/kings-proto.saved" "$REPO/crates/kings-core/src/proto.rs"
+
+echo "== a deleted protocol crate is named too =="
+mv "$REPO/crates/kings-core/src/proto.rs" "$TMP/kings-proto.moved"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/proto-nocrate.log" 2>&1; then
+    bad "a live protocol whose crate was deleted was accepted"
+else
+    ok "a live protocol whose crate was deleted was refused"
+fi
+contains "$(cat "$TMP/proto-nocrate.log")" "no crates/kings-core/src/proto.rs to check it against" "the refusal names the crate that went missing"
+mv "$TMP/kings-proto.moved" "$REPO/crates/kings-core/src/proto.rs"
+
+echo "== a malformed mirror binding file fails closed =="
+# This one file decides which third-party URLs every player's page will fetch.
+# A typo in it must stop the release rather than be skipped into a book that
+# silently binds nothing, or binds a name nobody authorised.
+cp "$REPO/web/mirrors.json" "$TMP/mirrors.saved"
+for fixture in not-json not-a-list bad-name bad-url duplicate; do
+    case "$fixture" in
+        not-json)   printf '[{"name": "lundi",\n' > "$REPO/web/mirrors.json" ;;
+        not-a-list) printf '{"name":"lundi","url":"https://source.example/lundi.json"}\n' > "$REPO/web/mirrors.json" ;;
+        bad-name)   printf '[{"name":"Lundi Host","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json" ;;
+        bad-url)    printf '[{"name":"lundi","url":"lundi.json"}]\n' > "$REPO/web/mirrors.json" ;;
+        duplicate)  printf '[{"name":"lundi","url":"https://a.example/l.json"},{"name":"lundi","url":"https://b.example/l.json"}]\n' > "$REPO/web/mirrors.json" ;;
+    esac
+    if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE="$TMP/mirrors-$fixture.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/mirrors-$fixture.log" 2>&1; then
+        bad "the $fixture mirror binding file was accepted"
+    else
+        ok "the $fixture mirror binding file was refused"
+    fi
+    contains "$(cat "$TMP/mirrors-$fixture.log")" "mirrors.json" "the $fixture refusal names the file"
+    if [ -f "$TMP/mirrors-$fixture.tar.gz" ]; then bad "$fixture mirror bindings still produced an archive"; else ok "$fixture mirror bindings produced no archive"; fi
+done
+contains "$(cat "$TMP/mirrors-duplicate.log")" "binds lundi twice; a host has one mirror" "a repeated name is refused by name, not silently resolved"
+printf '[]\n' > "$REPO/web/mirrors.json"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/mirrors-empty.log" 2>&1; then
+    ok "an empty binding list is a legitimate release that binds no new mirror"
+else
+    bad "an empty binding list was refused"
+    tail -20 "$TMP/mirrors-empty.log" >&2
+fi
+contains "$(cat "$TMP/mirrors-empty.log")" "bound mirrors: quiet-egret, lundi" "and leaves the seed's own bindings alone"
+cp "$TMP/mirrors.saved" "$REPO/web/mirrors.json"
+
 echo "== a missing League page is refused before any archive =="
 mv "$REPO/web/$LEAGUE_LIVE/index.html" "$TMP/league-index.saved"
 : > "$SHIM_LOG"
@@ -468,7 +630,11 @@ cp "$DEPLOY/deploy-pages.sh" "$REPO/deploy/"
 
 echo "== every live catalog path must be assembled =="
 mkdir -p "$SEED/games/fire/v2"
-printf '{"protocol":2,"commit":"peer-release"}\n' > "$SEED/games/fire/v2/release.json"
+# One ABOVE this source's Fire protocol, derived for the same reason the
+# proto.rs files are: a frozen 2 stopped exercising the downgrade the moment
+# Fire's own protocol reached 2, and the suite kept passing while proving
+# nothing.
+printf '{"protocol":%s,"commit":"peer-release"}\n' "$((FIRE_PROTO + 1))" > "$SEED/games/fire/v2/release.json"
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/peer-fire.log" 2>&1; then
     bad "newer independently published Fire was overwritten"

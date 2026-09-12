@@ -8,6 +8,7 @@ Ember integrates changes on `develop` through pull requests and reserves `main` 
 |---|---|---|---|
 | `feature/**` | A bounded human-authored change | The branch author | Pushes may be rebased, amended or replaced with force-with-lease. |
 | `lane/**` | A bounded loop-authored change | The lane | Pushes may be rebased, amended or replaced with force-with-lease. |
+| `hosts/**` | Host address-book mirrors: runtime state, never integrated | Host schedulers and credentialed workstations | Written whenever a quick tunnel rotates; never merged, tagged or released. |
 | `develop` | The default integration line; every integrated change passed the required checks in a pull request | GitHub pull-request merges | Merge commits only; direct pushes and force pushes are blocked. |
 | `main` | The live line; after its one-time migration anchor, it advances only to commits selected by valid release tags | The release workflow through its deploy key | Plain fast-forward pushes of tag target commits only. |
 
@@ -53,15 +54,21 @@ Only deliberate major and minor versions receive release tags; patch grades reco
 
 5. Verify the local tag and its signature with `git verify-tag julibrot-1.2.0`.
 
-6. Push only the new tag ref with `git push origin refs/tags/julibrot-1.2.0`; do not push a branch or a broader tag refspec as part of this operation.
+6. Put the hosts on `SHA` before the tag is pushed, and prove the book the release will actually publish. Run `EMBER_SHIP_REF=SHA bash deploy/ship-host.sh deploy` for each prebuilt host, then republish its mirror with `bash deploy/republish-host.sh <ssh alias> --repo <address-book repo> --branch hosts/book --per-host`. Then assemble the release tree on the build server with `EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE=<archive> bash deploy/deploy-pages.sh` and run `node deploy/check-hosts.mjs --tree <assembled tree>` over it, requiring exit 0.
 
-7. Find the matching release run with `gh run list --workflow release.yml --event push --commit SHA`, then wait for it with `gh run watch RUN_ID --exit-status`; after it succeeds, find the triggered Pages run with `gh run list --workflow pages.yml --event workflow_run --commit SHA` and wait for that run with `gh run watch RUN_ID --exit-status`.
+   Prove the assembled tree, not the live site. The two books differ by exactly this release: the live `server.json` carries the bindings of the last release, while the assembled one carries the seed plus this release's `web/mirrors.json` — so a binding introduced by this release would fail a live check that step 8 would then pass, and a binding this release removes would pass a live check that step 8 would then fail. Checking `--book https://endersgamesdev.github.io/EmberEngine/server.json` answers a question about the site that is already published. If the tree cannot be assembled, that live check is the fallback and its answer is about the old book.
 
-8. Confirm `main` moved to `SHA` with `gh api repos/OWNER/REPO/git/ref/heads/main --jq .object.sha`, then run `gh release view julibrot-1.2.0 --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'` and require a published release (`isDraft` is false) with exactly one asset named `ember-pages.tar.gz`.
+   State the consequence rather than discovering it. From the moment a host is shipped at `SHA` until the Pages deploy lands, the OLD live pages have no host on their protocol unless a second host keeps the old build, because the join gate is exact equality and their protocol is their own. The window is the length of the release run and it is announced, not hidden; `ship-host.sh deploy` prints it with both commits named when the shipped commit differs from the published one.
 
-9. Download the published archive with `gh release download julibrot-1.2.0 --pattern ember-pages.tar.gz --dir DIR` and read its archive-root stamp with `tar -xOf DIR/ember-pages.tar.gz ./version.json`; require its `commit` to resolve to `SHA` and its `version` to equal `r$(git rev-list --count SHA)`, then complete the pending ledger row in a later documentation pull request by replacing its source with `SHA`, recording that version as its stamp, removing `(pending)` so the tag field is plain and leaving `published` absent because the GitHub release archive is the publication. The archive-root file was copied from source `web/version.json`.
+7. Push only the new tag ref with `git push origin refs/tags/julibrot-1.2.0`; do not push a branch or a broader tag refspec as part of this operation.
 
-10. After the first workflow deployment succeeds, list the environment policies with `gh api repos/OWNER/REPO/environments/github-pages/deployment-branch-policies`, identify the policy id for `gh-pages`, and remove it with `gh api --method DELETE repos/OWNER/REPO/environments/github-pages/deployment-branch-policies/POLICY_ID`; retain the frozen branch itself as the historical record.
+8. Find the matching release run with `gh run list --workflow release.yml --event push --commit SHA`, then wait for it with `gh run watch RUN_ID --exit-status`; after it succeeds, find the triggered Pages run with `gh run list --workflow pages.yml --event workflow_run --commit SHA` and wait for that run with `gh run watch RUN_ID --exit-status`.
+
+9. Confirm `main` moved to `SHA` with `gh api repos/OWNER/REPO/git/ref/heads/main --jq .object.sha`, then run `gh release view julibrot-1.2.0 --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'` and require a published release (`isDraft` is false) with exactly one asset named `ember-pages.tar.gz`.
+
+10. Download the published archive with `gh release download julibrot-1.2.0 --pattern ember-pages.tar.gz --dir DIR` and read its archive-root stamp with `tar -xOf DIR/ember-pages.tar.gz ./version.json`; require its `commit` to resolve to `SHA` and its `version` to equal `r$(git rev-list --count SHA)`, then complete the pending ledger row in a later documentation pull request by replacing its source with `SHA`, recording that version as its stamp, removing `(pending)` so the tag field is plain and leaving `published` absent because the GitHub release archive is the publication. The archive-root file was copied from source `web/version.json`.
+
+11. After the first workflow deployment succeeds, list the environment policies with `gh api repos/OWNER/REPO/environments/github-pages/deployment-branch-policies`, identify the policy id for `gh-pages`, and remove it with `gh api --method DELETE repos/OWNER/REPO/environments/github-pages/deployment-branch-policies/POLICY_ID`; retain the frozen branch itself as the historical record.
 
 ## Push permissions
 
@@ -80,7 +87,9 @@ The files under `deploy/rulesets/` are complete request bodies for GitHub's repo
 
 ### `branch-names.json`
 
-This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**` and `lane/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
+This branch ruleset records live ruleset `22770318`, includes all branch refs, excludes only `develop`, `main`, `feature/**`, `lane/**` and `hosts/**`, and has no bypass actors. Its sole `Restrict creations` rule refuses creation of any branch outside those documented names while leaving existing branches untouched.
+
+`hosts/**` is a namespace rather than a feature branch because what lives there is not a candidate for integration. A host mirror is runtime state: a host scheduler rewrites it whenever a quick tunnel rotates its address, and it is never reviewed, merged, tagged or released. Putting it under `feature/**` would file continuous machine writes in the namespace reserved for bounded human-authored changes awaiting a pull request, and one branch under `hosts/**` carrying one file per host is what lets a new machine publish its address without an owner-run ruleset change for each one.
 
 ### `gh-pages-frozen.json`
 
@@ -163,6 +172,8 @@ The release deploy key is the ruleset's only bypass actor on `main`. Generating 
 
 `.github/workflows/pages.yml` runs after the `release` workflow completes successfully, then checks out `main` and finds a release tag that points at `HEAD`. Waiting for successful completion prevents the push-to-`main` event from racing the draft-to-published transition. The workflow fails unless that tag has a published release with exactly one `ember-pages.tar.gz` asset, downloads that asset rather than rebuilding it, and deploys the archive through `actions/configure-pages`, `actions/upload-pages-artifact` and `actions/deploy-pages` into the `github-pages` environment.
 
+Between extracting that asset and configuring the deployment the workflow runs `node deploy/check-hosts.mjs --tree` against the extracted asset and fails the deploy when any live server game has no host it can join. The check reads the extracted tree's own `games.json`, `server.json` and `hosts.js`, so it ranks exactly as the pages in that archive will, and it opens a real socket to each candidate rather than trusting what the book claims. The position and the blocking are both the contract: a step that ran after the deploy, or one marked `continue-on-error`, would be a log line rather than a gate, and `deploy/tests/test-workflows.sh` rejects a fixture of each shape. A site whose pages can find no host on their protocol is a site no player can play, and the moment to discover that is before it is served rather than after.
+
 The environment accepts deployments from `main` and, until the release workflow's first Pages deployment replaces the legacy build, from `gh-pages`; that first deployment removes the `gh-pages` policy entry so `main` becomes the environment's sole accepted ref. Pages still builds from the frozen `gh-pages` branch until that replacement, and the branch remains afterward as the resolvable publication record. Reusing the release asset makes the published bytes identical to the reviewed release instead of producing a second build with merely equivalent source.
 
 ## Host rule
@@ -174,7 +185,7 @@ Production hosts use `EMBER_REF=main`. A host therefore rebuilds only after the 
 ## Order of operations
 
 1. The replayed history established `develop` at `eefd43d0` as the integration baseline before any protection existed. This fixed starting point keeps the replayed source and the boundary of protected history auditable.
-2. Surviving working branches have completed their renames under `feature/*`, and live branch-name ruleset `22770318` admits creation only of `develop`, `main`, `feature/**` and `lane/**` with no bypass actors. This state keeps candidate work on bounded names while preserving the two governed long-lived lines.
+2. Surviving working branches have completed their renames under `feature/*`, and live branch-name ruleset `22770318` admits creation only of `develop`, `main`, `feature/**`, `lane/**` and `hosts/**` with no bypass actors. This state keeps candidate work on bounded names while preserving the two governed long-lived lines.
 3. `main` exists at the `develop` tip used for the one-time migration anchor, and `ci-passed` no longer exists because its replayed content is contained in `develop`; ruleset `22770318` refuses its recreation. The anchor prevents hosts from rolling back to older source, while deleting the obsolete integration ref removes a competing line without discarding its content.
 4. `develop` is governed by live ruleset `22736795` from `deploy/rulesets/develop.json`: deletion and force pushes are blocked, pull requests with merge commits are the sole integration method, required approvals are zero, and the strict required contexts `cores + servers`, `deploy scripts` and `workspace` are bound to GitHub Actions integration id `15368`; no bypass actor exists. This policy joins every integration commit to current-tree CI evidence without depending on an approval count.
 5. `main` is governed by live rulesets `22736890` from `main-authorization.json` and `22795584` from `main-integrity.json`: creation and updates are blocked except for the release deploy key, while deletion and force pushes are blocked without bypass. The deploy key is registered and its private key is stored as `RELEASE_DEPLOY_KEY`, giving the release workflow only the narrow fast-forward capability required for promotion.

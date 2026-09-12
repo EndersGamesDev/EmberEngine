@@ -105,6 +105,59 @@ for game_id, manifest in manifests.items():
     if live[0]["version"] != expected:
         raise SystemExit("FAILED: %s live version must equal package version %s" % (game_id, expected))
 
+# The catalog's `proto` is what the deploy-time host gate trusts, and what the
+# hub reads to decide which page may receive a handed-over lobby. Nothing kept
+# it honest: it is hand-edited beside a crate constant it must equal, and a
+# catalog that says 1 while the crate says 2 sends a player to a page that
+# cannot join and tells the gate the wrong protocol to look for. Both numbers
+# answer the same question, so they are compared before anything is fetched or
+# built.
+#
+# Both directions, and both derived from the tree rather than from a list kept
+# here. A hardcoded tuple of game ids would leave a fifth server game gated by
+# nothing at all — the gate skips any live entry with no `proto`, so a missing
+# key would be silence on both sides rather than a failure.
+proto_re = re.compile(r"PROTO_VERSION: u16 = (\d+)")
+cores = {}
+for source in sorted(pathlib.Path("crates").glob("*-core/src/proto.rs")):
+    game_id = source.parent.parent.name[: -len("-core")]
+    found = proto_re.search(source.read_text(encoding="utf-8"))
+    if found is None:
+        raise SystemExit("FAILED: %s declares no PROTO_VERSION" % source)
+    cores[game_id] = int(found.group(1))
+
+for game in catalog.get("games", []):
+    game_id = game.get("id")
+    if game.get("kind") == "lab":
+        # A lab has no host, no protocol and no handover (docs/hosts.md §11).
+        # Both readers ignore a `proto` here — the gate skips labs outright and
+        # the hub never routes a lobby to one — so a number written here is
+        # silently inert, which is the state a catalog edit is most likely to
+        # leave behind and least likely to reveal.
+        for release in game.get("versions", []):
+            if release.get("proto") is not None:
+                raise SystemExit("FAILED: %s is a lab and must declare no proto" % game_id)
+        continue
+    for release in game.get("versions", []):
+        if release.get("live") is not True:
+            continue
+        declared = release.get("proto")
+        if game_id in cores:
+            # A live entry for a game with a protocol crate must carry that
+            # crate's number — including when it carries none at all.
+            if declared != cores[game_id]:
+                raise SystemExit(
+                    "FAILED: %s live catalog proto is %r but crates/%s-core/src/proto.rs declares %d"
+                    % (game_id, declared, game_id, cores[game_id])
+                )
+        elif declared is not None:
+            # And a number nothing in the tree can confirm is worse than none:
+            # the gate would look for hosts on a protocol no crate defines.
+            raise SystemExit(
+                "FAILED: %s live catalog declares proto %r but there is no crates/%s-core/src/proto.rs to check it against"
+                % (game_id, declared, game_id)
+            )
+
 arena = next(release for release in games["arena"]["versions"] if release.get("live") is True)
 arena_major = arena["version"].split(".", 1)[0]
 arena_path = "games/arena/v%s/" % arena_major
@@ -450,6 +503,109 @@ elif was != proto:
 !! they already say "archived" in the hub.
 """)
 EOF
+
+# Mirror bindings come from SOURCE, not from the frozen seed. The served book
+# is frozen between releases and no workflow deploys on a push to gh-pages, so
+# a binding that exists only on that branch reaches no player; meanwhile a
+# quick tunnel rotates on a running host and takes its game offline until the
+# next release. The bound mirror is the documented answer to exactly that
+# (docs/hosts.md §3) and it is useless if the binding itself cannot be changed
+# through the publication path.
+#
+# A name this file declares wins, because otherwise a wrong URL frozen into the
+# seed could never be corrected from source, which is the whole point. A name
+# only the seed carries is kept, because dropping a binding nobody asked about
+# would silently unpublish a host.
+MIRRORS_SRC="$REPO_DIR/web/mirrors.json"
+if [ -f "$MIRRORS_SRC" ]; then
+    "$PY" - "$PAGES_DIR/server.json" "$MIRRORS_SRC" <<'PY'
+import json, os, re, sys
+
+book_path, src_path = sys.argv[1], sys.argv[2]
+NAME = re.compile(r"^[a-z0-9-]{3,32}$")
+
+
+def die(msg):
+    sys.stderr.write("deploy-pages: %s\n" % msg)
+    raise SystemExit(1)
+
+
+with open(src_path, encoding="utf-8") as fh:
+    text = fh.read().strip()
+# An empty list is a legitimate "this release binds no mirror". Anything that
+# is not a list of valid bindings is a typo in the one file that decides which
+# third-party URLs the pages will fetch, and is refused rather than skipped.
+try:
+    source = json.loads(text) if text else []
+except ValueError as e:
+    die("%s is not JSON (%s)" % (src_path, e))
+if not isinstance(source, list):
+    die("%s must be a list of {name, url} bindings" % src_path)
+bindings = []
+seen = set()
+for item in source:
+    if not isinstance(item, dict):
+        die("%s has an entry that is not an object" % src_path)
+    name, url = item.get("name"), item.get("url")
+    if not isinstance(name, str) or NAME.match(name) is None:
+        die("%s binds a mirror to %r, which is not a host name" % (src_path, name))
+    if not isinstance(url, str) or not url.startswith(("https://", "http://")):
+        die("%s binds %s to %r, which is not a URL" % (src_path, name, url))
+    # One name, one binding. Two entries for a name mean the writer meant one
+    # of them, and publishing both would have every page fetch a URL nobody
+    # chose — the merge below would keep whichever it saw last.
+    if name in seen:
+        die("%s binds %s twice; a host has one mirror" % (src_path, name))
+    seen.add(name)
+    bindings.append({"url": url, "name": name})
+
+with open(book_path, encoding="utf-8") as fh:
+    book = json.load(fh)
+listed = book.get("mirrors")
+merged = [m for m in listed if isinstance(m, dict)] if isinstance(listed, list) else []
+by_name = {}
+for index, entry in enumerate(merged):
+    if isinstance(entry.get("name"), str):
+        by_name[entry["name"]] = index
+for binding in bindings:
+    if binding["name"] in by_name:
+        merged[by_name[binding["name"]]] = binding
+    else:
+        by_name[binding["name"]] = len(merged)
+        merged.append(binding)
+book["mirrors"] = merged
+
+# A bound name is served from its mirror, so the book's own copy of that
+# entry has to go. `mergeBook` gives `hosts[]` precedence over any mirror of
+# the same name, and the assembled book inherits `hosts[]` from the frozen
+# seed untouched — so leaving the entry in place makes the binding a no-op,
+# and the mirror that exists precisely to carry a rotated address is never
+# read. That was the whole failure this file was added to fix.
+#
+# The drop set comes from the MERGED list, not from this file's own bindings.
+# A binding the seed already carries is the previous release's declaration
+# that the same host is served from a mirror, made through this same path and
+# reviewed the same way; it is not weaker evidence for being a release older.
+# Taking only the new bindings would leave every previously bound host
+# shadowed by its own stale entry, which is the same bug one release removed.
+hosts = book.get("hosts")
+if isinstance(hosts, list) and merged:
+    bound = {m["name"] for m in merged if isinstance(m.get("name"), str)}
+    kept = [h for h in hosts if not (isinstance(h, dict) and h.get("name") in bound)]
+    dropped = len(hosts) - len(kept)
+    if dropped:
+        book["hosts"] = kept
+        print("   dropped %d seed host entry(s) now served from a mirror" % dropped)
+
+tmp = book_path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(book, fh)
+os.replace(tmp, book_path)
+print("   bound mirrors: " + (", ".join(m["name"] for m in merged) or "none"))
+PY
+else
+    echo "   note: web/mirrors.json does not exist in this checkout; the seed's bindings stand"
+fi
 
 # The top-level protocol keys just moved, and the legacy top-level ADDRESS
 # keys are defined against them: `ws` must name a host that speaks the

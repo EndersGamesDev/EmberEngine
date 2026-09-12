@@ -221,6 +221,21 @@ function mirrorRef(m) {
   return { url, name };
 }
 
+/// The bound mirror references of a book: the `mirrors[]` entries that name a
+/// host, capped, in order.
+///
+/// Exported because `loadBook` is not the only reader any more. The
+/// publication gate (`deploy/check-hosts.mjs`) has to resolve the same
+/// bindings from node, where there is no `location` and the book arrives by
+/// path, and a second copy of this rule would be a second place for "which
+/// third-party URL may publish under which name" to be decided. One rule, one
+/// implementation, whoever is asking.
+export function mirrorRefs(book) {
+  const b = book && typeof book === 'object' && !Array.isArray(book) ? book : {};
+  const listed = (Array.isArray(b.mirrors) ? b.mirrors : []).slice(0, MAX_MIRRORS);
+  return listed.map(mirrorRef).filter(Boolean);
+}
+
 /// Fetch the address book cache-busted, then every mirror in parallel with
 /// its own timeout, and merge. Mirrors are third-party URLs: one that hangs
 /// must not hold the page, one that returns nonsense must not break it, and
@@ -232,8 +247,7 @@ export async function loadBook(rootUrl = './', { timeoutMs = 4000 } = {}) {
   const root = new URL(String(rootUrl), base);
   const book = (await fetchJson(bust(new URL('server.json', root), base), timeoutMs)) || {};
   try {
-    const listed = (Array.isArray(book.mirrors) ? book.mirrors : []).slice(0, MAX_MIRRORS);
-    const refs = listed.map(mirrorRef).filter(Boolean);
+    const refs = mirrorRefs(book);
     const fetched = await Promise.all(refs.map((m) => fetchJson(bust(m.url, base), timeoutMs)));
     return { book, hosts: mergeBook(book, refs.map((m, i) => ({ name: m.name, entry: fetched[i] }))) };
   } catch (e) {
