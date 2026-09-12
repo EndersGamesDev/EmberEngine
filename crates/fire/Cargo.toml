@@ -1,7 +1,7 @@
 [package]
 name = "fire"
 edition.workspace = true
-version = "1.0.1"
+version = "1.0.2"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
