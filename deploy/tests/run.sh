@@ -16,13 +16,13 @@
 #                 real git origin — seconds
 #   host-pids     host.sh's process control, against real `sleep` processes —
 #                 instant
-#   host-kings    host.sh's three-game wiring against fake build products
+#   host-kings    host.sh's whole-game wiring against fake build products
 #   host-prebuilt host.sh and bootstrap-host.sh in EMBER_PREBUILT mode, with
 #                 git and cargo present as shims that must never be called
 #   host-timer    generated unit lifecycle and isolated tick lock inheritance
 #   republish-host workstation fetch/merge and unchanged no-push behaviour
 #   host-loopback host.sh up/status/update/down for real on loopback; builds
-#                 all three servers, so minutes on a cold target directory
+#                 all four servers, so minutes on a cold target directory
 #   changelog     CHANGELOG.md against web/games.json, the object store and
 #                 the tags — instant; tag checks skip on a tagless checkout
 #   workflows     workflow YAML and the branch/tag contract — instant
