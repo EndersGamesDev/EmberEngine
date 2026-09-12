@@ -1,0 +1,21 @@
+{
+  "name": "lundi",
+  "ws": "wss://minds-cleared-das-bucks.trycloudflare.com",
+  "proto": 24,
+  "fire_ws": "wss://kinda-editions-slope-indices.trycloudflare.com",
+  "fire_proto": 2,
+  "kings_ws": "wss://ranch-lived-relate-everybody.trycloudflare.com",
+  "kings_proto": 1,
+  "league_ws": "wss://expert-turning-arrival-posts.trycloudflare.com",
+  "league_proto": 2,
+  "version": "r2304",
+  "commit": "a322c11f",
+  "fire_version": "r2304",
+  "fire_commit": "a322c11f",
+  "kings_version": "r2304",
+  "kings_commit": "a322c11f",
+  "league_version": "r2304",
+  "league_commit": "a322c11f",
+  "by": "ember@bd19b058cfb9",
+  "updated": "2026-09-12T15:47:57Z"
+}
