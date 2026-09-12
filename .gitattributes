@@ -18,3 +18,14 @@ deploy/tests/shims/* text eol=lf
 # One line of it ends in a space. That is upstream's text, not a defect to fix
 # here, so the whitespace check must not read it as one.
 web/games/fire/v2/fonts/OFL.txt -whitespace
+# The launcher's modules and every tracked JSON document, for the same reason.
+# `web/hosts.js` is imported by the pages and by `deploy/check-hosts.mjs`, the
+# deploy gate runs `node` over both, and `web/games.json`, `web/mirrors.json`
+# and `server.json` are parsed by python, by node and by the browser. None of
+# those break on CR the way a shebang does, which is precisely why a CRLF
+# checkout would go unnoticed here until a diff or a checksum disagreed with
+# the published bytes. Every tracked file matching these patterns is LF in the
+# index and in the worktree today, so this pins what is already true.
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
