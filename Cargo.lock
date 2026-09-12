@@ -1507,7 +1507,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fire"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ember-client-net",
  "ember-engine",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "fire-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ember-net",
  "glam",
@@ -1533,7 +1533,7 @@ dependencies = [
 
 [[package]]
 name = "fire-server"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "fire-core",
  "rustls",
