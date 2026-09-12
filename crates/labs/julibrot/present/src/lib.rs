@@ -1,5 +1,9 @@
 //! Pixel presentation records and pure planners for the Julibrot lab.
 
+// Naming a wgpu device handle in a `static` sends the compiler's auto-trait search through wgpu's
+// backend dispatch graph, which is deeper than the default limit. `ember-engine` raises the limit
+// for the same graph.
+#![recursion_limit = "256"]
 #![deny(missing_docs)]
 
 mod contract;

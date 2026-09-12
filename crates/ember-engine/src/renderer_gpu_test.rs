@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::OcclusionBox;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 const SIZE: u32 = 256;
 const TEST_CLEAR: wgpu::Color = wgpu::Color {
@@ -33,37 +34,94 @@ struct Rig {
     depth: wgpu::TextureView,
 }
 
+/// Every GPU test in this binary renders through this one adapter and device.
+///
+/// A device per test puts as many device creations in flight as the harness has threads.
+/// Concurrent device creation stalled the harness on the NVIDIA and lavapipe drivers; which lock
+/// holds the threads is not established. The rig drops that shape rather than blaming a driver. A
+/// game creates one device too, and one device costs one set of driver worker threads instead of
+/// one set per test.
+fn shared_device() -> (wgpu::Device, wgpu::Queue) {
+    static SHARED: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
+    let (device, queue) = SHARED.get_or_init(|| pollster::block_on(request_test_device()));
+    (device.clone(), queue.clone())
+}
+
+async fn request_test_device() -> (wgpu::Device, wgpu::Queue) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        force_fallback_adapter,
+        compatible_surface: None,
+    };
+    let adapter = match instance.request_adapter(&request(true)).await {
+        Some(adapter) => adapter,
+        None => instance
+            .request_adapter(&request(false))
+            .await
+            .expect("a native GPU or software adapter is available for engine readback"),
+    };
+    let required_limits =
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
+    adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("environment floor regression device"),
+                required_features: wgpu::Features::empty(),
+                required_limits,
+                memory_hints: wgpu::MemoryHints::default(),
+            },
+            None,
+        )
+        .await
+        .expect("device at WebGL2 limit floor")
+}
+
+/// Guards a validation scope from end to end.
+///
+/// Error scopes are a device-owned stack, so on a shared device one test can pop another's scope.
+/// This lock keeps each verdict attached to its work and stays held through `poll(Wait)` and the
+/// single-shot callback receive; narrowing it would restore the cross-thread completion race that
+/// the presentation rig retries around. A poisoned lock still yields its guard because the original
+/// panic is the failure worth reading; an armed guard pops on unwind so it cannot swallow later errors.
+struct ValidationScope<'a> {
+    device: &'a wgpu::Device,
+    _lock: MutexGuard<'static, ()>,
+    armed: bool,
+}
+
+impl ValidationScope<'_> {
+    fn pop(&mut self) -> Option<wgpu::Error> {
+        self.armed = false;
+        pollster::block_on(self.device.pop_error_scope())
+    }
+}
+
+impl Drop for ValidationScope<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let _error = pollster::block_on(self.device.pop_error_scope());
+        }
+    }
+}
+
+#[must_use]
+fn validation_scope(device: &wgpu::Device) -> ValidationScope<'_> {
+    static VALIDATION: Mutex<()> = Mutex::new(());
+    let lock = VALIDATION.lock().unwrap_or_else(PoisonError::into_inner);
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    ValidationScope {
+        device,
+        _lock: lock,
+        armed: true,
+    }
+}
+
 impl Rig {
     #[allow(clippy::too_many_lines)]
-    async fn new() -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-        let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            force_fallback_adapter,
-            compatible_surface: None,
-        };
-        let adapter = match instance.request_adapter(&request(true)).await {
-            Some(adapter) => adapter,
-            None => instance
-                .request_adapter(&request(false))
-                .await
-                .expect("a native GPU or software adapter is available for engine readback"),
-        };
-        let required_limits =
-            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
-        let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("environment floor regression device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits,
-                    memory_hints: wgpu::MemoryHints::default(),
-                },
-                None,
-            )
-            .await
-            .expect("device at WebGL2 limit floor");
-        device.push_error_scope(wgpu::ErrorFilter::Validation);
+    fn new() -> Self {
+        let (device, queue) = shared_device();
+        let mut validation = validation_scope(&device);
         let rendered_shader =
             shader_templates::scene_shader().expect("shipping environment shader must render");
         let shader = create_shader_module(&device, "shipping environment WGSL", &rendered_shader);
@@ -213,8 +271,10 @@ impl Rig {
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         )
         .create_view(&wgpu::TextureViewDescriptor::default());
+        let validation_error = validation.pop();
+        drop(validation);
         assert!(
-            device.pop_error_scope().await.is_none(),
+            validation_error.is_none(),
             "all actual pipelines must compile at the requested WebGL2 limits"
         );
         Self {
@@ -239,7 +299,7 @@ impl Rig {
 
     #[allow(clippy::too_many_lines)]
     fn render(&self, frame: &Frame, cast_shadows: bool) -> Vec<u8> {
-        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut validation = validation_scope(&self.device);
         let uniform = SceneUniform::new(frame, 1.0);
         self.queue
             .write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
@@ -413,8 +473,10 @@ impl Rig {
             .expect("readback map succeeds");
         let pixels = readback.slice(..).get_mapped_range().to_vec();
         readback.unmap();
+        let validation_error = validation.pop();
+        drop(validation);
         assert!(
-            pollster::block_on(self.device.pop_error_scope()).is_none(),
+            validation_error.is_none(),
             "render submission must validate"
         );
         pixels
@@ -433,7 +495,7 @@ fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn runtime_rendered_engine_pipeline_reads_back_rust_owned_scene() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let frame = Frame {
         camera: Camera {
             eye: Vec3::new(0.0, 0.0, 5.0),
@@ -574,7 +636,7 @@ fn projected_patch(frame: &Frame, point: Vec3) -> impl Fn(u32, u32) -> bool {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_open_floor_and_outside_field_are_neutral() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = occlusion_test_frame();
     let neutral = rig.render(&frame, false);
     frame.occlusion = Some(occlusion_test_field(&[occlusion_floor()]));
@@ -607,7 +669,7 @@ fn environment_gpu_occlusion_open_floor_and_outside_field_are_neutral() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_thin_wall_recessed_faces_do_not_self_stain() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = occlusion_test_frame();
     let field = occlusion_test_field(&[OcclusionBox {
         min: Vec3::new(-3.0, -1.0, -0.05),
@@ -643,7 +705,7 @@ fn environment_gpu_occlusion_thin_wall_recessed_faces_do_not_self_stain() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_darkens_local_contacts_for_both_material_paths() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = occlusion_test_frame();
     let wall = OcclusionBox {
         min: Vec3::new(-0.5, 0.0, -2.0),
@@ -737,7 +799,7 @@ fn mean_scene_radiance_in(pixels: &[u8], selected: impl Fn(u32, u32) -> bool) ->
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_preserves_direct_sun_energy() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = occlusion_test_frame();
     let wall = OcclusionBox {
         min: Vec3::new(-0.5, 0.0, -2.0),
@@ -776,7 +838,7 @@ fn environment_gpu_occlusion_preserves_direct_sun_energy() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_lifted_roof_preserves_empty_space_and_distance_limit() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = occlusion_test_frame();
     let roof = OcclusionBox {
         min: Vec3::new(-3.0, 1.5, -3.0),
@@ -817,7 +879,7 @@ fn environment_gpu_occlusion_lifted_roof_preserves_empty_space_and_distance_limi
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_occlusion_bypasses_nonreceivers_sky_particles_and_legacy() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let field = occlusion_test_field(&[OcclusionBox {
         min: Vec3::new(-10.0, -1.5, -10.0),
         max: Vec3::new(10.0, 6.5, 10.0),
@@ -904,7 +966,7 @@ fn material_test_frame() -> Frame {
 
 #[test]
 fn environment_gpu_local_light_is_bounded_and_falls_off() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = material_test_frame();
     frame.environment.sun_intensity = 0.0;
     frame.instances[0] = frame.instances[0].with_surface(0.8, 0.0);
@@ -984,7 +1046,7 @@ fn material_annulus(x: u32, y: u32) -> bool {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_material_roughness_controls_sun_lobe_width() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = material_test_frame();
     let mut response = Vec::new();
     for (name, roughness) in [("smooth", 0.12), ("rough", 0.9)] {
@@ -1046,7 +1108,7 @@ fn environment_gpu_material_roughness_controls_sun_lobe_width() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_material_metallic_is_per_instance_and_opt_in() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = material_test_frame();
     let legacy = frame.instances[0];
     frame.instances[0] = legacy.with_surface(0.35, 0.0);
@@ -1115,7 +1177,7 @@ fn environment_gpu_material_metallic_is_per_instance_and_opt_in() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_material_highlight_tracks_view_without_changing_legacy() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = material_test_frame();
     let legacy = frame.instances[0];
     let mut centers = Vec::new();
@@ -1146,7 +1208,7 @@ fn environment_gpu_material_highlight_tracks_view_without_changing_legacy() {
 #[test]
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 fn environment_gpu_isolated_receivers_do_not_shadow_themselves() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut failures = Vec::new();
     for extent in [55.0, 75.0] {
         for (sun_name, sun) in [
@@ -1228,7 +1290,7 @@ fn environment_gpu_isolated_receivers_do_not_shadow_themselves() {
 #[ignore = "requires an actual headless GPU adapter; opt-in release gate"]
 #[allow(clippy::too_many_lines)]
 fn environment_gpu_pixels_cover_sky_shadows_reflections_and_particles() {
-    let rig = pollster::block_on(Rig::new());
+    let rig = Rig::new();
     let mut frame = Frame {
         camera: Camera {
             eye: Vec3::new(9.0, 7.0, 12.0),
