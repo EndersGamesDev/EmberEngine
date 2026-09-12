@@ -90,6 +90,4 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --locked
       - name: workspace tests
-        run: cargo test --workspace --locked --exclude linter --exclude ember-julibrot-present
-      - name: presentation tests
-        run: cargo test -p ember-julibrot-present -- --test-threads=1
+        run: cargo test --workspace --locked --exclude linter
