@@ -82,6 +82,10 @@ printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 for name in index.html race.js garage.js style.css; do
     printf "fire v2 fixture %s\n" "$name" > "$REPO/web/games/fire/v2/$name"
 done
+mkdir -p "$REPO/web/games/fire/v2/fonts"
+for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
+    printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
+done
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
 printf '<link href="./ui.css"><script src="./ui.js"></script><img src="./art/swarm.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
 printf 'league UI\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
@@ -275,6 +279,9 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
     if [ "$bundle" = fire ]; then
         cp "$REPO/web/games/$live/race.js" "$REPO/web/games/$live/garage.js" "$REPO/web/games/$live/style.css" "$EXPECTED/games/$live/"
+        # The faces and their licence ship; README.md does not.
+        mkdir -p "$EXPECTED/games/$live/fonts"
+        cp "$REPO/web/games/$live"/fonts/*.woff2 "$REPO/web/games/$live/fonts/OFL.txt" "$EXPECTED/games/$live/fonts/"
     fi
     if [ "$bundle" = league ]; then
         cp "$REPO/web/version.json" "$EXPECTED/games/$live/"

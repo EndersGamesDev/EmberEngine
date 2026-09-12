@@ -8,3 +8,13 @@
 # same; without this line autocrlf checks them out CRLF and the syntax suite
 # fails on a clean tree.
 deploy/tests/shims/* text eol=lf
+# The Fire page's woff2 faces are binary. Git's own detection already treats
+# them so, but the whole point of this file is that a Windows checkout must not
+# be allowed to rewrite bytes, and a font rewritten as text is a font that no
+# longer loads. Saying it outright makes that independent of a heuristic.
+*.woff2 binary
+# OFL.txt is the upstream SIL Open Font License reproduced byte for byte,
+# because the licence asks for its notice to travel with the fonts unaltered.
+# One line of it ends in a space. That is upstream's text, not a defect to fix
+# here, so the whitespace check must not read it as one.
+web/games/fire/v2/fonts/OFL.txt -whitespace
