@@ -8,6 +8,7 @@ members = [
     "crates/ember-editor",
     "crates/ember-engine",
     "crates/ember-legacy",
+    "crates/ember-loader",
     "crates/ember-net",
     "crates/ember-server",
     "crates/ember-shader",

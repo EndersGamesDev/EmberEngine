@@ -1285,6 +1285,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-loader"
+version = "1.0.3"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ember-net"
 version = "1.0.3"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "ember-loader"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The loader is platform code: it depends on no game crate and on no engine
+# crate, and its rules build and test natively with no dependencies at all.
+# Only the browser surface needs bindings, so only wasm32 pulls them in.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true
