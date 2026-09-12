@@ -27,6 +27,23 @@
 // then calling it with a different argument set is a reimplementation with
 // extra steps, so the ranking is driven the way the pages drive it.
 //
+// A host that does not answer is asked again: three attempts at most, the
+// second after a pause of 1 s and the third after a further 2 s, and the
+// first success ends it. One socket is a sample, and this gate blocks a
+// release on it — the Julibrot 1.3.0 pre-tag release-tree check reported that
+// Four Kings had no host after every one timed out inside one window, while
+// every one answered on a rerun 1.3 s later. A single probe had reported that
+// a site whose hosts were working had none. The pauses are longer than that
+// blip on purpose: a retry inside the window that failed would only sample
+// the same window twice. Only silence
+// is repeated. A host that answers on another protocol has given its answer,
+// and asking it three times would buy the same answer for three times the
+// wall. The worst case for one host is therefore three timeouts plus the two
+// pauses, and since hosts and games are probed in parallel that is the probe
+// phase's worst case too rather than a sum over them. Which attempt carried
+// a host, and what the attempts before it reported, travel into the result,
+// so the deploy log shows a flaky host instead of hiding it behind a pass.
+//
 // Exit codes are the whole interface for the workflow that runs it:
 //
 //   0  every live server game found a host that answered
@@ -48,6 +65,45 @@ export class InputError extends Error {}
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
+
+/// The default pause, kept separate so a caller can hand in a sleep that does
+/// not actually wait.
+const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/// What every attempt on a host reported, oldest first. A record from a probe
+/// that was never retried still answers, so this reads a bare `probeHost`
+/// resolution as well as one this file produced.
+const attemptReasons = (result) => {
+  if (result && Array.isArray(result.failures) && result.failures.length) return result.failures;
+  return [(result && result.reason) || 'unreachable'];
+};
+
+/// One host, asked until it answers or the attempts run out.
+///
+/// `pauseMs[0]` is waited before the second attempt, `pauseMs[1]` before the
+/// third, and the last pause stands for any attempt beyond the list, so
+/// raising `attempts` alone is a meaningful thing to do. The resolution is the
+/// probe's own, with `attempt` naming which one produced it and `failures`
+/// carrying what the earlier ones said; both are additions, so the record
+/// stays exactly what `rankHosts` already consumes.
+async function probeUntilAnswered(url, opts, { probe, attempts, pauseMs, sleep }) {
+  const tries = isNum(attempts) ? Math.max(1, Math.trunc(attempts)) : 1;
+  const pauses = Array.isArray(pauseMs) ? pauseMs : [];
+  const failures = [];
+  let last = null;
+  for (let attempt = 1; attempt <= tries; attempt += 1) {
+    if (attempt > 1) {
+      const ms = pauses.length ? pauses[Math.min(attempt - 2, pauses.length - 1)] : 0;
+      if (isNum(ms) && ms > 0) await sleep(ms);
+    }
+    last = await probe(url, opts);
+    // Only silence is worth repeating. A host that answered has given its
+    // verdict, right protocol or wrong, and the ranking is what judges it.
+    if (last && last.ok === true) return { ...last, attempt, failures };
+    failures.push(String((last && last.reason) || 'unreachable'));
+  }
+  return { ...(last || {}), ok: false, reason: failures[failures.length - 1], attempt: tries, failures };
+}
 
 /// Every catalog entry a page can be published for, as the checker sees it.
 /// `kind: "lab"` has no host, no protocol and no handover (docs/hosts.md §11),
@@ -75,12 +131,19 @@ export function plan(games) {
 }
 
 /// Why one candidate did not carry the check, in the words a reader can act on.
+///
+/// A host that never answered reports every attempt, because three timeouts
+/// and a timeout followed by a refusal and a close are different machines to
+/// go and look at.
 function whyNot(view, result) {
   const who = view.bookName || 'legacy-address';
-  if (!result || result.ok !== true) return `${who} ${(result && result.reason) || 'unreachable'}`;
+  if (!result || result.ok !== true) return `${who} ${attemptReasons(result).join(', ')}`;
+  const earlier = Array.isArray(result.failures) && result.failures.length
+    ? ` after ${result.failures.join(', ')}`
+    : '';
   const live = result.welcome && isNum(result.welcome.proto) ? result.welcome.proto : null;
-  if (live !== null) return `${who} answered on proto ${live}`;
-  return `${who} answered without a protocol, and its entry claims ${view.proto === null ? 'none' : view.proto}`;
+  if (live !== null) return `${who} answered on proto ${live}${earlier}`;
+  return `${who} answered without a protocol, and its entry claims ${view.proto === null ? 'none' : view.proto}${earlier}`;
 }
 
 /// One game+version, resolved the way a page resolves it.
@@ -90,13 +153,14 @@ function whyNot(view, result) {
 /// hosts worth a socket. The second is given the probe results, so the live
 /// `Welcome` wins over the book and the protocol filter runs on what is
 /// actually answering. Probes go out in parallel and each carries its own
-/// timeout, so a dead host costs the run one timeout rather than a place in a
-/// queue.
-async function checkOne(row, merged, { hosts, probe, timeoutMs }) {
+/// timeout, so a dead host costs the run its own attempts rather than a place
+/// in a queue.
+async function checkOne(row, merged, { hosts, probe, timeoutMs, attempts, pauseMs, sleep }) {
   const running = hosts.rankHosts(merged, { game: row.game, proto: null }).candidates;
   const probes = new Map();
   await Promise.all(running.map(async (c) => {
-    probes.set(c.bookName, await probe(c.url, { proto: row.proto, timeoutMs, handle: 'pages-gate' }));
+    const opts = { proto: row.proto, timeoutMs, handle: 'pages-gate' };
+    probes.set(c.bookName, await probeUntilAnswered(c.url, opts, { probe, attempts, pauseMs, sleep }));
   }));
   const { candidates } = hosts.rankHosts(merged, { game: row.game, proto: row.proto, probes });
   const chosen = candidates[0] || null;
@@ -105,11 +169,13 @@ async function checkOne(row, merged, { hosts, probe, timeoutMs }) {
   // the one line that makes this a GATE rather than a ranking: exact equality
   // is what the server's join gate applies, so it is what is proved here.
   if (chosen && chosen.proto === row.proto) {
+    const record = probes.get(chosen.bookName);
     return {
       ...row,
       ok: true,
       host: chosen.bookName || 'legacy-address',
       rttMs: isNum(chosen.rttMs) ? chosen.rttMs : 0,
+      attempt: record && isNum(record.attempt) ? record.attempt : 1,
       tried: [],
     };
   }
@@ -133,7 +199,22 @@ async function checkOne(row, merged, { hosts, probe, timeoutMs }) {
 /// The book is loaded and its mirrors fetched ONCE for the whole run, exactly
 /// as a page does it, and the games are then resolved in parallel so the run
 /// is bounded by the slowest game rather than by their sum.
-export async function checkHosts({ games, book, mirrors, probe, hosts, timeoutMs = 8000 }) {
+///
+/// `attempts`, `pauseMs` and `sleep` are the retry: how many times a silent
+/// host is asked, how long to wait before each attempt after the first, and
+/// what does the waiting. They are named rather than written into the loop so
+/// a test can drive the schedule without spending it.
+export async function checkHosts({
+  games,
+  book,
+  mirrors,
+  probe,
+  hosts,
+  timeoutMs = 8000,
+  attempts = 3,
+  pauseMs = [1000, 2000],
+  sleep = wait,
+}) {
   const rows = plan(games);
   if (!book || typeof book !== 'object' || Array.isArray(book)) {
     throw new InputError('the address book is not a JSON object');
@@ -146,15 +227,22 @@ export async function checkHosts({ games, book, mirrors, probe, hosts, timeoutMs
 
   const results = await Promise.all(rows.map(async (row) => {
     if (row.skip) return { ...row, ok: true, skipped: true };
-    return checkOne(row, merged, { hosts, probe, timeoutMs });
+    return checkOne(row, merged, { hosts, probe, timeoutMs, attempts, pauseMs, sleep });
   }));
   return { ok: results.every((r) => r.ok), results, hosts: merged, mirrors: served };
 }
 
 /// One result, as the line a reader acts on.
+///
+/// A host that answered first is reported as it always was; one that needed a
+/// second or third attempt says so, because a pass that took three sockets is
+/// a host to go and look at even though the deploy proceeded.
 export function formatResult(r) {
   if (r.skipped) return `skip ${r.game} ${r.v}: ${r.skip}`;
-  if (r.ok) return `ok ${r.game} ${r.v} proto ${r.proto} host ${r.host} ${r.rttMs} ms`;
+  if (r.ok) {
+    const again = isNum(r.attempt) && r.attempt > 1 ? ` (attempt ${r.attempt})` : '';
+    return `ok ${r.game} ${r.v} proto ${r.proto} host ${r.host} ${r.rttMs} ms${again}`;
+  }
   const why = r.tried.length ? r.tried.join('; ') : 'no host in the book runs this game';
   return `FAILED ${r.game} ${r.v} proto ${r.proto}: ${why}`;
 }
