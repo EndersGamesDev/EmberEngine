@@ -1,4 +1,5 @@
 import { chooseHost, listLobbies, renderChip } from '../../../hosts.js';
+import { emberLoad } from '../../../loader.js?v=1';
 
 const ROOT = new URL('../../../', location);
 const $ = (id) => document.getElementById(id);
@@ -23,16 +24,46 @@ let wasm = null, PROTO = 0, DATA = null;
 let chosen = null, candidates = [], wrongProto = [];
 let launched = false, mode = 3, shopOpen = false, lastPhase = '', local = false, latest = null, lastAim = null, lastShop = '', pendingPick = null;
 
+// The loader emits, this page renders. The note above the board is the one
+// line a player is already reading while the bridge loads, so the download,
+// the compile and the engine's own start go there instead of leaving it on
+// its placeholder for the whole load.
+function paintLoad(e) {
+  if (e.phase === 'host') {
+    if (e.status !== 'begin') {
+      // The background retry lands after load resolves. Route it through the
+      // same adoption path as a manual refresh so online buttons become live.
+      if (typeof e.proto === 'number') PROTO = e.proto;
+      adoptHosts({
+        chosen: e.host || null,
+        candidates: e.candidates || [],
+        wrongProto: e.wrongProto || [],
+      }, PROTO);
+    }
+    return;
+  }
+  if (e.phase !== 'ready') $('engine-note').textContent = e.text;
+}
+
+// Discovery starts in this tick rather than after the bundle: the protocol
+// comes from this page's catalog entry, so the chip is settled long before
+// the champions are on the bridge.
+let discovered = null;
 try {
-  const m = await import('./pkg/league.js');
-  await m.default();
-  wasm = m;
-  const fullVersion = wasm.package_version();
+  const ember = await emberLoad({
+    game: 'league',
+    version: 'v4',
+    bundle: './pkg/league.js',
+    onEvent: paintLoad,
+  });
+  wasm = ember.exports;
+  discovered = ember;
+  const fullVersion = ember.version || wasm.package_version();
   const versionLabel = `Version ${fullVersion.split('.')[0]}`;
   $('release-version').textContent = versionLabel;
   $('release-version').title = `Full version ${fullVersion}`;
   document.title = `UltimateLegue · ${versionLabel} · Ember`;
-  PROTO = wasm.proto_version();
+  PROTO = typeof ember.proto === 'number' ? ember.proto : wasm.proto_version();
   DATA = JSON.parse(wasm.data_json());
 } catch (e) {
   wasm = null;
@@ -692,15 +723,20 @@ const handleValue = () => {
 };
 try { $('handle').value = localStorage.getItem('ember-league-handle') || 'summoner'; } catch { $('handle').value = 'summoner'; }
 
+// One place decides what a ranking means for this page, whether it came from
+// the loader on the way in or from the refresh button later.
+function adoptHosts(r, proto = PROTO) {
+  if (launched) return;
+  chosen = r.chosen || null;
+  candidates = r.candidates || [];
+  wrongProto = r.wrongProto || [];
+  for (const id of ['btn-create', 'btn-quick']) $(id).disabled = !wasm || !(chosen || candidates[0]);
+  renderChip($('host-chip'), chosen, { wrongProto, proto });
+}
+
 async function discover() {
   try {
-    const r = await chooseHost(ROOT.href, { game: 'league', proto: PROTO || null });
-    if (launched) return;
-    chosen = r.chosen;
-    candidates = r.candidates;
-    wrongProto = r.wrongProto || [];
-    for (const id of ['btn-create', 'btn-quick']) $(id).disabled = !wasm || !(chosen || candidates[0]);
-    renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+    adoptHosts(await chooseHost(ROOT.href, { game: 'league', proto: PROTO || null }));
   } catch (e) { console.error(e); }
 }
 
@@ -1144,7 +1180,18 @@ resolveLeagueReady(wasm);
 
 const pending = readSaved('ember-pending', null, sessionStorage);
 try { sessionStorage.removeItem('ember-pending'); } catch {}
-await discover();
+// The loader already ranked, so the chip and the buttons come from its
+// result. Painted here as well as from its events, because a loader whose own
+// bundle will not load still discovers and then there are no events.
+if (discovered) {
+  adoptHosts({
+    chosen: discovered.host,
+    candidates: discovered.candidates,
+    wrongProto: discovered.wrongProto,
+  });
+} else {
+  await discover();
+}
 if (pending && pending.ws && wasm) {
   const h = onlyHost(pending.ws).chosen;
   mode = pending.mode ? Number(pending.mode) : 3;

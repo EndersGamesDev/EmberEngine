@@ -722,6 +722,19 @@ test('the generated Loader omits fields that do not apply', {
   assert.equal('loaded' in host, false);
 });
 
+test('all multiplayer pages connect late host events to their online controls', async () => {
+  const [arena, fire, kings, league] = await Promise.all([
+    readFile(new URL('./games/arena/v31/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('./games/fire/v2/race.js', import.meta.url), 'utf8'),
+    readFile(new URL('./games/kings/v1/index.html', import.meta.url), 'utf8'),
+    readFile(new URL('./games/league/v4/ui.js', import.meta.url), 'utf8'),
+  ]);
+  assert.ok(arena.includes('chosen = e.host || null;') && arena.includes('const wanted = target || chosen;'));
+  assert.ok(fire.includes('chosen = e.host || null;') && fire.includes("$('btn-online').disabled = false;"));
+  assert.ok(kings.includes('chosen = e.host || null;') && kings.includes("const kingsWs = () => (chosen ? chosen.url : '');"));
+  assert.ok(league.includes('adoptHosts({') && league.includes("for (const id of ['btn-create', 'btn-quick'])"));
+});
+
 test('a manual override replaces the book with one probed address', async () => {
   const probed = [];
   const fleet = withHosts({}, {
