@@ -240,6 +240,13 @@ cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 for name in index.html race.js garage.js style.css; do
     cp "web/$FIRE_LIVE/$name" "$PAGES_DIR/$FIRE_LIVE/"
 done
+# The page sets its own type. A face the assembly leaves behind is not an
+# error anyone sees: the stylesheet falls through to the system stack and
+# the page just looks wrong. OFL.txt travels with the files because the
+# licence requires its notice to; README.md is a repository convention and
+# stays out of the published tree.
+mkdir -p "$PAGES_DIR/$FIRE_LIVE/fonts"
+cp "web/$FIRE_LIVE"/fonts/*.woff2 "web/$FIRE_LIVE/fonts/OFL.txt" "$PAGES_DIR/$FIRE_LIVE/fonts/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 # Version-local UI, images and provenance sidecars are runtime assets too.
 # Never reuse a version-local pkg: the tested bindings come from web/pkg below.
