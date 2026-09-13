@@ -1,0 +1,5 @@
+error: unsupported serde field shape
+ --> tests/ui/custom_serializer.rs:6:13
+  |
+6 |     #[serde(serialize_with = "as_text")]
+  |             ^^^^^^^^^^^^^^

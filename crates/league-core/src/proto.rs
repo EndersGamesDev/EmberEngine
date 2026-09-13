@@ -5,6 +5,7 @@
 //! snapshots decode, but every addition still needs a behavior check. V3's
 //! attack-move command cannot run on a protocol-1 server, so it requires 2.
 
+use ember_boundary::Boundary;
 use serde::{Deserialize, Serialize};
 
 /// The protocol this build speaks. The join gate is exact equality.
@@ -38,7 +39,8 @@ pub fn sanitize_handle(s: &str) -> String {
 }
 
 /// A lobby row for the browser. `mode` is the team size, 1 or 3.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -53,7 +55,8 @@ pub struct LobbyInfo {
 
 /// One roster seat, human or bot, with everything the page shows in the
 /// select screen.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct SlotInfo {
     pub slot: u8,
     pub team: u8,
@@ -70,7 +73,8 @@ pub struct SlotInfo {
 
 /// The lifecycle a league lobby walks. Select is the pick screen; Over is
 /// the result screen, then the lobby resets to Select.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     #[default]
@@ -84,7 +88,8 @@ pub enum Phase {
 ///
 /// There are no held inputs in league; move is a destination, attacks and
 /// casts are orders the authoritative sim executes.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[boundary(direction = "input")]
 #[serde(tag = "a", rename_all = "snake_case")]
 pub enum Cmd {
     /// Right-click ground: walk here.
@@ -147,7 +152,8 @@ impl Cmd {
 /// One unit on the field, flat for the wire. `k`: 0 champion, 1 melee
 /// minion, 2 caster minion, 3 hologram, 4 north court, 5 south court,
 /// 6 blue core, 7 red core. Champion-only fields default for the rest.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[boundary(direction = "output")]
 pub struct UnitSnap {
     pub id: u32,
     pub k: u8,
@@ -196,7 +202,8 @@ pub struct UnitSnap {
 }
 
 /// A visible status effect on a champion: kind, seconds left, value.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct BuffSnap {
     pub u: u32,
     pub k: u8,
@@ -205,7 +212,8 @@ pub struct BuffSnap {
 }
 
 /// An active projectile. Kind: 0 auto-attack, 1 drone, 2 bolt, 3 hook.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[boundary(direction = "output")]
 pub struct ProjSnap {
     pub id: u32,
     pub k: u8,
@@ -220,7 +228,8 @@ pub struct ProjSnap {
 }
 
 /// An active zone. Kind: 0 tornado, 1 trap, 2 stasis, 3 shroud.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[boundary(direction = "output")]
 pub struct ZoneSnap {
     pub k: u8,
     pub x: f32,
@@ -238,7 +247,8 @@ pub struct ZoneSnap {
 /// For k=0, v is a flag word: bit 0 crit, bit 1 spell, bit 2 attack-start.
 /// Starts run x/z -> x2/z2 even when the target is at the origin; impacts
 /// are points at x/z with bit 2 clear.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct Fx {
     pub k: u8,
     /// Actual emitting unit for attack starts and accepted casts; 0 is unknown.
@@ -261,7 +271,8 @@ pub struct Fx {
 /// Kill-feed line. `t`: 0 kill (a=killer unit id or 0, b=victim, g=bounty),
 /// 1 first blood, 2 court taken (a=team), 3 core lost (a=losing team),
 /// 4 smote (a=unit, b=court), 5 revive (a=unit).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct LogEv {
     pub t: u8,
     pub a: u32,
@@ -270,7 +281,8 @@ pub struct LogEv {
 }
 
 /// Client -> server.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[boundary(direction = "input")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
@@ -300,6 +312,7 @@ pub enum C2S {
     /// The host's "start game". Unfilled seats become bots.
     StartMatch,
     /// One player command. The socket's own pings never travel this path.
+    #[boundary(intersection)]
     Cmd(Cmd),
     Ping {
         nonce: u32,
@@ -307,7 +320,8 @@ pub enum C2S {
 }
 
 /// Server -> client.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug)]
+#[boundary(direction = "output")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
     Welcome {
@@ -383,7 +397,8 @@ pub enum S2C {
 /// A champion's player-facing view: which slot it belongs to plus the
 /// summary the HUD needs. Kept separate from `UnitSnap` so the common
 /// per-frame fields of a minion stay tiny.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct ChampView {
     pub slot: u8,
     pub team: u8,
@@ -401,9 +416,90 @@ pub struct ChampView {
     pub f: u8,
 }
 
+/// Every League type supplied to the phase 0b renderer.
+#[must_use]
+pub const fn boundary_descriptions() -> &'static [&'static ember_boundary::Description] {
+    ember_boundary::boundary_descriptions![
+        LobbyInfo, SlotInfo, Phase, Cmd, UnitSnap, BuffSnap, ProjSnap, ZoneSnap, Fx, LogEv, C2S,
+        S2C, ChampView,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prove<T>(samples: &[&str])
+    where
+        T: Boundary + for<'de> Deserialize<'de> + Serialize,
+    {
+        let ember_boundary::Shape::Enum { tag, variants } = T::DESCRIPTION.shape else {
+            panic!("wire samples require an enum");
+        };
+        assert_eq!(samples.len(), variants.len());
+        let input = ember_boundary::json_schema::<T>(ember_boundary::View::Input);
+        let output = ember_boundary::json_schema::<T>(ember_boundary::View::Output);
+        let input = jsonschema::validator_for(&input).expect("input schema compiles");
+        let output = jsonschema::validator_for(&output).expect("output schema compiles");
+        for (sample, variant) in samples.iter().zip(variants) {
+            let raw: serde_json::Value = serde_json::from_str(sample).expect("sample is JSON");
+            input
+                .validate(&raw)
+                .expect("input sample matches descriptor");
+            if let Some(tag) = tag {
+                assert_eq!(raw[tag], variant.name);
+            }
+            let decoded: T = serde_json::from_value(raw).expect("sample deserializes");
+            let encoded = serde_json::to_value(decoded).expect("sample serializes");
+            output
+                .validate(&encoded)
+                .expect("serialized sample matches descriptor");
+        }
+    }
+
+    #[test]
+    fn boundary_wire_samples_cover_every_variant() {
+        prove::<Phase>(&[r#""select""#, r#""live""#, r#""over""#]);
+        prove::<Cmd>(&[
+            r#"{"a":"move","x":0.0,"z":0.0}"#,
+            r#"{"a":"attack","target":1}"#,
+            r#"{"a":"attack_move","x":0.0,"z":0.0}"#,
+            r#"{"a":"cast","slot":0,"x":0.0,"z":0.0}"#,
+            r#"{"a":"spell","slot":0,"x":0.0,"z":0.0}"#,
+            r#"{"a":"rank","slot":0}"#,
+            r#"{"a":"use_item","slot":0}"#,
+            r#"{"a":"buy","item":1}"#,
+        ]);
+        prove::<C2S>(&[
+            r#"{"t":"hello","proto":2,"handle":"summoner"}"#,
+            r#"{"t":"list_lobbies"}"#,
+            r#"{"t":"create_lobby","name":"lane","password":null,"mode":1}"#,
+            r#"{"t":"join_lobby","name":"lane","password":null}"#,
+            r#"{"t":"leave_lobby"}"#,
+            r#"{"t":"pick","champ":0,"d":0,"f":1,"runes":[0,1,2]}"#,
+            r#"{"t":"start_match"}"#,
+            r#"{"t":"cmd","a":"move","x":0.0,"z":0.0}"#,
+            r#"{"t":"ping","nonce":1}"#,
+        ]);
+        prove::<S2C>(&[
+            r#"{"t":"welcome","proto":2}"#,
+            r#"{"t":"rejected","reason":"no"}"#,
+            r#"{"t":"lobbies","lobbies":[]}"#,
+            r#"{"t":"joined","lobby":"lane","id":0,"mode":1,"roster":[]}"#,
+            r#"{"t":"player_joined","slot":{"slot":0,"team":0,"handle":"s","bot":false,"champ":0,"picked":false,"d":0,"f":1,"runes":[0,1,2]}}"#,
+            r#"{"t":"player_left","slot":0}"#,
+            r#"{"t":"roster","roster":[]}"#,
+            r#"{"t":"phase","phase":"select","left":0.0}"#,
+            r#"{"t":"state","tick":1,"secs":0.0,"units":[],"champs":[],"buffs":[],"kills":[0,0],"boon":[0,0],"boon_left":[0.0,0.0],"court_respawn":[0.0,0.0],"fx":[],"log":[]}"#,
+            r#"{"t":"result","winner":0,"kills":[0,0],"gold":[0,0]}"#,
+            r#"{"t":"pong","nonce":1}"#,
+        ]);
+    }
+
+    #[test]
+    fn every_boundary_type_is_enumerated() {
+        assert_eq!(boundary_descriptions().len(), 13);
+    }
 
     #[test]
     fn legacy_effects_default_to_generic_and_new_identity_round_trips() {

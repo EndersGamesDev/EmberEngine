@@ -18,7 +18,10 @@ use crate::progress::Progress;
 use crate::text;
 
 /// The phases of a load, in the order a page sees them.
+#[derive(ember_boundary::Boundary, serde::Deserialize, serde::Serialize)]
+#[boundary(direction = "output")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum Phase {
     /// The loader itself is coming up.
     Boot,

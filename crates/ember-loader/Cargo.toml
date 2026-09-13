@@ -6,12 +6,21 @@ version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# The loader is platform code: it depends on no game crate and on no engine
-# crate, and its rules build and test natively with no dependencies at all.
-# Only the browser surface needs bindings, so only wasm32 pulls them in.
+# The loader is platform code: it depends on no game or engine crate. Its native
+# dependencies are the platform boundary descriptor and Serde; only wasm32 adds
+# browser bindings.
+[dependencies]
+ember-boundary.workspace = true
+serde.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+
+[dev-dependencies]
+ember-boundary = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.56", default-features = false }
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,5 @@
+error: newtype variant shape is unsupported unless marked boundary(intersection)
+ --> tests/ui/newtype.rs:7:12
+  |
+7 |     Wrapped(Payload),
+  |            ^^^^^^^^^

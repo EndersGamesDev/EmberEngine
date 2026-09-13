@@ -12,7 +12,7 @@ use js_sys::{Object, Reflect};
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 
-use crate::event::{Event, js_key};
+use crate::event::{Event, EventValue};
 use crate::phase::{Machine, Phase};
 use crate::progress::whole_bytes;
 
@@ -23,59 +23,17 @@ fn put(object: &Object, key: &str, value: &JsValue) {
     let _set = Reflect::set(object, &JsValue::from_str(key), value);
 }
 
-fn put_number(object: &Object, key: &str, value: Option<f64>) {
-    if let Some(number) = value {
-        put(object, key, &JsValue::from_f64(number));
-    }
-}
-
-fn put_text(object: &Object, key: &str, value: Option<&str>) {
-    if let Some(text) = value {
-        put(object, key, &JsValue::from_str(text));
-    }
-}
-
 /// The event, as the plain object a page's handler receives.
 fn to_js(ev: &Event) -> JsValue {
     let object = Object::new();
-    put(
-        &object,
-        js_key::PHASE,
-        &JsValue::from_str(ev.phase.as_str()),
-    );
-    put(
-        &object,
-        js_key::STATUS,
-        &JsValue::from_str(ev.status.as_str()),
-    );
-    put(
-        &object,
-        js_key::ELAPSED_MS,
-        &JsValue::from_f64(ev.elapsed_ms),
-    );
-    put(&object, js_key::PHASE_MS, &JsValue::from_f64(ev.phase_ms));
-    put_number(
-        &object,
-        js_key::LOADED,
-        ev.loaded.map(crate::progress::as_f64),
-    );
-    put_number(
-        &object,
-        js_key::TOTAL,
-        ev.total.map(crate::progress::as_f64),
-    );
-    put_number(&object, js_key::PERCENT, ev.percent.map(f64::from));
-    put_number(&object, js_key::RATE_BPS, ev.rate_bps);
-    put_number(&object, js_key::ETA_MS, ev.eta_ms);
-    put(&object, js_key::STALLED, &JsValue::from_bool(ev.stalled));
-    put(
-        &object,
-        js_key::STALLED_MS,
-        &JsValue::from_f64(ev.stalled_ms),
-    );
-    put_text(&object, js_key::REASON, ev.reason.as_deref());
-    put_text(&object, js_key::DETAIL, ev.detail.as_deref());
-    put(&object, js_key::TEXT, &JsValue::from_str(&ev.text));
+    ev.visit_fields(|key, value| {
+        let value = match value {
+            EventValue::Text(value) => JsValue::from_str(value),
+            EventValue::Number(value) => JsValue::from_f64(value),
+            EventValue::Boolean(value) => JsValue::from_bool(value),
+        };
+        put(&object, key, &value);
+    });
     object.into()
 }
 

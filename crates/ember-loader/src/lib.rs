@@ -29,3 +29,9 @@ mod wasm;
 pub use event::{Event, Status};
 pub use phase::{Machine, Phase, STALL_MS};
 pub use progress::Progress;
+
+/// Every loader type supplied to the phase 0b renderer.
+#[must_use]
+pub const fn boundary_descriptions() -> &'static [&'static ember_boundary::Description] {
+    ember_boundary::boundary_descriptions![Phase, Status, Event]
+}

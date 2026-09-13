@@ -1,0 +1,5 @@
+error: per-item serde rename, skip, or serializer shape is unsupported
+ --> tests/ui/rename.rs:7:5
+  |
+7 |     #[serde(rename = "other")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^

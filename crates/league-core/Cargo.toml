@@ -10,10 +10,13 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+ember-boundary.workspace = true
 ember-net = { path = "../ember-net" }
 serde = { workspace = true }
 
 [dev-dependencies]
+ember-boundary = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.56", default-features = false }
 serde_json = { workspace = true }
 proptest = "1"
 

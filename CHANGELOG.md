@@ -174,6 +174,8 @@ The diagnostic crate's client-network dependency is now wasm-only, matching its 
 
 ### Engine and workspace debt cleanup
 
+The compiler-owned boundary foundation now describes every Rust protocol, loader event and catalog or host-book value that crosses into scripts, including directional omission and nullability, Serde tags and casing, League's intersected command payload and generated JSON Schema validation (`a9a30aca`, `0868bd83`).
+
 The typed web generation study measures 127 current scripts plus the loader branch snapshot and 37 inline-script pages, establishes Rust-generated declarations as mandatory inputs to pedantic legacy TypeScript templates before selective Rust ownership, and preserves published JavaScript bytes as an explicit historical exception (`6872c75c`).
 
 The engine's scene and presentation shaders now render through the shared template mechanism from Rust-owned layouts, fixed point-light arrays, binding slots and constants. The former native raw-file reload is retired because accepting edited WGSL after startup would bypass declaration provenance and the anti-drift oracle; runtime context rendering is the sole dynamic shader-generation path. Every engine-backed game bundle now carries that shared runtime; the pre-rebase sokol arena measurement was 755,558 bytes (+1.68%), while the `62f5c450` merge candidate awaits its same-host measurement (`bd0e13ee`).

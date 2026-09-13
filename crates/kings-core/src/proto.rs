@@ -13,6 +13,7 @@
 //! `PartialEq` on the message enums), documentation on every item, and the
 //! two helpers copied from `fire-core` at the bottom.
 
+use ember_boundary::Boundary;
 use serde::{Deserialize, Serialize};
 
 /// Kings' own protocol version.
@@ -48,7 +49,8 @@ pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 /// A piece kind. The kind is the whole of a piece's rule state: a dormant
 /// and an awakened hero are two kinds, a promoted pawn is a queen.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[boundary(direction = "both")]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// Steps one tile in any of the eight directions.
@@ -73,7 +75,8 @@ pub enum Kind {
 }
 
 /// Where a lobby is in its life.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     /// In the lobby; the board shows the setup for the seats held so far.
@@ -86,7 +89,8 @@ pub enum Phase {
 }
 
 /// Why a Finished game ended.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(rename_all = "snake_case")]
 pub enum EndReason {
     /// One seated player still has a king.
@@ -104,7 +108,8 @@ pub enum EndReason {
 
 /// What the last applied action was, so the page can narrate it. Derived by
 /// the server from the applied `Move`; the client never sends it.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
     /// Any ordinary move or capture, including the joker's step and its
@@ -125,7 +130,8 @@ pub enum ActionKind {
 }
 
 /// One row of the lobby browser.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct LobbyInfo {
     /// Lobby name, sanitized.
     pub name: String,
@@ -146,7 +152,8 @@ pub struct LobbyInfo {
 }
 
 /// One member of a lobby, as seen in `Roster`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct PlayerMeta {
     /// Lobby-local id, stable while the member stays.
     pub id: u8,
@@ -160,7 +167,8 @@ pub struct PlayerMeta {
 /// The pre-game card swap: kinds for the four Legend tiles in the order
 /// local (0,0) (1,0) (0,1) (1,1), and for the five Epic tiles in the order
 /// local (2,0) (2,1) (2,2) (1,2) (0,2).
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "input")]
 pub struct Formation {
     /// Kinds on the corner 2x2, a permutation of King, Queen, Hero, Joker.
     pub legend: [Kind; 4],
@@ -173,7 +181,8 @@ pub struct Formation {
 ///
 /// Flat scalars: the rules crate's `Piece` can be refactored without that
 /// being a protocol question.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct PieceState {
     /// `seat * 16 + setup index`; stable for the whole game.
     pub id: u8,
@@ -188,7 +197,8 @@ pub struct PieceState {
 }
 
 /// Per-corner bookkeeping.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct SeatState {
     /// Corner index, 0 = SW, counter-clockwise.
     pub seat: u8,
@@ -210,7 +220,8 @@ pub struct SeatState {
 }
 
 /// The last applied action, for narration.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct LastAction {
     /// The seat that acted (or passed, or timed out).
     pub seat: u8,
@@ -239,7 +250,8 @@ pub struct LastAction {
 /// Sent in full on every change: at 64 pieces it is a few kilobytes, and a
 /// full snapshot cannot get out of step the way a stream of deltas can (the
 /// racer's one-shot events already showed what a missed message costs).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct BoardState {
     /// Increments on every completed turn. Moves carry it back so a stale
     /// intent is refused rather than applied to the wrong turn.
@@ -263,7 +275,8 @@ pub struct BoardState {
 }
 
 /// Client -> server.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[boundary(direction = "input")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
@@ -326,7 +339,8 @@ pub enum C2S {
 }
 
 /// Server -> client.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
     /// Reply to a valid Hello. The identity fields follow `docs/hosts.md`
@@ -431,9 +445,106 @@ pub fn sanitize_handle(s: &str) -> String {
     ember_net::sanitize_handle(s, MAX_HANDLE_LEN, "player")
 }
 
+/// Every Kings type supplied to the phase 0b renderer.
+#[must_use]
+pub const fn boundary_descriptions() -> &'static [&'static ember_boundary::Description] {
+    ember_boundary::boundary_descriptions![
+        Kind, Phase, EndReason, ActionKind, LobbyInfo, PlayerMeta, Formation, PieceState,
+        SeatState, LastAction, BoardState, C2S, S2C,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prove<T>(samples: &[&str])
+    where
+        T: Boundary + for<'de> Deserialize<'de> + Serialize,
+    {
+        let ember_boundary::Shape::Enum { tag, variants } = T::DESCRIPTION.shape else {
+            panic!("wire samples require an enum");
+        };
+        assert_eq!(samples.len(), variants.len());
+        let input = ember_boundary::json_schema::<T>(ember_boundary::View::Input);
+        let output = ember_boundary::json_schema::<T>(ember_boundary::View::Output);
+        let input = jsonschema::validator_for(&input).expect("input schema compiles");
+        let output = jsonschema::validator_for(&output).expect("output schema compiles");
+        for (sample, variant) in samples.iter().zip(variants) {
+            let raw: serde_json::Value = serde_json::from_str(sample).expect("sample is JSON");
+            input
+                .validate(&raw)
+                .expect("input sample matches descriptor");
+            if let Some(tag) = tag {
+                assert_eq!(raw[tag], variant.name);
+            }
+            let decoded: T = serde_json::from_value(raw).expect("sample deserializes");
+            let encoded = serde_json::to_value(decoded).expect("sample serializes");
+            output
+                .validate(&encoded)
+                .expect("serialized sample matches descriptor");
+        }
+    }
+
+    #[test]
+    fn boundary_wire_samples_cover_every_variant() {
+        prove::<Kind>(&[
+            r#""king""#,
+            r#""queen""#,
+            r#""rook""#,
+            r#""bishop""#,
+            r#""knight""#,
+            r#""pawn""#,
+            r#""joker""#,
+            r#""hero""#,
+            r#""hero_awake""#,
+        ]);
+        prove::<Phase>(&[r#""waiting""#, r#""playing""#, r#""finished""#]);
+        prove::<EndReason>(&[
+            r#""last_king""#,
+            r#""no_progress""#,
+            r#""stalemate""#,
+            r#""turn_cap""#,
+            r#""abandoned""#,
+        ]);
+        prove::<ActionKind>(&[
+            r#""move""#,
+            r#""joker_teleport""#,
+            r#""joker_place""#,
+            r#""hero_swap""#,
+            r#""hero_wake""#,
+            r#""pass""#,
+            r#""timeout""#,
+        ]);
+        prove::<C2S>(&[
+            r#"{"t":"hello","proto":1,"handle":"king"}"#,
+            r#"{"t":"list_lobbies"}"#,
+            r#"{"t":"create_lobby","name":"table","password":null}"#,
+            r#"{"t":"join_lobby","name":"table","password":null}"#,
+            r#"{"t":"leave_lobby"}"#,
+            r#"{"t":"set_formation","formation":{"legend":["king","queen","hero","joker"],"epic":["rook","rook","bishop","bishop","knight"]}}"#,
+            r#"{"t":"start"}"#,
+            r#"{"t":"move","turn":1,"fx":0,"fy":0,"tx":1,"ty":1}"#,
+            r#"{"t":"ping","nonce":1}"#,
+        ]);
+        prove::<S2C>(&[
+            r#"{"t":"welcome","proto":1}"#,
+            r#"{"t":"rejected","reason":"no"}"#,
+            r#"{"t":"lobbies","lobbies":[]}"#,
+            r#"{"t":"joined","lobby":"table","id":1}"#,
+            r#"{"t":"roster","creator":1,"roster":[]}"#,
+            r#"{"t":"can_start","players":2}"#,
+            r#"{"t":"phase","phase":"waiting"}"#,
+            r#"{"t":"state","board":{"turn":1,"seat":0,"left_ms":1,"quiet":0,"stalls":0,"pieces":[],"seats":[]}}"#,
+            r#"{"t":"clock","turn":1,"seat":0,"left_ms":1}"#,
+            r#"{"t":"pong","nonce":1}"#,
+        ]);
+    }
+
+    #[test]
+    fn every_boundary_type_is_enumerated() {
+        assert_eq!(boundary_descriptions().len(), 13);
+    }
     use crate::board::{setup, to_state};
 
     fn roundtrip<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(v: &T) -> T {

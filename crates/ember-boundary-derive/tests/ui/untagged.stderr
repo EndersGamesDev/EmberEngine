@@ -1,0 +1,5 @@
+error: unsupported serde container shape
+ --> tests/ui/untagged.rs:5:9
+  |
+5 | #[serde(untagged)]
+  |         ^^^^^^^^

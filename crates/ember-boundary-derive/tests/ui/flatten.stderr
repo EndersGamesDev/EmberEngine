@@ -1,0 +1,5 @@
+error: unsupported serde field shape
+ --> tests/ui/flatten.rs:6:13
+  |
+6 |     #[serde(flatten)]
+  |             ^^^^^^^

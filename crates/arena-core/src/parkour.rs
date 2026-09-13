@@ -22,6 +22,8 @@ pub const MIN_WALL_SPAN: f32 = 2.0 * PLAYER_R + 0.1;
 const WALL_SKIN: f32 = 0.06;
 
 /// Complete replay state; weapon changes and reloads must not reset it.
+#[derive(ember_boundary::Boundary)]
+#[boundary(direction = "output")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ParkourState {
     pub velocity: [f32; 2],

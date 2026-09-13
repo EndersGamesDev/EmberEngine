@@ -1,0 +1,5 @@
+{
+  "hosts": [
+    { "name": "amber-otter", "ws": 123, "proto": "twenty-four" }
+  ]
+}

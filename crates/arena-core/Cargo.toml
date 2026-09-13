@@ -4,9 +4,12 @@ edition.workspace = true
 version = "31.0.1"
 
 [dependencies]
+ember-boundary.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+ember-boundary = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.56", default-features = false }
 serde_json.workspace = true
 
 [lints]
