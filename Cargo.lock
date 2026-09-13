@@ -1395,6 +1395,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-webgen"
+version = "1.0.4"
+dependencies = [
+ "arena-core",
+ "ember-boundary",
+ "ember-loader",
+ "fire-core",
+ "jsonschema",
+ "kings-core",
+ "league-core",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "end-game"
 version = "12.0.1"
 dependencies = [

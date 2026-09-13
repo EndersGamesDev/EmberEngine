@@ -1,0 +1,18 @@
+/** Generated release-only exhaustiveness proof. Compile with --noEmit only; never ship. */
+{% for union in unions %}
+import type { {{ union.type_name }} as {{ union.alias }} } from "./{{ union.module }}.js";
+{% endfor %}
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled generated boundary variant: ${JSON.stringify(value)}`);
+}
+{% for union in unions %}
+export function {{ union.function_name }}(value: {{ union.alias }}): void {
+  switch ({{ union.discriminant }}) {
+{% for case in union.cases %}    case {{ case }}:
+      return;
+{% endfor %}    default:
+      return assertNever(value);
+  }
+}
+{% endfor %}

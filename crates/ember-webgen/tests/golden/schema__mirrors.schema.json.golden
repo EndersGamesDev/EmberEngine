@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "items": {
+    "additionalProperties": true,
+    "properties": {
+      "name": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "name"
+    ],
+    "type": "object"
+  },
+  "title": "MirrorList",
+  "type": "array"
+}

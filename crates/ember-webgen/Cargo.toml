@@ -1,0 +1,26 @@
+[package]
+name = "ember-webgen"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arena-core = { path = "../arena-core" }
+ember-boundary = { workspace = true, features = ["models", "schema"] }
+ember-loader = { path = "../ember-loader" }
+fire-core = { path = "../fire-core" }
+kings-core = { path = "../kings-core" }
+league-core = { path = "../league-core" }
+minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "multi_template", "serde"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+jsonschema = { version = "0.56", default-features = false }
+tempfile.workspace = true
+
+[lints]
+workspace = true
