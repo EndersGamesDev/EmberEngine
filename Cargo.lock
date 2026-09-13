@@ -203,6 +203,8 @@ dependencies = [
 name = "arena-core"
 version = "31.0.1"
 dependencies = [
+ "ember-boundary",
+ "jsonschema",
  "serde",
  "serde_json",
 ]
@@ -1339,7 +1341,11 @@ dependencies = [
 name = "ember-loader"
 version = "1.0.4"
 dependencies = [
+ "ember-boundary",
  "js-sys",
+ "jsonschema",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
 ]
 
@@ -1595,8 +1601,10 @@ dependencies = [
 name = "fire-core"
 version = "1.0.3"
 dependencies = [
+ "ember-boundary",
  "ember-net",
  "glam",
+ "jsonschema",
  "serde",
  "serde_json",
 ]
@@ -2527,7 +2535,9 @@ dependencies = [
 name = "kings-core"
 version = "1.0.1"
 dependencies = [
+ "ember-boundary",
  "ember-net",
+ "jsonschema",
  "serde",
  "serde_json",
 ]
@@ -2571,7 +2581,9 @@ dependencies = [
 name = "league-core"
 version = "2.0.1"
 dependencies = [
+ "ember-boundary",
  "ember-net",
+ "jsonschema",
  "proptest",
  "serde",
  "serde_json",

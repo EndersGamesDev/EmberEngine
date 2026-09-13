@@ -5,6 +5,7 @@
 //! v2: the match is the drop-in arena shooter. A lobby IS a running game —
 //! creating one starts it with the host inside; joiners drop straight in.
 
+use ember_boundary::Boundary;
 use serde::{Deserialize, Serialize};
 
 use crate::parkour::ParkourState;
@@ -254,7 +255,8 @@ pub const STATE_EVERY_TICKS: u64 = 2;
 /// Clients ping at least this often; the server drops peers silent > 30 s.
 pub const CLIENT_PING_SECS: u64 = 5;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -277,7 +279,8 @@ pub struct LobbyInfo {
     pub starting_weapon: u8,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[boundary(direction = "output")]
 pub struct PlayerMeta {
     pub id: u8,
     pub handle: String,
@@ -290,7 +293,8 @@ pub struct PlayerMeta {
     clippy::struct_excessive_bools,
     reason = "Independent booleans are stable wire-format fields"
 )]
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct PState {
     pub id: u8,
     pub x: f32,
@@ -383,7 +387,8 @@ pub struct PState {
     pub team: u8,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
+#[boundary(direction = "output")]
 pub struct BState {
     #[serde(default)]
     pub projectile_id: u64,
@@ -411,7 +416,8 @@ pub struct BState {
 }
 
 /// Client -> server.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Boundary, Serialize, Deserialize, Debug)]
+#[boundary(direction = "input")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
@@ -510,7 +516,8 @@ pub enum C2S {
 }
 
 /// Server -> client.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Boundary, Serialize, Deserialize, Debug, Clone)]
+#[boundary(direction = "output")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
     /// Reply to a valid `Hello`, and the one round trip a page uses to rank
@@ -735,9 +742,106 @@ pub fn sanitize_text(s: &str, max: usize) -> String {
         .collect()
 }
 
+/// Every Arena type supplied to the phase 0b renderer.
+#[must_use]
+pub const fn boundary_descriptions() -> &'static [&'static ember_boundary::Description] {
+    ember_boundary::boundary_descriptions![
+        LobbyInfo,
+        PlayerMeta,
+        PState,
+        BState,
+        ParkourState,
+        ShieldState,
+        WeaponSlot,
+        C2S,
+        S2C,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prove<T>(samples: &[&str])
+    where
+        T: Boundary + for<'de> Deserialize<'de> + Serialize,
+    {
+        let ember_boundary::Shape::Enum { tag, variants } = T::DESCRIPTION.shape else {
+            panic!("wire samples require an enum");
+        };
+        assert_eq!(samples.len(), variants.len());
+        let input = ember_boundary::json_schema::<T>(ember_boundary::View::Input);
+        let output = ember_boundary::json_schema::<T>(ember_boundary::View::Output);
+        let input = jsonschema::validator_for(&input).expect("input schema compiles");
+        let output = jsonschema::validator_for(&output).expect("output schema compiles");
+        for (sample, variant) in samples.iter().zip(variants) {
+            let raw: serde_json::Value = serde_json::from_str(sample).expect("sample is JSON");
+            input
+                .validate(&raw)
+                .expect("input sample matches descriptor");
+            if let Some(tag) = tag {
+                assert_eq!(raw[tag], variant.name);
+            }
+            let decoded: T = serde_json::from_value(raw).expect("sample deserializes");
+            let encoded = serde_json::to_value(decoded).expect("sample serializes");
+            output
+                .validate(&encoded)
+                .expect("serialized sample matches descriptor");
+        }
+    }
+
+    #[test]
+    fn boundary_wire_samples_cover_every_variant() {
+        prove::<C2S>(&[
+            r#"{"t":"hello","proto":24,"handle":"player"}"#,
+            r#"{"t":"list_lobbies"}"#,
+            r#"{"t":"create_lobby","name":"arena","password":null}"#,
+            r#"{"t":"join_lobby","name":"arena","password":null}"#,
+            r#"{"t":"leave_lobby"}"#,
+            r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#,
+            r#"{"t":"ping","nonce":1}"#,
+        ]);
+        prove::<S2C>(&[
+            r#"{"t":"welcome","proto":24,"motd":"hello"}"#,
+            r#"{"t":"error","message":"no"}"#,
+            r#"{"t":"lobby_list","lobbies":[]}"#,
+            r#"{"t":"game_joined","id":1,"seed":1,"arena_half":24.0,"players":[]}"#,
+            r#"{"t":"player_joined","meta":{"id":1,"handle":"p","color":[1.0,0.0,0.0]}}"#,
+            r#"{"t":"player_left","id":1}"#,
+            r#"{"t":"state","tick":1,"players":[],"bullets":[]}"#,
+            r#"{"t":"round_over","winner":1,"team":false,"scores":[]}"#,
+            r#"{"t":"kill","killer":1,"victim":2}"#,
+            r#"{"t":"hit","shooter":1,"victim":2,"dmg":1,"head":false}"#,
+            r#"{"t":"shot","owner":1,"weapon":1,"x0":0.0,"y0":0.0,"z0":0.0,"x1":1.0,"y1":0.0,"z1":0.0,"hit":0,"cover":255,"victim":255}"#,
+            r#"{"t":"blast","x":0.0,"y":0.0,"z":0.0,"owner":1}"#,
+            r#"{"t":"loot","player":1,"block":0,"weapon":1}"#,
+            r#"{"t":"pong","nonce":1}"#,
+        ]);
+    }
+
+    #[test]
+    fn every_boundary_type_is_enumerated() {
+        assert_eq!(boundary_descriptions().len(), 9);
+    }
+
+    #[test]
+    fn input_schema_matches_serde_for_options_and_unknown_keys() {
+        let value = serde_json::json!({
+            "t": "join_lobby",
+            "name": "lane",
+            "future": true,
+        });
+        let schema = ember_boundary::json_schema::<C2S>(ember_boundary::View::Input);
+        jsonschema::validator_for(&schema)
+            .expect("schema compiles")
+            .validate(&value)
+            .expect("missing Option and unknown input key are accepted");
+        let decoded: C2S = serde_json::from_value(value).expect("Serde accepts the same input");
+        let C2S::JoinLobby { password, .. } = decoded else {
+            panic!("sample selected the wrong variant");
+        };
+        assert_eq!(password, None);
+    }
     use crate::shooter::{GameMode, HILL_CONTESTED};
 
     // One round trip per message shape, in one place, so a field added to

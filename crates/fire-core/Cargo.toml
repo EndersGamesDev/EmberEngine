@@ -4,10 +4,15 @@ edition.workspace = true
 version = "1.0.3"
 
 [dependencies]
+ember-boundary.workspace = true
 ember-net = { path = "../ember-net" }
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+
+[dev-dependencies]
+ember-boundary = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.56", default-features = false }
 
 [lints]
 workspace = true

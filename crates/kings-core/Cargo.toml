@@ -4,11 +4,14 @@ edition.workspace = true
 version = "1.0.1"
 
 [dependencies]
+ember-boundary.workspace = true
 ember-net = { path = "../ember-net" }
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 # Only the tests encode JSON here; the server and the client do their own.
+ember-boundary = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.56", default-features = false }
 serde_json.workspace = true
 
 [lints]

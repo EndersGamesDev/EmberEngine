@@ -16,6 +16,7 @@
 //! what an old peer actually DOES when the field is absent — and if the answer
 //! is "plays a different game", the version gets bumped instead.
 
+use ember_boundary::Boundary;
 use serde::{Deserialize, Serialize};
 
 /// Fire's own protocol version. Independent of `arena_core::proto::PROTO_VERSION`.
@@ -37,7 +38,8 @@ pub const CLIENT_TIMEOUT_SECS: u64 = 30;
 /// A single frame larger than this is a protocol violation, not a big update.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -50,7 +52,8 @@ pub struct LobbyInfo {
     pub racing: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 pub struct PlayerMeta {
     pub id: u8,
     pub handle: String,
@@ -64,7 +67,8 @@ pub struct PlayerMeta {
 /// Flat scalars on purpose: the sim's `Car` holds `glam::Vec2`, and keeping
 /// the wire shape separate means the internal struct can be refactored without
 /// that being a protocol question.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[boundary(direction = "output")]
 pub struct CarState {
     pub id: u8,
     pub x: f32,
@@ -117,7 +121,8 @@ pub struct CarState {
 
 /// V2 world objects are authoritative. Clients render these snapshots and
 /// never award pickups or resolve projectiles locally.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[boundary(direction = "output")]
 pub struct PickupState {
     pub id: u16,
     pub x: f32,
@@ -125,7 +130,8 @@ pub struct PickupState {
     pub respawn_left: f32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[boundary(direction = "output")]
 pub struct ProjectileState {
     pub owner: u8,
     pub target: u8,
@@ -134,7 +140,8 @@ pub struct ProjectileState {
     pub life_left: f32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+#[boundary(direction = "output")]
 pub struct HazardState {
     pub owner: u8,
     pub x: f32,
@@ -142,7 +149,8 @@ pub struct HazardState {
     pub life_left: f32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[boundary(direction = "output")]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Waiting,
@@ -152,7 +160,8 @@ pub enum Phase {
 }
 
 /// Client -> server.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Boundary, Serialize, Deserialize, Debug, Clone)]
+#[boundary(direction = "input")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
@@ -208,7 +217,8 @@ pub enum C2S {
 }
 
 /// Server -> client.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Boundary, Serialize, Deserialize, Debug, Clone)]
+#[boundary(direction = "output")]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
     /// Reply to a valid Hello, and the one round trip a page uses to rank
@@ -297,9 +307,93 @@ pub fn sanitize_handle(s: &str) -> String {
     ember_net::sanitize_handle(s, MAX_HANDLE_LEN, "driver")
 }
 
+/// Every Fire type supplied to the phase 0b renderer.
+#[must_use]
+pub const fn boundary_descriptions() -> &'static [&'static ember_boundary::Description] {
+    ember_boundary::boundary_descriptions![
+        LobbyInfo,
+        PlayerMeta,
+        CarState,
+        PickupState,
+        ProjectileState,
+        HazardState,
+        Phase,
+        C2S,
+        S2C,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prove<T>(samples: &[&str])
+    where
+        T: Boundary + for<'de> Deserialize<'de> + Serialize,
+    {
+        let description = &T::DESCRIPTION;
+        let ember_boundary::Shape::Enum { tag, variants } = description.shape else {
+            panic!("wire samples require an enum");
+        };
+        assert_eq!(samples.len(), variants.len());
+        let input = ember_boundary::json_schema::<T>(ember_boundary::View::Input);
+        let output = ember_boundary::json_schema::<T>(ember_boundary::View::Output);
+        let input = jsonschema::validator_for(&input).expect("input schema compiles");
+        let output = jsonschema::validator_for(&output).expect("output schema compiles");
+        for (sample, variant) in samples.iter().zip(variants) {
+            let raw: serde_json::Value = serde_json::from_str(sample).expect("sample is JSON");
+            input
+                .validate(&raw)
+                .expect("input sample matches descriptor");
+            if let Some(tag) = tag {
+                assert_eq!(raw[tag], variant.name);
+            }
+            let decoded: T = serde_json::from_value(raw).expect("sample deserializes");
+            let encoded = serde_json::to_value(decoded).expect("sample serializes");
+            output
+                .validate(&encoded)
+                .expect("serialized sample matches descriptor");
+        }
+    }
+
+    #[test]
+    fn boundary_wire_samples_cover_every_variant() {
+        prove::<Phase>(&[
+            r#""waiting""#,
+            r#""countdown""#,
+            r#""racing""#,
+            r#""finished""#,
+        ]);
+        prove::<C2S>(&[
+            r#"{"t":"hello","proto":2,"handle":"driver"}"#,
+            r#"{"t":"list_lobbies"}"#,
+            r#"{"t":"create_lobby","name":"race","password":null}"#,
+            r#"{"t":"join_lobby","name":"race","password":null}"#,
+            r#"{"t":"leave_lobby"}"#,
+            r#"{"t":"ready","ready":true}"#,
+            r#"{"t":"select_vehicle","vehicle":1}"#,
+            r#"{"t":"recover"}"#,
+            r#"{"t":"input","seq":1,"throttle":1.0,"steer":0.0,"handbrake":false}"#,
+            r#"{"t":"ping","nonce":1}"#,
+        ]);
+        prove::<S2C>(&[
+            r#"{"t":"welcome","proto":2}"#,
+            r#"{"t":"rejected","reason":"no"}"#,
+            r#"{"t":"lobbies","lobbies":[]}"#,
+            r#"{"t":"joined","lobby":"race","id":1,"slot":1,"laps":3,"roster":[]}"#,
+            r#"{"t":"player_joined","meta":{"id":1,"handle":"d","slot":1}}"#,
+            r#"{"t":"player_left","id":1}"#,
+            r#"{"t":"phase","phase":"waiting","countdown":0.0}"#,
+            r#"{"t":"state","tick":1,"cars":[]}"#,
+            r#"{"t":"results","order":[]}"#,
+            r#"{"t":"pong","nonce":1}"#,
+        ]);
+    }
+
+    #[test]
+    fn every_boundary_type_is_enumerated() {
+        assert_eq!(boundary_descriptions().len(), 9);
+    }
 
     fn roundtrip<T: Serialize + serde::de::DeserializeOwned + std::fmt::Debug>(v: &T) -> T {
         let s = serde_json::to_string(v).expect("encode");

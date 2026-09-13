@@ -45,6 +45,8 @@ pub const SHIELD_REUSE_COOLDOWN: f32 = 5.0;
 ///
 /// A press during cooldown is consumed: `held` remembers the last intent even
 /// when raising fails, so continued holding never automatically reactivates it.
+#[derive(ember_boundary::Boundary)]
+#[boundary(direction = "output")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShieldState {
     pub active: bool,
@@ -339,6 +341,8 @@ pub const SUPPLY_RADIUS: f32 = 1.15;
 
 /// Fixed inventory slot; zero weapon is empty. Ammunition belongs to the gun,
 /// never to an equip action, so switching cannot manufacture rounds.
+#[derive(ember_boundary::Boundary)]
+#[boundary(direction = "output")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WeaponSlot {
     pub weapon: u8,

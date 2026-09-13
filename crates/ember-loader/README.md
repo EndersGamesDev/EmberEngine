@@ -6,7 +6,7 @@ A page used to learn which server it would join only after its game bundle had d
 
 This crate owns the load's rules and nothing else: the phase machine, the download arithmetic, the stall test and the one line each event carries. It holds no socket, opens no request and touches no DOM. `web/loader.js` performs the browser input and output — discovery through `web/hosts.js`, the counting fetch, the compile, and the call into the game's own wasm-bindgen glue — and drives this machine with the clock as it goes.
 
-The split is what makes the rules testable: a test here is a list of calls and timestamps with no browser anywhere, and `cargo test -p ember-loader` runs natively with no dependencies at all. The browser bindings are behind `cfg(target_arch = "wasm32")`, so a native build of the workspace compiles the rules alone.
+The split is what makes the rules testable: a test here is a list of calls and timestamps with no browser anywhere, and `cargo test -p ember-loader` runs natively with only `ember-boundary` and Serde. The browser bindings are behind `cfg(target_arch = "wasm32")`, so a native build of the workspace compiles the rules and descriptors alone.
 
 Every call carries the page's own clock instead of reading one. That is what lets `web/loader.js` start the fetch and discovery in the page's first tick and replay the drive calls afterwards, in order and with their real timestamps, once this module has instantiated: the loader's own arrival never delays the work it reports on.
 
@@ -16,7 +16,7 @@ The machine does not trust its driver. Every call is checked against the state t
 
 ## Layering
 
-Platform code: no game crate, no engine crate, no dependency at all when built natively. One bundle for every page, built once by `deploy/deploy-pages.sh` and shipped once, so no game carries loading code of its own.
+Platform code: no game crate and no engine crate; native builds depend on `ember-boundary` and Serde for the unconditional boundary and wire derives. One bundle for every page, built once by `deploy/deploy-pages.sh` and shipped once, so no game carries loading code of its own.
 
 ## Building
 
