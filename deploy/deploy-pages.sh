@@ -240,6 +240,7 @@ echo "== assembling the Pages release tree =="
 git fetch -q origin gh-pages \
     || { echo "FAILED: cannot fetch the legacy origin/gh-pages seed" >&2; exit 1; }
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
+PLACED_PATHS="$(mktemp -t ember-pages-placed-XXXX)"
 COMPARE_DIR=""
 # Armed BEFORE the add, so neither a failing add nor anything after it can
 # leave the directory registered as a worktree. Without this, one failed push
@@ -248,7 +249,7 @@ COMPARE_DIR=""
 # `git worktree remove`. The status is preserved: the trap reports the failure
 # that caused it, not the cleanup's own.
 # shellcheck disable=SC2154
-trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; [ -z "$COMPARE_DIR" ] || rm -rf "$COMPARE_DIR"; exit $st' EXIT
+trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; rm -f "$PLACED_PATHS"; [ -z "$COMPARE_DIR" ] || rm -rf "$COMPARE_DIR"; exit $st' EXIT
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # The legacy seed can contain an independently versioned Fire release. Never
@@ -275,94 +276,76 @@ rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
     "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
     "${PAGES_DIR:?}"/games.json
 mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$END_GAME_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
-cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
-# The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
-# and every live page imports it from there, so there is one copy of the rule
-# rather than one per game. Guarded because a checkout that predates it still
-# has to be deployable: the frozen pages carry their own inline discovery and
-# read the legacy keys, so a hub without hosts.js degrades to what it did
-# before rather than breaking.
-if [ -f web/hosts.js ]; then
-    cp web/hosts.js "$PAGES_DIR"/
-else
-    echo "   note: web/hosts.js does not exist in this checkout; not copying it"
-fi
-# The shared loader's page-side half. One copy at the root beside hosts.js,
-# because it imports both that file and its own bundle relative to itself: a
-# per-game copy would be a second module instance and a second wasm download
-# for every player. Unguarded, unlike hosts.js: every live page imports this
-# first, so a tree assembled without it is a set of blank pages, and failing
-# here is how that is found by a build rather than by a player.
-cp web/loader.js "$PAGES_DIR"/
-# The developer landing page (marketing): one static file with no build of its
-# own. Guarded for the same reason as hosts.js: an older checkout must still
-# deploy.
-if [ -f web/engine.html ]; then
-    cp web/engine.html "$PAGES_DIR"/
-fi
-cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
-cp "web/$ARENA_LIVE/settings.js" "$PAGES_DIR/$ARENA_LIVE/"
-cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
-# Fire's page is a shell plus its own stylesheet and two modules. A static
-# import is resolved before the importing module runs, so leaving one behind
-# is a blank page, not a status line. Generated bindings still come from the
-# verified root pkg below.
-for name in index.html race.js garage.js style.css; do
-    cp "web/$FIRE_LIVE/$name" "$PAGES_DIR/$FIRE_LIVE/"
-done
-# The page sets its own type. A face the assembly leaves behind is not an
-# error anyone sees: the stylesheet falls through to the system stack and
-# the page just looks wrong. OFL.txt travels with the files because the
-# licence requires its notice to; README.md is a repository convention and
-# stays out of the published tree.
-mkdir -p "$PAGES_DIR/$FIRE_LIVE/fonts"
-cp "web/$FIRE_LIVE"/fonts/*.woff2 "web/$FIRE_LIVE/fonts/OFL.txt" "$PAGES_DIR/$FIRE_LIVE/fonts/"
-cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
-# Version-local UI, images and provenance sidecars are runtime assets too.
-# Never reuse a version-local pkg: the tested bindings come from web/pkg below.
-"$PY" - "web/$LEAGUE_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" <<'PY'
-import pathlib, shutil, sys
-source, dest = map(pathlib.Path, sys.argv[1:])
-if not (source / "index.html").is_file():
-    raise SystemExit(f"FAILED: missing live League page: {(source / 'index.html').as_posix()}")
-for parent in [source, *source.parents]:
-    if parent.is_symlink():
-        raise SystemExit(f"FAILED: League source contains a symlink: {parent}")
-for path in sorted(source.rglob("*")):
-    if path.is_symlink():
-        raise SystemExit(f"FAILED: League source contains a symlink: {path}")
-    relative = path.relative_to(source)
+# A live page is a tracked runtime tree, not a hand-maintained basename list.
+# That makes a newly imported module and a newly added sound or image part of
+# the same reviewed source change that starts using it. README files stay in
+# the repository, generated pkg directories come from the verified build below
+# and version sidecars come from the one build stamp shared by this assembly.
+copy_live_source() {
+    # $1 = source dir, $2 = destination dir, $3 = root, page or assets
+    "$PY" - "$1" "$2" "$3" "$PAGES_DIR" "$PLACED_PATHS" <<'PY'
+import pathlib, shutil, subprocess, sys
+
+repo = pathlib.Path.cwd()
+source = repo / sys.argv[1]
+dest = pathlib.Path(sys.argv[2])
+root_only = sys.argv[3] == "root"
+require_page = sys.argv[3] != "assets"
+pages_root = pathlib.Path(sys.argv[4])
+manifest = pathlib.Path(sys.argv[5])
+listed = subprocess.check_output(["git", "ls-files", "-z", "--", sys.argv[1]])
+tracked = [repo / pathlib.Path(item.decode("utf-8")) for item in listed.split(b"\0") if item]
+copied = []
+placed = []
+for path in sorted(tracked):
+    try:
+        relative = path.relative_to(source)
+    except ValueError:
+        raise SystemExit(f"FAILED: tracked live asset escapes {source}: {path}")
+    if root_only and len(relative.parts) != 1:
+        continue
+    if relative.name == "README.md":
+        continue
     if relative.parts[0] == "pkg" or relative.as_posix() == "version.json":
         continue
+    if root_only and (relative.name == "mirrors.json" or relative.name.endswith(".test.mjs")):
+        continue
+    for parent in [path, *path.parents]:
+        if parent.is_symlink():
+            raise SystemExit(f"FAILED: live source contains a symlink: {parent.relative_to(repo)}")
+        if parent == repo:
+            break
+    if not path.is_file():
+        raise SystemExit(f"FAILED: tracked live asset is not a regular file: {path}")
     target = dest / relative
-    if path.is_dir():
-        target.mkdir(parents=True, exist_ok=True)
-    elif path.is_file():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(path, target)
-    else:
-        raise SystemExit(f"FAILED: League source is not a regular file: {path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, target)
+    copied.append(relative.as_posix())
+    placed.append(target.relative_to(pages_root).as_posix())
+if require_page and "index.html" not in copied:
+    raise SystemExit(f"FAILED: missing tracked live page: {(source / 'index.html').as_posix()}")
+with manifest.open("a", encoding="utf-8", newline="") as handle:
+    for path in placed:
+        handle.write(path + "\n")
+print("   copy set %s: %s" % (dest.as_posix(), " ".join(copied)))
 PY
-cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
-cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
-# End Game has version-local UI and media. Copy only its source assets here;
-# generated bindings come from the verified root pkg below.
-for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
-    cp "web/$END_GAME_LIVE/$name" "$PAGES_DIR/$END_GAME_LIVE/"
+}
+
+copy_live_source web "$PAGES_DIR" root
+cp web/version.json "$PAGES_DIR/"
+for live in "$ARENA_LIVE" "$ARENA_V0_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE"; do
+    copy_live_source "web/$live" "$PAGES_DIR/$live" page
 done
+# League v4 deliberately shares the complete tracked v2 art vocabulary. Copy
+# that source tree even though v2 itself is frozen, so v4 never depends on
+# whatever an older Pages seed happens to contain.
+copy_live_source web/games/league/v2/art "$PAGES_DIR/games/league/v2/art" assets
+# League and End Game publish the source build stamp beside their page.
+cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp web/version.json "$PAGES_DIR/$END_GAME_LIVE/"
 
-# lab.js is not optional furniture: main.js imports it statically, so a deploy
-# that omits it resolves the import to a missing file and the whole module graph
-# fails to load — no page, no controls, and not even the page's own error
-# handler, because the handler is inside the module that never ran. drive.html
-# is the controls-free driver the lab's pixel proofs are taken through, and it
-# is shipped for the same reason a proof is worth having: a measurement taken
-# on a locally built copy is a measurement of a build nobody is serving.
-cp "web/$LAB_JULIBROT_LIVE/index.html" "web/$LAB_JULIBROT_LIVE/main.js" \
-    "web/$LAB_JULIBROT_LIVE/lab.js" "web/$LAB_JULIBROT_LIVE/drive.html" \
-    "web/$LAB_JULIBROT_LIVE/worker.js" "web/$LAB_JULIBROT_LIVE/style.css" \
-    "$PAGES_DIR/$LAB_JULIBROT_LIVE/"
+# Generated Julibrot bindings stay beside the lab; its tracked modules and
+# runtime assets came from the same derived copy set as every live game above.
 cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.js" \
     "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot_bg.wasm" \
     "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg/"
@@ -673,25 +656,23 @@ if len(token.findall(text)) != 1:
 with open(p, "w", encoding="utf-8", newline="") as fh:
     fh.write(token.sub(lambda _: './settings.js?v=' + sys.argv[2], text))
 PY
-for loader in index.html main.js lab.js drive.html worker.js; do
-    assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
-    if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
-        echo "FAILED: Julibrot cache key rewrite matched no ?v=1 token in $loader" >&2
-        exit 1
-    fi
-    "$PY" - "$assembled" "$DEPLOY_STAMP" <<'PY'
+"$PY" - "$PAGES_DIR/$LAB_JULIBROT_LIVE" "$DEPLOY_STAMP" <<'PY'
 import pathlib, re, sys
-p = pathlib.Path(sys.argv[1])
-text = p.read_text(encoding="utf-8")
-stamped = re.sub(r"\?v=1(?![0-9])", "?v=" + sys.argv[2], text)
-with open(p, "w", encoding="utf-8", newline="") as fh:
-    fh.write(stamped)
+
+root = pathlib.Path(sys.argv[1])
+token = re.compile(r"\?v=1(?![0-9])")
+paths = sorted(path for path in root.iterdir() if path.suffix in {".html", ".js"})
+for path in paths:
+    text = path.read_text(encoding="utf-8")
+    if token.search(text) is None:
+        raise SystemExit("FAILED: Julibrot cache key rewrite matched no ?v=1 token in %s" % path.name)
+    stamped = token.sub("?v=" + sys.argv[2], text)
+    if token.search(stamped) is not None:
+        raise SystemExit("FAILED: Julibrot cache key rewrite left ?v=1 in %s" % path.name)
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(stamped)
+print("   stamped %d Julibrot HTML and JavaScript file(s)" % len(paths))
 PY
-    if grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
-        echo "FAILED: Julibrot cache key rewrite left ?v=1 in $loader" >&2
-        exit 1
-    fi
-done
 
 # The shared loader is one file at the pages root, and a page that imports it
 # carries exactly one cache token: the `?v=` on that import. The deploy owns
@@ -766,35 +747,118 @@ if stamped_pages != game_live:
 print("   stamped the shared loader into %d live game page(s)" % len(stamped_pages))
 LOADER
 
-# A module the assembly does not place is a page that never runs. A static
-# import is resolved before any code in the importing module executes, so a
-# missing target is not a caught error reported in the status line: it is a
-# blank page with a console entry nobody is watching. The list of files to copy
-# and the list of files the pages reference are two lists that drifted apart
-# once and would drift again, so the second is read out of the assembled pages
-# themselves and checked against what is on disk beside them.
-"$PY" - "$PAGES_DIR/$LAB_JULIBROT_LIVE" <<'PY'
-import pathlib, re, sys
+# Record outputs that do not come through the tracked-source copy above. The
+# reference proof consumes this manifest rather than trusting files inherited
+# from the seed worktree.
+"$PY" - "$PAGES_DIR" "$PLACED_PATHS" \
+    version.json games.json server.json .nojekyll \
+    "$LEAGUE_LIVE/version.json" "$END_GAME_LIVE/version.json" \
+    pkg "$ARENA_LIVE/pkg" "$ARENA_V0_LIVE/pkg" "$FIRE_LIVE/pkg" \
+    "$KINGS_LIVE/pkg" "$LEAGUE_LIVE/pkg" "$WHAT_LIVE/pkg" \
+    "$END_GAME_LIVE/pkg" "$LAB_JULIBROT_LIVE/pkg" <<'PY'
+import pathlib, sys
 
 root = pathlib.Path(sys.argv[1])
-reference = re.compile(
-    r"""(?:from|import)\s*\(?\s*["'](\.{1,2}/[^"'?]+)"""
-    r"""|(?:src|href)\s*=\s*["'](\.{1,2}/[^"'?]+)"""
+manifest = pathlib.Path(sys.argv[2])
+placed = []
+for relative in map(pathlib.Path, sys.argv[3:]):
+    path = root / relative
+    if path.is_file():
+        placed.append(relative.as_posix())
+    elif path.is_dir():
+        placed.extend(item.relative_to(root).as_posix() for item in sorted(path.rglob("*")) if item.is_file())
+    else:
+        raise SystemExit("FAILED: assembly output is missing before reference validation: %s" % relative)
+with manifest.open("a", encoding="utf-8", newline="") as handle:
+    for path in placed:
+        handle.write(path + "\n")
+PY
+
+# A module the assembly does not place is a page that never runs. Inspect every
+# HTML, JavaScript and module-JavaScript file at the root and in each live tree,
+# then require relative static imports, dynamic imports, worker entries and
+# local runtime assets to belong to this assembly while its tree is inspectable.
+"$PY" - "$PAGES_DIR" "$PLACED_PATHS" . "$ARENA_LIVE" "$ARENA_V0_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE" <<'PY'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+placed = set(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines())
+page_roots = [root / path for path in sys.argv[3:]]
+static_import = re.compile(
+    r"""\b(?:import|export)\s+(?:(?:[^;"']*?)\s+from\s+)?["'](\.{1,2}/[^"']+)["']"""
 )
-missing = []
-for page in sorted(root.rglob("*")):
-    if not page.is_file() or page.suffix not in {".js", ".html"}:
+dynamic_import = re.compile(r"""\bimport\s*\(\s*["'](\.{1,2}/[^"']+)["']\s*\)""")
+worker_entry = re.compile(r"""\bnew\s+Worker\s*\(\s*["'](\.{1,2}/[^"']+)["']""")
+module_script = re.compile(
+    r"""<script\b(?=[^>]*\btype=["']module["'])[^>]*\bsrc=["'](\.{1,2}/[^"']+)["']""",
+    re.IGNORECASE,
+)
+page_asset = re.compile(r"""\b(?:src|href|poster)=["'](\.{1,2}/[^"']+)["']""", re.IGNORECASE)
+runtime_asset = re.compile(
+    r"""["'`](\.{1,2}/[^"'`]+\.(?:avif|css|gif|ico|jpe?g|json|mp3|mp4|ogg|png|svg|wav|wasm|webm|webp|woff2?)(?:[?#][^"'`]*)?)["'`]""",
+    re.IGNORECASE,
+)
+queue = sorted(
+    {
+        page
+        for base in page_roots
+        for page in (base.glob("*") if base == root else base.rglob("*"))
+        if page.is_file() and page.suffix in {".html", ".js", ".mjs"}
+    }
+)
+seen = set()
+problems = []
+references = 0
+
+
+def resolve(source, specifier, kind):
+    global references
+    references += 1
+    bare = specifier.split("#", 1)[0].split("?", 1)[0]
+    target = (source.parent / bare).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        problems.append(f"{source.relative_to(root)} {kind} {specifier}, which escapes the release tree")
+        return None
+    exists = target.is_dir() if bare.endswith("/") else target.is_file()
+    relative = target.relative_to(root).as_posix()
+    if bare.endswith("/"):
+        prefix = "" if relative == "." else relative.rstrip("/") + "/"
+        assembled = relative == "." or any(path.startswith(prefix) for path in placed)
+    else:
+        assembled = relative in placed
+    if not exists or not assembled:
+        problems.append(f"{source.relative_to(root)} references {specifier}, which this assembly did not place")
+        return None
+    return target
+
+
+while queue:
+    page = queue.pop(0)
+    if page in seen:
         continue
+    seen.add(page)
     text = page.read_text(encoding="utf-8")
-    for found in reference.finditer(text):
-        target = found.group(1) or found.group(2)
-        if not (page.parent / target).is_file():
-            missing.append(f"{page.relative_to(root)} references {target}")
-if missing:
-    print("FAILED: the assembled lab references files the deploy does not ship:", file=sys.stderr)
-    for entry in missing:
-        print(f"  {entry}", file=sys.stderr)
-    sys.exit(1)
+    imports = list(static_import.findall(text))
+    imports.extend(dynamic_import.findall(text))
+    imports.extend(worker_entry.findall(text))
+    if page.suffix == ".html":
+        imports.extend(module_script.findall(text))
+        for specifier in page_asset.findall(text):
+            resolve(page, specifier, "references")
+    for specifier in runtime_asset.findall(text):
+        resolve(page, specifier, "references")
+    for specifier in imports:
+        target = resolve(page, specifier, "imports")
+        if target is not None and target.suffix in {".html", ".js", ".mjs"}:
+            queue.append(target)
+if problems:
+    print("FAILED: the assembled live pages reference files the deploy does not ship:", file=sys.stderr)
+    for entry in problems:
+        print("  " + entry, file=sys.stderr)
+    raise SystemExit(1)
+print("   resolved %d relative live-page reference(s) across %d root(s)" % (references, len(page_roots)))
 PY
 
 if [ -n "${EMBER_PAGES_COMPARE:-}" ]; then
