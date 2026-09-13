@@ -1,0 +1,17 @@
+{
+  "name": "ember-typed-web",
+  "private": true,
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": "24.20.0"
+  },
+  "scripts": {
+    "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",
+    "typecheck:node": "tsc -p tsconfig.node.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "typescript": "5.9.3"
+  }
+}

@@ -15,6 +15,7 @@ The protocol test: an old peer that "plays a different game" when a field is abs
 ## Prerequisites
 
 - Rust, pinned by `rust-toolchain.toml`; for web builds also the `wasm32-unknown-unknown` target and `wasm-bindgen-cli`.
+- Node 24.20.0 and npm 11.19.0; install the locked TypeScript dependencies with `npm ci`.
 - A working `python3` for the deploy scripts (not the Windows App Execution Alias stub).
 - Git Bash on Windows: the deploy scripts are bash.
 

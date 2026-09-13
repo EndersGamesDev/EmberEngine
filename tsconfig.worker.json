@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"],
+    "rootDir": "target/web-generated/worker-ts",
+    "outDir": "target/web-generated/worker-js"
+  },
+  "include": ["target/web-generated/worker-ts/**/*.ts"]
+}
