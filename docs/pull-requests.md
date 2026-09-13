@@ -12,7 +12,7 @@ The candidate branch is pushed early, while it is still in progress, so its exis
 
 Every authored commit passes the shell suites named for its changed surfaces before the pull request opens. Documentation and integration-process changes normally include `bash deploy/tests/test-readmes.sh`, `bash deploy/tests/test-done-lists.sh`, `bash deploy/tests/test-changelog.sh`, `bash deploy/tests/test-commit-messages.sh`, `bash deploy/tests/test-rulesets.sh`, `bash deploy/tests/test-workflows.sh` and `bash deploy/tests/run.sh syntax`; another changed surface adds its own applicable suites.
 
-Code changes also pass the workspace formatting, lint and test suites represented by `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked`, `cargo test --workspace --locked --exclude linter --exclude ember-julibrot-present` and `cargo test -p ember-julibrot-present -- --test-threads=1`. These local or pod results establish the candidate before GitHub repeats the required checks on the proposed merge tree.
+Code changes also pass the workspace formatting, lint and test suites represented by `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked` and `cargo test --workspace --locked --exclude linter`. These local or pod results establish the candidate before GitHub repeats the required checks on the proposed merge tree.
 
 Every gate record names the command, the tested commit, its pass and fail counts, and its wall time. An unavailable or omitted gate remains explicitly unverified rather than being inferred from inspection or from a different suite.
 
@@ -68,7 +68,7 @@ The live `develop` ruleset requires the strict GitHub Actions contexts `cores + 
 
 `cores + servers` tests the four shared game cores and four server packages, then builds the host probe examples. `deploy scripts` runs the deployment syntax, workflow, ruleset, host, Pages, SSH-deploy and watchdog contract suites and, on pull requests, the repository README, done-list, changelog and commit-message policy suites.
 
-`workspace` checks formatting, runs locked all-target workspace Clippy, tests the workspace with `linter` and `ember-julibrot-present` excluded, and then tests only `ember-julibrot-present` separately with one test thread; it does not test `linter`. Its complete runner setup and gate have a roughly twenty-minute budget, so a pending result is expected evidence in progress rather than a reason to bypass the check.
+`workspace` checks formatting, runs locked all-target workspace Clippy, and tests the workspace with `linter` excluded. Its complete runner setup and gate have a roughly twenty-minute budget, so a pending result is expected evidence in progress rather than a reason to bypass the check.
 
 Strict up-to-date checking means a green result belongs only to a candidate based on the current `develop`. When `develop` moves, the candidate is rebased onto its new tip, force-pushed with force-with-lease to its own feature or lane branch, and gated again commit by commit; GitHub then runs all three required contexts on the new proposed merge tree.
 

@@ -18,6 +18,7 @@ use crate::{
     ICE_PALETTE, PaletteRecord, PresentFacts, PresentHot, SubmissionKind, SubmissionMeasurement,
     exterior_zero, shade_presentation_value,
 };
+use std::sync::OnceLock;
 
 #[test]
 fn glitch_census_sums_red_counts_and_ignores_row_padding() {
@@ -295,7 +296,24 @@ fn reference_acceptance_identity_is_independent_of_centre_revision() {
     assert!(accepted_reference_advanced(Some(&edited), &next_acceptance));
 }
 
+/// Every presentation test in this binary submits through this one adapter and device.
+///
+/// A device per test puts as many device creations in flight as the harness has threads.
+/// Concurrent device creation stalled the harness on the NVIDIA and lavapipe drivers; which lock
+/// holds the threads is not established. The application creates one device too, and one device
+/// costs one set of driver worker threads instead of one set per test.
 fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    static SHARED: OnceLock<(wgpu::Device, wgpu::Queue)> = OnceLock::new();
+    let (device, queue) = SHARED.get_or_init(request_native_test_device);
+    // The shared handles are stored bare because a static holding `Arc<wgpu::Device>` sends the
+    // compiler's auto-trait search one layer deeper into wgpu's backend dispatch graph than the
+    // recursion limit allows. `Arc::from` is deliberate: `Arc::new` makes Clippy's
+    // `arc_with_non_send_sync` probe recurse through the same graph. Cloning a device handle shares
+    // the one device; the `Arc` is only the shape `Presenter` asks for.
+    (Arc::from(device.clone()), Arc::from(queue.clone()))
+}
+
+fn request_native_test_device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let request = |force_fallback_adapter| wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
@@ -324,10 +342,7 @@ fn native_test_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         None,
     ))
     .expect("the native presentation test device is created");
-    // `Arc::new` makes Clippy's `arc_with_non_send_sync` probe recurse through wgpu's backend
-    // dispatch graph on this nightly. `Presenter` requires these shared handles, and conversion
-    // constructs the same concrete Arc without asking that unrelated lint to solve the graph.
-    (Arc::from(device), Arc::from(queue))
+    (device, queue)
 }
 
 fn native_test_heap(device: &wgpu::Device) -> HeapPresentResources {
@@ -564,17 +579,63 @@ fn capture_native_palette_on(
             slot,
         )
         .expect("the palette presentation is submitted");
-    device.poll(wgpu::Maintain::Wait);
-    assert!(presenter.poll_fixed(now_ms + 1.0).into_iter().any(
-        |event| matches!(event, crate::PresentEvent::WarpCompleted { measurement } if measurement.id == receipt.warp_id)
-    ));
+    wait_for_native_warp(presenter, device, now_ms + 1.0, receipt.warp_id);
     presenter.record_presented(receipt.warp_id);
-    device.poll(wgpu::Maintain::Wait);
-    let readback = presenter
-        .take_frame_readback()
-        .expect("the offscreen palette copy maps")
-        .expect("the offscreen palette copy is ready");
+    let readback = wait_for_native_frame_readback(presenter, device, "the offscreen palette copy");
     (receipt, readback)
+}
+
+fn wait_for_native_warp(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    now_ms: f64,
+    warp_id: u64,
+) {
+    for _poll in 0..PresentConfig::V1_MAX_FENCE_POLLS {
+        device.poll(wgpu::Maintain::Poll);
+        let ready = presenter.warp_fence.as_ref().is_some_and(|pending| {
+            pending.signal_result.is_some()
+                || pending.signal.lock().is_ok_and(|signal| signal.is_some())
+        });
+        if ready {
+            assert!(
+                presenter.poll_fixed(now_ms).into_iter().any(
+                    |event| matches!(event, crate::PresentEvent::WarpCompleted { measurement } if measurement.id == warp_id),
+                ),
+                "native warp {warp_id} map completed without a successful warp event"
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!(
+        "native warp {warp_id} did not complete within {} polls",
+        PresentConfig::V1_MAX_FENCE_POLLS
+    );
+}
+
+fn wait_for_native_frame_readback(
+    presenter: &mut Presenter,
+    device: &wgpu::Device,
+    route: &str,
+) -> FrameReadback {
+    if let Some(error) = presenter.take_frame_readback_refusal() {
+        panic!("{route} was refused: {error}");
+    }
+    for _poll in 0..PresentConfig::V1_MAX_FENCE_POLLS {
+        device.poll(wgpu::Maintain::Poll);
+        let readback = presenter
+            .take_frame_readback()
+            .unwrap_or_else(|error| panic!("{route} maps: {error}"));
+        if let Some(readback) = readback {
+            return readback;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!(
+        "{route} did not complete within {} polls",
+        PresentConfig::V1_MAX_FENCE_POLLS
+    );
 }
 
 fn status_page_values() -> [[f32; 4]; STATUS_PAGE_TEXELS] {
@@ -659,11 +720,7 @@ fn capture_native_status_page(
     presenter
         .request_frame_readback(&target)
         .expect("the native status colour target can be copied");
-    device.poll(wgpu::Maintain::Wait);
-    presenter
-        .take_frame_readback()
-        .expect("the native status colour copy maps")
-        .expect("the native status colour copy is ready")
+    wait_for_native_frame_readback(presenter, device, "the native status colour copy")
 }
 
 fn expected_status_colours(selected: PaletteRecord) -> [[f32; 4]; 8] {

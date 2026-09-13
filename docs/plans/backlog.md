@@ -15,6 +15,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## engine-renderer
 
+- wgpu 24.0.5 stalls concurrent `request_device` calls under both the NVIDIA and lavapipe ICDs in the fourteen-concurrent experiment recorded by `cc119422`; close this with a wgpu upgrade that passes the same experiment or an upstream report.
 - Before the `62f5c450` point-light rebase, the shared shader renderer added 755,558 bytes (+1.68%) to each engine-backed wasm game bundle on the measured sokol toolchain; remeasure the rebased candidate, then determine whether target-specific Minijinja feature factoring can retain the feature-full dynamic-generation contract while avoiding unreachable wasm machinery.
 - A provenance-preserving native template reload remains possible: watch the `.wgsl.jinja` files, render changed source through the same `ShaderContext`, require emission-marker verification, naga validation and the layout oracle, and replace pipelines only after success. It needs an audited render-from-template-source API because public `ember_shader::render` resolves embedded names; direct raw WGSL lowering must remain forbidden.
 - The scene and present command buffers reach the queue in one `submit` (`crates/ember-engine/src/renderer.rs:1313`) under a comment claiming the ATW sliced-submission rule (`crates/ember-engine/src/renderer.rs:1144`); splitting the call is a one-line fix for the stage boundary but delivers no slicing on one in-order queue, so fix the comment with the code.
@@ -51,7 +52,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 - `EngineConfig` is exhaustive (`crates/ember-engine/src/app.rs:50`), so a new field forces edits at three unrelated call sites; `#[non_exhaustive]` with a defaulted constructor contains it.
 - Procedural primitive construction is repeated across `crates/kings/src/meshes.rs:25-198`, `crates/league/src/scene.rs:262-404`, and `crates/arena/src/rounds.rs:456-477`; there is no engine primitive module to receive it, so add behavior-pinned builders before migrating only byte-equivalent shapes.
 - Level 1 of `docs/state-model.md` has no checkable artefact: the scene concept is hand-written three times, in the sim structs, the protocol enums and the instance builder (`crates/arena/src/lib.rs:285`), with nothing generated or shared between them.
-- `cargo test -p ember-engine` deadlocks under the default parallel harness: of the 13 tests in `crates/ember-engine/src/renderer_gpu_test.rs` (the `gpu_tests` module declared at `crates/ember-engine/src/renderer.rs:2601`) 11 are `#[ignore]`, but two run in a normal native suite (`:434`, `:905`), and each stands up its own wgpu instance, adapter and device through `Rig::new()` and reaches `Rig::render`, so running in parallel they can block at the readback `rx.recv()` at `:411` — twice observed as a lib test binary at 0 % CPU for 16 minutes, while `-- --test-threads=1` passes 57 tests in 30 s. Gates run this crate single-threaded and a workspace sweep has to `--exclude ember-engine`; the julibrot-present entry on the software Vulkan driver is the same problem, and the shared-device and lock isolation named there closes both.
 
 ## platform-web-deploy
 
@@ -245,7 +245,6 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 ## julibrot-present
 
 - Round two completion record: [Pending → Julibrot rounds two and three](../../CHANGELOG.md#julibrot-rounds-two-and-three).
-- Present GPU tests can deadlock intermittently under parallel execution on the software Vulkan driver; serialize this shard until shared device and lock isolation is corrected. At c95fba62 the crate's test binary sat 43 minutes at 0.4% CPU with four gpu::device::tests threads blocked on futex and rt_mutex beside lavapipe threads, while the serialized run passes in 46 s.
 - No check relates a scene's submitted extent to the pose it is submitted against: the pose comes from the hot slot and the extent from the grid in `crates/labs/julibrot/present/src/gpu/device/scene/submit.rs`, and the two validators check each alone.
 - The scale invariant is skipped whenever a plan declares exposure (`crates/labs/julibrot/present/src/gpu/device/ledger.rs:221`, the flag decided by `crates/labs/julibrot/present/src/planner.rs:305`), so any pan past half a pose pixel leaves the coverage check; the decision belongs in `docs/julibrot/present.md` and is recorded nowhere.
 - `record_height` returns the neutral 0 for glitch, horizon, malformed and non-finite records (`crates/labs/julibrot/present/src/shader.rs:51`, mirrored at `crates/labs/julibrot/present/src/mesh.rs:145`) — the middle of the height range, not its floor, where the interior returns the bottom; the decision belongs in `docs/julibrot/present.md` and is recorded nowhere.
@@ -274,6 +273,7 @@ Each line says what is wrong or missing, where it can be seen, and what closes i
 
 ## julibrot-app-web
 
+- The native GPU rig in `crates/labs/julibrot/app/src/frame/loop/tests.rs:3379` creates an instance, adapter and device per test and serializes its two callers with `PAIRED_GPU_TEST_MUTEX` at `:3366`, `:3935` and `:8797`; share one device as the engine and presentation rigs do.
 - Adopt `ember-camera` as Julibrot's exact view and navigation authority, mapping the existing camera-angle product order and presentation controls at the app boundary while removing the replaced bignum edit path only after its frozen navigation and screen-map oracles agree.
 - Native-versus-wasm execution equality for `ember-camera` is asserted structurally by core-only arithmetic and pinned byte/bit goldens until a wasm test runner exists on the servers.
 - Optimize `ember-camera`'s exact projection division in a follow-up bite after merge: a correctly rounded quotient needs only the leading 54 quotient bits and a sticky remainder, so normalise numerator and denominator by their common leading-zero count, divide at double width, and use the exact remainder only to decide the rounding bit. The target to beat is the measured 355,220–385,949 ns `reference_displacement` wall, roughly 47 times the earlier 3,580–7,960 ns floating-evaluation range, without changing any output bit.
