@@ -9,6 +9,7 @@
 # fail unless the assembled files are byte-identical to an existing archive.
 #
 # Server-build/workstation dry-run recipe:
+#   npm ci
 #   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p end-game -p ember-loader -p ember-julibrot-app --lib
 #   CARGO_WASM_RELEASE="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
 #   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/fire.wasm"
@@ -60,6 +61,17 @@ for cand in python3 python; do
     break
 done
 [ -n "$PY" ] || die "need a working python3 or python on PATH"
+
+timed_step() {
+    local label="$1" start end status wall
+    shift
+    start="$("$PY" -c 'import time; print(time.monotonic_ns())')"
+    if "$@"; then status=0; else status=$?; fi
+    end="$("$PY" -c 'import time; print(time.monotonic_ns())')"
+    wall="$("$PY" -c 'import sys; print("%.3f" % ((int(sys.argv[2]) - int(sys.argv[1])) / 1_000_000_000))' "$start" "$end")"
+    printf 'TIMING %s wall=%ss exit=%s\n' "$label" "$wall" "$status"
+    return "$status"
+}
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
@@ -241,6 +253,40 @@ else
         "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
 fi
 
+stage_pkg_types() {
+    # $1 = wasm-bindgen output directory, $2... = crate output stems
+    local source="$1"
+    shift
+    for crate in "$@"; do
+        mkdir -p "$PKG_TYPES_DIR/$crate"
+        cp "$source/$crate.d.ts" "$source/${crate}_bg.wasm.d.ts" "$PKG_TYPES_DIR/$crate/"
+    done
+}
+
+rm -rf "$PKG_TYPES_DIR"
+stage_pkg_types web/pkg fire arena kings league what_is_this end_game ember_loader
+stage_pkg_types web/labs/julibrot/pkg ember_lab_julibrot
+
+echo "== generating and compiling Rust-owned web declarations =="
+EMBER_SOURCE_SHA="$SOURCE_SHA" timed_step ember-webgen \
+    cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$SOURCE_SHA"
+for crate in fire arena kings league what_is_this end_game ember_loader ember_lab_julibrot; do
+    for destination in \
+        "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts/wasm/$crate" \
+        "$REPO_DIR/target/web-generated/ts/wasm/$crate"
+    do
+        mkdir -p "$destination"
+        cp "$PKG_TYPES_DIR/$crate/$crate.d.ts" \
+            "$PKG_TYPES_DIR/$crate/${crate}_bg.wasm.d.ts" \
+            "$destination/"
+    done
+done
+diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts" \
+    "$REPO_DIR/target/web-generated/ts" >/dev/null \
+    || die "fixed TypeScript inputs differ from the source-scoped tree"
+bash deploy/check-toolchain.sh
+timed_step typescript npx --no-install tsc -p tsconfig.web.json --noEmit
+
 echo "== assembling the Pages release tree =="
 # The retired gh-pages branch remains a read-only seed for frozen historical
 # bundles that are not stored in source. The detached worktree makes it
@@ -356,11 +402,6 @@ cp web/version.json "$PAGES_DIR/$END_GAME_LIVE/"
 cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.js" \
     "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot_bg.wasm" \
     "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg/"
-rm -rf "$PKG_TYPES_DIR"
-mkdir -p "$PKG_TYPES_DIR/ember_lab_julibrot"
-cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.d.ts" \
-    "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot_bg.wasm.d.ts" \
-    "$PKG_TYPES_DIR/ember_lab_julibrot/"
 # Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
 # game directory shipped arena's 18 MB wasm to fire players and fire's to arena
 # players — a fire player was downloading ~23 MB to run a ~6 MB game. The
@@ -372,8 +413,6 @@ copy_pkg() {
     mkdir -p "$dest"
     for crate in "$@"; do
         cp "web/pkg/$crate.js" "web/pkg/${crate}_bg.wasm" "$dest/"
-        mkdir -p "$PKG_TYPES_DIR/$crate"
-        cp "web/pkg/$crate.d.ts" "web/pkg/${crate}_bg.wasm.d.ts" "$PKG_TYPES_DIR/$crate/"
     done
 }
 copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena

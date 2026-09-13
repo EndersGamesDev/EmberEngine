@@ -27,7 +27,7 @@ cargo run -p fire --bin fire-app     # Fire Racer
 cargo run -p kings --bin kings-app   # Four Kings, hotseat
 ```
 
-Web builds (the hub is assembled by `bash deploy/deploy-pages.sh`, which does all of this):
+Web builds (run `npm ci` first; the hub is assembled by `bash deploy/deploy-pages.sh`, which does all of this):
 
 ```
 cargo build --target wasm32-unknown-unknown --release -p arena --lib

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# A fake Node runtime for the Pages fixture's pinned-toolchain check.
+set -euo pipefail
+printf '%s\n' "${SHIM_NODE_VERSION:-v24.20.0}"

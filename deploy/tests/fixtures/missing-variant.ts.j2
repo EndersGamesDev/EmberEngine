@@ -1,0 +1,18 @@
+// This fixture contains no Jinja; its template suffix keeps generated TypeScript untracked.
+import type { C2S } from "./arena-core.js";
+
+declare const message: C2S;
+
+switch (message["t"]) {
+  case "hello":
+  case "list_lobbies":
+  case "create_lobby":
+  case "join_lobby":
+  case "leave_lobby":
+  case "input":
+    break;
+  default: {
+    const exhaustive: never = message;
+    throw new Error(`unhandled fixture variant: ${JSON.stringify(exhaustive)}`);
+  }
+}

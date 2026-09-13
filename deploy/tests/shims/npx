@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# A fake npx for Pages TypeScript integration; version checks remain exact.
+set -euo pipefail
+
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'npx'; for argument in "$@"; do printf ' [%s]' "$argument"; done; printf '\n'; } >> "$LOG"
+
+case " $* " in
+    *" tsc --version "*) printf 'Version 5.9.3\n' ;;
+    *)
+        if [ "${SHIM_NPX_FAIL:-}" = 1 ]; then
+            printf 'fixture TypeScript failure\n' >&2
+            exit 2
+        fi
+        ;;
+esac

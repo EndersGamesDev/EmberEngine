@@ -17,7 +17,7 @@ DEPLOY="$(cd "$HERE/.." && pwd)"
 # The shims have no extension on purpose — they stand in for `ssh`, `scp`,
 # `cargo`, `wasm-bindgen`, `git`, `curl` and `sleep` on PATH — so they are
 # listed rather than globbed.
-FILES="$(find "$DEPLOY" -name '*.sh' -print; ls "$HERE"/shims/ssh "$HERE"/shims/scp "$HERE"/shims/cargo "$HERE"/shims/wasm-bindgen "$HERE"/shims/git "$HERE"/shims/curl "$HERE"/shims/sleep)"
+FILES="$(find "$DEPLOY" -name '*.sh' -print; ls "$HERE"/shims/ssh "$HERE"/shims/scp "$HERE"/shims/cargo "$HERE"/shims/wasm-bindgen "$HERE"/shims/git "$HERE"/shims/curl "$HERE"/shims/sleep "$HERE"/shims/node "$HERE"/shims/npm "$HERE"/shims/npx)"
 
 while IFS= read -r f; do
     [ -n "$f" ] || continue

@@ -70,6 +70,34 @@ jobs:
           bash deploy/tests/test-changelog.sh
           bash deploy/tests/test-commit-messages.sh origin/develop
 
+  typed-web:
+    name: typed web
+    runs-on: ubuntu-latest
+    env:
+      EMBER_SOURCE_SHA: ${{ github.sha }}
+      EMBER_TYPED_WEB_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.20.0"
+          cache: npm
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: typed-web
+      - name: install locked TypeScript toolchain
+        run: npm ci
+      - name: verify pinned TypeScript toolchain
+        run: bash deploy/check-toolchain.sh
+      - name: generate and compile declarations
+        run: |
+          cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$EMBER_SOURCE_SHA"
+          npx --no-install tsc -p tsconfig.web.json --noEmit
+      - name: typed web fixtures
+        run: bash deploy/tests/test-typescript.sh
+
   workspace:
     name: workspace
     runs-on: ubuntu-latest

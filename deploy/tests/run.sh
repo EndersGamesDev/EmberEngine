@@ -27,12 +27,14 @@
 #                 the tags — instant; tag checks skip on a tagless checkout
 #   workflows     workflow YAML and the branch/tag contract — instant
 #   rulesets      repository-ruleset JSON payloads and policy — instant
+#   typescript    pinned configs, a Rust generator build and compile failure;
+#                 skips unless the pinned Node toolchain is installed
 #
 # Nothing here contacts a host, a tunnel or a network.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax changelog workflows rulesets pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
+SUITES="${*:-syntax changelog workflows rulesets typescript pages publish-host ssh-deploys ship-host watchdog host-pids host-kings host-prebuilt host-timer republish-host host-loopback}"
 
 T0="$(date +%s)"
 failed=""
