@@ -102,7 +102,7 @@ An attribute is removable only when every cfg containing it was compiled and the
 - `crates/ember-engine/src/overlay.rs`: J 12.
 - `crates/ember-engine/src/puppet.rs`: D 112.
 - `crates/ember-engine/src/renderer.rs`: J 13, D 577, D 1024, J 2193, J 2233.
-- `crates/ember-engine/src/renderer_gpu_test.rs`: D 30, D 228, J 472, D 1110.
+- `crates/ember-engine/src/renderer_gpu_test.rs`: D 121, D 300, J 628, D 1291.
 - `crates/ember-engine/src/rig.rs`: D 616, D 766.
 - `crates/ember-legacy/src/lib.rs`: R 9, R 29.
 - `crates/ember-net/src/outer.rs`: J 8, D 452.

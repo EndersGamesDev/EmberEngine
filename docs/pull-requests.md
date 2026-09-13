@@ -68,7 +68,7 @@ The live `develop` ruleset requires the strict GitHub Actions contexts `cores + 
 
 `cores + servers` tests the four shared game cores and four server packages, then builds the host probe examples. `deploy scripts` runs the deployment syntax, workflow, ruleset, host, Pages, SSH-deploy and watchdog contract suites and, on pull requests, the repository README, done-list, changelog and commit-message policy suites.
 
-`workspace` checks formatting, runs locked all-target workspace Clippy, and tests the workspace with `linter` excluded; it does not test `linter`. Its complete runner setup and gate have a roughly twenty-minute budget, so a pending result is expected evidence in progress rather than a reason to bypass the check.
+`workspace` checks formatting, runs locked all-target workspace Clippy, and tests the workspace with `linter` excluded. Its complete runner setup and gate have a roughly twenty-minute budget, so a pending result is expected evidence in progress rather than a reason to bypass the check.
 
 Strict up-to-date checking means a green result belongs only to a candidate based on the current `develop`. When `develop` moves, the candidate is rebased onto its new tip, force-pushed with force-with-lease to its own feature or lane branch, and gated again commit by commit; GitHub then runs all three required contexts on the new proposed merge tree.
 
