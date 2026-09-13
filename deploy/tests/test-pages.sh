@@ -58,7 +58,9 @@ SEED="$TMP/pages-seed"
 EXPECTED="$TMP/expected"
 export SHIM_PUBLISHED="$TMP/published"
 export SHIM_GIT_INDEX="$TMP/git-index"
+export SHIM_GIT_TRACKED="$TMP/git-tracked"
 export SHIM_LOG="$TMP/argv.log"
+unset CARGO_TARGET_DIR
 
 SHIMS="$TMP/shims"
 mkdir -p "$SHIMS"
@@ -72,6 +74,7 @@ export PATH="$SHIMS:$PATH"
 
 mkdir -p "$REPO/deploy" "$REPO/web/$ARENA_LIVE" "$REPO/web/games/arena/v0"
 mkdir -p "$REPO/web/games/fire/v2" "$REPO/web/games/kings/v1" "$REPO/web/games/what-is-this/v1"
+mkdir -p "$REPO/web/games/league/v2/art"
 mkdir -p "$REPO/web/$LEAGUE_LIVE/art/nested" "$REPO/web/$LEAGUE_LIVE/pkg"
 mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
@@ -97,6 +100,7 @@ with open(p, "w", encoding="utf-8", newline="") as fh:
 PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf '[{"name":"lundi","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json"
+printf 'root test module\n' > "$REPO/web/hosts.test.mjs"
 printf 'hub\n' > "$REPO/web/index.html"
 printf 'export function emberLoad() {}\n' > "$REPO/web/loader.js"
 printf '{}\n' > "$REPO/web/version.json"
@@ -112,40 +116,70 @@ for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt READ
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
 done
 printf 'kings v1<script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/games/kings/v1/index.html"
-printf '<link href="./ui.css"><script src="./ui.js"></script><img src="./art/swarm.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
-printf 'import { emberLoad } from "../../../loader.js?v=1";\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
+printf '<link href="./ui.css"><script src="./ui.js"></script><img src="../v2/art/arena.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
+printf 'import { emberLoad } from "../../../loader.js?v=1"; const ART = ["../v2/art/swarm.webp", "../v2/art/emberknight.webp", "../v2/art/hallow.webp", "../v2/art/bogmaw.webp", "../v2/art/tessera.webp"]; const ICONS = "../v2/art/icons.svg";\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
 printf 'league CSS\n' > "$REPO/web/$LEAGUE_LIVE/ui.css"
 printf 'league portrait bytes\n' > "$REPO/web/$LEAGUE_LIVE/art/swarm.webp"
 printf '{"source":"fleet"}\n' > "$REPO/web/$LEAGUE_LIVE/art/nested/manifest.json"
+for name in arena.webp swarm.webp emberknight.webp hallow.webp bogmaw.webp tessera.webp icons.svg; do
+    printf "shared League art fixture %s\n" "$name" > "$REPO/web/games/league/v2/art/$name"
+done
 printf 'stale source bundle\n' > "$REPO/web/$LEAGUE_LIVE/pkg/arena.js"
 printf 'stale source stamp\n' > "$REPO/web/$LEAGUE_LIVE/version.json"
 printf 'what is this v1<script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/games/what-is-this/v1/index.html"
 for name in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav; do
     printf "End Game fixture %s\n" "$name" > "$REPO/web/$END_GAME_LIVE/$name"
 done
-printf 'import { emberLoad } from "../../../loader.js?v=1";\n' >> "$REPO/web/$END_GAME_LIVE/main.js"
-printf '<link href="./style.css?v=1"><script src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
+cat > "$REPO/web/$END_GAME_LIVE/main.js" <<'JS'
+import { Quality } from './quality.js';
+import { VoiceAudio } from './dialogue.js';
+import { CastleDialogue } from './castle-audio.js';
+import { CASTLE_LINES } from './voice-lines.js';
+import { renderCastle } from './castle-ui.js';
+import { emberLoad } from '../../../loader.js?v=1';
+JS
+printf 'export class VoiceAudio {}\n' > "$REPO/web/$END_GAME_LIVE/dialogue.js"
+printf 'export class CastleDialogue {}\n' > "$REPO/web/$END_GAME_LIVE/castle-audio.js"
+printf 'export const CASTLE_LINES = [];\n' > "$REPO/web/$END_GAME_LIVE/voice-lines.js"
+printf 'export function renderCastle() {}\n' > "$REPO/web/$END_GAME_LIVE/castle-ui.js"
+for name in boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav; do
+    printf "End Game fixture %s\n" "$name" > "$REPO/web/$END_GAME_LIVE/$name"
+done
+printf '<link href="./style.css?v=1"><script type="module" src="./main.js?v=1"></script>\n' > "$REPO/web/labs/julibrot/index.html"
 # main.js imports lab.js statically, exactly as the shipped page does: the
 # fixture has to carry the same import for the assembly check to mean anything.
 printf 'import { openLab } from "./lab.js?v=1"; fetch("./future.js?v=10");\n' > "$REPO/web/labs/julibrot/main.js"
 printf 'globalThis.JULIBROT_WORKER_URL = "./worker.js?v=1"; import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1"); export function openLab() {}\n' > "$REPO/web/labs/julibrot/lab.js"
 printf '<canvas id="julibrot"></canvas><script type="module">import { openLab } from "./lab.js?v=1";</script>\n' > "$REPO/web/labs/julibrot/drive.html"
 printf 'import("./pkg/ember_lab_julibrot.js?v=1"); fetch("./pkg/ember_lab_julibrot_bg.wasm?v=1");\n' > "$REPO/web/labs/julibrot/worker.js"
+printf '<script type="module">import { openLab } from "./lab.js?v=1";</script>\n' > "$REPO/web/labs/julibrot/whole-grid-oracle.html"
+printf '{"fixture":"whole-grid"}\n' > "$REPO/web/labs/julibrot/whole-grid-v1.json"
+printf 'compressed whole-grid fixture\n' > "$REPO/web/labs/julibrot/whole-grid-v1.rgba.deflate.bin"
 printf 'julibrot style\n' > "$REPO/web/labs/julibrot/style.css"
 printf 'pub const PROTO_VERSION: u16 = %s;\n' "$ARENA_PROTO" > "$REPO/crates/arena-core/src/proto.rs"
 printf 'pub const PROTO_VERSION: u16 = %s;\n' "$FIRE_PROTO" > "$REPO/crates/fire-core/src/proto.rs"
 printf 'pub const PROTO_VERSION: u16 = %s;\n' "$KINGS_PROTO" > "$REPO/crates/kings-core/src/proto.rs"
 printf 'pub const PROTO_VERSION: u16 = %s;\n' "$LEAGUE_PROTO" > "$REPO/crates/league-core/src/proto.rs"
 
-mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
+# Snapshot the fixture's tracked files before adding scratch state. The git
+# shim answers ls-files from this manifest, so source-copy tests distinguish
+# repository inputs from merely present files.
+(cd "$REPO" && find . -type f -printf '%P\n' | LC_ALL=C sort) > "$SHIM_GIT_TRACKED"
+printf 'untracked scratch\n' > "$REPO/web/$END_GAME_LIVE/untracked.tmp"
+
+mkdir -p "$SEED/games/arena/v0/pkg" "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
 mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg" "$SEED/$LEAGUE_LIVE/pkg"
 printf 'keep arena\n' > "$SEED/games/arena/v17/frozen.txt"
 printf 'archived arena<script src="./settings.js?v=archived"></script>\n' > "$SEED/games/arena/v17/index.html"
 printf 'archived controls\n' > "$SEED/games/arena/v17/settings.js"
+printf 'seed arena v0 page\n' > "$SEED/games/arena/v0/index.html"
+printf 'seed arena v0 JavaScript\n' > "$SEED/games/arena/v0/pkg/arena.js"
+printf 'seed arena v0 wasm bytes\000\377\n' > "$SEED/games/arena/v0/pkg/arena_bg.wasm"
 printf 'keep fire\n' > "$SEED/games/fire/v1/frozen.txt"
 printf 'keep kings\n' > "$SEED/games/kings/old/frozen.txt"
 printf 'keep league archive\n' > "$SEED/games/league/old/frozen.txt"
 printf 'frozen league v1\n' > "$SEED/games/league/v1/index.html"
+printf 'seed-only League asset\n' > "$SEED/games/league/v1/seed-only.webp"
 printf 'frozen league v1 js\n' > "$SEED/games/league/v1/pkg/league.js"
 printf 'frozen league v1 wasm\n' > "$SEED/games/league/v1/pkg/league_bg.wasm"
 printf 'stale foreign bundle\n' > "$SEED/$LEAGUE_LIVE/pkg/arena.js"
@@ -175,13 +209,29 @@ tar -xzf "$ARCHIVE" -C "$SHIM_PUBLISHED"
 if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "the archive build attempted a branch push"; else ok "the archive build attempted no branch push"; fi
 ARGV="$(cat "$SHIM_LOG")"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [what-is-this] [--lib]" "what-is-this is built as a wasm library"
-contains "$ARGV" "release/what_is_this.wasm" "what-is-this is passed to wasm-bindgen"
+contains "$ARGV" "[target/wasm32-unknown-unknown/release/what_is_this.wasm]" "what-is-this uses Cargo's default target directory"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [league] [--lib]" "League is built as a wasm library"
 contains "$ARGV" "release/league.wasm" "League is passed to wasm-bindgen"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [ember-julibrot-app] [--lib]" "Julibrot is built as a wasm library"
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
-for f in index.html main.js quality.js style.css cover.png prologue.mp4 ambience.wav pkg/end_game.js pkg/end_game_bg.wasm; do
+if [ -e "$REPO/target" ]; then bad "the default-target fixture made an unexpected target entry"; else ok "the default-target build needs no target symlink"; fi
+
+echo "== a configured Cargo target directory supplies wasm-bindgen inputs =="
+: > "$SHIM_LOG"
+CUSTOM_TARGET="$TMP/shared-cargo-target"
+CUSTOM_ARCHIVE="$TMP/custom-target-pages.tar.gz"
+if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 CARGO_TARGET_DIR="$CUSTOM_TARGET" EMBER_PAGES_ARCHIVE="$CUSTOM_ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/custom-target.log" 2>&1; then
+    ok "the configured-target build-and-archive run succeeded"
+else
+    bad "the configured-target build-and-archive run failed"
+    tail -40 "$TMP/custom-target.log" >&2
+fi
+CUSTOM_ARGV="$(cat "$SHIM_LOG")"
+contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/fire.wasm]" "wasm-bindgen reads Fire from the configured Cargo target directory"
+contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm]" "wasm-bindgen reads Julibrot from the configured Cargo target directory"
+if [ -e "$REPO/target" ]; then bad "the configured-target build used a target entry"; else ok "the configured-target build needs no target symlink"; fi
+for f in index.html main.js quality.js dialogue.js castle-audio.js castle-ui.js voice-lines.js style.css cover.png prologue.mp4 ambience.wav boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav pkg/end_game.js pkg/end_game_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done
 contains "$ARGV" "[-p] [end-game] [--lib]" "End Game is built as an Ember wasm library"
@@ -202,6 +252,13 @@ for f in index.html ui.js ui.css art/swarm.webp art/nested/manifest.json version
         bad "assembled League is missing $f"
     fi
 done
+for f in arena.webp swarm.webp emberknight.webp hallow.webp bogmaw.webp tessera.webp icons.svg; do
+    if cmp -s "$REPO/web/games/league/v2/art/$f" "$SHIM_PUBLISHED/games/league/v2/art/$f"; then
+        ok "League v4 shared art $f is derived from tracked source"
+    else
+        bad "League v4 shared art $f is missing or came from the seed"
+    fi
+done
 is "$(find "$SHIM_PUBLISHED/$LEAGUE_LIVE/pkg" -type f -printf '%f\n' | sort | tr '\n' ' ')" "league.js league_bg.wasm " "League gets only its own generated bundle and replaces stale files"
 if cmp -s "$REPO/web/version.json" "$SHIM_PUBLISHED/$LEAGUE_LIVE/version.json"; then
     ok "League carries the source build stamp beside its page"
@@ -216,13 +273,23 @@ if [ "$LEAGUE_LIVE" != games/league/v1 ]; then
         cat "$TMP/league-v1.diff" >&2
     fi
 fi
-for f in index.html main.js lab.js drive.html worker.js style.css pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
+for f in index.html main.js lab.js drive.html worker.js style.css whole-grid-oracle.html whole-grid-v1.json whole-grid-v1.rgba.deflate.bin pkg/ember_lab_julibrot.js pkg/ember_lab_julibrot_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/labs/julibrot/$f" ]; then
         ok "assembled Julibrot $f"
     else
         bad "assembled Julibrot is missing $f"
     fi
 done
+if [ -e "$SHIM_PUBLISHED/$END_GAME_LIVE/untracked.tmp" ]; then
+    bad "an untracked file under a live tree was published"
+else
+    ok "untracked files under live trees are not published"
+fi
+if [ -e "$SHIM_PUBLISHED/mirrors.json" ] || [ -e "$SHIM_PUBLISHED/hosts.test.mjs" ]; then
+    bad "root-only deployment metadata or test modules were published"
+else
+    ok "web/mirrors.json and web/*.test.mjs stay out of the root publication"
+fi
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
@@ -267,6 +334,7 @@ contains "$ARGV" "[-p] [ember-loader] [--lib]" "the shared loader is built as a 
 contains "$ARGV" "release/ember_loader.wasm" "the shared loader is passed to wasm-bindgen"
 contains "$(cat "$SHIM_PUBLISHED/$ARENA_LIVE/index.html")" "../../../loader.js?v=$STAMP" "the page's loader import carries the deploy stamp"
 contains "$(cat "$TMP/build.log")" "stamped the shared loader into 6 live game page" "the assembly reports one stamp per live game page"
+contains "$(cat "$TMP/build.log")" "resolved " "the assembly reports its live-page reference walk"
 if grep -qE 'loader\.js\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/$ARENA_LIVE/index.html"; then
     bad "the assembled page kept a stale loader cache key"
 else
@@ -310,19 +378,37 @@ for f in index.html settings.js; do
         bad "archived Arena $f was rewritten"
     fi
 done
-for f in index.html main.js lab.js drive.html worker.js; do
-    contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/$f")" "?v=$STAMP" "Julibrot $f uses the deploy stamp"
-    if grep -qE '\?v=1([^0-9]|$)' "$SHIM_PUBLISHED/labs/julibrot/$f"; then
-        bad "assembled Julibrot $f retained ?v=1"
+if diff -r "$SEED/games/arena/v0" "$SHIM_PUBLISHED/games/arena/v0" > "$TMP/arena-v0.diff"; then
+    ok "frozen Arena v0 remains byte-identical to the seed"
+else
+    bad "frozen Arena v0 changed"
+    cat "$TMP/arena-v0.diff" >&2
+fi
+while IFS= read -r seed_file; do
+    relative="${seed_file#"$SEED/games/arena/v0/"}"
+    seed_sha="$(sha256sum "$seed_file" | cut -d ' ' -f 1)"
+    assembled_sha="$(sha256sum "$SHIM_PUBLISHED/games/arena/v0/$relative" | cut -d ' ' -f 1)"
+    is "$assembled_sha" "$seed_sha" "frozen Arena v0 $relative keeps its seed SHA-256"
+done < <(find "$SEED/games/arena/v0" -type f | sort)
+if grep -Fq "git [ls-files] [-z] [--] [web/games/arena/v0]" "$SHIM_LOG"; then
+    bad "the assembler read Arena v0 source files"
+else
+    ok "the assembler leaves Arena v0 entirely to the seed"
+fi
+while IFS= read -r f; do
+    name="${f#"$SHIM_PUBLISHED/labs/julibrot/"}"
+    contains "$(cat "$f")" "?v=$STAMP" "Julibrot $name uses the deploy stamp"
+    if grep -qE '\?v=1([^0-9]|$)' "$f"; then
+        bad "assembled Julibrot $name retained ?v=1"
     else
-        ok "assembled Julibrot $f has no stale ?v=1 cache key"
+        ok "assembled Julibrot $name has no stale ?v=1 cache key"
     fi
-    if grep -qE '\?v=1([^0-9]|$)' "$REPO/web/labs/julibrot/$f"; then
-        ok "Julibrot source $f remains pinned at ?v=1"
+    if grep -qE '\?v=1([^0-9]|$)' "$REPO/web/labs/julibrot/$name"; then
+        ok "Julibrot source $name remains pinned at ?v=1"
     else
-        bad "Julibrot source $f was rewritten"
+        bad "Julibrot source $name was rewritten"
     fi
-done
+done < <(find "$SHIM_PUBLISHED/labs/julibrot" -maxdepth 1 -type f \( -name '*.html' -o -name '*.js' \) | LC_ALL=C sort)
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/lab.js")" "JULIBROT_WORKER_URL = \"./worker.js?v=$STAMP\"" "the worker bootstrap URL uses the deploy stamp"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "./future.js?v=10" "a future two-digit cache key is not partly rewritten"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "from \"./lab.js?v=$STAMP\"" "the page's static import of the lab module is stamped"
@@ -358,7 +444,7 @@ cp "$TMP/version.before-archive.json" "$REPO/web/version.json"
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
+for spec in "${ARENA_LIVE#games/} arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
     # shellcheck disable=SC2086
     set -- $spec
     live="$1"
@@ -385,6 +471,8 @@ for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/
     printf 'shim js for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/$bundle.js"
     printf 'shim wasm for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/${bundle}_bg.wasm"
 done
+mkdir -p "$EXPECTED/games/league/v2"
+cp -R "$REPO/web/games/league/v2/art" "$EXPECTED/games/league/v2/"
 for page in games/fire/v2/race.js games/kings/v1/index.html "$LEAGUE_LIVE/ui.js"; do
     sed -i "s/loader\\.js?v=1/loader.js?v=$STAMP/" "$EXPECTED/$page"
 done
@@ -660,6 +748,39 @@ for fixture in missing duplicate two-digit; do
 done
 cp "$TMP/arena-index.saved" "$REPO/web/$ARENA_LIVE/index.html"
 
+echo "== seed-only references and source symlinks are refused =="
+cp "$REPO/web/$LEAGUE_LIVE/index.html" "$TMP/league-index.saved"
+printf '<img src="../v1/seed-only.webp">\n' >> "$REPO/web/$LEAGUE_LIVE/index.html"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/seed-only.log" 2>&1; then
+    bad "a live reference supplied only by the seed was accepted"
+else
+    ok "a live reference supplied only by the seed was refused"
+fi
+contains "$(cat "$TMP/seed-only.log")" "$LEAGUE_LIVE/index.html references ../v1/seed-only.webp, which this assembly did not place" "the seed-only refusal names the live edge"
+mv "$TMP/league-index.saved" "$REPO/web/$LEAGUE_LIVE/index.html"
+
+ln -s index.html "$REPO/web/$END_GAME_LIVE/linked.html"
+printf 'web/%s/linked.html\n' "$END_GAME_LIVE" >> "$SHIM_GIT_TRACKED"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/source-symlink.log" 2>&1; then
+    bad "a tracked symlink under a live tree was accepted"
+else
+    ok "a tracked symlink under a live tree was refused"
+fi
+contains "$(cat "$TMP/source-symlink.log")" "live source contains a symlink" "the live-tree symlink refusal identifies its cause"
+rm "$REPO/web/$END_GAME_LIVE/linked.html"
+sed -i "\\|^web/$END_GAME_LIVE/linked.html$|d" "$SHIM_GIT_TRACKED"
+
+mv "$REPO/web/games" "$REPO/tracked-games"
+ln -s ../tracked-games "$REPO/web/games"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/source-ancestor-symlink.log" 2>&1; then
+    bad "a symlinked web/games source ancestor was accepted"
+else
+    ok "a symlinked web/games source ancestor was refused"
+fi
+contains "$(cat "$TMP/source-ancestor-symlink.log")" "live source contains a symlink: web/games" "the ancestor symlink refusal walks to the repository root"
+rm "$REPO/web/games"
+mv "$REPO/tracked-games" "$REPO/web/games"
+
 echo "== a statically imported module the deploy does not ship is refused =="
 printf 'import { openLab } from "./lab.js?v=1"; import nowhere from "./nowhere.js?v=1";\n' > "$REPO/web/labs/julibrot/main.js"
 : > "$SHIM_LOG"
@@ -676,10 +797,10 @@ printf 'import { openLab } from "./lab.js?v=1";\n' > "$REPO/web/labs/julibrot/ma
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 text = p.read_text(encoding="utf-8")
-old = '"web/$LAB_JULIBROT_LIVE/lab.js" "web/$LAB_JULIBROT_LIVE/drive.html" \\\n    '
+old = 'if relative.name == "README.md":\n        continue'
 assert text.count(old) == 1
 with open(p, "w", encoding="utf-8", newline="") as fh:
-    fh.write(text.replace(old, ""))
+    fh.write(text.replace(old, 'if relative.name in {"README.md", "lab.js"}:\n        continue'))
 PY
 : > "$SHIM_LOG"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/unshipped-lab.log" 2>&1; then
@@ -688,6 +809,27 @@ else
     ok "a deploy that omits the statically imported lab module was refused"
 fi
 cp "$DEPLOY/deploy-pages.sh" "$REPO/deploy/"
+
+echo "== unshipped dynamic imports and direct worker entries are refused =="
+cp "$REPO/web/labs/julibrot/worker.js" "$TMP/worker.saved"
+printf 'await import("./pkg/missing-worker.js?v=1");\n' > "$REPO/web/labs/julibrot/worker.js"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/unshipped-worker-import.log" 2>&1; then
+    bad "an unshipped module imported only by worker.js was accepted"
+else
+    ok "an unshipped module imported only by worker.js was refused"
+fi
+contains "$(cat "$TMP/unshipped-worker-import.log")" "worker.js references ./pkg/missing-worker.js" "the dynamic-import refusal names worker.js and its target"
+mv "$TMP/worker.saved" "$REPO/web/labs/julibrot/worker.js"
+
+cp "$REPO/web/labs/julibrot/lab.js" "$TMP/lab.saved"
+printf 'new Worker("./missing-worker.js?v=1"); import("./pkg/ember_lab_julibrot.js?v=1");\n' > "$REPO/web/labs/julibrot/lab.js"
+if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/unshipped-worker-entry.log" 2>&1; then
+    bad "an unshipped direct worker entry was accepted"
+else
+    ok "an unshipped direct worker entry was refused"
+fi
+contains "$(cat "$TMP/unshipped-worker-entry.log")" "lab.js references ./missing-worker.js" "the worker-entry refusal names its source and target"
+mv "$TMP/lab.saved" "$REPO/web/labs/julibrot/lab.js"
 
 echo "== every live catalog path must be assembled =="
 mkdir -p "$SEED/games/fire/v2"

@@ -7,6 +7,21 @@ LOG="${SHIM_LOG:-/dev/null}"
 { printf 'git'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
 
 case "${1:-}" in
+    ls-files)
+        source=""
+        take_next=""
+        for arg in "$@"; do
+            if [ -n "$take_next" ]; then source="$arg"; take_next=""; fi
+            if [ "$arg" = -- ]; then take_next=1; fi
+        done
+        [ -n "$source" ] || { echo "git shim: ls-files needs a path" >&2; exit 97; }
+        [ -f "${SHIM_GIT_TRACKED:?}" ] || { echo "git shim: tracked-file manifest is missing" >&2; exit 97; }
+        while IFS= read -r path; do
+            case "$path" in
+                "$source"|"$source"/*) printf '%s\0' "$path" ;;
+            esac
+        done < "$SHIM_GIT_TRACKED"
+        ;;
     rev-list) echo 1 ;;
     rev-parse) echo deadbee ;;
     log) echo "pages deploy test" ;;
