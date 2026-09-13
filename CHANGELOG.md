@@ -172,6 +172,8 @@ The diagnostic crate's client-network dependency is now wasm-only, matching its 
 
 ### Engine and workspace debt cleanup
 
+The typed web generation study measures 127 current scripts plus the loader branch snapshot and 37 inline-script pages, establishes Rust-generated declarations as mandatory inputs to pedantic legacy TypeScript templates before selective Rust ownership, and preserves published JavaScript bytes as an explicit historical exception (`6872c75c`).
+
 The engine's scene and presentation shaders now render through the shared template mechanism from Rust-owned layouts, fixed point-light arrays, binding slots and constants. The former native raw-file reload is retired because accepting edited WGSL after startup would bypass declaration provenance and the anti-drift oracle; runtime context rendering is the sole dynamic shader-generation path. Every engine-backed game bundle now carries that shared runtime; the pre-rebase sokol arena measurement was 755,558 bytes (+1.68%), while the `62f5c450` merge candidate awaits its same-host measurement (`bd0e13ee`).
 
 The final inline transient-read copies moved onto the shared network predicate, the never-run 9 mm converter was removed, stale lint suppressions disappeared and the workspace gate remained green, closing the planned cleanup slices while leaving the two explicitly ranked follow-ups open (`9918e39c`).
