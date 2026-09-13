@@ -34,7 +34,7 @@
 #   games/arena/v0/       frozen arena v0 pong classic, retained from the seed
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
-#   games/league/v2/      live UltimateLegue build (selected from games.json)
+#   games/league/v4/      live UltimateLegue build (selected from games.json)
 #   games/league/v1/      frozen first UltimateLegue build
 #   games/what-is-this/v1/ live browser and hardware diagnostic
 #   labs/julibrot/        live four-dimensional slice viewer lab
