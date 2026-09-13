@@ -60,6 +60,7 @@ export SHIM_PUBLISHED="$TMP/published"
 export SHIM_GIT_INDEX="$TMP/git-index"
 export SHIM_GIT_TRACKED="$TMP/git-tracked"
 export SHIM_LOG="$TMP/argv.log"
+unset CARGO_TARGET_DIR
 
 SHIMS="$TMP/shims"
 mkdir -p "$SHIMS"
@@ -208,12 +209,28 @@ tar -xzf "$ARCHIVE" -C "$SHIM_PUBLISHED"
 if grep -q '^git \[push\]' "$SHIM_LOG"; then bad "the archive build attempted a branch push"; else ok "the archive build attempted no branch push"; fi
 ARGV="$(cat "$SHIM_LOG")"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [what-is-this] [--lib]" "what-is-this is built as a wasm library"
-contains "$ARGV" "release/what_is_this.wasm" "what-is-this is passed to wasm-bindgen"
+contains "$ARGV" "[target/wasm32-unknown-unknown/release/what_is_this.wasm]" "what-is-this uses Cargo's default target directory"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [league] [--lib]" "League is built as a wasm library"
 contains "$ARGV" "release/league.wasm" "League is passed to wasm-bindgen"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [ember-julibrot-app] [--lib]" "Julibrot is built as a wasm library"
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
+if [ -e "$REPO/target" ]; then bad "the default-target fixture made an unexpected target entry"; else ok "the default-target build needs no target symlink"; fi
+
+echo "== a configured Cargo target directory supplies wasm-bindgen inputs =="
+: > "$SHIM_LOG"
+CUSTOM_TARGET="$TMP/shared-cargo-target"
+CUSTOM_ARCHIVE="$TMP/custom-target-pages.tar.gz"
+if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 CARGO_TARGET_DIR="$CUSTOM_TARGET" EMBER_PAGES_ARCHIVE="$CUSTOM_ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/custom-target.log" 2>&1; then
+    ok "the configured-target build-and-archive run succeeded"
+else
+    bad "the configured-target build-and-archive run failed"
+    tail -40 "$TMP/custom-target.log" >&2
+fi
+CUSTOM_ARGV="$(cat "$SHIM_LOG")"
+contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/fire.wasm]" "wasm-bindgen reads Fire from the configured Cargo target directory"
+contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm]" "wasm-bindgen reads Julibrot from the configured Cargo target directory"
+if [ -e "$REPO/target" ]; then bad "the configured-target build used a target entry"; else ok "the configured-target build needs no target symlink"; fi
 for f in index.html main.js quality.js dialogue.js castle-audio.js castle-ui.js voice-lines.js style.css cover.png prologue.mp4 ambience.wav boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav pkg/end_game.js pkg/end_game_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done

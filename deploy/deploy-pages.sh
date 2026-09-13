@@ -10,14 +10,15 @@
 #
 # Server-build/workstation dry-run recipe:
 #   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p end-game -p ember-loader -p ember-julibrot-app --lib
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/league.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/end_game.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/ember_loader.wasm
-#   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
+#   CARGO_WASM_RELEASE="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/fire.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/arena.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/kings.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/league.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/what_is_this.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/end_game.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/ember_loader.wasm"
+#   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
 # Copy web/pkg from the server into this checkout, then assemble without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
 # Assemble the same tree as a release archive without committing or pushing:
@@ -202,6 +203,7 @@ fi
 
 echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
+CARGO_WASM_RELEASE="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     echo "== using six prebuilt game bundles, the shared loader and the Julibrot lab bundle from web/pkg =="
@@ -216,21 +218,21 @@ else
     cargo build --target wasm32-unknown-unknown --release -p ember-loader --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/fire.wasm
+        "$CARGO_WASM_RELEASE/fire.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/arena.wasm
+        "$CARGO_WASM_RELEASE/arena.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/kings.wasm
+        "$CARGO_WASM_RELEASE/kings.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/league.wasm
+        "$CARGO_WASM_RELEASE/league.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/what_is_this.wasm
+        "$CARGO_WASM_RELEASE/what_is_this.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/end_game.wasm
+        "$CARGO_WASM_RELEASE/end_game.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-        target/wasm32-unknown-unknown/release/ember_loader.wasm
+        "$CARGO_WASM_RELEASE/ember_loader.wasm"
     wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
-        target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
+        "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
 fi
 
 echo "== assembling the Pages release tree =="
