@@ -24,7 +24,7 @@ The deploy builds it with the game bundles:
 
 ```text
 cargo build --target wasm32-unknown-unknown --release -p ember-loader --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/ember_loader.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/ember_loader.wasm
 ```
 
 Every byte ships to every player on every page, so the size of `ember_loader_bg.wasm` is a budget, not an afterthought.

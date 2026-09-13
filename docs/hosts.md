@@ -231,10 +231,10 @@ The release workflow performs the authoritative build. A manual compute host can
 
 ```sh
 cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
 ```
 
 After copying `web/pkg` into the local checkout, `EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE=<output.tar.gz> bash deploy/deploy-pages.sh` performs the dry-run assembly without Cargo or wasm-bindgen. Prebuilt mode refuses to emit the archive unless the required JavaScript and background wasm files are present; it never publishes Pages.

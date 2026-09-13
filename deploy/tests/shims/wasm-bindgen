@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A fake `wasm-bindgen` for deploy/tests/test-pages.sh: log the invocation and
-# make the two files a web-target invocation would write.
+# make the four files a web-target invocation would write.
 set -euo pipefail
 
 LOG="${SHIM_LOG:-/dev/null}"
@@ -12,7 +12,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --out-dir) OUT="${2:-}"; shift 2 ;;
         --target) shift 2 ;;
-        --no-typescript) shift ;;
+        --no-typescript) echo "wasm-bindgen shim: declarations were disabled" >&2; exit 2 ;;
         *) INPUT="$1"; shift ;;
     esac
 done
@@ -21,3 +21,5 @@ stem="$(basename "$INPUT" .wasm)"
 mkdir -p "$OUT"
 printf 'shim js for %s\n' "$stem" > "$OUT/$stem.js"
 printf 'shim wasm for %s\n' "$stem" > "$OUT/${stem}_bg.wasm"
+printf 'export function start(): void;\n' > "$OUT/$stem.d.ts"
+printf 'export const memory: WebAssembly.Memory;\n' > "$OUT/${stem}_bg.wasm.d.ts"

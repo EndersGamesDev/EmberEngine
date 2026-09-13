@@ -31,7 +31,7 @@ Web builds (the hub is assembled by `bash deploy/deploy-pages.sh`, which does al
 
 ```
 cargo build --target wasm32-unknown-unknown --release -p arena --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 ```
 
 ## Check it

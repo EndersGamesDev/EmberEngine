@@ -324,7 +324,7 @@ cargo test -p ember-julibrot-present --lib two_palettes_recolour_one_completed_s
 
 ```text
 cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
-wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
+wasm-bindgen --target web --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 python3 -m http.server 8000 --directory web
 ```
 
