@@ -8,6 +8,7 @@ members = [
     "crates/ember-editor",
     "crates/ember-engine",
     "crates/ember-legacy",
+    "crates/ember-loader",
     "crates/ember-net",
     "crates/ember-server",
     "crates/ember-shader",
@@ -58,7 +59,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 # Development runs on the pinned nightly; rust-version records the stable floor.
 rust-version = "1.98"
-version = "1.0.3"
+version = "1.0.4"
 
 [workspace.lints.rust]
 deprecated_safe = { level = "deny", priority = -1 }

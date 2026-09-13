@@ -1104,7 +1104,10 @@ fn welcome_names_the_host_and_reports_its_live_load() {
         } => {
             assert_eq!(
                 motd,
-                "Killshot — Version 31 (31.0.0) — Breach-12 — powered by Ember"
+                format!(
+                    "Killshot — Version 31 ({}) — Breach-12 — powered by Ember",
+                    env!("CARGO_PKG_VERSION")
+                )
             );
             assert_eq!(host, "test-otter");
             assert_eq!(players, 0, "an idle server has nobody in a game: {raw}");

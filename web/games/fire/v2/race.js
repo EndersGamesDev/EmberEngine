@@ -1,5 +1,6 @@
-    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
+    import { chooseHost, listLobbies, probeHost, rankHosts, renderChip }
       from '../../../hosts.js';
+    import { emberLoad } from '../../../loader.js?v=1';
     import { vehicles, selectedVehicle, formatTime, EngineAudio } from './garage.js';
 
     const $ = (id) => document.getElementById(id);
@@ -48,32 +49,61 @@
     };
 
     const ROOT = new URL('../../../', location);
-    // `v` is the deploy stamp and still lives in the book's legacy top-level
-    // key, which every publish keeps writing.
-    const { book } = await loadBook(ROOT.href);
-    const V = book.v || '0';
 
-    const wasm = await import(`./pkg/fire.js?v=${V}`);
-    await wasm.default({ module_or_path: `./pkg/fire_bg.wasm?v=${V}` });
-    const FULL_VERSION = wasm.package_version();
+    // The loader emits, this page renders. The two lines a driver already
+    // watches carry it: the note under the stage and the placeholder inside
+    // it. Before this, both said "first load may take a moment" and then
+    // nothing for the rest of the download.
+    let chosen = null;       // the host we will race on
+    let candidates = [];     // it, then the fallbacks, in order
+    let wrongProto = [];     // answered, but speaking another protocol
+    let PROTO = 0;           // the bundle confirms this after the early ranking
+    function paint(e) {
+      if (e.phase === 'host') {
+        if (e.status !== 'begin') {
+          // The background post-bundle retry updates launch state and the chip
+          // after load resolves, even while the online panel is still closed.
+          chosen = e.host || null;
+          candidates = e.candidates || [];
+          wrongProto = e.wrongProto || [];
+          if (typeof e.proto === 'number') PROTO = e.proto;
+          renderChip($('host-chip'), chosen, { wrongProto, proto: e.proto });
+        }
+        return;
+      }
+      if (e.phase !== 'ready') $('engine-note').textContent = e.text;
+      const el = $('loading');
+      if (el) el.textContent = e.text;
+      if (e.status === 'fail') fail(e.text);
+    }
+
+    // The bundle and the host together. Fire Racer has never had a manual URL
+    // override — the one in the hub's server settings is the arena's address
+    // and pointing this page at it would be a worse bug than having no
+    // override at all — so the address book is the only source here, and the
+    // protocol comes from this page's catalog entry rather than its bundle.
+    const ember = await emberLoad({
+      game: 'fire',
+      version: 'v2',
+      bundle: './pkg/fire.js',
+      onEvent: paint,
+    });
+    const wasm = ember.exports;
+    const FULL_VERSION = ember.version || wasm.package_version();
     const VERSION_LABEL = `Version ${FULL_VERSION.split('.')[0]}`;
     $('release-version').textContent = VERSION_LABEL;
     $('release-version').title = `Full version ${FULL_VERSION}`;
     document.title = `Fire Racer · ${VERSION_LABEL} · Ember`;
-    const PROTO = wasm.proto_version();
+    PROTO = typeof ember.proto === 'number' ? ember.proto : wasm.proto_version();
     $('btn-practice').disabled = false;
     $('btn-online').disabled = false;
     $('btn-practice').textContent = 'Start race ↗';
     $('engine-note').textContent = 'Ready to race. Seven AI opponents. No account needed.';
 
     // ---- host discovery ----------------------------------------------------
-    // Fire Racer has never had a manual URL override — the one in the hub's
-    // server settings is the arena's address and pointing this page at it
-    // would be a worse bug than having no override at all. The address book
-    // is the only source here.
-    let chosen = null;    // the host we will race on
-    let candidates = [];  // it, then the fallbacks, in order
-    let wrongProto = [];  // answered, but speaking another protocol
+    chosen = ember.host;
+    candidates = ember.candidates;
+    wrongProto = ember.wrongProto;
     // Declared here rather than beside the launchers: `discover()` reads it to
     // drop a probe that finished after a launch had already committed.
     let launched = false;
@@ -307,8 +337,8 @@
         wrongProto = r.wrongProto || [];
       } else {
         // A handover from a page that predates the host list: no address came
-        // with it, so the normal pick applies.
-        await discover();
+        // with it, so the normal pick applies — and the loader has made it.
+        renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
       }
       if (chosen && pending.host) chosen.name = chosen.name || pending.host;
       renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
@@ -316,9 +346,11 @@
       // the handed-over lobby. `launchOnline` starts one if that fails.
       launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
     } else {
-      // Rank once on load so the chip is honest before anyone opens the
-      // online panel; the panel's own refresh re-ranks from there.
-      discover();
+      // The loader ranked once on load, so the chip is honest before anyone
+      // opens the online panel; the panel's own refresh re-ranks from there.
+      // Painted here as well as from the event, because a loader that could
+      // not start still discovers and then there are no events to paint from.
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
     }
 
     // ---- HUD ---------------------------------------------------------------

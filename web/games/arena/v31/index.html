@@ -39,6 +39,12 @@
       background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
       padding: 5px 10px; white-space: nowrap;
     }
+    #load-row {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 0.78rem; color: #9fb4d8; font-family: ui-monospace, monospace;
+    }
+    #load-row[hidden] { display: none; }
+    #load-bar { flex: 0 0 150px; height: 6px; accent-color: #6ea8fe; }
     .card {
       background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
       padding: 18px 20px; width: min(560px, 94vw); box-sizing: border-box;
@@ -159,6 +165,10 @@
 
   <div id="menu" class="card">
     <h2>Killshot</h2>
+    <div id="load-row" aria-live="polite">
+      <progress id="load-bar" max="100" aria-label="Game download"></progress>
+      <span id="load-line">starting…</span>
+    </div>
     <div class="hint"><b>Find your route. Keep your momentum.</b> Free for all, 4v4 team deathmatch or king of the hill across three hand-authored maps. Up to 8 players · <b>5 HP</b> · respawn in 2.5 seconds.</div>
     <div class="hint"><b>New in <span id="release-update">this release</span> · protocol 24:</b> meet the <b>Breach-12 shotgun</b>, a close-range eight-pellet weapon in slot <b>8</b>. Find it in a weapon pickup or choose it as your Custom starting weapon. LIFE, ammo and health boxes, retained weapon slots, circular reload timers, saved controls and <b>Fullscreen mode</b> stay ready.</div>
     <details class="quick-guide">
@@ -274,8 +284,9 @@
   </script>
 
   <script type="module">
-    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
+    import { chooseHost, listLobbies, probeHost, rankHosts, renderChip }
       from '../../../hosts.js';
+    import { emberLoad } from '../../../loader.js?v=1';
 
     const $ = (id) => document.getElementById(id);
     const ROOT = new URL('../../../', location);
@@ -342,36 +353,70 @@
     });
     renderAccount();
 
-    // ---- the bundle. `v` is the deploy stamp and still comes from the book's
-    // legacy top-level key, which every publish keeps writing.
-    const { book } = await loadBook(ROOT.href);
-    const V = book.v || '0';
-    const { default: init, package_version, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
-    let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
-      .catch((e) => { fail(e); console.error(e); });
-    // The bundle's exports call into the wasm module, which does not exist
-    // until init has resolved: asking for the protocol before that threw
-    // "Cannot read properties of undefined (reading 'proto_version')" on the
-    // live page (2026-09-02) and left it at "server …" for good. So wait.
-    await ready;
-    const FULL_VERSION = package_version();
+    // The loader emits, this page renders. The host events are the chip's,
+    // because that is where a player looks for a server; everything else is
+    // one line and a bar beside the menu heading, so a cold load says what it
+    // is doing instead of sitting on "loading engine…" for a minute.
+    let chosen = null;       // the host we will play on
+    let candidates = [];     // it, then the fallbacks, in order
+    let wrongProto = [];     // answered, but speaking another protocol
+    let PROTO = 0;           // the bundle confirms this after the early ranking
+    function paint(e) {
+      if (e.phase === 'host') {
+        if (e.status !== 'begin') {
+          // Both the early ranking and the background post-bundle retry land
+          // here. Keep launch state in step with the chip after load resolves.
+          chosen = e.host || null;
+          candidates = e.candidates || [];
+          wrongProto = e.wrongProto || [];
+          if (typeof e.proto === 'number') PROTO = e.proto;
+          renderChip($('host-chip'), chosen, { wrongProto, proto: e.proto });
+        }
+        return;
+      }
+      $('load-line').textContent = e.text;
+      const bar = $('load-bar');
+      if (typeof e.percent === 'number') bar.value = e.percent;
+      else bar.removeAttribute('value'); // no declared length: no false bar
+      if (e.phase === 'ready') $('load-row').hidden = true;
+      if (e.status === 'fail') { bar.hidden = true; fail(e.text); }
+      const loading = $('loading');
+      if (loading) loading.textContent = e.text;
+    }
+
+    // ---- the manual override short-circuits discovery, exactly as before:
+    // one address, no book, no ranking, no protocol filter. Someone typing a
+    // URL has overruled the address book on purpose.
+    const overridden = readStorage('ember-server-url-manual')
+      ? (readStorage('ember-server-url') || '').trim() : '';
+
+    // ---- the bundle and the host, through the shared loader.
+    // Discovery no longer waits for the bundle. The protocol comes from the
+    // catalog entry for THIS page, so the probes go out in the first tick
+    // beside the download rather than after it, and the chip settles in about
+    // a second on the page carrying the site's largest bundle.
+    const ember = await emberLoad({
+      game: 'arena',
+      version: 'v31',
+      bundle: './pkg/arena.js',
+      override: overridden,
+      onEvent: paint,
+    });
+    const { package_version, proto_version, start_online } = ember.exports;
+    const FULL_VERSION = ember.version || package_version();
     const VERSION_LABEL = `Version ${FULL_VERSION.split('.')[0]}`;
     $('release-version').textContent = VERSION_LABEL;
     $('release-version').title = `Full version ${FULL_VERSION}`;
     $('release-update').textContent = VERSION_LABEL;
     document.title = `Killshot · ${VERSION_LABEL} · Ember`;
-    const PROTO = proto_version();
+    PROTO = typeof ember.proto === 'number' ? ember.proto : proto_version();
 
-    // ---- host discovery
-    // The manual override short-circuits everything, exactly as before: one
-    // address, no book, no ranking, no protocol filter. Someone typing a URL
-    // has overruled the address book on purpose.
-    const overridden = readStorage('ember-server-url-manual')
-      ? (readStorage('ember-server-url') || '').trim() : '';
-
-    let chosen = null;      // the host we will play on
-    let candidates = [];    // it, then the fallbacks, in order
-    let wrongProto = [];    // answered, but speaking another protocol
+    chosen = ember.host;
+    candidates = ember.candidates;
+    wrongProto = ember.wrongProto;
+    // Painted here as well as from the event: a loader that could not start
+    // still discovers, and then there are no events to paint from.
+    renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
 
     // Bumped the moment a launch commits to a host. A menu tick that started
     // before that must not land: it would repaint the chip with a host the
@@ -435,7 +480,6 @@
       if (!wanted) { showMenu(offlineText()); return; }
       pollOff();
       $('menu-note').textContent = '';
-      await ready;
       showGame();
       $('status').textContent = 'connecting…';
 
@@ -604,17 +648,13 @@
       wrongProto = r.wrongProto || [];
       if (chosen && pending.host) chosen.name = chosen.name || pending.host;
       renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
-      await ready;
       goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
     } else {
-      await discover();
       if (pending && pending.lobby) {
         // A handover from a page that predates the host list: no address, so
-        // the normal pick applies.
-        await ready;
+        // the normal pick applies, and the loader has already made it.
         goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
       } else {
-        await ready;
         refreshLobbies();
         // Lobbies live for seconds and this list used to load exactly once, so
         // two people waiting here for each other would never see each other's

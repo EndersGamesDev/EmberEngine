@@ -295,6 +295,9 @@
   </footer>
 
   <script type="module">
+    import { chooseHost } from '../../../hosts.js';
+    import { emberLoad } from '../../../loader.js?v=1';
+
     const $ = (id) => document.getElementById(id);
     const fail = (msg) => {
       const el = $('loading');
@@ -605,23 +608,51 @@
     }
     window.__kingsRender = render;
 
-    // ---- server discovery ----------------------------------------------
+    // ---- the bundle and the server -------------------------------------
     const ROOT = new URL('../../../', location);
+
+    // The loader emits, this page renders. The note under the board is where
+    // this page already says whether a game can start, so the download and
+    // the engine's start go there rather than nowhere.
+    let engineError = null;
     let cfg = {};
-    try {
-      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
-      if (r.ok) cfg = await r.json();
-    } catch {}
-    const V = cfg.v || '0';
+    let chosen = null;
+    let catalogProto = null;
+    function paint(e) {
+      if (e.phase === 'host') {
+        if (e.status !== 'begin') {
+          // `kingsWs` reads this binding, so the background retry can turn an
+          // early empty result into a working lobby browser after load resolves.
+          chosen = e.host || null;
+          catalogProto = e.proto;
+        }
+        return; // the protocol line below is this page's chip
+      }
+      // The note is this page's own; it goes back to empty once the board can
+      // be played, because from then on it belongs to whatever refuses next.
+      $('engine-note').textContent = e.phase === 'ready' ? '' : e.text;
+      const el = $('loading');
+      if (el) el.textContent = e.text;
+      if (e.status === 'fail') fail(e.text);
+    }
 
     // The bundle may be missing on a page that was published ahead of it;
     // the page then still shows the lobby list and the rules and says why
-    // nothing can start, instead of dying on an uncaught rejection.
-    let engineError = null;
+    // nothing can start, instead of dying on an uncaught rejection. So the
+    // ranking is repeated in the failure arm: a page with no engine still
+    // lists the lobbies of the host it would have joined.
     try {
-      wasm = await import(`./pkg/kings.js?v=${V}`);
-      await wasm.default({ module_or_path: `./pkg/kings_bg.wasm?v=${V}` });
-      const fullVersion = wasm.package_version();
+      const ember = await emberLoad({
+        game: 'kings',
+        version: 'v1',
+        bundle: './pkg/kings.js',
+        onEvent: paint,
+      });
+      wasm = ember.exports;
+      chosen = ember.host;
+      cfg = ember.book || {};
+      catalogProto = ember.proto;
+      const fullVersion = ember.version || wasm.package_version();
       const versionLabel = `Version ${fullVersion.split('.')[0]}`;
       document.querySelector('#release-version').textContent = versionLabel;
       document.querySelector('#release-version').title = `Full version ${fullVersion}`;
@@ -630,24 +661,23 @@
       wasm = null;
       engineError = e;
       console.error(e);
+      try {
+        const r = await chooseHost(ROOT.href, { game: 'kings', proto: null });
+        chosen = r.chosen;
+        cfg = r.book || {};
+      } catch (second) { console.error(second); }
     }
-    const proto = () => { try { return wasm ? wasm.proto_version() : 0; } catch { return 0; } };
-
-    // Prefer a hosts[] entry that speaks this build's protocol, newest first;
-    // fall back to the top-level key.
-    const rNum = (v) => { const m = /(\d+)/.exec(String(v || '')); return m ? Number(m[1]) : -1; };
-    // Pure: (server.json object, this build's proto or null when unknown) -> url.
-    const pickWs = (c, p) => {
-      if (Array.isArray(c.hosts)) {
-        const ok = c.hosts
-          .filter((h) => h && typeof h.kings_ws === 'string' && h.kings_ws.trim() && (p == null || h.kings_proto === p))
-          .sort((a, b) => rNum(b.version) - rNum(a.version));
-        if (ok.length) return ok[0].kings_ws.trim();
-      }
-      return (c.kings_ws || '').trim();
+    // The address book used to be read here and ranked here, by a rule this
+    // page kept to itself: newest `kings_ws` that matches the protocol, else
+    // the legacy top-level key. `hosts.js` is that rule for every other page,
+    // and it also probes before it picks, so a published host that is not
+    // answering stops being the one this page offers. The legacy top-level
+    // address is still reached, because the merge promotes it to an entry.
+    const proto = () => {
+      if (typeof catalogProto === 'number') return catalogProto;
+      try { return wasm ? wasm.proto_version() : 0; } catch { return 0; }
     };
-    window.__kingsPickWs = pickWs;
-    const kingsWs = () => pickWs(cfg, wasm ? proto() : null);
+    const kingsWs = () => (chosen ? chosen.url : '');
     {
       const p = proto();
       const sp = cfg.kings_proto;
