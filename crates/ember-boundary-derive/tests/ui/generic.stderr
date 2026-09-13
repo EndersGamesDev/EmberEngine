@@ -1,0 +1,5 @@
+error: unregistered generic instantiation is unsupported
+ --> tests/ui/generic.rs:8:12
+  |
+8 |     value: Wrapper<u8>,
+  |            ^^^^^^^^^^^

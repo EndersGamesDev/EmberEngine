@@ -1,0 +1,14 @@
+{
+  "hosts": [
+    { "name": "amber-otter", "ws": "wss://real", "proto": 24 },
+    { "name": "amber-otter", "ws": "wss://replacement", "proto": 24 },
+    { "name": "a/b", "fire_ws": "wss://untrusted", "fire_proto": 2 }
+  ],
+  "mirrors": [
+    { "url": "https://evil.example/host.json", "name": "quiet-raven" }
+  ],
+  "ws": "wss://legacy",
+  "proto": 24,
+  "fire_ws": "wss://legacy-fire",
+  "fire_proto": 2
+}

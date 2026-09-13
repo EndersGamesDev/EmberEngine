@@ -1,0 +1,17 @@
+{
+  "v": "1788261977",
+  "hosts": [
+    {
+      "name": "amber-otter",
+      "ws": "wss://arena.example",
+      "proto": 24,
+      "version": "r1490",
+      "commit": "abc1234",
+      "fire_ws": "wss://fire.example",
+      "fire_proto": 2
+    }
+  ],
+  "mirrors": [
+    { "url": "https://mirror.example/host.json", "name": "quiet-raven" }
+  ]
+}

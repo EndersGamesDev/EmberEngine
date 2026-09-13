@@ -1,0 +1,9 @@
+{
+  "name": "quiet-raven",
+  "kings_ws": "wss://kings.example",
+  "kings_proto": 1,
+  "kings_version": "r1491",
+  "kings_commit": "def5678",
+  "updated": "2026-09-13T00:00:00Z",
+  "by": "host"
+}

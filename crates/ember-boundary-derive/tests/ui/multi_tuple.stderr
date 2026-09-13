@@ -1,0 +1,5 @@
+error: multi-field tuple variant shape is unsupported
+ --> tests/ui/multi_tuple.rs:7:9
+  |
+7 |     Pair(u8, u8),
+  |         ^^^^^^^^

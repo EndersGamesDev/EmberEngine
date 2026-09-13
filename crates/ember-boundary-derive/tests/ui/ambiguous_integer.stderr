@@ -1,0 +1,5 @@
+error: ambiguous integer lowering: target-sized integers are unsupported
+ --> tests/ui/ambiguous_integer.rs:6:12
+  |
+6 |     value: usize,
+  |            ^^^^^

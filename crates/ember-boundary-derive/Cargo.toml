@@ -1,0 +1,24 @@
+[package]
+name = "ember-boundary-derive"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote = "1"
+serde-rename-rule = "=0.2.3"
+syn = { workspace = true, features = ["full", "parsing"] }
+
+[dev-dependencies]
+ember-boundary = { path = "../ember-boundary", default-features = false }
+serde.workspace = true
+trybuild = "1"
+
+[lints]
+workspace = true
