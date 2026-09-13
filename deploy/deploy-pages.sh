@@ -30,7 +30,7 @@
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
 #   games/arena/v31/      live Killshot build — Breach-12 shotgun (page + frozen pkg)
-#   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
+#   games/arena/v0/       frozen arena v0 pong classic, retained from the seed
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
 #   games/league/v2/      live UltimateLegue build (selected from games.json)
@@ -265,17 +265,16 @@ if release.exists():
 PY
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
 WHAT_LIVE="games/what-is-this/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
 rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
-    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$LEAGUE_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" "${PAGES_DIR:?}/$END_GAME_LIVE" \
+    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$LEAGUE_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" "${PAGES_DIR:?}/$END_GAME_LIVE" \
     "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
     "${PAGES_DIR:?}"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$END_GAME_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$LEAGUE_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$END_GAME_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
 # A live page is a tracked runtime tree, not a hand-maintained basename list.
 # That makes a newly imported module and a newly added sound or image part of
 # the same reviewed source change that starts using it. README files stay in
@@ -333,7 +332,7 @@ PY
 
 copy_live_source web "$PAGES_DIR" root
 cp web/version.json "$PAGES_DIR/"
-for live in "$ARENA_LIVE" "$ARENA_V0_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE"; do
+for live in "$ARENA_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE"; do
     copy_live_source "web/$live" "$PAGES_DIR/$live" page
 done
 # League v4 deliberately shares the complete tracked v2 art vocabulary. Copy
@@ -363,7 +362,6 @@ copy_pkg() {
     done
 }
 copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena
-copy_pkg "$PAGES_DIR/$ARENA_V0_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
 copy_pkg "$PAGES_DIR/$LEAGUE_LIVE/pkg" league
@@ -753,7 +751,7 @@ LOADER
 "$PY" - "$PAGES_DIR" "$PLACED_PATHS" \
     version.json games.json server.json .nojekyll \
     "$LEAGUE_LIVE/version.json" "$END_GAME_LIVE/version.json" \
-    pkg "$ARENA_LIVE/pkg" "$ARENA_V0_LIVE/pkg" "$FIRE_LIVE/pkg" \
+    pkg "$ARENA_LIVE/pkg" "$FIRE_LIVE/pkg" \
     "$KINGS_LIVE/pkg" "$LEAGUE_LIVE/pkg" "$WHAT_LIVE/pkg" \
     "$END_GAME_LIVE/pkg" "$LAB_JULIBROT_LIVE/pkg" <<'PY'
 import pathlib, sys
@@ -778,7 +776,7 @@ PY
 # HTML, JavaScript and module-JavaScript file at the root and in each live tree,
 # then require relative static imports, dynamic imports, worker entries and
 # local runtime assets to belong to this assembly while its tree is inspectable.
-"$PY" - "$PAGES_DIR" "$PLACED_PATHS" . "$ARENA_LIVE" "$ARENA_V0_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE" <<'PY'
+"$PY" - "$PAGES_DIR" "$PLACED_PATHS" . "$ARENA_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE" <<'PY'
 import pathlib, re, sys
 
 root = pathlib.Path(sys.argv[1]).resolve()

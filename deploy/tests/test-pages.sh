@@ -166,11 +166,14 @@ printf 'pub const PROTO_VERSION: u16 = %s;\n' "$LEAGUE_PROTO" > "$REPO/crates/le
 (cd "$REPO" && find . -type f -printf '%P\n' | LC_ALL=C sort) > "$SHIM_GIT_TRACKED"
 printf 'untracked scratch\n' > "$REPO/web/$END_GAME_LIVE/untracked.tmp"
 
-mkdir -p "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
+mkdir -p "$SEED/games/arena/v0/pkg" "$SEED/games/arena/v17" "$SEED/games/fire/v1" "$SEED/games/kings/old" "$SEED/games/pong/v1/pkg"
 mkdir -p "$SEED/games/league/old" "$SEED/games/league/v1/pkg" "$SEED/$LEAGUE_LIVE/pkg"
 printf 'keep arena\n' > "$SEED/games/arena/v17/frozen.txt"
 printf 'archived arena<script src="./settings.js?v=archived"></script>\n' > "$SEED/games/arena/v17/index.html"
 printf 'archived controls\n' > "$SEED/games/arena/v17/settings.js"
+printf 'seed arena v0 page\n' > "$SEED/games/arena/v0/index.html"
+printf 'seed arena v0 JavaScript\n' > "$SEED/games/arena/v0/pkg/arena.js"
+printf 'seed arena v0 wasm bytes\000\377\n' > "$SEED/games/arena/v0/pkg/arena_bg.wasm"
 printf 'keep fire\n' > "$SEED/games/fire/v1/frozen.txt"
 printf 'keep kings\n' > "$SEED/games/kings/old/frozen.txt"
 printf 'keep league archive\n' > "$SEED/games/league/old/frozen.txt"
@@ -358,6 +361,23 @@ for f in index.html settings.js; do
         bad "archived Arena $f was rewritten"
     fi
 done
+if diff -r "$SEED/games/arena/v0" "$SHIM_PUBLISHED/games/arena/v0" > "$TMP/arena-v0.diff"; then
+    ok "frozen Arena v0 remains byte-identical to the seed"
+else
+    bad "frozen Arena v0 changed"
+    cat "$TMP/arena-v0.diff" >&2
+fi
+while IFS= read -r seed_file; do
+    relative="${seed_file#"$SEED/games/arena/v0/"}"
+    seed_sha="$(sha256sum "$seed_file" | cut -d ' ' -f 1)"
+    assembled_sha="$(sha256sum "$SHIM_PUBLISHED/games/arena/v0/$relative" | cut -d ' ' -f 1)"
+    is "$assembled_sha" "$seed_sha" "frozen Arena v0 $relative keeps its seed SHA-256"
+done < <(find "$SEED/games/arena/v0" -type f | sort)
+if grep -Fq "git [ls-files] [-z] [--] [web/games/arena/v0]" "$SHIM_LOG"; then
+    bad "the assembler read Arena v0 source files"
+else
+    ok "the assembler leaves Arena v0 entirely to the seed"
+fi
 while IFS= read -r f; do
     name="${f#"$SHIM_PUBLISHED/labs/julibrot/"}"
     contains "$(cat "$f")" "?v=$STAMP" "Julibrot $name uses the deploy stamp"
@@ -407,7 +427,7 @@ cp "$TMP/version.before-archive.json" "$REPO/web/version.json"
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
+for spec in "${ARENA_LIVE#games/} arena" "fire/v2 fire" "kings/v1 kings" "${LEAGUE_LIVE#games/} league"; do
     # shellcheck disable=SC2086
     set -- $spec
     live="$1"
