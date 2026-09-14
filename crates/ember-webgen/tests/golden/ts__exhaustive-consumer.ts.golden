@@ -1,0 +1,419 @@
+/** Generated release-only exhaustiveness proof. Compile with --noEmit only; never ship. */
+
+import type { C2S as ArenaCoreC2S } from "./arena-core.js";
+
+import type { S2C as ArenaCoreS2C } from "./arena-core.js";
+
+import type { Phase as FireCorePhase } from "./fire-core.js";
+
+import type { C2S as FireCoreC2S } from "./fire-core.js";
+
+import type { S2C as FireCoreS2C } from "./fire-core.js";
+
+import type { Kind as KingsCoreKind } from "./kings-core.js";
+
+import type { Phase as KingsCorePhase } from "./kings-core.js";
+
+import type { EndReason as KingsCoreEndReason } from "./kings-core.js";
+
+import type { ActionKind as KingsCoreActionKind } from "./kings-core.js";
+
+import type { C2S as KingsCoreC2S } from "./kings-core.js";
+
+import type { S2C as KingsCoreS2C } from "./kings-core.js";
+
+import type { Phase as LeagueCorePhase } from "./league-core.js";
+
+import type { Cmd as LeagueCoreCmd } from "./league-core.js";
+
+import type { C2S as LeagueCoreC2S } from "./league-core.js";
+
+import type { S2C as LeagueCoreS2C } from "./league-core.js";
+
+import type { Phase as EmberLoaderPhase } from "./ember-loader.js";
+
+import type { Status as EmberLoaderStatus } from "./ember-loader.js";
+
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled generated boundary variant: ${JSON.stringify(value)}`);
+}
+
+export function checkArenaCoreC2S(value: ArenaCoreC2S): void {
+  switch (value["t"]) {
+    case "hello":
+      return;
+    case "list_lobbies":
+      return;
+    case "create_lobby":
+      return;
+    case "join_lobby":
+      return;
+    case "leave_lobby":
+      return;
+    case "input":
+      return;
+    case "ping":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkArenaCoreS2C(value: ArenaCoreS2C): void {
+  switch (value["t"]) {
+    case "welcome":
+      return;
+    case "error":
+      return;
+    case "lobby_list":
+      return;
+    case "game_joined":
+      return;
+    case "player_joined":
+      return;
+    case "player_left":
+      return;
+    case "state":
+      return;
+    case "round_over":
+      return;
+    case "kill":
+      return;
+    case "hit":
+      return;
+    case "shot":
+      return;
+    case "blast":
+      return;
+    case "loot":
+      return;
+    case "pong":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkFireCorePhase(value: FireCorePhase): void {
+  switch (value) {
+    case "waiting":
+      return;
+    case "countdown":
+      return;
+    case "racing":
+      return;
+    case "finished":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkFireCoreC2S(value: FireCoreC2S): void {
+  switch (value["t"]) {
+    case "hello":
+      return;
+    case "list_lobbies":
+      return;
+    case "create_lobby":
+      return;
+    case "join_lobby":
+      return;
+    case "leave_lobby":
+      return;
+    case "ready":
+      return;
+    case "select_vehicle":
+      return;
+    case "recover":
+      return;
+    case "input":
+      return;
+    case "ping":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkFireCoreS2C(value: FireCoreS2C): void {
+  switch (value["t"]) {
+    case "welcome":
+      return;
+    case "rejected":
+      return;
+    case "lobbies":
+      return;
+    case "joined":
+      return;
+    case "player_joined":
+      return;
+    case "player_left":
+      return;
+    case "phase":
+      return;
+    case "state":
+      return;
+    case "results":
+      return;
+    case "pong":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCoreKind(value: KingsCoreKind): void {
+  switch (value) {
+    case "king":
+      return;
+    case "queen":
+      return;
+    case "rook":
+      return;
+    case "bishop":
+      return;
+    case "knight":
+      return;
+    case "pawn":
+      return;
+    case "joker":
+      return;
+    case "hero":
+      return;
+    case "hero_awake":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCorePhase(value: KingsCorePhase): void {
+  switch (value) {
+    case "waiting":
+      return;
+    case "playing":
+      return;
+    case "finished":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCoreEndReason(value: KingsCoreEndReason): void {
+  switch (value) {
+    case "last_king":
+      return;
+    case "no_progress":
+      return;
+    case "stalemate":
+      return;
+    case "turn_cap":
+      return;
+    case "abandoned":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCoreActionKind(value: KingsCoreActionKind): void {
+  switch (value) {
+    case "move":
+      return;
+    case "joker_teleport":
+      return;
+    case "joker_place":
+      return;
+    case "hero_swap":
+      return;
+    case "hero_wake":
+      return;
+    case "pass":
+      return;
+    case "timeout":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCoreC2S(value: KingsCoreC2S): void {
+  switch (value["t"]) {
+    case "hello":
+      return;
+    case "list_lobbies":
+      return;
+    case "create_lobby":
+      return;
+    case "join_lobby":
+      return;
+    case "leave_lobby":
+      return;
+    case "set_formation":
+      return;
+    case "start":
+      return;
+    case "move":
+      return;
+    case "ping":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkKingsCoreS2C(value: KingsCoreS2C): void {
+  switch (value["t"]) {
+    case "welcome":
+      return;
+    case "rejected":
+      return;
+    case "lobbies":
+      return;
+    case "joined":
+      return;
+    case "roster":
+      return;
+    case "can_start":
+      return;
+    case "phase":
+      return;
+    case "state":
+      return;
+    case "clock":
+      return;
+    case "pong":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkLeagueCorePhase(value: LeagueCorePhase): void {
+  switch (value) {
+    case "select":
+      return;
+    case "live":
+      return;
+    case "over":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkLeagueCoreCmd(value: LeagueCoreCmd): void {
+  switch (value["a"]) {
+    case "move":
+      return;
+    case "attack":
+      return;
+    case "attack_move":
+      return;
+    case "cast":
+      return;
+    case "spell":
+      return;
+    case "rank":
+      return;
+    case "use_item":
+      return;
+    case "buy":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkLeagueCoreC2S(value: LeagueCoreC2S): void {
+  switch (value["t"]) {
+    case "hello":
+      return;
+    case "list_lobbies":
+      return;
+    case "create_lobby":
+      return;
+    case "join_lobby":
+      return;
+    case "leave_lobby":
+      return;
+    case "pick":
+      return;
+    case "start_match":
+      return;
+    case "cmd":
+      return;
+    case "ping":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkLeagueCoreS2C(value: LeagueCoreS2C): void {
+  switch (value["t"]) {
+    case "welcome":
+      return;
+    case "rejected":
+      return;
+    case "lobbies":
+      return;
+    case "joined":
+      return;
+    case "player_joined":
+      return;
+    case "player_left":
+      return;
+    case "roster":
+      return;
+    case "phase":
+      return;
+    case "state":
+      return;
+    case "result":
+      return;
+    case "pong":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkEmberLoaderPhase(value: EmberLoaderPhase): void {
+  switch (value) {
+    case "boot":
+      return;
+    case "host":
+      return;
+    case "download":
+      return;
+    case "compile":
+      return;
+    case "init":
+      return;
+    case "start":
+      return;
+    case "ready":
+      return;
+    default:
+      return assertNever(value);
+  }
+}
+
+export function checkEmberLoaderStatus(value: EmberLoaderStatus): void {
+  switch (value) {
+    case "begin":
+      return;
+    case "progress":
+      return;
+    case "done":
+      return;
+    case "fail":
+      return;
+    default:
+      return assertNever(value);
+  }
+}

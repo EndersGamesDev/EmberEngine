@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "games": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "desc": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "landing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "trailer": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "captions": {
+                    "type": "string"
+                  },
+                  "poster": {
+                    "type": "string"
+                  },
+                  "src": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "src",
+                  "poster",
+                  "captions"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "versions": {
+            "items": {
+              "additionalProperties": true,
+              "properties": {
+                "bytes": {
+                  "anyOf": [
+                    {
+                      "maximum": 18446744073709551615,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "handover": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "live": {
+                  "type": "boolean"
+                },
+                "note": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "proto": {
+                  "anyOf": [
+                    {
+                      "maximum": 65535,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "v": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "v",
+                "version",
+                "path",
+                "live",
+                "note"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "tag",
+          "desc",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "games"
+  ],
+  "title": "GameCatalog",
+  "type": "object"
+}

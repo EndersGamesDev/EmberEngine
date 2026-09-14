@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# A fake npm client for the Pages fixture's pinned-toolchain check.
+set -euo pipefail
+printf '11.19.0\n'

@@ -15,6 +15,7 @@ The protocol test: an old peer that "plays a different game" when a field is abs
 ## Prerequisites
 
 - Rust, pinned by `rust-toolchain.toml`; for web builds also the `wasm32-unknown-unknown` target and `wasm-bindgen-cli`.
+- Node 24.20.0 and npm 11.19.0; install the locked TypeScript dependencies with `npm ci`.
 - A working `python3` for the deploy scripts (not the Windows App Execution Alias stub).
 - Git Bash on Windows: the deploy scripts are bash.
 
@@ -26,11 +27,11 @@ cargo run -p fire --bin fire-app     # Fire Racer
 cargo run -p kings --bin kings-app   # Four Kings, hotseat
 ```
 
-Web builds (the hub is assembled by `bash deploy/deploy-pages.sh`, which does all of this):
+Web builds (run `npm ci` first; the hub is assembled by `bash deploy/deploy-pages.sh`, which does all of this):
 
 ```
 cargo build --target wasm32-unknown-unknown --release -p arena --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 ```
 
 ## Check it

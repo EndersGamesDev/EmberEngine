@@ -64,7 +64,7 @@ unset CARGO_TARGET_DIR
 
 SHIMS="$TMP/shims"
 mkdir -p "$SHIMS"
-for shim in cargo wasm-bindgen git; do
+for shim in cargo wasm-bindgen git node npm npx; do
     cp "$HERE/shims/$shim" "$SHIMS/$shim"
     chmod +x "$SHIMS/$shim"
 done
@@ -82,7 +82,8 @@ mkdir -p "$REPO/crates/league-core/src"
 mkdir -p "$REPO/crates/arena" "$REPO/crates/fire" "$REPO/crates/kings" "$REPO/crates/league"
 mkdir -p "$REPO/crates/end-game" "$REPO/web/$END_GAME_LIVE"
 mkdir -p "$REPO/crates/what-is-this" "$REPO/crates/labs/julibrot/app"
-cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
+cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$DEPLOY/check-toolchain.sh" "$REPO/deploy/"
+cp "$DEPLOY/../package.json" "$DEPLOY/../package-lock.json" "$DEPLOY/../tsconfig.web.json" "$REPO/"
 for manifest in arena fire kings league what-is-this end-game; do
     cp "$DEPLOY/../crates/$manifest/Cargo.toml" "$REPO/crates/$manifest/"
 done
@@ -215,7 +216,33 @@ contains "$ARGV" "release/league.wasm" "League is passed to wasm-bindgen"
 contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] [-p] [ember-julibrot-app] [--lib]" "Julibrot is built as a wasm library"
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
-if [ -e "$REPO/target" ]; then bad "the default-target fixture made an unexpected target entry"; else ok "the default-target build needs no target symlink"; fi
+contains "$ARGV" "cargo [run] [--locked] [-p] [ember-webgen] [--release] [--] [--out] [target/web-generated/deadbee]" "the generator receives the checkout source identifier"
+contains "$ARGV" "npx [--no-install] [tsc] [-p] [tsconfig.web.json] [--noEmit]" "the pinned TypeScript compiler gates assembly"
+contains "$(cat "$TMP/build.log")" "TIMING ember-webgen wall=" "the generator wall time is recorded"
+contains "$(cat "$TMP/build.log")" "TIMING typescript wall=" "the TypeScript wall time is recorded"
+if grep -Fq '[--no-typescript]' "$SHIM_LOG"; then bad "wasm-bindgen declarations were disabled"; else ok "every wasm-bindgen invocation emits declarations"; fi
+for bundle in fire arena kings league what_is_this end_game ember_loader; do
+    for declaration in "$bundle.d.ts" "${bundle}_bg.wasm.d.ts"; do
+        if [ -f "$REPO/target/web-generated/deadbee/pkg-types/$bundle/$declaration" ]; then ok "staged $bundle declaration $declaration"; else bad "missing staged $bundle declaration $declaration"; fi
+    done
+done
+for declaration in ember_lab_julibrot.d.ts ember_lab_julibrot_bg.wasm.d.ts; do
+    if [ -f "$REPO/target/web-generated/deadbee/pkg-types/ember_lab_julibrot/$declaration" ]; then ok "staged Julibrot declaration $declaration"; else bad "missing staged Julibrot declaration $declaration"; fi
+done
+if find "$SHIM_PUBLISHED" -type f -name '*.d.ts' -print -quit | grep -q .; then bad "the Pages tree contains compiler declarations"; else ok "the Pages tree excludes compiler declarations"; fi
+if [ -e "$REPO/target/wasm32-unknown-unknown" ]; then bad "the default-target fixture made an unexpected Cargo target entry"; else ok "the default-target build needs no Cargo target symlink"; fi
+
+echo "== a TypeScript failure refuses assembly before the Pages seed =="
+: > "$SHIM_LOG"
+TSC_FAIL_ARCHIVE="$TMP/tsc-failure.tar.gz"
+if (cd "$REPO" && SHIM_NPX_FAIL=1 EMBER_PAGES_ARCHIVE="$TSC_FAIL_ARCHIVE" bash deploy/deploy-pages.sh) > "$TMP/tsc-failure.log" 2>&1; then
+    bad "a failed TypeScript compile was accepted"
+else
+    ok "a failed TypeScript compile was refused"
+fi
+contains "$(cat "$TMP/tsc-failure.log")" "TIMING typescript wall=" "the failed TypeScript wall time is recorded"
+if [ -f "$TSC_FAIL_ARCHIVE" ]; then bad "a failed TypeScript compile produced an archive"; else ok "a failed TypeScript compile produced no archive"; fi
+if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "a failed TypeScript compile reached Pages assembly"; else ok "a failed TypeScript compile stopped before Pages assembly"; fi
 
 echo "== a configured Cargo target directory supplies wasm-bindgen inputs =="
 : > "$SHIM_LOG"
@@ -230,7 +257,7 @@ fi
 CUSTOM_ARGV="$(cat "$SHIM_LOG")"
 contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/fire.wasm]" "wasm-bindgen reads Fire from the configured Cargo target directory"
 contains "$CUSTOM_ARGV" "[$CUSTOM_TARGET/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm]" "wasm-bindgen reads Julibrot from the configured Cargo target directory"
-if [ -e "$REPO/target" ]; then bad "the configured-target build used a target entry"; else ok "the configured-target build needs no target symlink"; fi
+if [ -e "$REPO/target/wasm32-unknown-unknown" ]; then bad "the configured-target build used a default Cargo target entry"; else ok "the configured-target build needs no Cargo target symlink"; fi
 for f in index.html main.js quality.js dialogue.js castle-audio.js castle-ui.js voice-lines.js style.css cover.png prologue.mp4 ambience.wav boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav pkg/end_game.js pkg/end_game_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done
@@ -439,6 +466,7 @@ if grep -Eq '^\./\.git(/|$)' "$TMP/archive.list"; then
 else
     ok "the release archive excludes worktree metadata"
 fi
+if grep -Eq '\.d\.ts$' "$TMP/archive.list"; then bad "the release archive contains declarations"; else ok "the release archive excludes declarations"; fi
 contains "$(cat "$TMP/archive.log")" "byte-identical to" "comparison mode reports byte identity"
 cp "$TMP/version.before-archive.json" "$REPO/web/version.json"
 
@@ -502,7 +530,7 @@ contains "$(cat "$TMP/missing.log")" "web/pkg/ember_loader.js" "the failure list
 if grep -q '^cargo' "$SHIM_LOG"; then bad "the refused prebuilt run invoked cargo"; else ok "the refused prebuilt run invoked no cargo"; fi
 if grep -q '^git \[fetch\]' "$SHIM_LOG"; then bad "missing prebuilt artifacts reached Pages assembly"; else ok "missing prebuilt artifacts stopped before Pages assembly"; fi
 
-echo "== complete prebuilt mode skips every build tool =="
+echo "== complete prebuilt mode reuses wasm and refreshes declarations =="
 printf 'shim wasm for what_is_this\n' > "$REPO/web/pkg/what_is_this_bg.wasm"
 printf 'shim js for league\n' > "$REPO/web/pkg/league.js"
 printf 'shim wasm for league\n' > "$REPO/web/pkg/league_bg.wasm"
@@ -517,7 +545,9 @@ else
     bad "complete prebuilt mode failed"
     tail -40 "$TMP/prebuilt.log" >&2
 fi
-if grep -Eq '^(cargo|wasm-bindgen)' "$SHIM_LOG"; then bad "complete prebuilt mode invoked a build tool"; else ok "complete prebuilt mode invoked no build tool"; fi
+if grep -q '^cargo \[build\]' "$SHIM_LOG" || grep -q '^wasm-bindgen' "$SHIM_LOG"; then bad "complete prebuilt mode rebuilt wasm"; else ok "complete prebuilt mode reused every wasm artifact"; fi
+contains "$(cat "$SHIM_LOG")" "cargo [run] [--locked] [-p] [ember-webgen]" "complete prebuilt mode still refreshes Rust-owned declarations"
+contains "$(cat "$SHIM_LOG")" "npx [--no-install] [tsc]" "complete prebuilt mode still compiles declarations"
 
 echo "== unsafe or ambiguous League catalog destinations are refused =="
 cp "$REPO/web/games.json" "$TMP/catalog.saved"

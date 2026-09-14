@@ -43,6 +43,8 @@ This builds, starts, probes, and exposes the game servers; publishing defaults t
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) is the contributor orientation and command reference; the separate [`docs/setup.md`](docs/setup.md) walks through the pinned toolchain, a native game, the local browser launcher, and a dedicated server from a fresh checkout.
 
+Install the pinned TypeScript toolchain with `npm ci`. The lockfile is authoritative; deploy and test commands use `npx --no-install tsc` and never install from the network while compiling.
+
 ## How the engine is put together
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) maps the crates and hosting flow, [`docs/engine-design.md`](docs/engine-design.md) follows the engine from authority to surface, and [`docs/minimum-requirements.md`](docs/minimum-requirements.md) defines the browser and GPU floor.

@@ -299,6 +299,129 @@ PY
     fi
 }
 
+typed_web_matches_contract() {
+    local file="$1"
+    if [ -n "$HAVE_PYYAML" ]; then
+        python3 - "$file" <<'PY'
+import pathlib
+import sys
+import yaml
+
+document = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+job = document.get("jobs", {}).get("typed-web")
+if not isinstance(job, dict) or job.get("name") != "typed web":
+    raise SystemExit(1)
+if job.get("env") != {
+    "EMBER_SOURCE_SHA": "${{ github.sha }}",
+    "EMBER_TYPED_WEB_REQUIRED": "1",
+}:
+    raise SystemExit(1)
+steps = job.get("steps", [])
+setups = [step for step in steps if step.get("uses") == "actions/setup-node@v4"]
+if len(setups) != 1 or setups[0].get("with") != {
+    "node-version": "24.20.0",
+    "cache": "npm",
+}:
+    raise SystemExit(1)
+runs = [step.get("run") for step in steps if isinstance(step.get("run"), str)]
+required = [
+    "npm ci",
+    "bash deploy/check-toolchain.sh",
+    'cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$EMBER_SOURCE_SHA"',
+    "npx --no-install tsc -p tsconfig.web.json --noEmit",
+    "bash deploy/tests/test-typescript.sh",
+]
+if any(not any(command in run for run in runs) for command in required):
+    raise SystemExit(1)
+PY
+    else
+        grep -Fq '  typed-web:' "$file" \
+            && grep -Fq '    name: typed web' "$file" \
+            && grep -Fq '      EMBER_SOURCE_SHA: ${{ github.sha }}' "$file" \
+            && grep -Fq '      EMBER_TYPED_WEB_REQUIRED: "1"' "$file" \
+            && grep -Fq '      - uses: actions/setup-node@v4' "$file" \
+            && grep -Fq '          node-version: "24.20.0"' "$file" \
+            && grep -Fq '        run: npm ci' "$file" \
+            && grep -Fq '        run: bash deploy/check-toolchain.sh' "$file" \
+            && grep -Fq 'cargo run --locked -p ember-webgen --release' "$file" \
+            && grep -Fq 'npx --no-install tsc -p tsconfig.web.json --noEmit' "$file" \
+            && grep -Fq 'bash deploy/tests/test-typescript.sh' "$file"
+    fi
+}
+
+release_pages_toolchain_matches_contract() {
+    local file="$1"
+    if [ -n "$HAVE_PYYAML" ]; then
+        python3 - "$file" <<'PY'
+import pathlib
+import sys
+import yaml
+
+document = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+steps = document.get("jobs", {}).get("build", {}).get("steps")
+if not isinstance(steps, list):
+    raise SystemExit(1)
+setups = [
+    (index, step)
+    for index, step in enumerate(steps)
+    if step.get("uses") == "actions/setup-node@v4"
+]
+installs = [
+    (index, step)
+    for index, step in enumerate(steps)
+    if step.get("name") == "install locked TypeScript toolchain"
+]
+assemblers = [
+    (index, step)
+    for index, step in enumerate(steps)
+    if "bash deploy/deploy-pages.sh" in str(step.get("run", ""))
+]
+if len(setups) != 1 or setups[0][1].get("with") != {
+    "node-version": "24.20.0",
+    "cache": "npm",
+}:
+    raise SystemExit(1)
+if len(installs) != 1 or installs[0][1].get("run") != "npm ci":
+    raise SystemExit(1)
+if len(assemblers) != 1 or not setups[0][0] < installs[0][0] < assemblers[0][0]:
+    raise SystemExit(1)
+PY
+    else
+        awk '
+            /^  build:$/ { inside = 1; next }
+            inside && /^  [^ ]/ { inside = 0 }
+            !inside { next }
+            /^      - / {
+                step++
+                setup_here = 0
+                install_here = 0
+            }
+            /uses: actions\/setup-node@v4$/ {
+                setup_count++
+                setup_step = step
+                setup_here = 1
+            }
+            setup_here && $0 == "          node-version: \"24.20.0\"" { node = 1 }
+            setup_here && $0 == "          cache: npm" { cache = 1 }
+            $0 == "      - name: install locked TypeScript toolchain" {
+                install_count++
+                install_step = step
+                install_here = 1
+            }
+            install_here && $0 == "        run: npm ci" { npm = 1 }
+            /bash deploy\/deploy-pages\.sh/ {
+                assembler_count++
+                assembler_step = step
+            }
+            END {
+                exit !(setup_count == 1 && install_count == 1 && assembler_count == 1 \
+                    && node && cache && npm \
+                    && setup_step < install_step && install_step < assembler_step)
+            }
+        ' "$file"
+    fi
+}
+
 release_order_matches_contract() {
     local file="$1"
     if [ -n "$HAVE_PYYAML" ]; then
@@ -620,6 +743,27 @@ write_missing_native_package_fixture() {
     sed 's/ mesa-vulkan-drivers//' "$source" > "$file"
 }
 
+write_wrong_typed_node_fixture() {
+    local source="$1" file="$2"
+    sed 's/node-version: "24.20.0"/node-version: "24.19.0"/' "$source" > "$file"
+}
+
+write_missing_release_step_fixture() {
+    local source="$1" file="$2" marker="$3"
+    awk -v marker="$marker" '
+        $0 == marker {
+            skipping = 1
+            next
+        }
+        skipping && /^      - / {
+            skipping = 0
+        }
+        !skipping {
+            print
+        }
+    ' "$source" > "$file"
+}
+
 write_missing_release_tag_object_fixture() {
     local source="$1" file="$2"
     awk '
@@ -751,6 +895,9 @@ trap 'rm -r -- "$TEST_WORK"' EXIT
 QUOTED_PROMOTE="$TEST_WORK/quoted-promote.yml"
 PERMISSIVE_REGEX="$TEST_WORK/permissive-regex.yml"
 MISSING_NATIVE_PACKAGE="$TEST_WORK/missing-native-package.yml"
+WRONG_TYPED_NODE="$TEST_WORK/wrong-typed-node.yml"
+MISSING_RELEASE_NODE="$TEST_WORK/missing-release-node.yml"
+MISSING_RELEASE_NPM="$TEST_WORK/missing-release-npm.yml"
 MISSING_RELEASE_TAG_OBJECT="$TEST_WORK/missing-release-tag-object.yml"
 EXTRA_RELEASE_TAG_ENV="$TEST_WORK/extra-release-tag-env.yml"
 DUPLICATE_RELEASE_TAG_ENV="$TEST_WORK/duplicate-release-tag-env.yml"
@@ -761,6 +908,11 @@ SOFT_HOST_GATE="$TEST_WORK/soft-host-gate.yml"
 write_quoted_promote_fixture "$QUOTED_PROMOTE"
 write_permissive_regex_fixture "$PERMISSIVE_REGEX"
 write_missing_native_package_fixture .github/workflows/ci.yml "$MISSING_NATIVE_PACKAGE"
+write_wrong_typed_node_fixture .github/workflows/ci.yml "$WRONG_TYPED_NODE"
+write_missing_release_step_fixture .github/workflows/release.yml "$MISSING_RELEASE_NODE" \
+    "      - uses: actions/setup-node@v4"
+write_missing_release_step_fixture .github/workflows/release.yml "$MISSING_RELEASE_NPM" \
+    "      - name: install locked TypeScript toolchain"
 write_missing_release_tag_object_fixture .github/workflows/release.yml "$MISSING_RELEASE_TAG_OBJECT"
 write_extra_release_tag_env_fixture .github/workflows/release.yml "$EXTRA_RELEASE_TAG_ENV"
 write_duplicate_release_tag_env_fixture .github/workflows/release.yml "$DUPLICATE_RELEASE_TAG_ENV"
@@ -775,6 +927,9 @@ for fixture in \
     "$QUOTED_PROMOTE" \
     "$PERMISSIVE_REGEX" \
     "$MISSING_NATIVE_PACKAGE" \
+    "$WRONG_TYPED_NODE" \
+    "$MISSING_RELEASE_NODE" \
+    "$MISSING_RELEASE_NPM" \
     "$MISSING_RELEASE_TAG_OBJECT" \
     "$EXTRA_RELEASE_TAG_ENV" \
     "$DUPLICATE_RELEASE_TAG_ENV" \
@@ -857,6 +1012,31 @@ if workspace_native_packages_match_contract "$MISSING_NATIVE_PACKAGE"; then
     bad "the workspace native-package check accepted a fixture with one package removed"
 else
     ok "the workspace native-package check rejects a fixture with one package removed"
+fi
+if typed_web_matches_contract .github/workflows/ci.yml; then
+    ok "ci.yml pins and runs the complete typed web job"
+else
+    bad "ci.yml does not run the pinned typed web contract"
+fi
+if typed_web_matches_contract "$WRONG_TYPED_NODE"; then
+    bad "the typed web workflow check accepted a different Node patch"
+else
+    ok "the typed web workflow check rejects a different Node patch"
+fi
+if release_pages_toolchain_matches_contract .github/workflows/release.yml; then
+    ok "release.yml installs the pinned Node toolchain before Pages assembly"
+else
+    bad "release.yml does not install the pinned Node toolchain before Pages assembly"
+fi
+if release_pages_toolchain_matches_contract "$MISSING_RELEASE_NODE"; then
+    bad "the release toolchain check accepted a fixture without setup-node"
+else
+    ok "the release toolchain check rejects a fixture without setup-node"
+fi
+if release_pages_toolchain_matches_contract "$MISSING_RELEASE_NPM"; then
+    bad "the release toolchain check accepted a fixture without npm ci"
+else
+    ok "the release toolchain check rejects a fixture without npm ci"
 fi
 
 TAG_PATTERN='*-[0-9]*.[0-9]*.[0-9]*'

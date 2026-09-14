@@ -230,11 +230,12 @@ A browser below the lab's WebGL2 floor, or a run that reaches no complete scenar
 The release workflow performs the authoritative build. A manual compute host can reproduce the local prebuilt assembly with:
 
 ```sh
+npm ci
 cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
+wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
 ```
 
-After copying `web/pkg` into the local checkout, `EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE=<output.tar.gz> bash deploy/deploy-pages.sh` performs the dry-run assembly without Cargo or wasm-bindgen. Prebuilt mode refuses to emit the archive unless the required JavaScript and background wasm files are present; it never publishes Pages.
+After copying `web/pkg` into the local checkout, install exact Node 24.20.0 and npm 11.19.0 and run `npm ci`; then `EMBER_PAGES_PREBUILT=1 EMBER_PAGES_ARCHIVE=<output.tar.gz> bash deploy/deploy-pages.sh` performs the dry-run assembly without Cargo or wasm-bindgen. Prebuilt mode refuses to emit the archive unless the required JavaScript, declarations and background wasm files are present; it never publishes Pages.

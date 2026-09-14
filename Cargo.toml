@@ -14,6 +14,7 @@ members = [
     "crates/ember-net",
     "crates/ember-server",
     "crates/ember-shader",
+    "crates/ember-webgen",
     "crates/fire",
     "crates/fire-core",
     "crates/fire-server",

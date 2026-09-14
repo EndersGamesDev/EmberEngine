@@ -1,4 +1,5 @@
 /target
+/node_modules/
 **/*.rs.bk
 *.pdb
 # generated wasm bindings (built by CI/deploy, not source)

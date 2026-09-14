@@ -9,16 +9,17 @@
 # fail unless the assembled files are byte-identical to an existing archive.
 #
 # Server-build/workstation dry-run recipe:
+#   npm ci
 #   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p league -p what-is-this -p end-game -p ember-loader -p ember-julibrot-app --lib
 #   CARGO_WASM_RELEASE="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/fire.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/arena.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/kings.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/league.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/what_is_this.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/end_game.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/pkg "$CARGO_WASM_RELEASE/ember_loader.wasm"
-#   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/fire.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/arena.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/kings.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/league.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/what_is_this.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/end_game.wasm"
+#   wasm-bindgen --target web --out-dir web/pkg "$CARGO_WASM_RELEASE/ember_loader.wasm"
+#   wasm-bindgen --target web --out-dir web/labs/julibrot/pkg "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
 # Copy web/pkg from the server into this checkout, then assemble without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
 # Assemble the same tree as a release archive without committing or pushing:
@@ -61,8 +62,25 @@ for cand in python3 python; do
 done
 [ -n "$PY" ] || die "need a working python3 or python on PATH"
 
+timed_step() {
+    local label="$1" start end status wall
+    shift
+    start="$("$PY" -c 'import time; print(time.monotonic_ns())')"
+    if "$@"; then status=0; else status=$?; fi
+    end="$("$PY" -c 'import time; print(time.monotonic_ns())')"
+    wall="$("$PY" -c 'import sys; print("%.3f" % ((int(sys.argv[2]) - int(sys.argv[1])) / 1_000_000_000))' "$start" "$end")"
+    printf 'TIMING %s wall=%ss exit=%s\n' "$label" "$wall" "$status"
+    return "$status"
+}
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+SOURCE_SHA="${EMBER_SOURCE_SHA:-$(git rev-parse HEAD)}"
+[ -n "$SOURCE_SHA" ] || die "source SHA is empty"
+case "$SOURCE_SHA" in
+    *[!0-9A-Za-z._-]*) die "source SHA contains an unsafe path character" ;;
+esac
+PKG_TYPES_DIR="$REPO_DIR/target/web-generated/$SOURCE_SHA/pkg-types"
 # gh-pages commit holding the original first web build (auto-run pong).
 V1_COMMIT="e7b85e8"
 
@@ -187,11 +205,11 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     # page imports before its own, so a prebuilt tree without it assembles
     # pages whose first import is not there.
     for bundle in fire arena kings league what_is_this end_game ember_loader; do
-        for artifact in "$bundle.js" "${bundle}_bg.wasm"; do
+        for artifact in "$bundle.js" "${bundle}_bg.wasm" "$bundle.d.ts" "${bundle}_bg.wasm.d.ts"; do
             [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
         done
     done
-    for artifact in ember_lab_julibrot.js ember_lab_julibrot_bg.wasm; do
+    for artifact in ember_lab_julibrot.js ember_lab_julibrot_bg.wasm ember_lab_julibrot.d.ts ember_lab_julibrot_bg.wasm.d.ts; do
         [ -f "web/labs/julibrot/pkg/$artifact" ] || missing+=("web/labs/julibrot/pkg/$artifact")
     done
     if [ "${#missing[@]}" -ne 0 ]; then
@@ -217,23 +235,57 @@ else
     cargo build --target wasm32-unknown-unknown --release -p end-game --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-loader --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/fire.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/arena.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/kings.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/league.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/what_is_this.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/end_game.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/ember_loader.wasm"
-    wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
+    wasm-bindgen --target web --out-dir web/labs/julibrot/pkg \
         "$CARGO_WASM_RELEASE/ember_lab_julibrot.wasm"
 fi
+
+stage_pkg_types() {
+    # $1 = wasm-bindgen output directory, $2... = crate output stems
+    local source="$1"
+    shift
+    for crate in "$@"; do
+        mkdir -p "$PKG_TYPES_DIR/$crate"
+        cp "$source/$crate.d.ts" "$source/${crate}_bg.wasm.d.ts" "$PKG_TYPES_DIR/$crate/"
+    done
+}
+
+rm -rf "$PKG_TYPES_DIR"
+stage_pkg_types web/pkg fire arena kings league what_is_this end_game ember_loader
+stage_pkg_types web/labs/julibrot/pkg ember_lab_julibrot
+
+echo "== generating and compiling Rust-owned web declarations =="
+EMBER_SOURCE_SHA="$SOURCE_SHA" timed_step ember-webgen \
+    cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$SOURCE_SHA"
+for crate in fire arena kings league what_is_this end_game ember_loader ember_lab_julibrot; do
+    for destination in \
+        "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts/wasm/$crate" \
+        "$REPO_DIR/target/web-generated/ts/wasm/$crate"
+    do
+        mkdir -p "$destination"
+        cp "$PKG_TYPES_DIR/$crate/$crate.d.ts" \
+            "$PKG_TYPES_DIR/$crate/${crate}_bg.wasm.d.ts" \
+            "$destination/"
+    done
+done
+diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts" \
+    "$REPO_DIR/target/web-generated/ts" >/dev/null \
+    || die "fixed TypeScript inputs differ from the source-scoped tree"
+bash deploy/check-toolchain.sh
+timed_step typescript npx --no-install tsc -p tsconfig.web.json --noEmit
 
 echo "== assembling the Pages release tree =="
 # The retired gh-pages branch remains a read-only seed for frozen historical
@@ -345,8 +397,8 @@ copy_live_source web/games/league/v2/art "$PAGES_DIR/games/league/v2/art" assets
 cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp web/version.json "$PAGES_DIR/$END_GAME_LIVE/"
 
-# Generated Julibrot bindings stay beside the lab; its tracked modules and
-# runtime assets came from the same derived copy set as every live game above.
+# Generated Julibrot runtime bindings stay beside the lab. Its declarations
+# are staged only for the compiler and never enter the Pages tree.
 cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.js" \
     "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot_bg.wasm" \
     "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg/"
@@ -395,7 +447,7 @@ for game in catalog.get("games", []):
 catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="")
 PY
 
-cp -r web/pkg "$PAGES_DIR"/pkg
+copy_pkg "$PAGES_DIR/pkg" fire arena kings league what_is_this end_game ember_loader
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
 cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"
 cp "$PAGES_DIR/pkg/arena_bg.wasm" "$PAGES_DIR/pkg/pong_bg.wasm"

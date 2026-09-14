@@ -45,6 +45,10 @@
             "integration_id": 15368
           },
           {
+            "context": "typed web",
+            "integration_id": 15368
+          },
+          {
             "context": "workspace",
             "integration_id": 15368
           }

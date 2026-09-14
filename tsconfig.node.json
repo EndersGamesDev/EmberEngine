@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.web.json",
+  "compilerOptions": {
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "rootDir": "target/web-generated/node-ts",
+    "outDir": "target/web-generated/node-js"
+  },
+  "include": ["target/web-generated/node-ts/**/*.mts", "target/web-generated/node-ts/**/*.cts"]
+}
