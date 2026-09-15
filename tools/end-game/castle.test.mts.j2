@@ -1,18 +1,55 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {CastleDialogue} from '../../web/games/end-game/v12/castle-audio.js';
-import {castleView} from '../../web/games/end-game/v12/castle-ui.js';
-import {CASTLE_LINES} from '../../web/games/end-game/v12/voice-lines.js';
+
+interface VoiceLine { file?: string; text: string; duration: number; speaker?: string }
+type VoiceLines = Record<string, VoiceLine>;
+interface CastleEvent { id: number; kind: string }
+interface CastlePlayer {
+  active: {elapsed: number} | null;
+  ingest(events: CastleEvent[]): void;
+  tick(seconds: number, channelBusy?: boolean): void;
+  setPaused(value: boolean): void;
+}
+interface CastleViewResult {
+  journal: string[];
+  seals: string;
+  inventory: string;
+  enemy: {danger: boolean} | null;
+}
+interface CastleModule {
+  CastleDialogue: new(
+    output: {ready(kind: string): boolean; play(kind: string): void; stop(): void; pause(): void; resume(): void},
+    lines: VoiceLines,
+    caption: (line: VoiceLine | null) => void,
+  ) => CastlePlayer;
+}
+interface CastleUiModule { castleView(state: object): CastleViewResult | null }
+interface VoiceModule { CASTLE_LINES: VoiceLines }
+type UnknownRecord = Record<string, unknown>;
+function moduleRecord(value: unknown): UnknownRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('End Game test module is not an object');
+  return value as UnknownRecord;
+}
+const castleModule = moduleRecord(await import(new URL('../../../js/games/end-game/v12/castle-audio.js', import.meta.url).href));
+const castleUiModule = moduleRecord(await import(new URL('../../../js/games/end-game/v12/castle-ui.js', import.meta.url).href));
+const voiceModule = moduleRecord(await import(new URL('../../../js/games/end-game/v12/voice-lines.js', import.meta.url).href));
+if (typeof castleModule['CastleDialogue'] !== 'function' || typeof castleUiModule['castleView'] !== 'function'
+    || !voiceModule['CASTLE_LINES'] || typeof voiceModule['CASTLE_LINES'] !== 'object') {
+  throw new Error('End Game castle test exports are incomplete');
+}
+const {CastleDialogue} = castleModule as UnknownRecord & CastleModule;
+const {castleView} = castleUiModule as UnknownRecord & CastleUiModule;
+const {CASTLE_LINES} = voiceModule as UnknownRecord & VoiceModule;
 
 const lines = Object.fromEntries(['boss_intro','boss_phase2','boss_defeat','escape_clue','escape_ending'].map(k => [k,{duration:1,text:k,speaker:'Castellan'}]));
 function fixture(ready=true) {
-  const calls=[], captions=[];
-  const output={ready:()=>ready,play:k=>calls.push(k),stop:()=>{},pause:()=>{},resume:()=>{}};
-  const player=new CastleDialogue(output,lines,t=>captions.push(t));
+  const calls: string[] = [], captions: Array<VoiceLine | null> = [];
+  const output={ready:()=>ready,play:(kind: string)=>calls.push(kind),stop:()=>{},pause:()=>{},resume:()=>{}};
+  const player=new CastleDialogue(output,lines,line=>captions.push(line));
   return {player,calls,captions};
 }
-const tick=(p,n=20)=>{for(let i=0;i<n;i++)p.tick(.25);};
+const tick=(player: CastlePlayer,n=20)=>{for(let i=0;i<n;i++)player.tick(.25);};
 test('fixed tick event history preserves queued story and repeated snapshots do not replay',()=>{
   const f=fixture(), events=[{id:1,kind:'boss_intro'},{id:2,kind:'boss_phase2'}];
   f.player.ingest(events);f.player.tick(.1);assert.deepEqual(f.calls,['boss_intro']);
@@ -28,9 +65,11 @@ test('boss death and escape supersede combat lines; castle checkpoint does not r
 });
 test('pause and long background frame do not consume speech; unavailable clips retain captions',()=>{
   const f=fixture(false);f.player.ingest([{id:1,kind:'escape_clue'}]);tick(f.player,6);
-  assert.equal(f.captions.at(-1).text,'escape_clue');
+  assert.equal(f.captions.at(-1)?.text,'escape_clue');
+  assert.ok(f.player.active);
   const elapsed=f.player.active.elapsed;f.player.setPaused(true);tick(f.player,50);
   f.player.setPaused(false);f.player.tick(120);
+  assert.ok(f.player.active);
   assert.equal(f.player.active.elapsed,elapsed);
 });
 test('castle speech waits for the warden channel',()=>{
@@ -40,16 +79,18 @@ test('castle speech waits for the warden channel',()=>{
 test('HUD exposes discovered clues and distinguishes unblockable boss warnings',()=>{
   const state={stage:5,objective:'Seek the bell',quest:{sequence:2,journal:['The wolf wakes.'],seal:true,shrinesUsed:1,defeated:4},enemy:{name:'Castellan',health:190,maxHealth:420,boss:true,cue:'Maul raised — dodge',unblockable:true},exploration:{visited:4}};
   const view=castleView(state);
+  assert.ok(view);
   assert.deepEqual(view.journal,['The wolf wakes.']);
   assert.equal(view.seals,'Ancient seals · 2 / 3 awakened');
-  assert.match(view.inventory,/2 healing shrines/);assert.equal(view.enemy.danger,true);
+  assert.match(view.inventory,/2 healing shrines/);assert.equal(view.enemy?.danger,true);
   assert.equal(castleView({...state,stage:0}),null);
 });
 test('every shipped castle voice matches its caption duration and generated source bytes',()=>{
   assert.deepEqual(Object.keys(CASTLE_LINES).sort(),Object.keys(lines).sort());
   for(const line of Object.values(CASTLE_LINES)) {
-    const file=readFileSync(new URL(`../../web/games/end-game/v12/${line.file}`,import.meta.url));
-    const source=readFileSync(new URL(`../../assets/end-game/v10/${line.file}`,import.meta.url));
+    assert.ok(line.file);
+    const file=readFileSync(new URL(`../../../../../web/games/end-game/v12/${line.file}`,import.meta.url));
+    const source=readFileSync(new URL(`../../../../../assets/end-game/v10/${line.file}`,import.meta.url));
     assert.ok(file.equals(source),line.file);
     assert.equal(file.toString('ascii',0,4),'RIFF');
     let rate=0,data=0;

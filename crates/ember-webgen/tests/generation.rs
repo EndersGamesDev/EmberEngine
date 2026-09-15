@@ -7,7 +7,7 @@ use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBu
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "d4d50ec85ed011243a0598a47e28d456ab97cf0a32d381bc7a31eed3d146eb8e";
+const TEMPLATE_HASH: &str = "cb824247e7e18ac4ef6ebc4a2bacc03f54a961bb2aa9623d8493463195f79e9f";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,7 +183,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
             exact("league-core.S2C.state.tick"),
         ]
     );
-    assert_eq!(manifest.files.len(), 41);
+    assert_eq!(manifest.files.len(), 51);
     assert!(
         manifest
             .files

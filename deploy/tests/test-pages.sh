@@ -366,6 +366,25 @@ else
     ok "only the named emitted browser modules enter the root publication"
 fi
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
+END_GAME_EXPECTED="$TMP/end-game-emitted-expected"
+module_args=()
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    module_args+=(--module "$END_GAME_LIVE/$module.js")
+done
+"$PY" "$REPO/deploy/verify-emitted-modules.py" --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$END_GAME_EXPECTED" \
+    --stamp "$STAMP" \
+    "${module_args[@]}" \
+    --stamped "$END_GAME_LIVE/main.js" >/dev/null
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    if cmp -s "$END_GAME_EXPECTED/$END_GAME_LIVE/$module.js" \
+            "$SHIM_PUBLISHED/$END_GAME_LIVE/$module.js"; then
+        ok "assembled End Game $module.js matches its emitted expectation"
+    else
+        bad "assembled End Game $module.js differs from its emitted expectation"
+    fi
+done
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "$LEAGUE_PROTO" "League ships its independent source protocol"

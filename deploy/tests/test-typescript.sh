@@ -958,12 +958,17 @@ node_suites=(
     target/web-generated/node-js/loader.test.mjs
     target/web-generated/node-js/check-hosts.test.mjs
     target/web-generated/node-js/fire.test.mjs
+    target/web-generated/node-js/tools/end-game/castle.test.mjs
+    target/web-generated/node-js/tools/end-game/dialogue.test.mjs
+    target/web-generated/node-js/tools/end-game/guard.test.mjs
+    target/web-generated/node-js/tools/end-game/quality.test.mjs
+    target/web-generated/node-js/tools/end-game/main-boot.test.mjs
 )
 for suite in "${node_suites[@]}"; do
     [ -f "$suite" ] || bad "the emitted Node suite is missing: $suite"
 done
 node --test "${node_suites[@]}"
-ok "all four explicit emitted Node suites pass"
+ok "all nine explicit emitted Node suites pass"
 
 echo "== unavailable optional toolchains skip for distinct reasons =="
 mkdir -p "$TMP/node-free-path" "$TMP/mismatch-path"

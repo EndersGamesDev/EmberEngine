@@ -39,6 +39,16 @@ const END_GAME_QUALITY_TEMPLATE: &str =
     include_str!("../../../web/games/end-game/v12/quality.ts.j2");
 const END_GAME_VOICE_LINES_TEMPLATE: &str =
     include_str!("../../../web/games/end-game/v12/voice-lines.ts.j2");
+const END_GAME_CASTLE_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/castle.test.mts.j2");
+const END_GAME_DIALOGUE_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/dialogue.test.mts.j2");
+const END_GAME_GUARD_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/guard.test.mts.j2");
+const END_GAME_QUALITY_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/quality.test.mts.j2");
+const END_GAME_MAIN_BOOT_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/main-boot.test.mts.j2");
 const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
@@ -61,7 +71,7 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 15] = [
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 20] = [
     BehaviourTemplate {
         name: "hosts",
         source_path: "web/hosts.ts.j2",
@@ -243,6 +253,41 @@ const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 15] = [
         source_path: "web/games/end-game/v12/voice-lines.ts.j2",
         output_path: "ts/games/end-game/v12/voice-lines.ts",
         source: END_GAME_VOICE_LINES_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-castle-test",
+        source_path: "tools/end-game/castle.test.mts.j2",
+        output_path: "node-ts/tools/end-game/castle.test.mts",
+        source: END_GAME_CASTLE_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-dialogue-test",
+        source_path: "tools/end-game/dialogue.test.mts.j2",
+        output_path: "node-ts/tools/end-game/dialogue.test.mts",
+        source: END_GAME_DIALOGUE_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-guard-test",
+        source_path: "tools/end-game/guard.test.mts.j2",
+        output_path: "node-ts/tools/end-game/guard.test.mts",
+        source: END_GAME_GUARD_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-quality-test",
+        source_path: "tools/end-game/quality.test.mts.j2",
+        output_path: "node-ts/tools/end-game/quality.test.mts",
+        source: END_GAME_QUALITY_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-main-boot-test",
+        source_path: "tools/end-game/main-boot.test.mts.j2",
+        output_path: "node-ts/tools/end-game/main-boot.test.mts",
+        source: END_GAME_MAIN_BOOT_TEST_TEMPLATE,
         imports: &[],
     },
 ];
