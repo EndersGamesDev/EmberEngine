@@ -161,6 +161,9 @@ fi
 if ! bash deploy/check-toolchain.sh >/dev/null 2>&1; then
     skip_execution "toolchain version mismatch"
 fi
+if ! wasm_types_check="$(bash deploy/stage-wasm-types.sh --check 2>&1)"; then
+    skip_execution "$wasm_types_check"
+fi
 
 bash deploy/check-toolchain.sh
 
@@ -268,6 +271,7 @@ NODE
 
 echo "== generated hashes are stable =="
 EMBER_SOURCE_SHA="$SOURCE_ID" cargo run --locked -p ember-webgen -- --out "$SCOPED"
+bash deploy/stage-wasm-types.sh "$SOURCE_ID"
 WEBGEN_BIN="${CARGO_TARGET_DIR:-target}/debug/ember-webgen"
 [ -x "$WEBGEN_BIN" ] || bad "the diagnostic mapper binary was not built: $WEBGEN_BIN"
 mapped_tsc() {

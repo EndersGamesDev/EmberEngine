@@ -3,6 +3,11 @@
 # make the four files a web-target invocation would write.
 set -euo pipefail
 
+if [ "${1:-}" = --version ]; then
+    printf 'wasm-bindgen 0.2.127\n'
+    exit 0
+fi
+
 LOG="${SHIM_LOG:-/dev/null}"
 { printf 'wasm-bindgen'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
 

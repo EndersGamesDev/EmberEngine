@@ -233,7 +233,6 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
     echo "== using six prebuilt game bundles, the shared loader and the Julibrot lab bundle from web/pkg =="
 else
     echo "== building wasm =="
-    cargo build --target wasm32-unknown-unknown --release -p fire --lib
     cargo build --target wasm32-unknown-unknown --release -p arena --lib
     cargo build --target wasm32-unknown-unknown --release -p kings --lib
     cargo build --target wasm32-unknown-unknown --release -p league --lib
@@ -241,8 +240,6 @@ else
     cargo build --target wasm32-unknown-unknown --release -p end-game --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-loader --lib
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
-    wasm-bindgen --target web --out-dir web/pkg \
-        "$CARGO_WASM_RELEASE/fire.wasm"
     wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/arena.wasm"
     wasm-bindgen --target web --out-dir web/pkg \
@@ -270,13 +267,18 @@ stage_pkg_types() {
 }
 
 rm -rf "$PKG_TYPES_DIR"
-stage_pkg_types web/pkg fire arena kings league what_is_this end_game ember_loader
+stage_pkg_types web/pkg arena kings league what_is_this end_game ember_loader
 stage_pkg_types web/labs/julibrot/pkg ember_lab_julibrot
 
 echo "== generating and compiling Rust-owned web declarations =="
 EMBER_SOURCE_SHA="$SOURCE_SHA" timed_step ember-webgen \
     cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$SOURCE_SHA"
-for crate in fire arena kings league what_is_this end_game ember_loader ember_lab_julibrot; do
+if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
+    bash deploy/stage-wasm-types.sh --prebuilt "$SOURCE_SHA"
+else
+    bash deploy/stage-wasm-types.sh "$SOURCE_SHA"
+fi
+for crate in arena kings league what_is_this end_game ember_loader ember_lab_julibrot; do
     for destination in \
         "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts/wasm/$crate" \
         "$REPO_DIR/target/web-generated/ts/wasm/$crate"

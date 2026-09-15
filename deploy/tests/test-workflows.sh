@@ -327,7 +327,10 @@ runs = [step.get("run") for step in steps if isinstance(step.get("run"), str)]
 required = [
     "npm ci",
     "bash deploy/check-toolchain.sh",
+    "rustup target add wasm32-unknown-unknown",
+    'cargo install wasm-bindgen-cli --version "$version" --locked',
     'cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$EMBER_SOURCE_SHA"',
+    'bash deploy/stage-wasm-types.sh "$EMBER_SOURCE_SHA"',
     "npx --no-install tsc -p tsconfig.web.json --noEmit",
     "bash deploy/tests/test-typescript.sh",
 ]
@@ -343,7 +346,10 @@ PY
             && grep -Fq '          node-version: "24.20.0"' "$file" \
             && grep -Fq '        run: npm ci' "$file" \
             && grep -Fq '        run: bash deploy/check-toolchain.sh' "$file" \
+            && grep -Fq 'rustup target add wasm32-unknown-unknown' "$file" \
+            && grep -Fq 'cargo install wasm-bindgen-cli --version "$version" --locked' "$file" \
             && grep -Fq 'cargo run --locked -p ember-webgen --release' "$file" \
+            && grep -Fq 'bash deploy/stage-wasm-types.sh "$EMBER_SOURCE_SHA"' "$file" \
             && grep -Fq 'npx --no-install tsc -p tsconfig.web.json --noEmit' "$file" \
             && grep -Fq 'bash deploy/tests/test-typescript.sh' "$file"
     fi
