@@ -27,8 +27,9 @@
 #                 the tags — instant; tag checks skip on a tagless checkout
 #   workflows     workflow YAML and the branch/tag contract — instant
 #   rulesets      repository-ruleset JSON payloads and policy — instant
-#   typescript    pinned configs, a Rust generator build and compile failure;
-#                 skips unless the pinned Node toolchain is installed
+#   typescript    pinned configs, rendered-source AST policy, deliberate
+#                 failures and three emitted Node suites; skips unless the
+#                 pinned Node toolchain is installed
 #
 # Nothing here contacts a host, a tunnel or a network.
 set -uo pipefail

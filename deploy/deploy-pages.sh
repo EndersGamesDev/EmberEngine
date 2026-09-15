@@ -294,7 +294,12 @@ diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/node-ts" \
     "$REPO_DIR/target/web-generated/node-ts" >/dev/null \
     || die "fixed Node TypeScript inputs differ from the source-scoped tree"
 bash deploy/check-toolchain.sh
-timed_step typescript npx --no-install tsc -p tsconfig.web.json
+WEBGEN_BIN="${CARGO_TARGET_DIR:-target}/release/ember-webgen"
+[ -x "$WEBGEN_BIN" ] || die "the diagnostic mapper binary was not built: $WEBGEN_BIN"
+mapped_tsc() {
+    npx --no-install tsc "$@" 2>&1 | "$WEBGEN_BIN" --map-diagnostics >&2
+}
+timed_step typescript mapped_tsc -p tsconfig.web.json
 for module in hosts.js loader.js; do
     [ -f "target/web-generated/js/$module" ] \
         || die "TypeScript did not emit target/web-generated/js/$module"

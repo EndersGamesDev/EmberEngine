@@ -33,6 +33,10 @@ if [[ " $* " == *" run "* ]] && [[ " $* " == *" -p ember-webgen "* ]]; then
         printf 'export const renderedHostsTest = true;\n' > "$root/hosts.test.mts"
         printf 'export const renderedLoaderTest = true;\n' > "$root/loader.test.mts"
     done
+    mapper="${CARGO_TARGET_DIR:-target}/release/ember-webgen"
+    mkdir -p "$(dirname "$mapper")"
+    printf '#!/bin/sh\ncat\n' > "$mapper"
+    chmod +x "$mapper"
 fi
 # host.sh's fast wiring test asks this shim to materialize inert executables.
 # The ordinary ssh-deploy tests leave these variables unset and retain the
