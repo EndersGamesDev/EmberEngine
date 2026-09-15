@@ -186,13 +186,29 @@ const files = process.argv.slice(2);
 const failures = [];
 const checkedDeclarations = new Set();
 
-function location(source, position) {
+function renderedLocation(source, position) {
   const point = source.getLineAndCharacterOfPosition(position);
   return `${source.fileName}:${point.line + 1}:${point.character + 1}`;
 }
 
+function failure(source, position, message) {
+  const point = source.getLineAndCharacterOfPosition(position);
+  const renderedLine = point.line + 1;
+  const column = point.character + 1;
+  const mapPath = `${source.fileName}.map.json`;
+  if (fs.existsSync(mapPath)) {
+    const lineMap = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+    const templateLine = lineMap.lines[point.line];
+    if (Number.isInteger(templateLine)) {
+      return `${lineMap.template_path}(${templateLine},${column}): ${message} `
+        + `[rendered ${lineMap.rendered_path}(${renderedLine},${column})]`;
+    }
+  }
+  return `${renderedLocation(source, position)}: ${message}`;
+}
+
 function reject(source, node, message) {
-  failures.push(`${location(source, node.getStart(source))}: ${message}`);
+  failures.push(failure(source, node.getStart(source), message));
 }
 
 function unwrap(expression) {
@@ -208,19 +224,71 @@ function declarationCandidates(sourcePath, specifier) {
   return [`${stem}.d.ts`, `${stem}.d.mts`, `${stem}.d.cts`];
 }
 
-function scanWasmDeclaration(declaration) {
-  if (checkedDeclarations.has(declaration) || !fs.existsSync(declaration)) return;
-  checkedDeclarations.add(declaration);
-  const text = fs.readFileSync(declaration, 'utf8');
-  const source = ts.createSourceFile(declaration, text, ts.ScriptTarget.ES2022, true);
-  function visit(node) {
-    if (node.kind === ts.SyntaxKind.AnyKeyword) reject(source, node, 'wasm declaration exposes AnyKeyword');
-    ts.forEachChild(node, visit);
-  }
-  visit(source);
+function declarationName(node) {
+  return node.name && ts.isIdentifier(node.name) ? node.name.text : null;
 }
 
-function checkSpecifier(source, node, specifier) {
+function scanWasmDeclaration(declaration, importedNames, origin) {
+  const selection = importedNames === null ? '*' : [...importedNames].sort().join(',');
+  const checkedKey = `${declaration}\0${selection}`;
+  if (checkedDeclarations.has(checkedKey) || !fs.existsSync(declaration)) return;
+  checkedDeclarations.add(checkedKey);
+  const text = fs.readFileSync(declaration, 'utf8');
+  const source = ts.createSourceFile(declaration, text, ts.ScriptTarget.ES2022, true);
+  const declarations = new Map();
+  for (const statement of source.statements) {
+    const name = declarationName(statement);
+    if (!name) continue;
+    const overloads = declarations.get(name) || [];
+    overloads.push(statement);
+    declarations.set(name, overloads);
+  }
+  const visited = new Set();
+  function visitNamed(name) {
+    for (const candidate of declarations.get(name) || []) visit(candidate);
+  }
+  function visit(node) {
+    if (visited.has(node)) return;
+    visited.add(node);
+    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      reject(
+        origin.source,
+        origin.node,
+        `wasm declaration exposes AnyKeyword at ${renderedLocation(source, node.getStart(source))}`,
+      );
+    }
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+      visitNamed(node.typeName.text);
+    }
+    if (ts.isTypeQueryNode(node) && ts.isIdentifier(node.exprName)) {
+      visitNamed(node.exprName.text);
+    }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)
+      && ts.isStringLiteralLike(node.argument.literal)) {
+      const names = node.qualifier && ts.isIdentifier(node.qualifier)
+        ? new Set([node.qualifier.text])
+        : null;
+      for (const imported of declarationCandidates(declaration, node.argument.literal.text)) {
+        scanWasmDeclaration(imported, names, origin);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  if (importedNames === null) visit(source);
+  else for (const name of importedNames) visitNamed(name);
+}
+
+function namedImports(node) {
+  const clause = node.importClause;
+  if (!clause || clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)) {
+    return null;
+  }
+  return new Set(clause.namedBindings.elements.map(
+    (element) => (element.propertyName || element.name).text,
+  ));
+}
+
+function checkSpecifier(source, node, specifier, importedNames = null) {
   if (!specifier.startsWith('./') && !specifier.startsWith('../')) return;
   const bare = specifier.split(/[?#]/, 1)[0];
   const extension = path.posix.extname(bare);
@@ -229,7 +297,9 @@ function checkSpecifier(source, node, specifier) {
     reject(source, node, 'relative import names a TypeScript source extension');
   }
   for (const declaration of declarationCandidates(source.fileName, bare)) {
-    if (declaration.split(path.sep).includes('wasm')) scanWasmDeclaration(declaration);
+    if (declaration.split(path.sep).includes('wasm')) {
+      scanWasmDeclaration(declaration, importedNames, { source, node });
+    }
   }
 }
 
@@ -238,7 +308,7 @@ function scan(file) {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true);
   for (const match of text.matchAll(/@ts-(?:ignore|expect-error)/g)) {
     const position = match.index === undefined ? 0 : match.index;
-    failures.push(`${location(source, position)}: forbidden directive ${match[0]}`);
+    failures.push(failure(source, position, `forbidden directive ${match[0]}`));
   }
   function visit(node) {
     if (node.kind === ts.SyntaxKind.AnyKeyword) reject(source, node, 'forbidden AnyKeyword');
@@ -248,7 +318,11 @@ function scan(file) {
         reject(source, node, 'double assertion through unknown');
       }
     }
-    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+    if (ts.isImportDeclaration(node)
+      && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      checkSpecifier(source, node.moduleSpecifier, node.moduleSpecifier.text, namedImports(node));
+    }
+    if (ts.isExportDeclaration(node)
       && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
       checkSpecifier(source, node.moduleSpecifier, node.moduleSpecifier.text);
     }
@@ -318,13 +392,65 @@ ast_fixture typescript-expect-error "forbidden directive @ts-expect-error"
 ast_fixture typescript-double-assertion "double assertion through unknown"
 ast_fixture typescript-extensionless-import "relative import must name an emitted extension"
 ast_fixture typescript-source-import "relative import names a TypeScript source extension"
-cp deploy/tests/fixtures/typescript-wasm-any.ts.j2 "$TMP/ast/typescript-wasm-any.ts"
 cp deploy/tests/fixtures/typescript-wasm-any.d.ts.j2 "$TMP/ast/wasm/fake.d.ts"
-if source_ast_gate "$TMP/ast/typescript-wasm-any.ts" > "$TMP/typescript-wasm-any.log" 2>&1; then
-    bad "a wasm declaration exposing AnyKeyword was accepted"
+write_fixture_map() {
+    "$PY" - "$1" "$2" <<'PY'
+import json
+import pathlib
+import sys
+
+template, rendered = map(pathlib.Path, sys.argv[1:])
+line_count = len(template.read_text(encoding="utf-8").splitlines())
+line_map = {
+    "version": 1,
+    "rendered_path": rendered.as_posix(),
+    "template_path": template.as_posix(),
+    "lines": list(range(1, line_count + 1)),
+}
+rendered.with_name(rendered.name + ".map.json").write_text(
+    json.dumps(line_map, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+for fixture in named-clean named-transitive namespace overload; do
+    cp "deploy/tests/fixtures/typescript-wasm-$fixture.ts.j2" \
+        "$TMP/ast/typescript-wasm-$fixture.ts"
+    write_fixture_map "deploy/tests/fixtures/typescript-wasm-$fixture.ts.j2" \
+        "$TMP/ast/typescript-wasm-$fixture.ts"
+done
+if source_ast_gate "$TMP/ast/typescript-wasm-named-clean.ts"; then
+    ok "a named wasm import ignores an unreachable AnyKeyword sibling"
 else
-    contains "$(cat "$TMP/typescript-wasm-any.log")" "wasm declaration exposes AnyKeyword" \
-        "an imported wasm glue declaration cannot expose AnyKeyword"
+    bad "a clean named wasm import beside an AnyKeyword sibling was rejected"
+fi
+if source_ast_gate "$TMP/ast/typescript-wasm-named-transitive.ts" \
+    > "$TMP/typescript-wasm-named-transitive.log" 2>&1; then
+    bad "a named wasm import transitively exposing AnyKeyword was accepted"
+else
+    contains "$(cat "$TMP/typescript-wasm-named-transitive.log")" \
+        "deploy/tests/fixtures/typescript-wasm-named-transitive.ts.j2(1," \
+        "a transitive wasm failure names the template coordinate"
+    contains "$(cat "$TMP/typescript-wasm-named-transitive.log")" \
+        "[rendered $TMP/ast/typescript-wasm-named-transitive.ts(1," \
+        "a transitive wasm failure retains the rendered coordinate"
+fi
+if source_ast_gate "$TMP/ast/typescript-wasm-namespace.ts" \
+    > "$TMP/typescript-wasm-namespace.log" 2>&1; then
+    bad "a namespace wasm import beside an AnyKeyword was accepted"
+else
+    contains "$(cat "$TMP/typescript-wasm-namespace.log")" \
+        "wasm declaration exposes AnyKeyword" \
+        "a namespace wasm import scans the whole declaration"
+fi
+if source_ast_gate "$TMP/ast/typescript-wasm-overload.ts" \
+    > "$TMP/typescript-wasm-overload.log" 2>&1; then
+    bad "an AnyKeyword in an earlier wasm overload was accepted"
+else
+    contains "$(cat "$TMP/typescript-wasm-overload.log")" \
+        "wasm declaration exposes AnyKeyword" \
+        "every overload of a named wasm import is scanned"
 fi
 
 mapped_tsc -p tsconfig.web.json --noEmit

@@ -16,7 +16,7 @@ Before it copies tracked page sources, the assembler keeps wasm-bindgen declarat
 
 `stage-wasm-types.sh` owns the append-only list of converted games whose wasm-bindgen declarations are required by typed browser templates, builds those wasm crates and stages their declarations identically for CI, the required TypeScript gate and Pages assembly.
 
-The source-AST gate scans every rendered production source. Its wasm-declaration rule is currently exercised by a synthetic fixture: no rendered production source has a literal relative import resolving through a `wasm` path because the wasm-bindgen glue modules are imported by computed URL.
+The source-AST gate scans every rendered production source. For wasm declarations, a named import scans every overload of those exports and the declarations they reference, while namespace, default, dynamic and re-export imports scan the whole declaration file; an observable `any` is rejected in either path.
 
 The Pages job does not take a gate sidecar from the release archive. After extracting the site it checks out the release source, selects Node 24.20.0, runs `npm ci`, selects the pinned Rust toolchain, regenerates the compiler inputs, emits `target/web-generated/node-js/check-hosts.mjs` and runs that tool against the extracted tree. The gate is a tool rather than a shipped byte, its provenance is the checked-out source like the `typed web` CI job, and the release archive remains exactly the site. Its rebuild is the same order as that CI job, about two minutes measured on 2026-09-14; a sidecar would still need extraction and removal before upload, and each later gate would repeat that packaging path. There is no release-workflow post-assembly host gate; Pages owns this live network check.
 

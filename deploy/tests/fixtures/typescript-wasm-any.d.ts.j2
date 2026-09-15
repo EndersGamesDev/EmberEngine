@@ -1,1 +1,11 @@
-export function start(value: any): void;
+export interface UnsafeResult {
+  value: any;
+}
+
+export function clean(): void;
+
+export function reachesUnsafe(): UnsafeResult;
+
+export function overloaded(value: any): void;
+
+export function overloaded(value: string): void;
