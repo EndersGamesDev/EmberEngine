@@ -6,8 +6,7 @@
 
     type UnknownRecord = Record<string, unknown>;
     type LoaderModule = typeof import('../../../loader.js');
-    type FireWasmModule = typeof import('../../../wasm/fire/fire.js');
-    type FireWasm = Pick<FireWasmModule,
+    type FireWasm = Pick<typeof import('../../../wasm/fire/fire.js'),
       'hud_json' | 'online_status' | 'package_version' | 'proto_version'
       | 'restart_local' | 'start_local_vehicle' | 'start_online'>;
     export type FireProtocolBoundary = C2SOutput | S2CInput;

@@ -1,0 +1,2 @@
+type Pick<T, K> = T & { chosen?: K };
+export type Result = Pick<typeof import('./wasm/fake.js'), 'clean'>;

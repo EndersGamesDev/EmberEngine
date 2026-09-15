@@ -7,7 +7,7 @@ use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBu
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "a068bde304e34b30de000646029f40245a6abca27c00ebeefde9580b472e3b7f";
+const TEMPLATE_HASH: &str = "5bb16146213f3c625659c3d8e9c2d03f2f344facda2efc705e1e97cc74547a63";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
