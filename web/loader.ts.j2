@@ -29,13 +29,126 @@
 //     line instead of progress numbers.
 
 import { chooseHost, probeHost, rankHosts } from './hosts.js';
+import type { HostView, ProbeResult } from './hosts.js';
+
+type UnknownRecord = Record<string, unknown>;
+type DriveMethod = 'begin' | 'enter' | 'rerank' | 'done' | 'total' | 'bytes' | 'tick' | 'fail';
+type LoaderModel = Record<DriveMethod, (at: number, ...args: unknown[]) => unknown>;
+type Importer = (url: string) => Promise<unknown>;
+type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+interface LoaderConstructor {
+  new(nowMs: number, stallMs: number): LoaderModel;
+}
+
+type LoaderInitialiser = (input: { module_or_path: string }) => Promise<unknown>;
+
+interface LoaderRules {
+  default?: LoaderInitialiser;
+  Loader: LoaderConstructor;
+}
+
+interface GameGlue extends UnknownRecord {
+  default: (input: { module_or_path: string | WebAssembly.Module }) => Promise<unknown>;
+  package_version?: () => unknown;
+  proto_version?: () => unknown;
+}
+
+interface HostResult {
+  chosen?: HostView | null;
+  candidates?: HostView[];
+  wrongProto?: HostView[];
+  book?: unknown;
+}
+
+interface HostRules {
+  chooseHost(root: string, options: { game: string; proto: number | null }): Promise<HostResult>;
+  probeHost(url: string, options: { proto: number }): Promise<ProbeResult>;
+  rankHosts(entries: unknown[], options: { game: string; probes: Map<string, ProbeResult> }): HostResult;
+}
+
+interface LoaderOptions {
+  bundle?: unknown;
+  base?: unknown;
+  stamp?: unknown;
+  root?: unknown;
+  game?: unknown;
+  version?: unknown;
+  wasm?: unknown;
+  discover?: unknown;
+  proto?: unknown;
+  override?: unknown;
+  stallMs?: unknown;
+  catalogTimeoutMs?: unknown;
+  onEvent?: unknown;
+  start?: unknown;
+  fetchImpl?: unknown;
+  importer?: unknown;
+  loaderModule?: unknown;
+  hosts?: unknown;
+}
+
+interface Settings {
+  game: string;
+  version: string;
+  root: URL;
+  catalogUrl: string;
+  bundleUrl: string;
+  wasmUrl: string;
+  stamp: string;
+  discover: boolean;
+  proto: number | null;
+  override: string;
+  stallMs: number;
+  catalogTimeoutMs: number;
+  onEvent: (event: Event) => void;
+  start: ((glue: GameGlue) => unknown | Promise<unknown>) | null;
+  fetchImpl: Fetcher;
+  importer: Importer;
+  loaderModule: unknown;
+  hosts: HostRules;
+}
+
+type EventExtra = Partial<{
+  host: HostView | null;
+  candidates: HostView[];
+  wrongProto: HostView[];
+  proto: number | null;
+  provisional: boolean;
+  version: string;
+}>;
+
+interface Drive {
+  (method: DriveMethod, args?: unknown[], extra?: EventExtra | null): void;
+  ready(model: LoaderModel): void;
+  degrade(detail: string): void;
+  degraded(): boolean;
+}
+
+interface HostPayload {
+  host: HostView | null;
+  candidates: HostView[];
+  wrongProto: HostView[];
+  proto: number | null;
+  provisional: boolean;
+}
+
+interface Discovery extends HostPayload {
+  chosen: HostView | null;
+  book: unknown;
+}
+
+interface LoadedGame {
+  glue: GameGlue;
+  version: string;
+}
 
 /// This module's own URL, which is also where the site root is: the loader is
 /// deployed beside `hosts.js` and `games.json`, so a page passes no paths it
 /// does not own.
 const SELF = import.meta.url;
 
-const clock = () => (typeof performance === 'undefined' ? Date.now() : performance.now());
+const clock = (): number => (typeof performance === 'undefined' ? Date.now() : performance.now());
 const CATALOG_TIMEOUT_MS = 4000;
 
 /// The deploy stamp, taken from this module's own query.
@@ -47,7 +160,7 @@ const CATALOG_TIMEOUT_MS = 4000;
 /// the next deploy, so a cached page could ask for a bundle newer than
 /// itself, and a page and a bundle from different builds is exactly the pair
 /// nobody can reproduce.
-export function loaderStamp(url = SELF) {
+export function loaderStamp(url: unknown = SELF): string {
   try {
     return new URL(String(url), 'http://ember.invalid/').searchParams.get('v') || '';
   } catch {
@@ -56,14 +169,14 @@ export function loaderStamp(url = SELF) {
 }
 
 /// `pkg/arena.js` + a stamp -> `pkg/arena.js?v=<stamp>`.
-export function withStamp(url, stamp) {
+export function withStamp(url: string, stamp: string): string {
   if (!stamp) return url;
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(stamp)}`;
 }
 
 /// The wasm beside a wasm-bindgen glue module, by the name the generator gives
 /// it. A page may still name it outright.
-export function bundleWasm(glue) {
+export function bundleWasm(glue: unknown): string {
   return String(glue).replace(/\.js$/, '_bg.wasm');
 }
 
@@ -75,30 +188,36 @@ export function bundleWasm(glue) {
 /// else in the tree can drift from it: `deploy/deploy-pages.sh` refuses a
 /// catalog whose live `proto` differs from its game's `crates/<id>-core`
 /// constant, in both directions.
-function releaseFrom(catalog, game, version) {
-  const games = Array.isArray(catalog?.games) ? catalog.games : [];
-  const entry = games.find((g) => g && g.id === game);
+function releaseFrom(catalog: unknown, game: string, version: string): GameRelease | undefined {
+  const root = catalog && typeof catalog === 'object' && !Array.isArray(catalog)
+    ? catalog as GameCatalog & UnknownRecord
+    : null;
+  const games = Array.isArray(root?.games) ? root.games : [];
+  const entry = games.find((candidate) => candidate && candidate.id === game);
   const versions = Array.isArray(entry?.versions) ? entry.versions : [];
   return version
     ? versions.find((r) => r && r.v === version)
     : versions.find((r) => r && r.live === true);
 }
 
-export function protoFrom(catalog, game, version) {
+export function protoFrom(catalog: unknown, game: string, version: string): number | null {
   const found = releaseFrom(catalog, game, version);
   return typeof found?.proto === 'number' ? found.proto : null;
 }
 
 /// The decoded bundle size stamped into the served catalog by the deploy.
-export function bytesFrom(catalog, game, version) {
+export function bytesFrom(catalog: unknown, game: string, version: string): number | null {
   const bytes = releaseFrom(catalog, game, version)?.bytes;
-  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null;
+  return typeof bytes === 'number' && Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null;
 }
 
 /// A failure with a short code beside its message, so a page can tell a 404
 /// from a browser that will not compile the bytes.
 class LoadFailure extends Error {
-  constructor(phase, code, message) {
+  phase: Phase;
+  code: string;
+
+  constructor(phase: Phase, code: string, message: string) {
     super(message);
     this.name = 'LoadFailure';
     this.phase = phase;
@@ -106,41 +225,103 @@ class LoadFailure extends Error {
   }
 }
 
-const failureOf = (phase, error) => (error instanceof LoadFailure
-  ? error
-  : new LoadFailure(phase, 'error', (error && error.message) || String(error)));
+function messageOf(error: unknown): string {
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    const message: unknown = Reflect.get(error, 'message');
+    if (message) return String(message);
+  }
+  return String(error);
+}
 
-function settings(options) {
-  const o = options || {};
+const failureOf = (phase: Phase, error: unknown): LoadFailure => (error instanceof LoadFailure
+  ? error
+  : new LoadFailure(phase, 'error', messageOf(error)));
+
+const PHASES: readonly Phase[] = ['boot', 'host', 'download', 'compile', 'init', 'start', 'ready'];
+const STATUSES: readonly Status[] = ['begin', 'progress', 'done', 'fail'];
+
+function eventFrom(value: unknown): EventOutput | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const event = value as UnknownRecord;
+  if (!PHASES.includes(event['phase'] as Phase)
+      || !STATUSES.includes(event['status'] as Status)
+      || typeof event['elapsedMs'] !== 'number'
+      || typeof event['phaseMs'] !== 'number'
+      || typeof event['stalled'] !== 'boolean'
+      || typeof event['stalledMs'] !== 'number'
+      || typeof event['text'] !== 'string') return null;
+  for (const key of ['loaded', 'total', 'percent', 'rateBps', 'etaMs'] as const) {
+    if (event[key] !== undefined && typeof event[key] !== 'number') return null;
+  }
+  for (const key of ['reason', 'detail'] as const) {
+    if (event[key] !== undefined && typeof event[key] !== 'string') return null;
+  }
+  return event as EventOutput;
+}
+
+function loaderRulesFrom(value: unknown): LoaderRules {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('the loader module is not an object');
+  }
+  const module = value as UnknownRecord;
+  if (typeof module['Loader'] !== 'function') throw new Error('the loader module exports no Loader');
+  if (module['default'] !== undefined && typeof module['default'] !== 'function') {
+    throw new Error('the loader module default export is not callable');
+  }
+  const Loader = module['Loader'] as LoaderConstructor;
+  const initialise = module['default'];
+  return typeof initialise === 'function'
+    ? { Loader, default: initialise as LoaderInitialiser }
+    : { Loader };
+}
+
+function gameGlueFrom(value: unknown): GameGlue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('the game glue module is not an object');
+  }
+  const module = value as UnknownRecord;
+  if (typeof module['default'] !== 'function') throw new Error('the game glue default export is not callable');
+  return module as GameGlue;
+}
+
+function settings(options: unknown): Settings {
+  const o = (options && (typeof options === 'object' || typeof options === 'function')
+    ? options
+    : {}) as LoaderOptions;
   if (!o.bundle) throw new LoadFailure('boot', 'no-bundle', 'emberLoad needs the game bundle path');
+  const bundle = String(o.bundle);
   const base = o.base
     || (typeof document === 'undefined' ? 'http://ember.invalid/' : document.baseURI);
   const stamp = o.stamp === undefined ? loaderStamp() : String(o.stamp || '');
-  const root = new URL(o.root || './', SELF);
+  const root = new URL(String(o.root || './'), SELF);
   return {
     game: String(o.game || ''),
     version: o.version ? String(o.version) : '',
     root,
     catalogUrl: new URL('games.json', root).href,
-    bundleUrl: withStamp(new URL(o.bundle, base).href, stamp),
-    wasmUrl: withStamp(new URL(o.wasm || bundleWasm(o.bundle), base).href, stamp),
+    bundleUrl: withStamp(new URL(bundle, String(base)).href, stamp),
+    wasmUrl: withStamp(new URL(String(o.wasm || bundleWasm(bundle)), String(base)).href, stamp),
     stamp,
     discover: o.discover !== false,
     proto: typeof o.proto === 'number' ? o.proto : null,
     override: String(o.override || '').trim(),
     stallMs: typeof o.stallMs === 'number' ? o.stallMs : 5000,
-    catalogTimeoutMs: Number.isFinite(o.catalogTimeoutMs)
+    catalogTimeoutMs: typeof o.catalogTimeoutMs === 'number' && Number.isFinite(o.catalogTimeoutMs)
       ? Math.max(0, o.catalogTimeoutMs)
       : CATALOG_TIMEOUT_MS,
-    onEvent: typeof o.onEvent === 'function' ? o.onEvent : () => {},
-    start: typeof o.start === 'function' ? o.start : null,
-    fetchImpl: o.fetchImpl || ((...args) => globalThis.fetch(...args)),
-    importer: o.importer || ((url) => import(url)),
+    onEvent: typeof o.onEvent === 'function' ? o.onEvent as (event: Event) => void : () => {},
+    start: typeof o.start === 'function' ? o.start as (glue: GameGlue) => unknown | Promise<unknown> : null,
+    fetchImpl: o.fetchImpl
+      ? o.fetchImpl as Fetcher
+      : (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+    importer: o.importer ? o.importer as Importer : (url: string) => import(url),
     loaderModule: o.loaderModule || null,
     // The host rule, injectable for the same reason `hosts.js` lets a caller
     // supply a socket: the picking is tested there against plain objects, and
     // this file's own tests are about the order it drives things in.
-    hosts: o.hosts || { chooseHost, probeHost, rankHosts },
+    hosts: o.hosts
+      ? o.hosts as HostRules
+      : { chooseHost, probeHost, rankHosts },
   };
 }
 
@@ -152,12 +333,13 @@ function settings(options) {
 /// would have. When the rules cannot be loaded at all the queue is dropped and
 /// every later call is a no-op: a degraded load reports its own degradation
 /// once and then says nothing it cannot measure.
-function driver(o) {
-  const queue = [];
-  let model = null;
+function driver(o: Settings): Drive {
+  const queue: Array<{ method: DriveMethod; at: number; args: unknown[]; extra: EventExtra | null }> = [];
+  let model: LoaderModel | null = null;
   let degraded = false;
 
-  const deliver = (event, extra) => {
+  const deliver = (value: unknown, extra: EventExtra | null = null): void => {
+    const event = eventFrom(value);
     if (!event) return;
     if (extra) Object.assign(event, extra);
     try {
@@ -168,9 +350,11 @@ function driver(o) {
     }
   };
 
-  const call = (method, at, args, extra) => deliver(model[method](at, ...args), extra);
+  const call = (method: DriveMethod, at: number, args: unknown[], extra: EventExtra | null): void => {
+    if (model) deliver(model[method](at, ...args), extra);
+  };
 
-  const drive = (method, args = [], extra = null) => {
+  const drive = ((method: DriveMethod, args: unknown[] = [], extra: EventExtra | null = null): void => {
     const at = clock();
     if (degraded) return;
     if (!model) {
@@ -178,15 +362,15 @@ function driver(o) {
       return;
     }
     call(method, at, args, extra);
-  };
+  }) as Drive;
 
-  drive.ready = (loaded) => {
+  drive.ready = (loaded: LoaderModel): void => {
     model = loaded;
     for (const item of queue) call(item.method, item.at, item.args, item.extra);
     queue.length = 0;
   };
 
-  drive.degrade = (detail) => {
+  drive.degrade = (detail: string): void => {
     degraded = true;
     queue.length = 0;
     deliver({
@@ -202,15 +386,16 @@ function driver(o) {
     });
   };
 
-  drive.degraded = () => degraded;
+  drive.degraded = (): boolean => degraded;
   return drive;
 }
 
 /// Bring up the rules. A failure here degrades the load; it never ends it.
-async function rules(o, drive, t0) {
+async function rules(o: Settings, drive: Drive, t0: number): Promise<boolean> {
   try {
-    const module = o.loaderModule
+    const imported = o.loaderModule
       || await o.importer(withStamp(new URL('pkg/ember_loader.js', SELF).href, o.stamp));
+    const module = loaderRulesFrom(imported);
     if (module.default) {
       await module.default({
         module_or_path: withStamp(new URL('pkg/ember_loader_bg.wasm', SELF).href, o.stamp),
@@ -219,27 +404,28 @@ async function rules(o, drive, t0) {
     drive.ready(new module.Loader(t0, o.stallMs));
     return true;
   } catch (e) {
-    drive.degrade((e && e.message) || String(e));
+    drive.degrade(messageOf(e));
     return false;
   }
 }
 
 /// One address, probed once and dressed as a ranked candidate, so that a
 /// manual override and a ranked book have the same shape downstream.
-async function onlyHost(hosts, url, game, proto) {
+async function onlyHost(hosts: HostRules, url: string, game: string, proto: number): Promise<HostResult> {
   const entry = { name: '', ws: url, version: '', commit: '', updated: '' };
   const probes = new Map([['', await hosts.probeHost(url, { proto })]]);
   return hosts.rankHosts([entry], { game, probes });
 }
 
-async function catalog(o) {
-  let timer;
+async function catalog(o: Settings): Promise<unknown | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const request = (async () => {
       try {
         const response = await o.fetchImpl(o.catalogUrl, { cache: 'no-store' });
         if (!response || !response.ok) return null;
-        return await response.json();
+        const parsed: unknown = await response.json();
+        return parsed;
       } catch {
         // The catalog is a convenience, not a requirement. Without it
         // discovery ranks unfiltered and response headers may still supply a
@@ -247,7 +433,7 @@ async function catalog(o) {
         return null;
       }
     })();
-    const timeout = new Promise((resolve) => {
+    const timeout = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), o.catalogTimeoutMs);
     });
     return await Promise.race([request, timeout]);
@@ -256,7 +442,7 @@ async function catalog(o) {
   }
 }
 
-function hostPayload(result, proto, provisional) {
+function hostPayload(result: HostResult, proto: number | null, provisional: boolean): HostPayload {
   return {
     host: result.chosen || null,
     candidates: result.candidates || [],
@@ -266,7 +452,7 @@ function hostPayload(result, proto, provisional) {
   };
 }
 
-async function pick(o, proto) {
+async function pick(o: Settings, proto: number | null): Promise<HostResult> {
   return o.override
     ? await onlyHost(o.hosts, o.override, o.game, proto ?? 0)
     : await o.hosts.chooseHost(o.root.href, { game: o.game, proto });
@@ -275,11 +461,11 @@ async function pick(o, proto) {
 /// Discovery, as its own track. It starts with the download and neither waits
 /// for the other, and a failure here leaves the game loading: a page with no
 /// server still plays offline practice and still has to say so.
-async function discover(o, drive, protoPromise, rerank = false, previous = null) {
+async function discover(o: Settings, drive: Drive, protoPromise: Promise<number | null>, rerank = false, previous: Discovery | null = null): Promise<Discovery> {
   drive(rerank ? 'rerank' : 'enter', ['host']);
   const proto = await protoPromise;
   const provisional = proto === null;
-  let result;
+  let result: HostResult;
   try {
     result = await pick(o, proto);
   } catch (e) {
@@ -288,7 +474,7 @@ async function discover(o, drive, protoPromise, rerank = false, previous = null)
     // empty result.
     const kept = previous || { chosen: null, candidates: [], wrongProto: [], book: null };
     const payload = hostPayload(kept, proto, provisional);
-    drive('fail', ['host', 'discovery', (e && e.message) || String(e)], payload);
+    drive('fail', ['host', 'discovery', messageOf(e)], payload);
     return { ...payload, chosen: kept.chosen || null, book: kept.book || null };
   }
   const payload = hostPayload(result, proto, provisional);
@@ -315,7 +501,7 @@ async function discover(o, drive, protoPromise, rerank = false, previous = null)
 /// before there was anything to count. A browser that will not compile from a
 /// constructed response falls back to compiling the whole buffer, which costs
 /// one cached re-read and no correctness.
-async function fetchAndCompile(o, drive, catalogPromise) {
+async function fetchAndCompile(o: Settings, drive: Drive, catalogPromise: Promise<unknown | null>): Promise<WebAssembly.Module> {
   const response = await o.fetchImpl(o.wasmUrl, { credentials: 'same-origin' });
   if (!response || !response.ok) {
     const status = response ? `${response.status} ${response.statusText}` : 'no response';
@@ -362,8 +548,8 @@ async function fetchAndCompile(o, drive, catalogPromise) {
     acceptingTotal = false;
     drive('done', ['download']);
   };
-  const counted = new ReadableStream({
-    async pull(controller) {
+  const counted = new ReadableStream<Uint8Array>({
+    async pull(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
       const { done, value } = await reader.read();
       if (done) {
         drain();
@@ -374,7 +560,7 @@ async function fetchAndCompile(o, drive, catalogPromise) {
       drive('bytes', [value.byteLength]);
       controller.enqueue(value);
     },
-    cancel(reason) {
+    cancel(reason: unknown): Promise<void> {
       return reader.cancel(reason);
     },
   });
@@ -388,12 +574,12 @@ async function fetchAndCompile(o, drive, catalogPromise) {
     return module;
   } catch (e) {
     if (e instanceof WebAssembly.CompileError) {
-      throw new LoadFailure('compile', 'invalid-wasm', (e && e.message) || String(e));
+      throw new LoadFailure('compile', 'invalid-wasm', messageOf(e));
     }
     try { await reader.cancel(e); } catch {}
     const again = await o.fetchImpl(o.wasmUrl, { credentials: 'same-origin' });
     if (!again || !again.ok) {
-      throw new LoadFailure('compile', 'stream-compile', (e && e.message) || String(e));
+      throw new LoadFailure('compile', 'stream-compile', messageOf(e));
     }
     const bytes = new Uint8Array(await again.arrayBuffer());
     const remaining = Math.max(0, bytes.byteLength - streamedBytes);
@@ -405,7 +591,7 @@ async function fetchAndCompile(o, drive, catalogPromise) {
   }
 }
 
-async function bringUp(o, drive, gluePromise, catalogPromise) {
+async function bringUp(o: Settings, drive: Drive, gluePromise: Promise<GameGlue>, catalogPromise: Promise<unknown | null>): Promise<LoadedGame> {
   drive('enter', ['download']);
   const module = await fetchAndCompile(o, drive, catalogPromise);
   const glue = await gluePromise;
@@ -428,7 +614,7 @@ async function bringUp(o, drive, gluePromise, catalogPromise) {
 /// The legacy path, for a load whose own rules could not be brought up: the
 /// browser fetches and compiles the bundle itself, exactly as every page did
 /// before this file existed.
-async function withoutRules(o, gluePromise) {
+async function withoutRules(o: Settings, gluePromise: Promise<GameGlue>): Promise<LoadedGame> {
   const glue = await gluePromise;
   await glue.default({ module_or_path: o.wasmUrl });
   let version = '';
@@ -446,7 +632,18 @@ async function withoutRules(o, gluePromise) {
 /// Resolves with the game's own module namespace under `exports`, so a page
 /// hands over exactly as it always did — `start_online(...)` with the chosen
 /// host, `package_version()` for the label — and no game's Rust changes.
-export async function emberLoad(options) {
+export async function emberLoad(options: unknown): Promise<{
+  exports: GameGlue;
+  version: string;
+  host: HostView | null;
+  candidates: HostView[];
+  wrongProto: HostView[];
+  proto: number | null;
+  book: unknown;
+  hostSettled: Promise<{ host: HostView | null; candidates: HostView[]; wrongProto: HostView[]; proto: number | null; book: unknown }>;
+  stamp: string;
+  degraded: boolean;
+}> {
   const o = settings(options);
   const t0 = clock();
   const drive = driver(o);
@@ -456,9 +653,11 @@ export async function emberLoad(options) {
   // bundle: the drive calls carry the clock, so they replay in order with
   // their real timestamps the moment the rules land.
   const booting = rules(o, drive, t0);
-  const gluePromise = o.importer(o.bundleUrl).catch((e) => {
-    throw new LoadFailure('init', 'glue', (e && e.message) || String(e));
-  });
+  const gluePromise = o.importer(o.bundleUrl)
+    .then(gameGlueFrom)
+    .catch((e: unknown) => {
+      throw new LoadFailure('init', 'glue', messageOf(e));
+    });
   // A download can fail before bringUp awaits the eager glue import. Mark the
   // rejection handled now while keeping the same rejecting promise for the
   // normal init path.
@@ -470,7 +669,7 @@ export async function emberLoad(options) {
   const hostPromise = o.discover ? discover(o, drive, protoPromise) : Promise.resolve(null);
 
   const ticker = setInterval(() => drive('tick', []), 250);
-  let loaded;
+  let loaded: LoadedGame;
   try {
     await booting;
     loaded = drive.degraded()
@@ -492,7 +691,7 @@ export async function emberLoad(options) {
   // shares the link with the bundle download, so an empty result gets one
   // background pass after init on an idle link. That safety pass reports host
   // events but never holds the now-playable engine behind another probe window.
-  let bundleProto = null;
+  let bundleProto: unknown = null;
   let needsRetry = false;
   try {
     bundleProto = loaded.glue.proto_version ? loaded.glue.proto_version() : null;
@@ -522,14 +721,14 @@ export async function emberLoad(options) {
     host = await discover(
       o,
       drive,
-      Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host.proto),
+      Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host?.proto ?? o.proto),
       true,
       host,
     );
     needsRetry = false;
   }
 
-  const hostView = (settled) => ({
+  const hostView = (settled: Discovery | null): { host: HostView | null; candidates: HostView[]; wrongProto: HostView[]; proto: number | null; book: unknown } => ({
     host: settled ? settled.chosen : null,
     candidates: settled ? settled.candidates : [],
     wrongProto: settled ? settled.wrongProto : [],
@@ -544,11 +743,11 @@ export async function emberLoad(options) {
   // for a caller that explicitly wants to wait for the safety pass.
   const hostSettled = !needsRetry
     ? Promise.resolve(first)
-    : new Promise((resolve) => setTimeout(resolve, 0))
+    : new Promise<void>((resolve) => setTimeout(resolve, 0))
       .then(() => discover(
         o,
         drive,
-        Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host.proto),
+        Promise.resolve(typeof bundleProto === 'number' ? bundleProto : host?.proto ?? o.proto),
         true,
         host,
       ))

@@ -1,4 +1,4 @@
-// Unit tests for web/hosts.js — run with `node --test web/hosts.test.mjs`.
+// Unit tests for the emitted root hosts.js module.
 //
 // No browser, no server, no dependencies: the picking rule is the part of the
 // multi-host feature that is easiest to get subtly wrong and hardest to see
@@ -9,7 +9,66 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import {
+type UnknownRecord = Record<string, unknown>;
+type TestEntry = HostEntry & UnknownRecord & { legacy?: boolean };
+type TestProbe = { ok: true; rttMs: number; welcome: UnknownRecord } | { ok: false; reason: string };
+type TestSocketFactory = (url: string) => TestSocket;
+
+interface TestSocket {
+  url: string;
+  sent: unknown[];
+  closed: boolean;
+  send(data: string): void;
+  close(): void;
+  onerror?: (event: unknown) => void;
+  onclose?: (event: unknown) => void;
+  onopen?: () => void;
+  onmessage?: (event: { data: unknown }) => void;
+}
+
+interface TestView extends UnknownRecord {
+  bookName: string;
+  name: string;
+  url: string;
+  version: string;
+  versionNum: number;
+  commit: string;
+  proto: number | null;
+  players: number;
+  rttMs: number | null;
+  legacy: boolean;
+}
+
+interface HostsUnderTest {
+  PIN_KEY: string;
+  chooseHost(root?: string, options?: UnknownRecord): Promise<{ hosts: TestEntry[]; chosen: TestView | null; candidates: TestView[] }>;
+  keysFor(game: ServerGameId | string): { ws: string; proto: string };
+  listLobbies(url: string, options?: { proto?: number; timeoutMs?: number; socketFactory?: TestSocketFactory }): Promise<unknown[]>;
+  loadBook(root?: string, options?: { timeoutMs?: number }): Promise<{ book: unknown; hosts: TestEntry[] }>;
+  mergeBook(book: unknown, mirrors?: unknown): TestEntry[];
+  mirrorRefs(book: unknown): Mirror[];
+  parseVersion(value: unknown): number;
+  probeHost(url: string, options?: { proto?: number; timeoutMs?: number; socketFactory?: TestSocketFactory }): Promise<TestProbe>;
+  rankHosts(entries: unknown, options?: UnknownRecord): { chosen: TestView | null; candidates: TestView[]; wrongProto: TestView[] };
+  renderChip(element: { textContent: string; title: string } | null, choice: Partial<TestView> | null, options?: { wrongProto?: Array<Pick<TestView, 'name' | 'proto'>>; proto?: number | null }): void;
+  verKeysFor(game: ServerGameId | string): { version: string; commit: string };
+}
+
+function hostsUnderTest(value: unknown): HostsUnderTest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('hosts module is not an object');
+  return value as HostsUnderTest;
+}
+
+function catalogFixture(path: string): GameCatalog {
+  const parsed: unknown = JSON.parse(readFileSync(new URL(path, import.meta.url), 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as UnknownRecord)['games'])) {
+    throw new Error(`${path} has no games array`);
+  }
+  return parsed as GameCatalog;
+}
+
+const moduleValue: unknown = await import(new URL('../js/hosts.js', import.meta.url).href);
+const {
   PIN_KEY,
   chooseHost,
   keysFor,
@@ -22,7 +81,7 @@ import {
   rankHosts,
   renderChip,
   verKeysFor,
-} from './hosts.js';
+} = hostsUnderTest(moduleValue);
 
 // ---- key derivation ------------------------------------------------------
 
@@ -57,7 +116,7 @@ test('parseVersion: r<N> is an integer, anything else is zero', () => {
 
 // ---- merging -------------------------------------------------------------
 
-const mirror = (name, entry) => ({ name, entry });
+const mirror = (name: string, entry: unknown): { name: string; entry: unknown } => ({ name, entry });
 
 test('mirrorRefs: only a binding that names a host is a reference', () => {
   assert.deepEqual(
@@ -83,7 +142,7 @@ test('mirrorRefs: the list is capped, because nothing bounds a third party\u2019
 });
 
 test('mergeBook: entries merge by name and the later one wins', () => {
-  const book = {
+  const book: HostBook = {
     hosts: [
       { name: 'amber-otter', ws: 'wss://a', version: 'r200' },
       { name: 'flint-heron', ws: 'wss://b', version: 'r100' },
@@ -92,10 +151,10 @@ test('mergeBook: entries merge by name and the later one wins', () => {
   };
   const merged = mergeBook(book);
   assert.equal(merged.length, 2);
-  assert.equal(merged[0].name, 'amber-otter');
-  assert.equal(merged[0].ws, 'wss://a2');
-  assert.equal(merged[0].version, 'r211');
-  assert.equal(merged[1].name, 'flint-heron');
+  assert.equal(merged[0]!.name, 'amber-otter');
+  assert.equal(merged[0]!.ws, 'wss://a2');
+  assert.equal(merged[0]!.version, 'r211');
+  assert.equal(merged[1]!.name, 'flint-heron');
 });
 
 test('mergeBook: a mirror adds the one entry it is bound to', () => {
@@ -104,7 +163,7 @@ test('mergeBook: a mirror adds the one entry it is bound to', () => {
     mirror('amber-otter', { name: 'amber-otter', ws: 'wss://a', version: 'r211' }),
   ]);
   assert.deepEqual(merged.map((h) => h.name), ['flint-heron', 'amber-otter']);
-  assert.equal(merged[1].ws, 'wss://a');
+  assert.equal(merged[1]!.ws, 'wss://a');
 });
 
 test('mergeBook: a mirror cannot publish another host’s entry', () => {
@@ -115,7 +174,7 @@ test('mergeBook: a mirror cannot publish another host’s entry', () => {
     mirror('amber-otter', { name: 'flint-heron', ws: 'wss://evil', version: 'r999999' }),
   ]);
   assert.deepEqual(merged.map((h) => h.name), ['flint-heron']);
-  assert.equal(merged[0].ws, 'wss://real');
+  assert.equal(merged[0]!.ws, 'wss://real');
 });
 
 test('mergeBook: the book’s own entry wins over a mirror of the same name', () => {
@@ -124,7 +183,7 @@ test('mergeBook: the book’s own entry wins over a mirror of the same name', ()
     mirror('amber-otter', { name: 'amber-otter', ws: 'wss://evil', version: 'r999999' }),
   ]);
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].ws, 'wss://real');
+  assert.equal(merged[0]!.ws, 'wss://real');
 });
 
 test('mergeBook: a mirror may not serve an array or a whole book', () => {
@@ -153,10 +212,10 @@ test('mergeBook: address keys leave the module as strings or not at all', () => 
     hosts: [{ name: 'amber-otter', ws: 123, fire_ws: 'wss://f', proto: 'twelve', fire_proto: 1 }],
   });
   assert.equal(merged.length, 1);
-  assert.equal('ws' in merged[0], false);
-  assert.equal('proto' in merged[0], false);
-  assert.equal(merged[0].fire_ws, 'wss://f');
-  assert.equal(merged[0].fire_proto, 1);
+  assert.equal('ws' in merged[0]!, false);
+  assert.equal('proto' in merged[0]!, false);
+  assert.equal(merged[0]!.fire_ws, 'wss://f');
+  assert.equal(merged[0]!.fire_proto, 1);
 });
 
 test('mergeBook: neither the book nor its mirrors can grow the list without end', () => {
@@ -180,18 +239,18 @@ test('mergeBook: a legacy book with no hosts list still yields one entry', () =>
     fire_ws: 'wss://old-fire.example',
   });
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].name, '');
-  assert.equal(merged[0].ws, 'wss://old.example');
-  assert.equal(merged[0].proto, 12);
-  assert.equal(merged[0].fire_ws, 'wss://old-fire.example');
-  assert.equal(merged[0].fire_proto, 1);
-  assert.equal(merged[0].legacy, true);
+  assert.equal(merged[0]!.name, '');
+  assert.equal(merged[0]!.ws, 'wss://old.example');
+  assert.equal(merged[0]!.proto, 12);
+  assert.equal(merged[0]!.fire_ws, 'wss://old-fire.example');
+  assert.equal(merged[0]!.fire_proto, 1);
+  assert.equal(merged[0]!.legacy, true);
 });
 
 test('mergeBook: an empty hosts list falls back to the legacy keys too', () => {
   const merged = mergeBook({ hosts: [], ws: 'wss://old.example', proto: 12 });
   assert.equal(merged.length, 1);
-  assert.equal(merged[0].ws, 'wss://old.example');
+  assert.equal(merged[0]!.ws, 'wss://old.example');
 });
 
 test('mergeBook: a book with neither hosts nor addresses yields nothing', () => {
@@ -206,9 +265,9 @@ test('mergeBook: a mirror cannot erase the legacy address', () => {
   );
   assert.equal(merged.length, 2);
   const legacy = merged.find((h) => h.legacy);
-  assert.equal(legacy.ws, 'wss://old');
-  assert.equal(legacy.proto, 12);
-  assert.equal(legacy.name, '');
+  assert.equal(legacy!.ws, 'wss://old');
+  assert.equal(legacy!.proto, 12);
+  assert.equal(legacy!.name, '');
   // Seeded first, so the legacy address is also the first fallback.
   assert.equal(merged[0], legacy);
 });
@@ -224,8 +283,8 @@ test('mergeBook: a half-migrated book keeps the other game’s legacy address', 
     hosts: [{ name: 'amber-otter', ws: 'wss://new-arena', proto: 12, version: 'r211' }],
   });
   assert.equal(merged.length, 2);
-  assert.equal(merged[0].name, 'amber-otter');
-  const legacy = merged[1];
+  assert.equal(merged[0]!.name, 'amber-otter');
+  const legacy = merged[1]!;
   assert.equal(legacy.legacy, true);
   assert.equal(legacy.fire_ws, 'wss://live-fire');
   assert.equal(legacy.fire_proto, 1);
@@ -249,10 +308,10 @@ test('mergeBook: a book whose hosts cover every game synthesises nothing', () =>
 
 // ---- ranking -------------------------------------------------------------
 
-const ok = (extra = {}) => ({ ok: true, rttMs: 50, welcome: { t: 'welcome', ...extra } });
-const dead = { ok: false, reason: 'timeout' };
+const ok = (extra: UnknownRecord = {}): TestProbe => ({ ok: true, rttMs: 50, welcome: { t: 'welcome', ...extra } });
+const dead: TestProbe = { ok: false, reason: 'timeout' };
 
-const entry = (name, over = {}) => ({
+const entry = (name: string, over: UnknownRecord = {}): TestEntry => ({
   name,
   ws: `wss://${name}`,
   proto: 12,
@@ -273,7 +332,7 @@ test('rankHosts: the newest version wins, then name inside it', () => {
   // No probes at all: players and rtt tie, so NAME decides inside the newest
   // build (§5 step 5) — asserted AGAINST the `updated` order, which is a
   // property of the head sort and not of this one.
-  assert.equal(chosen.name, 'newest-a');
+  assert.equal(chosen!.name, 'newest-a');
   assert.deepEqual(
     candidates.map((c) => c.name),
     ['newest-a', 'newest-b', 'newer', 'old'],
@@ -310,8 +369,8 @@ test('rankHosts: a game’s own build stamp wins, and falls back to the bare one
     ['split-stamp', 'old-writer'],
   );
   // The fallback is what keeps an older entry from ranking as an unstamped 0.
-  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1].versionNum, 200);
-  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1].commit, 'aaa1111');
+  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1]!.versionNum, 200);
+  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1]!.commit, 'aaa1111');
 });
 
 test('rankHosts: unparseable versions sort last', () => {
@@ -340,6 +399,14 @@ test('rankHosts: the hub mode (no proto) keeps every protocol', () => {
   const r = rankHosts(hosts, { game: 'arena' });
   assert.equal(r.candidates.length, 2);
   assert.deepEqual(r.wrongProto, []);
+});
+
+test('rankHosts: a duck-typed probe map is accepted', () => {
+  const hosts = [entry('amber-otter', { proto: 12 })];
+  const probe = ok({ proto: 12 });
+  const probes = { get: (name: string) => (name === 'amber-otter' ? probe : undefined) };
+  const r = rankHosts(hosts, { game: 'arena', proto: 12, probes });
+  assert.equal(r.chosen?.name, 'amber-otter');
 });
 
 test('rankHosts: a host that answered on another protocol is reported, not lost', () => {
@@ -386,7 +453,7 @@ test('rankHosts: within the newest build, fewest players then lowest rtt then na
     ['idle-tie', { ok: true, rttMs: 20, welcome: { players: 0 } }],
   ]);
   const { chosen, candidates } = rankHosts(hosts, { game: 'arena', probes });
-  assert.equal(chosen.name, 'idle-near');
+  assert.equal(chosen!.name, 'idle-near');
   assert.deepEqual(
     candidates.map((c) => c.name),
     ['idle-near', 'idle-tie', 'idle-far', 'busy'],
@@ -402,7 +469,7 @@ test('rankHosts: load and latency never lift a host over a newer build', () => {
     ['newest', { ok: true, rttMs: 300, welcome: { players: 7 } }],
     ['emptier', { ok: true, rttMs: 1, welcome: { players: 0 } }],
   ]);
-  assert.equal(rankHosts(hosts, { game: 'arena', probes }).chosen.name, 'newest');
+  assert.equal(rankHosts(hosts, { game: 'arena', probes }).chosen!.name, 'newest');
 });
 
 test('rankHosts: hosts that did not answer are excluded once probes exist', () => {
@@ -412,7 +479,7 @@ test('rankHosts: hosts that did not answer are excluded once probes exist', () =
     ['down', dead],
   ]);
   const { chosen, candidates } = rankHosts(hosts, { game: 'arena', probes });
-  assert.equal(chosen.name, 'live');
+  assert.equal(chosen!.name, 'live');
   assert.deepEqual(
     candidates.map((c) => c.name),
     ['live'],
@@ -435,7 +502,7 @@ test('rankHosts: a pinned host that answered goes first, and stays in the list o
     ['pinned', ok()],
   ]);
   const { chosen, candidates } = rankHosts(hosts, { game: 'arena', pinned: 'pinned', probes });
-  assert.equal(chosen.name, 'pinned');
+  assert.equal(chosen!.name, 'pinned');
   assert.deepEqual(
     candidates.map((c) => c.name),
     ['pinned', 'best'],
@@ -452,7 +519,7 @@ test('rankHosts: the pin matches the book name, never a live Welcome name', () =
     ['pinned', ok()],
   ]);
   const { chosen } = rankHosts(hosts, { game: 'arena', pinned: 'pinned', probes });
-  assert.equal(chosen.bookName, 'pinned');
+  assert.equal(chosen!.bookName, 'pinned');
 });
 
 test('rankHosts: a pin that did not answer is ignored, not fatal', () => {
@@ -462,7 +529,7 @@ test('rankHosts: a pin that did not answer is ignored, not fatal', () => {
     ['pinned', dead],
   ]);
   const { chosen } = rankHosts(hosts, { game: 'arena', pinned: 'pinned', probes });
-  assert.equal(chosen.name, 'best');
+  assert.equal(chosen!.name, 'best');
 });
 
 test('rankHosts: an entry carrying only one game is invisible to the other', () => {
@@ -487,28 +554,28 @@ test('rankHosts: the live Welcome overrides the book, an old server does not', (
     ['booked', { ok: true, rttMs: 12, welcome: { host: 'renamed', version: 'r211', commit: 'bbb2222', players: 3 } }],
   ]);
   const fresh = rankHosts(hosts, { game: 'arena', probes: live }).chosen;
-  assert.equal(fresh.name, 'renamed');
-  assert.equal(fresh.version, 'r211');
-  assert.equal(fresh.versionNum, 211);
-  assert.equal(fresh.commit, 'bbb2222');
-  assert.equal(fresh.players, 3);
-  assert.equal(fresh.rttMs, 12);
+  assert.equal(fresh!.name, 'renamed');
+  assert.equal(fresh!.version, 'r211');
+  assert.equal(fresh!.versionNum, 211);
+  assert.equal(fresh!.commit, 'bbb2222');
+  assert.equal(fresh!.players, 3);
+  assert.equal(fresh!.rttMs, 12);
 
   // A server predating the fields answers with none of them: the book stands.
   const old = new Map([['booked', { ok: true, rttMs: 12, welcome: { proto: 12, motd: 'hi' } }]]);
   const stale = rankHosts(hosts, { game: 'arena', probes: old }).chosen;
-  assert.equal(stale.name, 'booked');
-  assert.equal(stale.version, 'r100');
-  assert.equal(stale.commit, 'aaa1111');
-  assert.equal(stale.players, 0);
+  assert.equal(stale!.name, 'booked');
+  assert.equal(stale!.version, 'r100');
+  assert.equal(stale!.commit, 'aaa1111');
+  assert.equal(stale!.players, 0);
 });
 
 test('rankHosts: a legacy synthesized entry ranks like any other', () => {
   const hosts = mergeBook({ ws: 'ws://localhost:7780', proto: 12 });
   const probes = new Map([['', ok({ proto: 12 })]]);
   const { chosen } = rankHosts(hosts, { game: 'arena', proto: 12, probes });
-  assert.equal(chosen.name, '');
-  assert.equal(chosen.url, 'ws://localhost:7780');
+  assert.equal(chosen!.name, '');
+  assert.equal(chosen!.url, 'ws://localhost:7780');
 });
 
 test('rankHosts: nothing to choose from is null, never a throw', () => {
@@ -523,10 +590,15 @@ test('rankHosts: nothing to choose from is null, never a throw', () => {
 // script decides what arrives and when. `open` fires on the next turn of the
 // loop so that the caller has installed its handlers first, exactly as a real
 // socket does.
-function fakeSocket(script) {
-  return (url) => {
-    const ws = { url, sent: [], closed: false, close() { this.closed = true; } };
-    ws.send = (data) => ws.sent.push(JSON.parse(data));
+function fakeSocket(script: { open?: boolean; messages?: unknown[]; thenClose?: boolean }): TestSocketFactory {
+  return (url: string): TestSocket => {
+    const ws: TestSocket = {
+      url,
+      sent: [],
+      closed: false,
+      close() { this.closed = true; },
+      send(data: string) { this.sent.push(JSON.parse(data) as unknown); },
+    };
     queueMicrotask(() => {
       if (script.open === false) {
         ws.onerror?.({});
@@ -559,7 +631,7 @@ test('listLobbies: accepts the Fire Racer tag lobbies', async () => {
 });
 
 test('listLobbies: says hello before it asks, and closes when done', async () => {
-  let socket;
+  let socket: TestSocket | undefined;
   const factory = fakeSocket({ messages: [{ t: 'lobby_list', lobbies: [] }] });
   await listLobbies('ws://x', {
     proto: 12,
@@ -568,11 +640,11 @@ test('listLobbies: says hello before it asks, and closes when done', async () =>
       return socket;
     },
   });
-  assert.deepEqual(socket.sent, [
+  assert.deepEqual(socket!.sent, [
     { t: 'hello', proto: 12, handle: 'browser' },
     { t: 'list_lobbies' },
   ]);
-  assert.equal(socket.closed, true);
+  assert.equal(socket!.closed, true);
 });
 
 test('listLobbies: an unreachable host is an empty list, not a rejection', async () => {
@@ -587,7 +659,7 @@ test('probeHost: the first welcome resolves with the round trip and the reply', 
     }),
   });
   assert.equal(r.ok, true);
-  assert.equal(r.welcome.host, 'amber-otter');
+  assert.equal(r.ok ? r.welcome?.['host'] : undefined, 'amber-otter');
   assert.ok(Number.isFinite(r.rttMs));
 });
 
@@ -602,32 +674,31 @@ test('probeHost: a socket that errors or closes first is a clean failure', async
 });
 
 test('probeHost: a timeout resolves and closes the socket', async () => {
-  let socket;
+  let socket: TestSocket | undefined;
   const r = await probeHost('ws://x', {
     timeoutMs: 20,
     socketFactory: (url) => {
-      socket = { url, send() {}, close() { this.closed = true; } };
-      queueMicrotask(() => socket.onopen?.());
+      socket = { url, sent: [], closed: false, send() {}, close() { this.closed = true; } };
+      queueMicrotask(() => socket!.onopen?.());
       return socket;
     },
   });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'timeout');
-  assert.equal(socket.closed, true);
+  assert.equal(socket!.closed, true);
 });
 
 // ---- the whole pipeline, with fetch and sockets both faked ---------------
 
 // The smallest thing that behaves like the half of `Response` fetchJson uses.
-const fakeResponse = (body) => ({
-  ok: true,
-  headers: { get: () => null },
-  text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
-});
+const fakeResponse = (body: unknown): Response => new Response(
+  typeof body === 'string' ? body : JSON.stringify(body),
+  { status: 200 },
+);
 
-async function withFetch(routes, fn) {
+async function withFetch<T>(routes: Array<[string, unknown]>, fn: () => Promise<T>): Promise<T> {
   const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url: string | URL | Request): Promise<Response> => {
     const path = String(url);
     for (const [needle, body] of routes) {
       if (path.includes(needle)) return fakeResponse(body);
@@ -652,14 +723,14 @@ test('chooseHost: loads, probes and ranks, a bound mirror merged in', async () =
     game: 'arena',
     proto: 12,
     pinned: '',
-    socketFactory: (url) =>
+    socketFactory: (url: string) =>
       url === 'ws://mirror'
         ? fakeSocket({ messages: [{ t: 'welcome', proto: 12, players: 0 }] })(url)
         : fakeSocket({ open: false })(url),
   }));
   // The mirror published its own entry, under the name it is bound to.
-  assert.equal(r.hosts.find((h) => h.name === 'quiet-raven').version, 'r211');
-  assert.equal(r.chosen.name, 'quiet-raven');
+  assert.equal(r.hosts.find((h) => h.name === 'quiet-raven')!.version, 'r211');
+  assert.equal(r.chosen!.name, 'quiet-raven');
   // `down` had the newest version in the book and still loses: it is gone.
   assert.deepEqual(r.candidates.map((c) => c.name), ['quiet-raven']);
 });
@@ -726,7 +797,7 @@ test('renderChip: names the host, or says there is none', () => {
 // that out.
 
 test('games.json: exactly one live version per game', () => {
-  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  const catalog = catalogFixture('../../../web/games.json');
   for (const g of catalog.games) {
     const live = g.versions.filter((v) => v.live).map((v) => v.v);
     assert.equal(live.length, 1, `${g.id} has ${live.length} live versions: ${live.join(', ')}`);
@@ -734,7 +805,7 @@ test('games.json: exactly one live version per game', () => {
 });
 
 test('games.json: every launcher entry has a three-grade semantic version', () => {
-  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  const catalog = catalogFixture('../../../web/games.json');
   for (const g of catalog.games) {
     for (const entry of g.versions) {
       assert.match(entry.version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} ${entry.v} has no three-grade version`);
@@ -749,21 +820,21 @@ test('games.json: every launcher entry has a three-grade semantic version', () =
   for (const g of catalog.games) {
     const live = g.versions.filter((entry) => entry.live === true);
     assert.equal(live.length, 1, `${g.id} must select exactly one live release`);
-    assert.match(live[0].version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} live release has no three-grade version`);
+    assert.match(live[0]!.version, /^[0-9]+\.[0-9]+\.[0-9]+$/, `${g.id} live release has no three-grade version`);
   }
 });
 
 test('launcher labels use semantic versions rather than directory slots', () => {
-  const launcher = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const launcher = readFileSync(new URL('../../../web/index.html', import.meta.url), 'utf8');
   assert.match(launcher, /const versionLabel = \(entry\) => `Version /);
   assert.doesNotMatch(launcher, /latest update · \$\{live\.v\}/);
   assert.doesNotMatch(launcher, /Play \$\{live \? live\.v/);
 });
 
 test('games.json: a handover target declares the protocol it is a target for', () => {
-  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  const catalog = catalogFixture('../../../web/games.json');
   for (const lab of catalog.games.filter((entry) => entry.kind === 'lab')) {
-    for (const version of lab.versions) {
+    for (const version of lab.versions as GameRelease[]) {
       assert.equal('proto' in version, false);
       assert.equal('handover' in version, false);
     }

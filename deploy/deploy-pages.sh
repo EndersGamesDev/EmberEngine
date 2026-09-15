@@ -284,6 +284,9 @@ done
 diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts" \
     "$REPO_DIR/target/web-generated/ts" >/dev/null \
     || die "fixed TypeScript inputs differ from the source-scoped tree"
+diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/node-ts" \
+    "$REPO_DIR/target/web-generated/node-ts" >/dev/null \
+    || die "fixed Node TypeScript inputs differ from the source-scoped tree"
 bash deploy/check-toolchain.sh
 timed_step typescript npx --no-install tsc -p tsconfig.web.json --noEmit
 

@@ -10,4 +10,13 @@ Three properties are worth knowing before changing a page. The loader stamps eve
 
 The event object has these properties: `phase`, `status`, `elapsedMs`, `phaseMs`, `loaded`, `total`, `percent`, `rateBps`, `etaMs`, `stalled`, `stalledMs`, `reason`, `detail`, `text`. The loader omits an optional property when that measurement or failure field does not apply; it does not publish the property with a null value, so pages may test absence with `in`, optional access or a nullish comparison. Host events add `host`, `candidates`, `wrongProto`, `proto` and `provisional` under their own rule: `host` and `proto` are null when absent, the two lists are always arrays, and `provisional` is always a boolean.
 
+The complete phase adds only these four runtime boundary guards; no other previously accepted input is narrowed.
+
+|Guard|Boundary action|
+|-----|---------------|
+|`eventFrom`|Drops an out-of-contract loader event before a page handler sees it.|
+|`loaderRulesFrom`|Rejects an imported loader namespace without a callable `Loader`, or with a non-callable default export.|
+|`gameGlueFrom`|Rejects imported game glue without a callable default export.|
+|`hostsModuleFrom`|Rejects an emitted host-gate dependency missing one of its required callable exports.|
+
 The publication contract lives in [`deploy/deploy-pages.sh`](../deploy/deploy-pages.sh), host discovery lives in [`docs/hosts.md`](../docs/hosts.md), and version selection, frozen pages and release tags are governed by [`docs/versioning.md`](../docs/versioning.md).

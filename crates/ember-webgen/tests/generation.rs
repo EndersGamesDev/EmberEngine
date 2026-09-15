@@ -7,7 +7,7 @@ use ember_webgen::{Manifest, RenderedBundle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "c4b777fd539a89b41501ba538ecc5471ba108aaf34fa7975b0579d828cf71f24";
+const TEMPLATE_HASH: &str = "4b19938d82db719f3960cca1588213bf2b5b684473362698fc5d76f5f42de02e";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -159,7 +159,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
     assert_eq!(manifest.template_source_hash, TEMPLATE_HASH);
     assert!(sentinel.is_file(), "generation preserves staged ABI types");
     assert_eq!(manifest.integer_64_fields.len(), 11);
-    assert_eq!(manifest.files.len(), 13);
+    assert_eq!(manifest.files.len(), 19);
     assert!(
         manifest
             .files
@@ -225,12 +225,31 @@ fn assert_behaviour_input(
 #[test]
 fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
     let bundle = bundle();
-    assert_behaviour_input(
-        &bundle,
-        "ts/behavior-placeholder.ts",
-        "crates/ember-webgen/templates/behavior-placeholder.ts.j2",
-        "// Generated from crates/ember-webgen/templates/behavior-placeholder.ts.j2 at golden. Do not edit.\nimport type { Phase } from './ember-loader.js';\n\n",
-    );
+    let templates = [
+        (
+            "ts/hosts.ts",
+            "web/hosts.ts.j2",
+            "// Generated from web/hosts.ts.j2 at golden. Do not edit.\nimport type { HostBook, HostEntry, Mirror, ServerGameId } from './ember-boundary.js';\n\n",
+        ),
+        (
+            "ts/loader.ts",
+            "web/loader.ts.j2",
+            "// Generated from web/loader.ts.j2 at golden. Do not edit.\nimport type { Phase, Status, Event, EventOutput } from './ember-loader.js';\nimport type { GameCatalog, GameRelease } from './ember-boundary.js';\n\n",
+        ),
+        (
+            "node-ts/hosts.test.mts",
+            "web/hosts.test.mts.j2",
+            "// Generated from web/hosts.test.mts.j2 at golden. Do not edit.\nimport type { GameCatalog, GameRelease, HostBook, HostEntry, Mirror, ServerGameId } from '../ts/ember-boundary.js';\n\n",
+        ),
+        (
+            "node-ts/loader.test.mts",
+            "web/loader.test.mts.j2",
+            "// Generated from web/loader.test.mts.j2 at golden. Do not edit.\nimport type { Phase, Status, Event, EventOutput } from '../ts/ember-loader.js';\nimport type { GameCatalog, GameRelease } from '../ts/ember-boundary.js';\n\n",
+        ),
+    ];
+    for (rendered_path, template_path, expected_preamble) in templates {
+        assert_behaviour_input(&bundle, rendered_path, template_path, expected_preamble);
+    }
 }
 
 #[test]
@@ -239,18 +258,21 @@ fn behaviour_input_check_rejects_boundary_import_drift() {
     let rendered = bundle
         .files
         .iter_mut()
-        .find(|file| file.path == "ts/behavior-placeholder.ts")
+        .find(|file| file.path == "ts/hosts.ts")
         .expect("the behaviour input is rendered");
     let source = String::from_utf8(rendered.bytes.clone()).expect("the rendered input is UTF-8");
     rendered.bytes = source
-        .replace("import type { Phase }", "import type { Status }")
+        .replace(
+            "HostBook, HostEntry, Mirror, ServerGameId",
+            "HostEntry, Mirror, ServerGameId",
+        )
         .into_bytes();
     let result = std::panic::catch_unwind(|| {
         assert_behaviour_input(
             &bundle,
-            "ts/behavior-placeholder.ts",
-            "crates/ember-webgen/templates/behavior-placeholder.ts.j2",
-            "// Generated from crates/ember-webgen/templates/behavior-placeholder.ts.j2 at golden. Do not edit.\nimport type { Phase } from './ember-loader.js';\n\n",
+            "ts/hosts.ts",
+            "web/hosts.ts.j2",
+            "// Generated from web/hosts.ts.j2 at golden. Do not edit.\nimport type { HostBook, HostEntry, Mirror, ServerGameId } from './ember-boundary.js';\n\n",
         );
     });
     assert!(
@@ -264,16 +286,14 @@ fn diagnostics_keep_rendered_coordinates_and_add_template_coordinates() {
     let temporary = tempfile::tempdir().expect("temporary directory is available");
     let out = temporary.path().join("target/web-generated/golden");
     ember_webgen::write(&out, &bundle()).expect("bundle writes");
-    let rendered = out.join("ts/behavior-placeholder.ts");
+    let rendered = out.join("ts/hosts.ts");
     let input = format!(
         "{}(4,14): error TS2322: deliberate\n{}(2,1): error TS1000: preamble\n",
         rendered.display(),
         rendered.display()
     );
     let mapped = ember_webgen::map_diagnostics(&input).expect("diagnostics map");
-    assert!(mapped.contains(
-        "crates/ember-webgen/templates/behavior-placeholder.ts.j2(1,14): error TS2322: deliberate"
-    ));
+    assert!(mapped.contains("web/hosts.ts.j2(1,14): error TS2322: deliberate"));
     assert!(mapped.contains(&format!("[rendered {}(4,14)]", rendered.display())));
     assert!(mapped.contains(&format!(
         "{}(2,1): error TS1000: preamble",

@@ -19,8 +19,10 @@ pub type WebgenResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const DECLARATION_TEMPLATE: &str = include_str!("../templates/declaration.d.ts.j2");
 const EXHAUSTIVE_TEMPLATE: &str = include_str!("../templates/exhaustive-consumer.ts.j2");
 const WASM_BINDGEN_COMPAT_TEMPLATE: &str = include_str!("../templates/wasm-bindgen-compat.d.ts.j2");
-const BEHAVIOUR_PLACEHOLDER_TEMPLATE: &str =
-    include_str!("../templates/behavior-placeholder.ts.j2");
+const HOSTS_TEMPLATE: &str = include_str!("../../../web/hosts.ts.j2");
+const LOADER_TEMPLATE: &str = include_str!("../../../web/loader.ts.j2");
+const HOSTS_TEST_TEMPLATE: &str = include_str!("../../../web/hosts.test.mts.j2");
+const LOADER_TEST_TEMPLATE: &str = include_str!("../../../web/loader.test.mts.j2");
 const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
@@ -43,17 +45,73 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 1] = [BehaviourTemplate {
-    name: "behaviour-placeholder",
-    source_path: "crates/ember-webgen/templates/behavior-placeholder.ts.j2",
-    output_path: "ts/behavior-placeholder.ts",
-    source: BEHAVIOUR_PLACEHOLDER_TEMPLATE,
-    imports: &[BoundaryImport {
-        module: "ember-loader",
-        specifier: "./ember-loader.js",
-        names: &["Phase"],
-    }],
-}];
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 4] = [
+    BehaviourTemplate {
+        name: "hosts",
+        source_path: "web/hosts.ts.j2",
+        output_path: "ts/hosts.ts",
+        source: HOSTS_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "./ember-boundary.js",
+            names: &["HostBook", "HostEntry", "Mirror", "ServerGameId"],
+        }],
+    },
+    BehaviourTemplate {
+        name: "loader",
+        source_path: "web/loader.ts.j2",
+        output_path: "ts/loader.ts",
+        source: LOADER_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "./ember-loader.js",
+                names: &["Phase", "Status", "Event", "EventOutput"],
+            },
+            BoundaryImport {
+                module: "ember-boundary",
+                specifier: "./ember-boundary.js",
+                names: &["GameCatalog", "GameRelease"],
+            },
+        ],
+    },
+    BehaviourTemplate {
+        name: "hosts-test",
+        source_path: "web/hosts.test.mts.j2",
+        output_path: "node-ts/hosts.test.mts",
+        source: HOSTS_TEST_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
+    },
+    BehaviourTemplate {
+        name: "loader-test",
+        source_path: "web/loader.test.mts.j2",
+        output_path: "node-ts/loader.test.mts",
+        source: LOADER_TEST_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "../ts/ember-loader.js",
+                names: &["Phase", "Status", "Event", "EventOutput"],
+            },
+            BoundaryImport {
+                module: "ember-boundary",
+                specifier: "../ts/ember-boundary.js",
+                names: &["GameCatalog", "GameRelease"],
+            },
+        ],
+    },
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// One generated artifact relative to the SHA-scoped output root.
