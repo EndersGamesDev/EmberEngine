@@ -1,6 +1,7 @@
 # pages: after a successful release workflow, deploy the published immutable
 # asset at main HEAD. Waiting for release success prevents the main push from
-# racing the draft-to-published transition. This workflow never rebuilds source.
+# racing the draft-to-published transition. It rebuilds only the unshipped host
+# gate from the checkout; the release asset remains the site of record.
 name: pages
 
 on:

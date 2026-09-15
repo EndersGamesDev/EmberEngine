@@ -1,7 +1,7 @@
 //! One short line per event, so every page says the same thing.
 //!
 //! The wording lives here rather than in each page for the reason the host
-//! chip's wording lives in `web/hosts.js`: six pages that each phrase a stall
+//! chip's wording lives in `web/hosts.ts.j2`: six pages that each phrase a stall
 //! their own way are six places to fix when the phrasing is wrong, and five
 //! of them are found by a player rather than by a reader.
 

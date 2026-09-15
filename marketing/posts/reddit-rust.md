@@ -25,7 +25,7 @@ Where I want eyes:
 
 - crates/arena-core/src/shooter.rs — the sim. Is the segment-intersection bullet stepping sane? The latest pass moved every round to its real muzzle velocity (280-900 m/s), which means a round crosses 15 m in one tick, so the cover and head-band tests had to become exact on the segment.
 - crates/ember-engine/src/renderer.rs — the scene pass. It is deliberately small (one base-colour texture per mesh, no blending, no culling). Too small, or the right size for a wasm target?
-- The host-picking rule in web/hosts.js, spec'd in docs/hosts.md.
+- The host-picking rule in web/hosts.ts.j2, spec'd in docs/hosts.md.
 
 Honest state: one developer, AI-assisted, no release yet. The README is long on purpose; the backlog is one line per known gap. I will answer anything, and I would rather be told what I got wrong than be told it is cool.
 ```

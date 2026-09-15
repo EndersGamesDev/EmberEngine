@@ -7,11 +7,12 @@
 //! nothing said about how far the download had got.
 //!
 //! This crate owns the rules of that load and nothing else. It holds no
-//! sockets, opens no requests and touches no DOM: `web/loader.js` performs the
-//! four pieces of browser input and output — discovery through `web/hosts.js`,
-//! the counting fetch, the compile, and the call into the game's own
-//! wasm-bindgen glue — and drives this machine with the clock as it goes. The
-//! machine decides what is legal, what the numbers are, and what the page is
+//! sockets, opens no requests and touches no DOM: the tracked
+//! `web/loader.ts.j2` performs the four pieces of browser input and output —
+//! discovery through the emitted root `hosts.js`, the counting fetch, the
+//! compile, and the call into the game's own wasm-bindgen glue — and drives
+//! this machine with the clock as it goes. The machine decides what is legal,
+//! what the numbers are, and what the page is
 //! told, which is why all of it is tested here natively with no browser.
 //!
 //! Layering: this is platform code. It depends on no game crate and on no

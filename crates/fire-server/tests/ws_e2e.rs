@@ -523,8 +523,8 @@ fn a_disconnect_frees_the_slot_for_the_next_player() {
 }
 
 /// The RAW `Welcome` frame. The text and not just the decoded message,
-/// because the wire key names are the contract `web/hosts.js` and the
-/// address book read, and no Rust type checks those.
+/// because the wire key names are the contract consumed by the emitted root
+/// `hosts.js` and the address book, and no Rust type checks those.
 fn raw_welcome(ws: &mut Client) -> String {
     let t0 = Instant::now();
     while t0.elapsed() < Duration::from_secs(3) {

@@ -1134,7 +1134,8 @@ if grep -Fq "\`.github/workflows/pages.yml\` runs after the \`release\` workflow
 else
     bad "branching.md does not state the release-completion Pages trigger"
 fi
-if grep -Fq "\`node deploy/check-hosts.mjs --tree\` against the extracted asset and fails the deploy" docs/branching.md; then
+if grep -Fq "emits \`target/web-generated/node-js/check-hosts.mjs\` from its checkout" docs/branching.md \
+    && grep -Fq "runs that gate against the extracted asset and fails the deploy" docs/branching.md; then
     ok "branching.md states the host gate between extraction and deployment"
 else
     bad "branching.md does not state the host gate between extraction and deployment"
