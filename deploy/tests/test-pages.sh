@@ -297,6 +297,11 @@ if [ -e "$REPO/target/wasm32-unknown-unknown" ]; then bad "the configured-target
 for f in index.html main.js quality.js dialogue.js castle-audio.js castle-ui.js voice-lines.js style.css cover.png prologue.mp4 ambience.wav boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav pkg/end_game.js pkg/end_game_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    contains "$(cat "$SHIM_PUBLISHED/$END_GAME_LIVE/$module.js")" \
+        "/* emitted $module */" \
+        "assembled End Game $module.js comes from TypeScript emission"
+done
 contains "$ARGV" "[-p] [end-game] [--lib]" "End Game is built as an Ember wasm library"
 if [ "$END_GAME_LIVE" != games/end-game/v1 ]; then
     if diff -r "$SEED/games/end-game/v1" "$SHIM_PUBLISHED/games/end-game/v1" > "$TMP/end-game-v1.diff"; then ok "frozen End Game v1 remains byte-identical"; else bad "frozen End Game v1 changed"; fi
@@ -656,6 +661,12 @@ printf 'shim wasm for league\n' > "$REPO/web/pkg/league_bg.wasm"
 printf 'shim js for ember_loader\n' > "$REPO/web/pkg/ember_loader.js"
 printf 'shim js for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js"
 printf 'shim wasm for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
+rm -rf "$REPO/web/$END_GAME_LIVE/pkg"
+if [ -f "$REPO/web/pkg/end_game.d.ts" ] && [ -f "$REPO/web/pkg/end_game_bg.wasm.d.ts" ] && [ ! -e "$REPO/web/$END_GAME_LIVE/pkg" ]; then
+    ok "complete prebuilt mode needs End Game declarations only at the documented root package path"
+else
+    bad "the End Game prebuilt fixture did not isolate the documented root package path"
+fi
 : > "$SHIM_LOG"
 rm -f "$SHIM_GIT_INDEX"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/prebuilt.log" 2>&1; then

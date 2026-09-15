@@ -22,6 +22,7 @@ SOURCE_SHA="${1:-${EMBER_SOURCE_SHA:-}}"
 # Later page lanes append one entry here per converted game.
 WASM_TYPE_CRATES=(
     "fire:fire:web/pkg"
+    "end-game:end_game:web/pkg"
 )
 
 fail() {

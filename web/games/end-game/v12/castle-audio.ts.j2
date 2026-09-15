@@ -1,7 +1,35 @@
 // Story clips share one voice channel. Event ids survive castle checkpoint deaths.
 // Captions are driven independently of successful audio decoding.
+import type { VoiceLine, VoiceLines, VoiceOutput } from './dialogue.js';
+
+export interface CastleEvent {
+  id: number;
+  kind: string;
+  time: number;
+}
+
+interface ActiveLine {
+  event: CastleEvent;
+  line: VoiceLine;
+  elapsed: number;
+}
+
 export class CastleDialogue {
-  constructor(output, lines, caption = () => {}) {
+  output: VoiceOutput;
+  lines: VoiceLines;
+  caption: (line: VoiceLine | null) => void;
+  cursor: number;
+  queue: CastleEvent[];
+  active: ActiveLine | null;
+  paused: boolean;
+  resumed: boolean;
+  waiting: number;
+
+  constructor(
+    output: VoiceOutput,
+    lines: VoiceLines,
+    caption: (line: VoiceLine | null) => void = () => {},
+  ) {
     this.output = output;
     this.lines = lines;
     this.caption = caption;
@@ -12,7 +40,7 @@ export class CastleDialogue {
     this.resumed = false;
     this.waiting = 0;
   }
-  ingest(events = []) {
+  ingest(events: CastleEvent[] = []) {
     for (const event of [...events].sort((a, b) => a.id - b.id)) {
       if (event.id <= this.cursor) continue;
       this.cursor = event.id;
@@ -23,7 +51,7 @@ export class CastleDialogue {
       this.queue.push(event);
     }
   }
-  tick(seconds, channelBusy = false) {
+  tick(seconds: number, channelBusy = false) {
     if (this.paused) return;
     const dt = this.resumed ? 0 : Math.min(0.25, Math.max(0, Number.isFinite(seconds) ? seconds : 0));
     this.resumed = false;
@@ -35,13 +63,16 @@ export class CastleDialogue {
     }
     if (this.active || channelBusy || !this.queue.length) return;
     this.waiting += dt;
-    const event = this.queue[0], line = this.lines[event.kind];
+    const event = this.queue[0];
+    if (!event) return;
+    const line = this.lines[event.kind];
+    if (!line) return;
     if (!this.output.ready(event.kind) && this.waiting < 1.2) return;
     this.queue.shift(); this.waiting = 0;
     this.active = {event, line, elapsed: 0};
     this.caption(line); this.output.play(event.kind);
   }
-  setPaused(value) {
+  setPaused(value: boolean) {
     if (this.paused === value) return;
     this.paused = value;
     if (value) { this.output.pause(); this.caption(null); }

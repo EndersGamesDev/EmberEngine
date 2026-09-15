@@ -307,9 +307,16 @@ EMITTED_WEB_MODULES=(
     loader.js
     games/fire/v2/race.js
     games/fire/v2/garage.js
+    games/end-game/v12/main.js
+    games/end-game/v12/dialogue.js
+    games/end-game/v12/castle-audio.js
+    games/end-game/v12/castle-ui.js
+    games/end-game/v12/quality.js
+    games/end-game/v12/voice-lines.js
 )
 STAMPED_WEB_MODULES=(
     games/fire/v2/race.js
+    games/end-game/v12/main.js
 )
 for module in "${EMITTED_WEB_MODULES[@]}"; do
     [ -f "target/web-generated/js/$module" ] \
