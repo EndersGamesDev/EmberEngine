@@ -125,6 +125,8 @@ converted_javascript=(
     web/loader.test.mjs
     deploy/check-hosts.mjs
     deploy/check-hosts.test.mjs
+    web/games/fire/v2/race.js
+    web/games/fire/v2/garage.js
 )
 for path in "${converted_javascript[@]}"; do
     if [ -n "$(git ls-files -- "$path")" ]; then

@@ -25,6 +25,8 @@ const HOSTS_TEST_TEMPLATE: &str = include_str!("../../../web/hosts.test.mts.j2")
 const LOADER_TEST_TEMPLATE: &str = include_str!("../../../web/loader.test.mts.j2");
 const CHECK_HOSTS_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.mts.j2");
 const CHECK_HOSTS_TEST_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.test.mts.j2");
+const FIRE_RACE_TEMPLATE: &str = include_str!("../../../web/games/fire/v2/race.ts.j2");
+const FIRE_GARAGE_TEMPLATE: &str = include_str!("../../../web/games/fire/v2/garage.ts.j2");
 const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
@@ -47,7 +49,7 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 6] = [
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 8] = [
     BehaviourTemplate {
         name: "hosts",
         source_path: "web/hosts.ts.j2",
@@ -148,6 +150,31 @@ const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 6] = [
                 "ServerGameId",
             ],
         }],
+    },
+    BehaviourTemplate {
+        name: "fire-race",
+        source_path: "web/games/fire/v2/race.ts.j2",
+        output_path: "ts/games/fire/v2/race.ts",
+        source: FIRE_RACE_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "fire-core",
+                specifier: "../../../fire-core.js",
+                names: &["C2SOutput", "LobbyInfoInput", "S2CInput"],
+            },
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "../../../ember-loader.js",
+                names: &["Event"],
+            },
+        ],
+    },
+    BehaviourTemplate {
+        name: "fire-garage",
+        source_path: "web/games/fire/v2/garage.ts.j2",
+        output_path: "ts/games/fire/v2/garage.ts",
+        source: FIRE_GARAGE_TEMPLATE,
+        imports: &[],
     },
 ];
 
