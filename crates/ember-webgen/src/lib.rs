@@ -23,6 +23,8 @@ const HOSTS_TEMPLATE: &str = include_str!("../../../web/hosts.ts.j2");
 const LOADER_TEMPLATE: &str = include_str!("../../../web/loader.ts.j2");
 const HOSTS_TEST_TEMPLATE: &str = include_str!("../../../web/hosts.test.mts.j2");
 const LOADER_TEST_TEMPLATE: &str = include_str!("../../../web/loader.test.mts.j2");
+const CHECK_HOSTS_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.mts.j2");
+const CHECK_HOSTS_TEST_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.test.mts.j2");
 const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
@@ -45,7 +47,7 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 4] = [
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 6] = [
     BehaviourTemplate {
         name: "hosts",
         source_path: "web/hosts.ts.j2",
@@ -110,6 +112,42 @@ const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 4] = [
                 names: &["GameCatalog", "GameRelease"],
             },
         ],
+    },
+    BehaviourTemplate {
+        name: "check-hosts",
+        source_path: "deploy/check-hosts.mts.j2",
+        output_path: "node-ts/check-hosts.mts",
+        source: CHECK_HOSTS_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
+    },
+    BehaviourTemplate {
+        name: "check-hosts-test",
+        source_path: "deploy/check-hosts.test.mts.j2",
+        output_path: "node-ts/check-hosts.test.mts",
+        source: CHECK_HOSTS_TEST_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
     },
 ];
 

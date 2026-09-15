@@ -1,4 +1,4 @@
-// Unit tests for deploy/check-hosts.mjs — `node --test deploy/check-hosts.test.mjs`.
+// Unit tests for the emitted node-js/check-hosts.mjs gate.
 //
 // The gate's whole value is that it says FAILED on the day the site would have
 // shipped a game nobody can enter, and says nothing on every other day. So the
@@ -6,7 +6,7 @@
 // actually happened, and the ways a healthy site could be failed by a gate
 // that trusted the book over the wire.
 //
-// The core is exercised against the REAL `web/hosts.js`, with only the network
+// The core is exercised against the real emitted root `hosts.js`, with only the network
 // faked. Testing it against a stand-in ranking would prove the gate agrees
 // with a copy of the rule rather than with the rule the players' pages run.
 // The CLI is exercised as a process, because its exit code is the entire
@@ -20,19 +20,106 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import * as hosts from '../web/hosts.js';
-import { checkHosts, formatResult, plan, parseArgs, InputError } from './check-hosts.mjs';
+type UnknownRecord = Record<string, unknown>;
+
+interface PlanRow {
+  game: ServerGameId;
+  v: string;
+  proto: number | null;
+  skip: string | null;
+}
+
+interface CheckResult extends PlanRow {
+  ok: boolean;
+  skipped?: boolean;
+  host?: string | null;
+  rttMs?: number | null;
+  attempt?: number;
+  tried?: string[];
+}
+
+interface ProbeOptions {
+  proto: number;
+  timeoutMs: number;
+  handle: string;
+}
+
+type ProbeResult = {
+  ok: true;
+  rttMs: number;
+  welcome: UnknownRecord;
+} | {
+  ok: false;
+  reason: string;
+};
+type Probe = (url: string, options: ProbeOptions) => Promise<ProbeResult>;
+type MirrorFetcher = (url: string) => Promise<unknown | null>;
+
+interface CheckOptions extends UnknownRecord {
+  games: unknown;
+  book: unknown;
+  mirrors: MirrorFetcher;
+  probe: Probe;
+}
+
+interface CheckOutput {
+  ok: boolean;
+  results: CheckResult[];
+}
+
+interface ParsedArgs {
+  games: string;
+  book: string;
+  hostsJs: string;
+  tree: string;
+  help: boolean;
+}
+
+interface CheckHostsModule {
+  checkHosts(options: CheckOptions): Promise<CheckOutput>;
+  formatResult(result: CheckResult): string;
+  plan(games: unknown): PlanRow[];
+  parseArgs(args: string[]): ParsedArgs;
+  InputError: new (message?: string) => Error;
+  readonly boundaryTypes?: [GameCatalog, GameRelease, HostBook, HostEntry, Mirror];
+}
+
+interface ProbeRow {
+  proto?: number | null;
+  host?: string;
+  rttMs?: number;
+  failFor?: number;
+  reasons?: string[];
+}
+
+type ProbeTable = Record<string, ProbeRow>;
+type FlakyProbe = Probe & { count(url: string): number };
+
+function checkHostsModule(value: unknown): CheckHostsModule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('check-hosts module is not an object');
+  return value as CheckHostsModule;
+}
+
+function first<T>(values: T[]): T {
+  const value = values[0];
+  if (value === undefined) throw new Error('expected at least one result');
+  return value;
+}
+
+const hosts: unknown = await import(new URL('../js/hosts.js', import.meta.url).href);
+const checkModuleValue: unknown = await import(new URL('./check-hosts.mjs', import.meta.url).href);
+const { checkHosts, formatResult, plan, parseArgs, InputError } = checkHostsModule(checkModuleValue);
 
 // ---- the fakes -------------------------------------------------------------
 
 /// A probe that answers from a table keyed by address. A missing address is an
 /// unreachable host, which is the common case and should need no spelling.
 /// `proto: null` is a server that reports no protocol at all.
-const probeFrom = (table) => async (url) => {
+const probeFrom = (table: ProbeTable): Probe => async (url: string, _options: ProbeOptions) => {
   const r = table[url];
   if (!r) return { ok: false, reason: 'timeout' };
-  const welcome = { host: r.host };
-  if (r.proto !== null && r.proto !== undefined) welcome.proto = r.proto;
+  const welcome: UnknownRecord = { host: r.host };
+  if (r.proto !== null && r.proto !== undefined) welcome['proto'] = r.proto;
   return { ok: true, rttMs: r.rttMs ?? 7, welcome };
 };
 
@@ -41,33 +128,43 @@ const probeFrom = (table) => async (url) => {
 /// `reasons` gives each silent attempt its own word where the difference is
 /// the point; a missing one is a timeout. `count(url)` is how many sockets
 /// that address was actually asked for.
-const flakyProbe = (table) => {
-  const asked = new Map();
-  const probe = async (url) => {
+const flakyProbe = (table: ProbeTable): FlakyProbe => {
+  const asked = new Map<string, number>();
+  const probe = (async (url: string, _options: ProbeOptions): Promise<ProbeResult> => {
     const n = (asked.get(url) ?? 0) + 1;
     asked.set(url, n);
     const r = table[url];
     if (!r) return { ok: false, reason: 'timeout' };
     if (n <= (r.failFor ?? 0)) return { ok: false, reason: (r.reasons ?? [])[n - 1] ?? 'timeout' };
-    const welcome = { host: r.host };
-    if (r.proto !== null && r.proto !== undefined) welcome.proto = r.proto;
+    const welcome: UnknownRecord = { host: r.host };
+    if (r.proto !== null && r.proto !== undefined) welcome['proto'] = r.proto;
     return { ok: true, rttMs: r.rttMs ?? 7, welcome };
-  };
-  probe.count = (url) => asked.get(url) ?? 0;
+  }) as FlakyProbe;
+  probe.count = (url: string) => asked.get(url) ?? 0;
   return probe;
 };
 
 /// Mirrors, likewise: a URL the table does not carry is a mirror that did not
 /// answer, which `hosts.js` treats as an absence rather than an error.
-const mirrorsFrom = (table) => async (url) => table[url] ?? null;
+const mirrorsFrom = (table: Record<string, unknown>): MirrorFetcher => async (url: string) => table[url] ?? null;
 
 /// The retry's pauses are spent instantly unless a test is about the schedule
 /// itself. A suite that actually waited would pay three seconds for every
 /// host that never answers, to prove nothing a recorded schedule does not.
-const run = (opts) => checkHosts({ hosts, timeoutMs: 50, sleep: async () => {}, ...opts });
+const run = (opts: CheckOptions): Promise<CheckOutput> => checkHosts({
+  hosts,
+  timeoutMs: 50,
+  sleep: async () => {},
+  ...opts,
+});
 
-const catalog = (games) => ({ games });
-const server = (proto, live = true) => ({ v: `v${proto}`, version: '1.0.0', live, proto });
+const catalog = (games: unknown[]): { games: unknown[] } => ({ games });
+const server = (proto: number, live = true): Partial<GameRelease> => ({
+  v: `v${proto}`,
+  version: '1.0.0',
+  live,
+  proto,
+});
 
 // ---- the plan --------------------------------------------------------------
 
@@ -82,7 +179,7 @@ test('plan: a lab and a live page with no proto are both skips, not failures', (
     ['what-is-this', 'v1', null, true],
     ['julibrot', 'v1', null, true],
   ]);
-  assert.match(rows[2].skip, /lab/);
+  assert.match(rows[2]!.skip!, /lab/);
 });
 
 test('plan: a catalog with no games array is an input error, not an empty pass', () => {
@@ -100,7 +197,7 @@ test('a live game whose host answers on its protocol passes', async () => {
     probe: probeFrom({ 'wss://arena': { proto: 24, host: 'lundi', rttMs: 31 } }),
   });
   assert.equal(out.ok, true);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 31 ms');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 31 ms');
 });
 
 test('the skips are reported, and they do not make the run fail', async () => {
@@ -134,7 +231,7 @@ test('a stale book protocol does not fail a host whose server welcomes the right
     probe: probeFrom({ 'wss://arena': { proto: 24, host: 'lundi', rttMs: 11 } }),
   });
   assert.equal(out.ok, true);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 11 ms');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 11 ms');
 });
 
 test('an entry with no protocol key at all is still probed, not discarded', async () => {
@@ -147,7 +244,7 @@ test('an entry with no protocol key at all is still probed, not discarded', asyn
     probe: probeFrom({ 'wss://kings': { proto: 1, host: 'lundi', rttMs: 6 } }),
   });
   assert.equal(out.ok, true);
-  assert.match(formatResult(out.results[0]), /^ok kings v1 proto 1 host lundi 6 ms$/);
+  assert.match(formatResult(first(out.results)), /^ok kings v1 proto 1 host lundi 6 ms$/);
 });
 
 test('a server that reports no protocol leaves the book’s claim standing', async () => {
@@ -161,7 +258,7 @@ test('a server that reports no protocol leaves the book’s claim standing', asy
     probe: probeFrom({ 'wss://kings': { proto: null, host: 'lundi', rttMs: 5 } }),
   });
   assert.equal(out.ok, true);
-  assert.match(formatResult(out.results[0]), /^ok kings v1 proto 1 host lundi 5 ms$/);
+  assert.match(formatResult(first(out.results)), /^ok kings v1 proto 1 host lundi 5 ms$/);
 });
 
 test('a server with neither a live nor a published protocol is not a pass', async () => {
@@ -174,7 +271,7 @@ test('a server with neither a live nor a published protocol is not a pass', asyn
     probe: probeFrom({ 'wss://kings': { proto: null, host: 'lundi' } }),
   });
   assert.equal(out.ok, false);
-  assert.match(formatResult(out.results[0]), /lundi answered without a protocol, and its entry claims none/);
+  assert.match(formatResult(first(out.results)), /lundi answered without a protocol, and its entry claims none/);
 });
 
 // ---- the failures ----------------------------------------------------------
@@ -188,7 +285,7 @@ test('no host at all for a live server game is a failure that says so', async ()
   });
   assert.equal(out.ok, false);
   assert.equal(
-    formatResult(out.results[0]),
+    formatResult(first(out.results)),
     'FAILED kings v1 proto 1: no host in the book runs this game',
   );
 });
@@ -210,7 +307,7 @@ test('2026-09-11: the hosts are up, and every one of them answers on the old pro
     probe: probeFrom({ 'wss://lundi': { proto: 23 }, 'wss://egret': { proto: 23 } }),
   });
   assert.equal(out.ok, false);
-  const line = formatResult(out.results[0]);
+  const line = formatResult(first(out.results));
   assert.match(line, /^FAILED arena v24 proto 24:/);
   // The diagnosis, not just the verdict: a reader has to be able to tell
   // "everything is down" from "everything is on the old build".
@@ -226,11 +323,11 @@ test('a host that answers on another protocol than it published is not a pass', 
     probe: probeFrom({ 'wss://fire': { proto: 1 } }),
   });
   assert.equal(out.ok, false);
-  assert.match(formatResult(out.results[0]), /lundi answered on proto 1/);
+  assert.match(formatResult(first(out.results)), /lundi answered on proto 1/);
 });
 
 test('every host running the game is probed, and each is named when none carries it', async () => {
-  const seen = [];
+  const seen: string[] = [];
   const out = await run({
     games: catalog([{ id: 'arena', versions: [server(24)] }]),
     book: {
@@ -240,14 +337,14 @@ test('every host running the game is probed, and each is named when none carries
       ],
     },
     mirrors: mirrorsFrom({}),
-    probe: async (url) => { seen.push(url); return { ok: false, reason: 'timeout' }; },
+    probe: async (url: string) => { seen.push(url); return { ok: false, reason: 'timeout' }; },
   });
   assert.equal(out.ok, false);
   // Newest build first (docs/hosts.md §5 step 3), and both were actually tried
   // — three times each, because neither ever answered.
   assert.deepEqual([...new Set(seen)].sort(), ['wss://newer', 'wss://older']);
   assert.equal(seen.length, 6);
-  assert.match(formatResult(out.results[0]), /newer timeout, timeout, timeout; older timeout, timeout, timeout/);
+  assert.match(formatResult(first(out.results)), /newer timeout, timeout, timeout; older timeout, timeout, timeout/);
 });
 
 // ---- the retry -------------------------------------------------------------
@@ -259,7 +356,7 @@ test('every host running the game is probed, and each is named when none carries
 // host that comes back, the host that really is gone, and the host that
 // answered the first time and must not be asked twice.
 
-const oneHost = (probe, extra = {}) => run({
+const oneHost = (probe: Probe, extra: UnknownRecord = {}): Promise<CheckOutput> => run({
   games: catalog([{ id: 'arena', versions: [server(24)] }]),
   book: { hosts: [{ name: 'lundi', ws: 'wss://arena', proto: 24, version: 'r1490' }] },
   mirrors: mirrorsFrom({}),
@@ -274,7 +371,7 @@ test('a host that is silent once and answers on the second attempt carries the c
   assert.equal(probe.count('wss://arena'), 2);
   // The pass says which attempt paid for it. A deploy that proceeded on the
   // second socket is a deploy to look at the host after.
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 12 ms (attempt 2)');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 12 ms (attempt 2)');
 });
 
 test('a host that answers only on the third attempt still carries the check', async () => {
@@ -282,7 +379,7 @@ test('a host that answers only on the third attempt still carries the check', as
   const out = await oneHost(probe);
   assert.equal(out.ok, true);
   assert.equal(probe.count('wss://arena'), 3);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 30 ms (attempt 3)');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 30 ms (attempt 3)');
 });
 
 test('three silent attempts is a hostless game, and every attempt is named', async () => {
@@ -292,7 +389,7 @@ test('three silent attempts is a hostless game, and every attempt is named', asy
   assert.equal(probe.count('wss://arena'), 3);
   // Three different words are three different machines to go and look at, so
   // the line carries all of them rather than only the last.
-  assert.equal(formatResult(out.results[0]), 'FAILED arena v24 proto 24: lundi timeout, error, closed');
+  assert.equal(formatResult(first(out.results)), 'FAILED arena v24 proto 24: lundi timeout, error, closed');
 });
 
 test('a host that answers the first time is asked once, and its line is unchanged', async () => {
@@ -302,7 +399,7 @@ test('a host that answers the first time is asked once, and its line is unchange
   assert.equal(probe.count('wss://arena'), 1);
   // No attempt count on a clean pass: a healthy deploy log says what it said
   // before this retry existed.
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 8 ms');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 8 ms');
 });
 
 test('a host that answers on another protocol is not asked again', async () => {
@@ -313,7 +410,7 @@ test('a host that answers on another protocol is not asked again', async () => {
   const out = await oneHost(probe);
   assert.equal(out.ok, false);
   assert.equal(probe.count('wss://arena'), 1);
-  assert.match(formatResult(out.results[0]), /lundi answered on proto 23/);
+  assert.match(formatResult(first(out.results)), /lundi answered on proto 23/);
 });
 
 test('a wrong-protocol answer reports the silent attempts before it', async () => {
@@ -323,17 +420,17 @@ test('a wrong-protocol answer reports the silent attempts before it', async () =
   const out = await oneHost(probe);
   assert.equal(out.ok, false);
   assert.equal(probe.count('wss://arena'), 2);
-  assert.equal(formatResult(out.results[0]), 'FAILED arena v24 proto 24: lundi answered on proto 23 after timeout');
+  assert.equal(formatResult(first(out.results)), 'FAILED arena v24 proto 24: lundi answered on proto 23 after timeout');
 });
 
 test('the pauses are 1 s before the second attempt and 2 s before the third', async () => {
   // Longer than the 1.3 s blip that started this, because a retry inside the
   // window that failed samples the same window twice. Nothing is waited after
   // the last attempt, which is why two pauses buy three sockets.
-  const slept = [];
+  const slept: number[] = [];
   const out = await oneHost(
     flakyProbe({ 'wss://arena': { failFor: 3 } }),
-    { sleep: async (ms) => { slept.push(ms); } },
+    { sleep: async (ms: number) => { slept.push(ms); } },
   );
   assert.equal(out.ok, false);
   assert.deepEqual(slept, [1000, 2000]);
@@ -350,17 +447,17 @@ test('the attempt count and the pauses are parameters, not a schedule in the loo
 
   // A longer schedule needs no new code, and the last pause stands for every
   // attempt past the end of the list.
-  const slept = [];
+  const slept: number[] = [];
   const patient = flakyProbe({ 'wss://arena': { failFor: 3, proto: 24, host: 'lundi', rttMs: 4 } });
   const out = await oneHost(patient, {
     attempts: 5,
     pauseMs: [10, 20],
-    sleep: async (ms) => { slept.push(ms); },
+    sleep: async (ms: number) => { slept.push(ms); },
   });
   assert.equal(out.ok, true);
   assert.equal(patient.count('wss://arena'), 4);
   assert.deepEqual(slept, [10, 20, 20]);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 4 ms (attempt 4)');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 4 ms (attempt 4)');
 });
 
 test('each host keeps its own attempts, and one flake does not spend another host’s', async () => {
@@ -382,7 +479,7 @@ test('each host keeps its own attempts, and one flake does not spend another hos
   assert.equal(out.ok, true);
   assert.equal(probe.count('wss://older'), 3);
   assert.equal(probe.count('wss://newer'), 2);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host newer 3 ms (attempt 2)');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host newer 3 ms (attempt 2)');
 });
 
 // ---- the mirrors -----------------------------------------------------------
@@ -397,7 +494,7 @@ test('a bound mirror supplies the host that makes the check pass', async () => {
     probe: probeFrom({ 'wss://rotated': { proto: 24, rttMs: 12 } }),
   });
   assert.equal(out.ok, true);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host lundi 12 ms');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host lundi 12 ms');
 });
 
 test('a dead mirror is an absence: the run finishes and reports the truth', async () => {
@@ -409,7 +506,7 @@ test('a dead mirror is an absence: the run finishes and reports the truth', asyn
   });
   assert.equal(out.ok, false);
   assert.equal(
-    formatResult(out.results[0]),
+    formatResult(first(out.results)),
     'FAILED arena v24 proto 24: no host in the book runs this game',
   );
 });
@@ -429,11 +526,11 @@ test('a mirror serving a name it is not bound to cannot rescue the check', async
 test('an unbound bare-string mirror is not fetched at all', async () => {
   // The rule comes from hosts.js itself now, so this pins that the gate reads
   // the same list the pages do rather than a copy of it.
-  const asked = [];
+  const asked: string[] = [];
   await run({
     games: catalog([{ id: 'arena', versions: [server(24)] }]),
     book: { hosts: [], mirrors: ['https://m/unbound.json', { url: 'https://m/lundi.json', name: 'lundi' }] },
-    mirrors: async (url) => { asked.push(url); return null; },
+    mirrors: async (url: string) => { asked.push(url); return null; },
     probe: probeFrom({}),
   });
   assert.deepEqual(asked, ['https://m/lundi.json']);
@@ -449,7 +546,7 @@ test('the legacy top-level address is a host like any other', async () => {
     probe: probeFrom({ 'wss://legacy': { proto: 24, rttMs: 9 } }),
   });
   assert.equal(out.ok, true);
-  assert.equal(formatResult(out.results[0]), 'ok arena v24 proto 24 host legacy-address 9 ms');
+  assert.equal(formatResult(first(out.results)), 'ok arena v24 proto 24 host legacy-address 9 ms');
 });
 
 test('a book that is not an object is an input error, not a failed check', async () => {
@@ -499,7 +596,7 @@ test('parseArgs: an explicit flag still wins over --tree', () => {
 
 test('parseArgs: a remote book falls back to this checkout’s hosts.js', () => {
   const a = parseArgs(['--games', 'web/games.json', '--book', 'https://example.invalid/server.json']);
-  assert.equal(a.hostsJs, fileURLToPath(new URL('../web/hosts.js', import.meta.url)));
+  assert.equal(a.hostsJs, fileURLToPath(new URL('../js/hosts.js', import.meta.url)));
 });
 
 test('parseArgs: a path book takes the hosts.js beside it', () => {
@@ -519,17 +616,23 @@ test('parseArgs: the refusals', () => {
 // workflow has to this script, so it is proved by running it, not by reading
 // it. Mirrors are bound to local files, so none of this touches a network.
 const SCRIPT = fileURLToPath(new URL('./check-hosts.mjs', import.meta.url));
-const HOSTS_JS = fileURLToPath(new URL('../web/hosts.js', import.meta.url));
+const HOSTS_JS = fileURLToPath(new URL('../js/hosts.js', import.meta.url));
 
-function cli(args) {
-  return new Promise((resolve) => {
+interface CliResult {
+  code: string | number;
+  stdout: string;
+  stderr: string;
+}
+
+function cli(args: string[]): Promise<CliResult> {
+  return new Promise<CliResult>((resolve) => {
     execFile(process.execPath, [SCRIPT, ...args], (err, stdout, stderr) => {
       resolve({ code: err ? err.code ?? 1 : 0, stdout, stderr });
     });
   });
 }
 
-async function siteTree(book, games) {
+async function siteTree(book: unknown, games: unknown): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), 'check-hosts-'));
   await mkdir(dir, { recursive: true });
   await copyFile(HOSTS_JS, path.join(dir, 'hosts.js'));
@@ -627,11 +730,11 @@ test('CLI: an unknown argument is 2 and prints the usage', async () => {
   const r = await cli(['--bogus']);
   assert.equal(r.code, 2);
   assert.match(r.stderr, /unknown argument --bogus/);
-  assert.match(r.stderr, /usage: node deploy\/check-hosts\.mjs --tree/);
+  assert.match(r.stderr, /usage: node target\/web-generated\/node-js\/check-hosts\.mjs --tree/);
 });
 
 test('CLI: --help is 0 and prints the usage on stdout', async () => {
   const r = await cli(['--help']);
   assert.equal(r.code, 0);
-  assert.match(r.stdout, /usage: node deploy\/check-hosts\.mjs --tree/);
+  assert.match(r.stdout, /usage: node target\/web-generated\/node-js\/check-hosts\.mjs --tree/);
 });

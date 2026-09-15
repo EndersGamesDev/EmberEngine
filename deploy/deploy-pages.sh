@@ -75,6 +75,12 @@ timed_step() {
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
+for module in hosts loader; do
+    if git ls-files -z -- "web/$module.js" | grep -q .; then
+        die "web/$module.js is tracked; converted browser modules must come from TypeScript emission"
+    fi
+    [ ! -e "web/$module.ts" ] || die "web/$module.ts is a bare compiler input; use web/$module.ts.j2"
+done
 SOURCE_SHA="${EMBER_SOURCE_SHA:-$(git rev-parse HEAD)}"
 [ -n "$SOURCE_SHA" ] || die "source SHA is empty"
 case "$SOURCE_SHA" in
@@ -288,7 +294,11 @@ diff -qr "$REPO_DIR/target/web-generated/$SOURCE_SHA/node-ts" \
     "$REPO_DIR/target/web-generated/node-ts" >/dev/null \
     || die "fixed Node TypeScript inputs differ from the source-scoped tree"
 bash deploy/check-toolchain.sh
-timed_step typescript npx --no-install tsc -p tsconfig.web.json --noEmit
+timed_step typescript npx --no-install tsc -p tsconfig.web.json
+for module in hosts.js loader.js; do
+    [ -f "target/web-generated/js/$module" ] \
+        || die "TypeScript did not emit target/web-generated/js/$module"
+done
 
 echo "== assembling the Pages release tree =="
 # The retired gh-pages branch remains a read-only seed for frozen historical
@@ -362,6 +372,8 @@ for path in sorted(tracked):
         continue
     if relative.name == "README.md":
         continue
+    if relative.name.endswith((".ts.j2", ".mts.j2", ".cts.j2")):
+        continue
     if relative.parts[0] == "pkg" or relative.as_posix() == "version.json":
         continue
     if root_only and (relative.name == "mirrors.json" or relative.name.endswith(".test.mjs")):
@@ -388,6 +400,9 @@ PY
 }
 
 copy_live_source web "$PAGES_DIR" root
+for module in hosts.js loader.js; do
+    cp "target/web-generated/js/$module" "$PAGES_DIR/$module"
+done
 cp web/version.json "$PAGES_DIR/"
 for live in "$ARENA_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE"; do
     copy_live_source "web/$live" "$PAGES_DIR/$live" page
@@ -806,7 +821,7 @@ LOADER
 # reference proof consumes this manifest rather than trusting files inherited
 # from the seed worktree.
 "$PY" - "$PAGES_DIR" "$PLACED_PATHS" \
-    version.json games.json server.json .nojekyll \
+    version.json games.json server.json hosts.js loader.js .nojekyll \
     "$LEAGUE_LIVE/version.json" "$END_GAME_LIVE/version.json" \
     pkg "$ARENA_LIVE/pkg" "$FIRE_LIVE/pkg" \
     "$KINGS_LIVE/pkg" "$LEAGUE_LIVE/pkg" "$WHAT_LIVE/pkg" \

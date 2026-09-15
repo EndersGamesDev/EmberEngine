@@ -1,7 +1,7 @@
 // Prove that every live server game in a catalog has a host it can join.
 //
-//   node deploy/check-hosts.mjs --tree <dir>
-//   node deploy/check-hosts.mjs --games <path|url> --book <path|url> [--hosts-js <path>]
+//   node target/web-generated/node-js/check-hosts.mjs --tree <dir>
+//   node target/web-generated/node-js/check-hosts.mjs --games <path|url> --book <path|url> [--hosts-js <path>]
 //
 // Publication used to be able to ship a site whose pages had no host. Every
 // page picks its host by EXACT protocol equality (docs/hosts.md §5), so a
@@ -57,25 +57,106 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
+type UnknownRecord = Record<string, unknown>;
+
+interface PlanRow {
+  game: ServerGameId;
+  v: string;
+  proto: number | null;
+  skip: string | null;
+}
+
+interface ProbeFailure {
+  ok: false;
+  reason?: string;
+  attempt?: number;
+  failures?: string[];
+}
+
+interface ProbeSuccess {
+  ok: true;
+  rttMs?: number;
+  welcome?: UnknownRecord;
+  attempt?: number;
+  failures?: string[];
+}
+
+type ProbeResult = ProbeFailure | ProbeSuccess;
+type Probe = (url: string, options: ProbeOptions) => Promise<ProbeResult>;
+
+interface ProbeOptions {
+  proto: number;
+  timeoutMs: number;
+  handle: string;
+}
+
+interface HostView {
+  bookName: string;
+  name: string;
+  url: string;
+  proto: number | null;
+  rttMs: number | null;
+}
+
+interface RankResult {
+  candidates: HostView[];
+}
+
+interface HostsModule {
+  mirrorRefs(book: HostBook): Mirror[];
+  mergeBook(book: HostBook, mirrors: Array<{ name: string; entry: unknown }>): HostEntry[];
+  rankHosts(entries: HostEntry[], options: { game: ServerGameId; proto: number | null; probes?: Map<string, ProbeResult> }): RankResult;
+  probeHost(url: string, options: ProbeOptions): Promise<ProbeResult>;
+}
+
+interface CheckResult extends PlanRow {
+  ok: boolean;
+  skipped?: boolean;
+  host?: string | null;
+  rttMs?: number | null;
+  attempt?: number;
+  tried?: string[];
+}
+
+interface CheckOptions {
+  games: unknown;
+  book: unknown;
+  mirrors: (url: string) => Promise<unknown | null>;
+  probe: Probe;
+  hosts: HostsModule;
+  timeoutMs?: number;
+  attempts?: number;
+  pauseMs?: number[];
+  sleep?: (ms: number) => Promise<void>;
+}
+
+interface ParsedArgs {
+  games: string;
+  book: string;
+  hostsJs: string;
+  tree: string;
+  help: boolean;
+}
+
 // ---- the pure core ---------------------------------------------------------
 
 /// An input that could not be read at all, which is exit 2 rather than a
 /// failed check: "the book is unreachable" is not "the game has no host".
 export class InputError extends Error {}
 
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
-const str = (v) => (typeof v === 'string' ? v.trim() : '');
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /// The default pause, kept separate so a caller can hand in a sleep that does
 /// not actually wait.
-const wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+const wait = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /// What every attempt on a host reported, oldest first. A record from a probe
 /// that was never retried still answers, so this reads a bare `probeHost`
 /// resolution as well as one this file produced.
-const attemptReasons = (result) => {
+const attemptReasons = (result: ProbeResult | null | undefined): string[] => {
   if (result && Array.isArray(result.failures) && result.failures.length) return result.failures;
-  return [(result && result.reason) || 'unreachable'];
+  return [result && !result.ok ? result.reason || 'unreachable' : 'unreachable'];
 };
 
 /// One host, asked until it answers or the attempts run out.
@@ -86,11 +167,20 @@ const attemptReasons = (result) => {
 /// probe's own, with `attempt` naming which one produced it and `failures`
 /// carrying what the earlier ones said; both are additions, so the record
 /// stays exactly what `rankHosts` already consumes.
-async function probeUntilAnswered(url, opts, { probe, attempts, pauseMs, sleep }) {
+async function probeUntilAnswered(
+  url: string,
+  opts: ProbeOptions,
+  { probe, attempts, pauseMs, sleep }: {
+    probe: Probe;
+    attempts: number;
+    pauseMs: number[];
+    sleep: (ms: number) => Promise<void>;
+  },
+): Promise<ProbeResult> {
   const tries = isNum(attempts) ? Math.max(1, Math.trunc(attempts)) : 1;
   const pauses = Array.isArray(pauseMs) ? pauseMs : [];
   const failures = [];
-  let last = null;
+  let last: ProbeResult | null = null;
   for (let attempt = 1; attempt <= tries; attempt += 1) {
     if (attempt > 1) {
       const ms = pauses.length ? pauses[Math.min(attempt - 2, pauses.length - 1)] : 0;
@@ -102,29 +192,31 @@ async function probeUntilAnswered(url, opts, { probe, attempts, pauseMs, sleep }
     if (last && last.ok === true) return { ...last, attempt, failures };
     failures.push(String((last && last.reason) || 'unreachable'));
   }
-  return { ...(last || {}), ok: false, reason: failures[failures.length - 1], attempt: tries, failures };
+  return { ...(last || {}), ok: false, reason: failures[failures.length - 1] || 'unreachable', attempt: tries, failures };
 }
 
 /// Every catalog entry a page can be published for, as the checker sees it.
 /// `kind: "lab"` has no host, no protocol and no handover (docs/hosts.md §11),
 /// so it is not a thing that can fail this check; a live version with no
 /// `proto` is a page that speaks to no server at all.
-export function plan(games) {
-  if (!games || typeof games !== 'object' || !Array.isArray(games.games)) {
+export function plan(games: unknown): PlanRow[] {
+  if (!games || typeof games !== 'object' || !Array.isArray((games as UnknownRecord)['games'])) {
     throw new InputError('the catalog has no `games` array');
   }
-  const rows = [];
-  for (const g of games.games) {
+  const catalog = games as GameCatalog & UnknownRecord;
+  const rows: PlanRow[] = [];
+  for (const g of catalog.games) {
     if (!g || typeof g !== 'object') continue;
     const id = str(g.id);
     if (!id) continue;
     const lab = str(g.kind) === 'lab';
-    for (const v of Array.isArray(g.versions) ? g.versions : []) {
+    for (const v of (Array.isArray(g.versions) ? g.versions : []) as GameRelease[]) {
       if (!v || typeof v !== 'object' || v.live !== true) continue;
       const slot = str(v.v) || str(v.version) || '?';
-      if (lab) rows.push({ game: id, v: slot, proto: null, skip: 'lab, no server needed' });
-      else if (!isNum(v.proto)) rows.push({ game: id, v: slot, proto: null, skip: 'no catalog proto, no server needed' });
-      else rows.push({ game: id, v: slot, proto: v.proto, skip: null });
+      const game = id as ServerGameId;
+      if (lab) rows.push({ game, v: slot, proto: null, skip: 'lab, no server needed' });
+      else if (!isNum(v.proto)) rows.push({ game, v: slot, proto: null, skip: 'no catalog proto, no server needed' });
+      else rows.push({ game, v: slot, proto: v.proto, skip: null });
     }
   }
   return rows;
@@ -135,13 +227,13 @@ export function plan(games) {
 /// A host that never answered reports every attempt, because three timeouts
 /// and a timeout followed by a refusal and a close are different machines to
 /// go and look at.
-function whyNot(view, result) {
+function whyNot(view: HostView, result: ProbeResult | undefined): string {
   const who = view.bookName || 'legacy-address';
   if (!result || result.ok !== true) return `${who} ${attemptReasons(result).join(', ')}`;
   const earlier = Array.isArray(result.failures) && result.failures.length
     ? ` after ${result.failures.join(', ')}`
     : '';
-  const live = result.welcome && isNum(result.welcome.proto) ? result.welcome.proto : null;
+  const live = result.welcome && isNum(result.welcome['proto']) ? result.welcome['proto'] : null;
   if (live !== null) return `${who} answered on proto ${live}${earlier}`;
   return `${who} answered without a protocol, and its entry claims ${view.proto === null ? 'none' : view.proto}${earlier}`;
 }
@@ -155,14 +247,27 @@ function whyNot(view, result) {
 /// actually answering. Probes go out in parallel and each carries its own
 /// timeout, so a dead host costs the run its own attempts rather than a place
 /// in a queue.
-async function checkOne(row, merged, { hosts, probe, timeoutMs, attempts, pauseMs, sleep }) {
+async function checkOne(
+  row: PlanRow,
+  merged: HostEntry[],
+  { hosts, probe, timeoutMs, attempts, pauseMs, sleep }: {
+    hosts: HostsModule;
+    probe: Probe;
+    timeoutMs: number;
+    attempts: number;
+    pauseMs: number[];
+    sleep: (ms: number) => Promise<void>;
+  },
+): Promise<CheckResult> {
+  if (row.proto === null) throw new InputError(`${row.game} ${row.v} has no protocol`);
+  const proto = row.proto;
   const running = hosts.rankHosts(merged, { game: row.game, proto: null }).candidates;
-  const probes = new Map();
+  const probes = new Map<string, ProbeResult>();
   await Promise.all(running.map(async (c) => {
-    const opts = { proto: row.proto, timeoutMs, handle: 'pages-gate' };
+    const opts = { proto, timeoutMs, handle: 'pages-gate' };
     probes.set(c.bookName, await probeUntilAnswered(c.url, opts, { probe, attempts, pauseMs, sleep }));
   }));
-  const { candidates } = hosts.rankHosts(merged, { game: row.game, proto: row.proto, probes });
+  const { candidates } = hosts.rankHosts(merged, { game: row.game, proto, probes });
   const chosen = candidates[0] || null;
   // `rankHosts` has already dropped everything that did not answer and
   // everything on another protocol. Asserting it again on the chosen host is
@@ -214,16 +319,17 @@ export async function checkHosts({
   attempts = 3,
   pauseMs = [1000, 2000],
   sleep = wait,
-}) {
+}: CheckOptions): Promise<{ ok: boolean; results: CheckResult[]; hosts: HostEntry[]; mirrors: Array<{ name: string; entry: unknown }> }> {
   const rows = plan(games);
   if (!book || typeof book !== 'object' || Array.isArray(book)) {
     throw new InputError('the address book is not a JSON object');
   }
-  const refs = hosts.mirrorRefs(book);
+  const checkedBook = book as HostBook;
+  const refs = hosts.mirrorRefs(checkedBook);
   const served = await Promise.all(refs.map(async (m) => {
     try { return { name: m.name, entry: await mirrors(m.url) }; } catch { return { name: m.name, entry: null }; }
   }));
-  const merged = hosts.mergeBook(book, served);
+  const merged = hosts.mergeBook(checkedBook, served);
 
   const results = await Promise.all(rows.map(async (row) => {
     if (row.skip) return { ...row, ok: true, skipped: true };
@@ -237,13 +343,14 @@ export async function checkHosts({
 /// A host that answered first is reported as it always was; one that needed a
 /// second or third attempt says so, because a pass that took three sockets is
 /// a host to go and look at even though the deploy proceeded.
-export function formatResult(r) {
+export function formatResult(r: CheckResult): string {
   if (r.skipped) return `skip ${r.game} ${r.v}: ${r.skip}`;
   if (r.ok) {
     const again = isNum(r.attempt) && r.attempt > 1 ? ` (attempt ${r.attempt})` : '';
     return `ok ${r.game} ${r.v} proto ${r.proto} host ${r.host} ${r.rttMs} ms${again}`;
   }
-  const why = r.tried.length ? r.tried.join('; ') : 'no host in the book runs this game';
+  const tried = r.tried || [];
+  const why = tried.length ? tried.join('; ') : 'no host in the book runs this game';
   return `FAILED ${r.game} ${r.v} proto ${r.proto}: ${why}`;
 }
 
@@ -251,14 +358,22 @@ export function formatResult(r) {
 
 const MAX_BYTES = 512 * 1024;
 
-const isUrl = (s) => /^https?:\/\//i.test(s);
+const isUrl = (s: string): boolean => /^https?:\/\//i.test(s);
+
+function messageOf(error: unknown): string {
+  if (error && (typeof error === 'object' || typeof error === 'function')) {
+    const message: unknown = Reflect.get(error, 'message');
+    if (message) return String(message);
+  }
+  return String(error);
+}
 
 /// Cache-busted, bounded, and an absence on every failure — the same rules
 /// `hosts.js` applies to a mirror, for the same reason: these are bytes a
 /// third party serves, and a gate that hangs on one is a gate that never
 /// answers. `strict` turns the absence back into an error, which is what the
 /// two inputs the run cannot proceed without need.
-async function fetchJson(url, { timeoutMs = 4000, strict = false } = {}) {
+async function fetchJson(url: string, { timeoutMs = 4000, strict = false }: { timeoutMs?: number; strict?: boolean } = {}): Promise<unknown | null> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -270,9 +385,10 @@ async function fetchJson(url, { timeoutMs = 4000, strict = false } = {}) {
     if (Number.isFinite(len) && len > MAX_BYTES) throw new Error('too large');
     const text = await r.text();
     if (text.length > MAX_BYTES) throw new Error('too large');
-    return JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    return parsed;
   } catch (e) {
-    if (strict) throw new InputError(`cannot read ${url}: ${e.message}`);
+    if (strict) throw new InputError(`cannot read ${url}: ${messageOf(e)}`);
     return null;
   } finally {
     clearTimeout(timer);
@@ -281,30 +397,39 @@ async function fetchJson(url, { timeoutMs = 4000, strict = false } = {}) {
 
 /// A path or a URL, read as JSON. Both are inputs the run cannot proceed
 /// without, so both failures are exit 2.
-async function readJson(where) {
+async function readJson(where: string): Promise<unknown> {
   if (isUrl(where)) return fetchJson(where, { strict: true });
   try {
-    return JSON.parse(await readFile(where, 'utf8'));
+    const parsed: unknown = JSON.parse(await readFile(where, 'utf8'));
+    return parsed;
   } catch (e) {
-    throw new InputError(`cannot read ${where}: ${e.message}`);
+    throw new InputError(`cannot read ${where}: ${messageOf(e)}`);
   }
 }
 
 /// A mirror is a URL in every supported shape (docs/hosts.md §3), but a local
 /// tree under test may bind one to a file so the whole gate can be exercised
 /// with no network at all.
-const fetchMirror = (url) => (isUrl(url) ? fetchJson(url) : readFile(url, 'utf8').then(JSON.parse).catch(() => null));
+const fetchMirror = async (url: string): Promise<unknown | null> => {
+  if (isUrl(url)) return fetchJson(url);
+  try {
+    const parsed: unknown = JSON.parse(await readFile(url, 'utf8'));
+    return parsed;
+  } catch {
+    return null;
+  }
+};
 
 const USAGE = [
-  'usage: node deploy/check-hosts.mjs --tree <dir>',
-  '       node deploy/check-hosts.mjs --games <path|url> --book <path|url> [--hosts-js <path>]',
+  'usage: node target/web-generated/node-js/check-hosts.mjs --tree <dir>',
+  '       node target/web-generated/node-js/check-hosts.mjs --games <path|url> --book <path|url> [--hosts-js <path>]',
 ];
 
-export function parseArgs(argv) {
-  const out = { games: '', book: '', hostsJs: '', tree: '', help: false };
+export function parseArgs(argv: string[]): ParsedArgs {
+  const out: ParsedArgs = { games: '', book: '', hostsJs: '', tree: '', help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    const next = () => {
+    const next = (): string => {
       const v = argv[i + 1];
       if (v === undefined) throw new InputError(`${a} needs a value`);
       i += 1;
@@ -334,18 +459,34 @@ export function parseArgs(argv) {
   // neighbour to read, so the rule falls back to this checkout's own.
   if (!out.hostsJs) {
     out.hostsJs = isUrl(out.book)
-      ? fileURLToPath(new URL('../web/hosts.js', import.meta.url))
+      ? fileURLToPath(new URL('../js/hosts.js', import.meta.url))
       : path.join(path.dirname(out.book), 'hosts.js');
   }
   return out;
 }
 
-export async function main(argv) {
-  let args;
+function hostsModuleFrom(value: unknown, source: string): HostsModule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new InputError(`${source} is not a module object`);
+  }
+  const module = value as UnknownRecord;
+  for (const name of ['mirrorRefs', 'mergeBook', 'rankHosts', 'probeHost'] as const) {
+    if (typeof module[name] !== 'function') throw new InputError(`${source} exports no ${name}`);
+  }
+  return {
+    mirrorRefs: module['mirrorRefs'] as HostsModule['mirrorRefs'],
+    mergeBook: module['mergeBook'] as HostsModule['mergeBook'],
+    rankHosts: module['rankHosts'] as HostsModule['rankHosts'],
+    probeHost: module['probeHost'] as HostsModule['probeHost'],
+  };
+}
+
+export async function main(argv: string[]): Promise<number> {
+  let args: ParsedArgs;
   try {
     args = parseArgs(argv);
   } catch (e) {
-    console.error(`check-hosts: ${e.message}`);
+    console.error(`check-hosts: ${messageOf(e)}`);
     for (const line of USAGE) console.error(line);
     return 2;
   }
@@ -360,12 +501,10 @@ export async function main(argv) {
     console.error('check-hosts: this node has no global WebSocket; node 22+ is required');
     return 2;
   }
-  let out;
+  let out: Awaited<ReturnType<typeof checkHosts>>;
   try {
-    const hosts = await import(pathToFileURL(args.hostsJs).href);
-    for (const fn of ['mirrorRefs', 'mergeBook', 'rankHosts', 'probeHost']) {
-      if (typeof hosts[fn] !== 'function') throw new InputError(`${args.hostsJs} exports no ${fn}`);
-    }
+    const imported: unknown = await import(pathToFileURL(args.hostsJs).href);
+    const hosts = hostsModuleFrom(imported, args.hostsJs);
     const [games, book] = await Promise.all([readJson(args.games), readJson(args.book)]);
     console.log(`check-hosts: ${args.games}`);
     console.log(`check-hosts: ${args.book}`);
@@ -373,7 +512,7 @@ export async function main(argv) {
       games,
       book,
       mirrors: fetchMirror,
-      probe: (url, opts) => hosts.probeHost(url, opts),
+      probe: (url: string, opts: ProbeOptions) => hosts.probeHost(url, opts),
       hosts,
     });
   } catch (e) {
@@ -390,6 +529,6 @@ export async function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (process.argv[1] !== undefined && pathToFileURL(process.argv[1]).href === import.meta.url) {
   process.exitCode = await main(process.argv.slice(2));
 }

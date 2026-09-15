@@ -654,12 +654,16 @@ def step_index(predicate):
 
 extract = step_index(lambda s: s.get("name") == "extract the release asset")
 gate = step_index(lambda s: "check-hosts.mjs" in str(s.get("run", "")))
+setup = step_index(lambda s: str(s.get("uses", "")).startswith("actions/setup-node@"))
+rust = step_index(lambda s: s.get("name") == "toolchain (pinned by rust-toolchain.toml)")
+install = step_index(lambda s: s.get("name") == "install locked TypeScript toolchain")
+build = step_index(lambda s: s.get("name") == "rebuild the host gate from this checkout")
 configure = step_index(lambda s: str(s.get("uses", "")).startswith("actions/configure-pages@"))
 upload = step_index(lambda s: str(s.get("uses", "")).startswith("actions/upload-pages-artifact@"))
 deploy = step_index(lambda s: str(s.get("uses", "")).startswith("actions/deploy-pages@"))
-if min(extract, gate, configure, upload, deploy) < 0:
+if min(extract, setup, rust, install, build, gate, configure, upload, deploy) < 0:
     raise SystemExit(1)
-if not extract < gate < configure < upload < deploy:
+if not extract < setup < rust < install < build < gate < configure < upload < deploy:
     raise SystemExit(1)
 if steps[gate].get("continue-on-error") is not None or steps[gate].get("if") is not None:
     raise SystemExit(1)
@@ -667,15 +671,20 @@ if steps[gate].get("continue-on-error") is not None or steps[gate].get("if") is 
 # directory: the asset is what ships, and the two differ by every commit made
 # since the tag.
 gate_run = str(steps[gate].get("run", ""))
-if "--tree" not in gate_run or "pages-site" not in gate_run:
+if "target/web-generated/node-js/check-hosts.mjs" not in gate_run or "--tree" not in gate_run or "pages-site" not in gate_run:
     raise SystemExit(1)
-# node 22 or newer, pinned before the gate: the probe opens a real WebSocket
-# from the global, and a runtime without one would fail every game for a
-# reason that has nothing to do with the hosts.
-setup = step_index(lambda s: str(s.get("uses", "")).startswith("actions/setup-node@"))
-if setup < 0 or setup > gate:
+# The gate is rebuilt from this checkout using the pinned TypeScript and Rust
+# toolchains. It is a tool rather than a release-archive byte, while the
+# --tree argument still makes it inspect the extracted release.
+setup_with = steps[setup].get("with", {})
+if str(setup_with.get("node-version", "")) != "24.20.0" or setup_with.get("cache") != "npm":
     raise SystemExit(1)
-if int(str(steps[setup].get("with", {}).get("node-version", "0")).split(".")[0]) < 22:
+if steps[install].get("run") != "npm ci":
+    raise SystemExit(1)
+build_run = str(steps[build].get("run", ""))
+if "cargo run --locked -p ember-webgen --release" not in build_run:
+    raise SystemExit(1)
+if "npx --no-install tsc -p tsconfig.node.json" not in build_run:
     raise SystemExit(1)
 PY
     else
@@ -692,15 +701,24 @@ PY
                 /^      - / { flush(); isgate = 0; soft_here = 0 }
                 /^      - name: extract the release asset$/ { extract = NR }
                 /uses: actions\/setup-node@/ { setup = NR }
+                /node-version: "24.20.0"/ { node = NR }
+                /^      - name: toolchain \(pinned by rust-toolchain.toml\)$/ { rust = NR }
+                /^      - name: install locked TypeScript toolchain$/ { install = NR }
+                /^        run: npm ci$/ { npm = NR }
+                /^      - name: rebuild the host gate from this checkout$/ { build = NR }
+                /cargo run --locked -p ember-webgen --release/ { cargo = NR }
+                /npx --no-install tsc -p tsconfig.node.json/ { tsc = NR }
                 /check-hosts\.mjs/ { gate = NR; isgate = 1 }
                 /^        (continue-on-error|if):/ { soft_here = 1 }
                 /uses: actions\/configure-pages@/ { configure = NR }
                 /uses: actions\/deploy-pages@/ { deploy = NR }
                 END {
                     flush()
-                    exit !(extract && setup && gate && configure && deploy \
+                    exit !(extract && setup && node && rust && install && npm \
+                        && build && cargo && tsc && gate && configure && deploy \
                         && !soft \
-                        && extract < gate && setup < gate \
+                        && extract < setup && setup < rust && rust < install \
+                        && install < build && build < gate \
                         && gate < configure && configure < deploy)
                 }
             ' "$file"

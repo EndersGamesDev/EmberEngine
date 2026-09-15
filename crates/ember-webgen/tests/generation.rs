@@ -7,7 +7,7 @@ use ember_webgen::{Manifest, RenderedBundle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "4b19938d82db719f3960cca1588213bf2b5b684473362698fc5d76f5f42de02e";
+const TEMPLATE_HASH: &str = "83511f7e7f522ef7c7261a1edffc366f6e72b657d67e067d8c7276049d2a9ccd";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -159,7 +159,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
     assert_eq!(manifest.template_source_hash, TEMPLATE_HASH);
     assert!(sentinel.is_file(), "generation preserves staged ABI types");
     assert_eq!(manifest.integer_64_fields.len(), 11);
-    assert_eq!(manifest.files.len(), 19);
+    assert_eq!(manifest.files.len(), 23);
     assert!(
         manifest
             .files
@@ -245,6 +245,16 @@ fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
             "node-ts/loader.test.mts",
             "web/loader.test.mts.j2",
             "// Generated from web/loader.test.mts.j2 at golden. Do not edit.\nimport type { Phase, Status, Event, EventOutput } from '../ts/ember-loader.js';\nimport type { GameCatalog, GameRelease } from '../ts/ember-boundary.js';\n\n",
+        ),
+        (
+            "node-ts/check-hosts.mts",
+            "deploy/check-hosts.mts.j2",
+            "// Generated from deploy/check-hosts.mts.j2 at golden. Do not edit.\nimport type { GameCatalog, GameRelease, HostBook, HostEntry, Mirror, ServerGameId } from '../ts/ember-boundary.js';\n\n",
+        ),
+        (
+            "node-ts/check-hosts.test.mts",
+            "deploy/check-hosts.test.mts.j2",
+            "// Generated from deploy/check-hosts.test.mts.j2 at golden. Do not edit.\nimport type { GameCatalog, GameRelease, HostBook, HostEntry, Mirror, ServerGameId } from '../ts/ember-boundary.js';\n\n",
         ),
     ];
     for (rendered_path, template_path, expected_preamble) in templates {
