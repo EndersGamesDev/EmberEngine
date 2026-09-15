@@ -101,9 +101,10 @@ with open(p, "w", encoding="utf-8", newline="") as fh:
 PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf '[{"name":"lundi","url":"https://source.example/lundi.json"}]\n' > "$REPO/web/mirrors.json"
-printf 'root test module\n' > "$REPO/web/hosts.test.mjs"
+printf 'root hosts test template\n' > "$REPO/web/hosts.test.mts.j2"
 printf 'hub\n' > "$REPO/web/index.html"
-printf 'export function emberLoad() {}\n' > "$REPO/web/loader.js"
+printf 'export const hostsTemplate = true;\n' > "$REPO/web/hosts.ts.j2"
+printf 'export function loaderTemplate() {}\n' > "$REPO/web/loader.ts.j2"
 printf '{}\n' > "$REPO/web/version.json"
 printf 'arena live<script src="./settings.js?v=1"></script><script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
 printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
@@ -217,7 +218,7 @@ contains "$ARGV" "cargo [build] [--target] [wasm32-unknown-unknown] [--release] 
 contains "$ARGV" "[--out-dir] [web/labs/julibrot/pkg]" "Julibrot wasm-bindgen output stays in the lab"
 contains "$ARGV" "release/ember_lab_julibrot.wasm" "Julibrot artifact is passed to wasm-bindgen"
 contains "$ARGV" "cargo [run] [--locked] [-p] [ember-webgen] [--release] [--] [--out] [target/web-generated/deadbee]" "the generator receives the checkout source identifier"
-contains "$ARGV" "npx [--no-install] [tsc] [-p] [tsconfig.web.json] [--noEmit]" "the pinned TypeScript compiler gates assembly"
+contains "$ARGV" "npx [--no-install] [tsc] [-p] [tsconfig.web.json]" "the pinned TypeScript compiler emits the browser modules"
 contains "$(cat "$TMP/build.log")" "TIMING ember-webgen wall=" "the generator wall time is recorded"
 contains "$(cat "$TMP/build.log")" "TIMING typescript wall=" "the TypeScript wall time is recorded"
 if grep -Fq '[--no-typescript]' "$SHIM_LOG"; then bad "wasm-bindgen declarations were disabled"; else ok "every wasm-bindgen invocation emits declarations"; fi
@@ -231,6 +232,27 @@ for declaration in ember_lab_julibrot.d.ts ember_lab_julibrot_bg.wasm.d.ts; do
 done
 if find "$SHIM_PUBLISHED" -type f -name '*.d.ts' -print -quit | grep -q .; then bad "the Pages tree contains compiler declarations"; else ok "the Pages tree excludes compiler declarations"; fi
 if [ -e "$REPO/target/wasm32-unknown-unknown" ]; then bad "the default-target fixture made an unexpected Cargo target entry"; else ok "the default-target build needs no Cargo target symlink"; fi
+
+echo "== converted root modules cannot regain handwritten compiler inputs =="
+cp "$SHIM_GIT_TRACKED" "$TMP/git-tracked.saved"
+printf 'export const staleHosts = true;\n' > "$REPO/web/hosts.js"
+printf 'web/hosts.js\n' >> "$SHIM_GIT_TRACKED"
+if (cd "$REPO" && EMBER_PAGES_ARCHIVE="$TMP/tracked-hosts.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/tracked-hosts.log" 2>&1; then
+    bad "a tracked web/hosts.js was accepted"
+else
+    ok "a tracked web/hosts.js is refused before generation"
+fi
+contains "$(cat "$TMP/tracked-hosts.log")" "converted browser modules must come from TypeScript emission" "the tracked-JavaScript refusal explains the generated source"
+mv "$TMP/git-tracked.saved" "$SHIM_GIT_TRACKED"
+rm "$REPO/web/hosts.js"
+printf 'export const bareLoader = true;\n' > "$REPO/web/loader.ts"
+if (cd "$REPO" && EMBER_PAGES_ARCHIVE="$TMP/bare-loader.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/bare-loader.log" 2>&1; then
+    bad "a bare web/loader.ts was accepted"
+else
+    ok "a bare web/loader.ts is refused before generation"
+fi
+contains "$(cat "$TMP/bare-loader.log")" "use web/loader.ts.j2" "the bare-TypeScript refusal names the template form"
+rm "$REPO/web/loader.ts"
 
 echo "== a TypeScript failure refuses assembly before the Pages seed =="
 : > "$SHIM_LOG"
@@ -312,10 +334,17 @@ if [ -e "$SHIM_PUBLISHED/$END_GAME_LIVE/untracked.tmp" ]; then
 else
     ok "untracked files under live trees are not published"
 fi
-if [ -e "$SHIM_PUBLISHED/mirrors.json" ] || [ -e "$SHIM_PUBLISHED/hosts.test.mjs" ]; then
-    bad "root-only deployment metadata or test modules were published"
+if [ -e "$SHIM_PUBLISHED/mirrors.json" ] || [ -e "$SHIM_PUBLISHED/hosts.test.mjs" ] \
+    || [ -e "$SHIM_PUBLISHED/hosts.test.mts.j2" ]; then
+    bad "root-only deployment metadata or test templates were published"
 else
-    ok "web/mirrors.json and web/*.test.mjs stay out of the root publication"
+    ok "web/mirrors.json and web test templates stay out of the root publication"
+fi
+if [ -e "$SHIM_PUBLISHED/hosts.ts.j2" ] || [ -e "$SHIM_PUBLISHED/loader.ts.j2" ] \
+    || [ -e "$SHIM_PUBLISHED/exhaustive-consumer.js" ]; then
+    bad "templates or an unrelated compiler output entered the root publication"
+else
+    ok "only the named emitted browser modules enter the root publication"
 fi
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
@@ -344,10 +373,11 @@ fi
 contains "$(cat "$SHIM_PUBLISHED/$ARENA_LIVE/index.html")" "src=\"./settings.js?v=$STAMP\"" "Arena settings loader uses the final recomputed deploy stamp"
 # The shared loader: one copy at the root, one bundle under the root pkg, and
 # the page's single cache token rewritten to the same stamp as everything else.
-if cmp -s "$REPO/web/loader.js" "$SHIM_PUBLISHED/loader.js"; then
-    ok "the shared loader ships at the pages root"
+if cmp -s "$REPO/target/web-generated/js/loader.js" "$SHIM_PUBLISHED/loader.js" \
+    && cmp -s "$REPO/target/web-generated/js/hosts.js" "$SHIM_PUBLISHED/hosts.js"; then
+    ok "the emitted host picker and shared loader ship at the pages root"
 else
-    bad "the shared loader is missing from the pages root"
+    bad "the root host picker or loader did not come from compiler output"
 fi
 for f in pkg/ember_loader.js pkg/ember_loader_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$f" ]; then ok "assembled the shared loader $f"; else bad "missing the shared loader $f"; fi

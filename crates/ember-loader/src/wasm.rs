@@ -1,12 +1,13 @@
-//! The browser surface: the machine, as an object `web/loader.js` drives.
+//! The browser surface: the machine, as an object driven by the emitted root
+//! `loader.js`.
 //!
 //! Every call carries the page's own clock rather than reading one here. That
-//! is what lets `web/loader.js` start the fetch and discovery in the same tick
-//! as the page load and replay the drive calls, in order and with their real
-//! timestamps, once this module has finished instantiating — so the loader's
-//! own arrival never delays the work it reports on, and the numbers a player
-//! reads are measured from the moment the page began rather than from the
-//! moment the loader was ready to watch.
+//! is what lets the emitted root `loader.js` start the fetch and discovery in
+//! the same tick as the page load and replay the drive calls, in order and with
+//! their real timestamps, once this module has finished instantiating — so the
+//! loader's own arrival never delays the work it reports on, and the numbers
+//! a player reads are measured from the moment the page began rather than from
+//! the moment the loader was ready to watch.
 
 use js_sys::{Object, Reflect};
 use wasm_bindgen::JsValue;

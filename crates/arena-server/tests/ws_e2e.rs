@@ -1061,8 +1061,8 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
 }
 
 /// Hello, then the RAW `Welcome` frame. The text and not just the decoded
-/// message, because the wire key names are the contract `web/hosts.js` and
-/// the address book read, and no Rust type checks those.
+/// message, because the wire key names are the contract consumed by the
+/// emitted root `hosts.js` and the address book, and no Rust type checks those.
 fn connect_raw_welcome(port: u16, handle: &str) -> (Ws, String) {
     let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
     if let MaybeTlsStream::Plain(s) = ws.get_ref() {

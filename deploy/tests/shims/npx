@@ -12,5 +12,13 @@ case " $* " in
             printf 'fixture TypeScript failure\n' >&2
             exit 2
         fi
+        if [[ " $* " == *" tsc -p tsconfig.web.json "* ]] && [[ " $* " != *" --noEmit "* ]]; then
+            mkdir -p target/web-generated/js
+            printf 'export const generatedHosts = "npx-emitted-hosts";\n' \
+                > target/web-generated/js/hosts.js
+            printf 'export function emberLoad() { return "npx-emitted-loader"; }\n' \
+                > target/web-generated/js/loader.js
+            printf 'export {};\n' > target/web-generated/js/exhaustive-consumer.js
+        fi
         ;;
 esac

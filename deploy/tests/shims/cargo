@@ -10,6 +10,34 @@ set -uo pipefail
 LOG="${SHIM_LOG:-/dev/null}"
 { printf 'cargo'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
 
+# The Pages fixture exercises the generated-input-to-emitted-module handoff.
+# A webgen run therefore creates the two browser compiler inputs in both
+# output trees; the npx shim emits recognisable JavaScript from that stage.
+if [[ " $* " == *" run "* ]] && [[ " $* " == *" -p ember-webgen "* ]]; then
+    output=""
+    previous=""
+    for argument in "$@"; do
+        if [ "$previous" = "--out" ]; then output="$argument"; break; fi
+        previous="$argument"
+    done
+    [ -n "$output" ] || { echo "cargo shim: ember-webgen run has no --out" >&2; exit 2; }
+    for root in "$output/ts" target/web-generated/ts; do
+        mkdir -p "$root"
+        printf 'export const renderedHosts = true;\n' > "$root/hosts.ts"
+        printf 'export const renderedLoader = true;\n' > "$root/loader.ts"
+    done
+    for root in "$output/node-ts" target/web-generated/node-ts; do
+        mkdir -p "$root"
+        printf 'export const renderedHostGate = true;\n' > "$root/check-hosts.mts"
+        printf 'export const renderedHostGateTest = true;\n' > "$root/check-hosts.test.mts"
+        printf 'export const renderedHostsTest = true;\n' > "$root/hosts.test.mts"
+        printf 'export const renderedLoaderTest = true;\n' > "$root/loader.test.mts"
+    done
+    mapper="${CARGO_TARGET_DIR:-target}/release/ember-webgen"
+    mkdir -p "$(dirname "$mapper")"
+    printf '#!/bin/sh\ncat\n' > "$mapper"
+    chmod +x "$mapper"
+fi
 # host.sh's fast wiring test asks this shim to materialize inert executables.
 # The ordinary ssh-deploy tests leave these variables unset and retain the
 # original log-and-succeed behaviour above.

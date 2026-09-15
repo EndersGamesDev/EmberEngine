@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::error::Error;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ember_boundary::models::{GameCatalog, HostBook, Mirror};
 use ember_boundary::{Description, Direction, Field, Shape, TypeRef, VariantShape, View};
@@ -19,10 +19,136 @@ pub type WebgenResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 const DECLARATION_TEMPLATE: &str = include_str!("../templates/declaration.d.ts.j2");
 const EXHAUSTIVE_TEMPLATE: &str = include_str!("../templates/exhaustive-consumer.ts.j2");
 const WASM_BINDGEN_COMPAT_TEMPLATE: &str = include_str!("../templates/wasm-bindgen-compat.d.ts.j2");
-const TEMPLATES: [(&str, &str); 3] = [
+const HOSTS_TEMPLATE: &str = include_str!("../../../web/hosts.ts.j2");
+const LOADER_TEMPLATE: &str = include_str!("../../../web/loader.ts.j2");
+const HOSTS_TEST_TEMPLATE: &str = include_str!("../../../web/hosts.test.mts.j2");
+const LOADER_TEST_TEMPLATE: &str = include_str!("../../../web/loader.test.mts.j2");
+const CHECK_HOSTS_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.mts.j2");
+const CHECK_HOSTS_TEST_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.test.mts.j2");
+const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
     ("wasm-bindgen-compat", WASM_BINDGEN_COMPAT_TEMPLATE),
+];
+
+#[derive(Clone, Copy)]
+struct BoundaryImport {
+    module: &'static str,
+    specifier: &'static str,
+    names: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+struct BehaviourTemplate {
+    name: &'static str,
+    source_path: &'static str,
+    output_path: &'static str,
+    source: &'static str,
+    imports: &'static [BoundaryImport],
+}
+
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 6] = [
+    BehaviourTemplate {
+        name: "hosts",
+        source_path: "web/hosts.ts.j2",
+        output_path: "ts/hosts.ts",
+        source: HOSTS_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "./ember-boundary.js",
+            names: &["HostBook", "HostEntry", "Mirror", "ServerGameId"],
+        }],
+    },
+    BehaviourTemplate {
+        name: "loader",
+        source_path: "web/loader.ts.j2",
+        output_path: "ts/loader.ts",
+        source: LOADER_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "./ember-loader.js",
+                names: &["Phase", "Status", "Event", "EventOutput"],
+            },
+            BoundaryImport {
+                module: "ember-boundary",
+                specifier: "./ember-boundary.js",
+                names: &["GameCatalog", "GameRelease"],
+            },
+        ],
+    },
+    BehaviourTemplate {
+        name: "hosts-test",
+        source_path: "web/hosts.test.mts.j2",
+        output_path: "node-ts/hosts.test.mts",
+        source: HOSTS_TEST_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
+    },
+    BehaviourTemplate {
+        name: "loader-test",
+        source_path: "web/loader.test.mts.j2",
+        output_path: "node-ts/loader.test.mts",
+        source: LOADER_TEST_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "../ts/ember-loader.js",
+                names: &["Phase", "Status", "Event", "EventOutput"],
+            },
+            BoundaryImport {
+                module: "ember-boundary",
+                specifier: "../ts/ember-boundary.js",
+                names: &["GameCatalog", "GameRelease"],
+            },
+        ],
+    },
+    BehaviourTemplate {
+        name: "check-hosts",
+        source_path: "deploy/check-hosts.mts.j2",
+        output_path: "node-ts/check-hosts.mts",
+        source: CHECK_HOSTS_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
+    },
+    BehaviourTemplate {
+        name: "check-hosts-test",
+        source_path: "deploy/check-hosts.test.mts.j2",
+        output_path: "node-ts/check-hosts.test.mts",
+        source: CHECK_HOSTS_TEST_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-boundary",
+            specifier: "../ts/ember-boundary.js",
+            names: &[
+                "GameCatalog",
+                "GameRelease",
+                "HostBook",
+                "HostEntry",
+                "Mirror",
+                "ServerGameId",
+            ],
+        }],
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,12 +195,33 @@ pub struct Manifest {
     pub source_root: String,
     /// Stable compiler-input root refreshed by this invocation.
     pub compiler_root: String,
+    /// Stable Node compiler-input root refreshed by this invocation.
+    pub node_compiler_root: String,
     /// Hash of every registered production template.
     pub template_source_hash: String,
     /// Sorted fields containing 64-bit integers.
     pub integer_64_fields: Vec<String>,
     /// Every emitted file except this manifest.
     pub files: Vec<ManifestFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Mapping from one rendered TypeScript input back to its tracked template.
+pub struct RenderedLineMap {
+    /// Mapping format version.
+    pub version: u8,
+    /// Slash-separated path relative to the generated bundle root.
+    pub rendered_path: String,
+    /// Canonical tracked template path.
+    pub template_path: String,
+    /// Template line for each rendered line, or null for generated preamble.
+    pub lines: Vec<Option<usize>>,
+}
+
+#[derive(Serialize)]
+struct BehaviourImportContext {
+    module: String,
+    names: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -104,10 +251,18 @@ struct Feed {
 #[must_use]
 pub fn template_source_hash() -> String {
     let mut hasher = Sha256::new();
-    for (name, source) in TEMPLATES {
+    for (name, source) in CORE_TEMPLATES {
         hasher.update(name.as_bytes());
         hasher.update([0]);
         hasher.update(source.as_bytes());
+        hasher.update([u8::MAX]);
+    }
+    for template in BEHAVIOUR_TEMPLATES {
+        hasher.update(template.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(template.source_path.as_bytes());
+        hasher.update([0]);
+        hasher.update(template.source.as_bytes());
         hasher.update([u8::MAX]);
     }
     hex(&hasher.finalize())
@@ -183,6 +338,11 @@ pub fn render(source_sha: &str, game_ids: &[String]) -> WebgenResult<RenderedBun
         path: "ts/wasm-bindgen-compat.d.ts".into(),
         bytes: clean_rendered(&wasm_bindgen_compat),
     });
+    files.extend(render_behaviour_templates(
+        &environment,
+        &feeds,
+        source_sha,
+    )?);
     files.extend(schema_files()?);
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(RenderedBundle {
@@ -211,9 +371,12 @@ pub fn write(out: &Path, bundle: &RenderedBundle) -> WebgenResult<Manifest> {
         return Err("SHA-scoped output cannot be the fixed ts directory".into());
     }
     let compiler_root = parent.join("ts");
+    let node_compiler_root = parent.join("node-ts");
     remove_dir(&out.join("ts"))?;
+    remove_dir(&out.join("node-ts"))?;
     remove_dir(&out.join("schema"))?;
     remove_dir(&compiler_root)?;
+    remove_dir(&node_compiler_root)?;
     remove_file(&out.join("manifest.json"))?;
 
     let mut manifest_files = Vec::with_capacity(bundle.files.len());
@@ -224,7 +387,13 @@ pub fn write(out: &Path, bundle: &RenderedBundle) -> WebgenResult<Manifest> {
         let compiler_path = relative
             .strip_prefix("ts")
             .ok()
-            .map(|compiler_relative| compiler_root.join(compiler_relative));
+            .map(|compiler_relative| compiler_root.join(compiler_relative))
+            .or_else(|| {
+                relative
+                    .strip_prefix("node-ts")
+                    .ok()
+                    .map(|compiler_relative| node_compiler_root.join(compiler_relative))
+            });
         let compiler_display = if let Some(fixed) = &compiler_path {
             write_file(fixed, &file.bytes)?;
             Some(path_string(fixed))
@@ -242,6 +411,7 @@ pub fn write(out: &Path, bundle: &RenderedBundle) -> WebgenResult<Manifest> {
         source_sha: bundle.source_sha.clone(),
         source_root: path_string(out),
         compiler_root: path_string(&compiler_root),
+        node_compiler_root: path_string(&node_compiler_root),
         template_source_hash: bundle.template_source_hash.clone(),
         integer_64_fields: bundle.integer_64_fields.clone(),
         files: manifest_files,
@@ -275,6 +445,68 @@ pub fn game_ids(path: &Path) -> WebgenResult<Vec<String>> {
         return Err("catalog contains duplicate game ids".into());
     }
     Ok(ids)
+}
+
+/// Map TypeScript diagnostics for rendered inputs back to tracked templates.
+///
+/// Diagnostics without a readable adjacent line map are returned unchanged.
+/// A mapped diagnostic retains its rendered coordinate in brackets.
+///
+/// # Errors
+///
+/// Returns an error when an adjacent map exists but is unreadable or invalid.
+pub fn map_diagnostics(diagnostics: &str) -> WebgenResult<String> {
+    let mut output = String::new();
+    for line in diagnostics.lines() {
+        if let Some(mapped) = map_diagnostic_line(line)? {
+            writeln!(output, "{mapped}")?;
+        } else {
+            writeln!(output, "{line}")?;
+        }
+    }
+    Ok(output)
+}
+
+fn map_diagnostic_line(line: &str) -> WebgenResult<Option<String>> {
+    let Some(coordinate_end) = line.find("): ") else {
+        return Ok(None);
+    };
+    let Some(coordinate_start) = line[..coordinate_end].rfind('(') else {
+        return Ok(None);
+    };
+    let rendered_path = &line[..coordinate_start];
+    let Some((rendered_line, rendered_column)) =
+        parse_coordinate(&line[coordinate_start + 1..coordinate_end])
+    else {
+        return Ok(None);
+    };
+    let map_path = PathBuf::from(format!("{rendered_path}.map.json"));
+    let map_bytes = match fs::read(&map_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let line_map: RenderedLineMap = serde_json::from_slice(&map_bytes)?;
+    if line_map.version != 1 {
+        return Err(format!(
+            "unsupported rendered line-map version in {}",
+            path_string(&map_path)
+        )
+        .into());
+    }
+    let Some(Some(template_line)) = line_map.lines.get(rendered_line.saturating_sub(1)) else {
+        return Ok(None);
+    };
+    let message = &line[coordinate_end + 3..];
+    Ok(Some(format!(
+        "{}({template_line},{rendered_column}): {message} [rendered {rendered_path}({rendered_line},{rendered_column})]",
+        line_map.template_path
+    )))
+}
+
+fn parse_coordinate(value: &str) -> Option<(usize, usize)> {
+    let (line, column) = value.split_once(',')?;
+    Some((line.parse().ok()?, column.parse().ok()?))
 }
 
 /// Return every generated union and its descriptor-owned variant count.
@@ -329,10 +561,141 @@ const fn feeds() -> [Feed; 6] {
 fn environment() -> WebgenResult<Environment<'static>> {
     let mut environment = Environment::new();
     environment.set_undefined_behavior(UndefinedBehavior::Strict);
-    for (name, source) in TEMPLATES {
+    for (name, source) in CORE_TEMPLATES {
         environment.add_template(name, source)?;
     }
+    for template in BEHAVIOUR_TEMPLATES {
+        environment.add_template(template.name, template.source)?;
+    }
     Ok(environment)
+}
+
+fn render_behaviour_templates(
+    environment: &Environment<'_>,
+    feeds: &[Feed],
+    source_sha: &str,
+) -> WebgenResult<Vec<RenderedFile>> {
+    let mut files = Vec::new();
+    for template in BEHAVIOUR_TEMPLATES {
+        validate_behaviour_template(&template, feeds)?;
+        let imports = template
+            .imports
+            .iter()
+            .map(|boundary_import| BehaviourImportContext {
+                module: boundary_import.module.into(),
+                names: boundary_import
+                    .names
+                    .iter()
+                    .map(|name| (*name).into())
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let rendered_body = environment
+            .get_template(template.name)?
+            .render(context! { imports, source_sha })?;
+        if rendered_body.lines().count() != template.source.lines().count() {
+            return Err(format!(
+                "behaviour template {} must preserve its source line count",
+                template.source_path
+            )
+            .into());
+        }
+        let mut rendered = format!(
+            "// Generated from {} at {source_sha}. Do not edit.\n",
+            template.source_path
+        );
+        for boundary_import in template.imports {
+            let names = boundary_import.names.join(", ");
+            let _ = writeln!(
+                rendered,
+                "import type {{ {names} }} from '{}';",
+                boundary_import.specifier
+            );
+        }
+        rendered.push('\n');
+        rendered.push_str(&rendered_body);
+        let rendered_bytes = clean_rendered(&rendered);
+        let rendered_line_count = rendered_bytes.split(|byte| *byte == b'\n').count() - 1;
+        let preamble_lines = 2 + template.imports.len();
+        let mut lines = vec![None; preamble_lines];
+        lines.extend((1..=template.source.lines().count()).map(Some));
+        if lines.len() != rendered_line_count {
+            return Err(format!(
+                "behaviour template {} produced an inconsistent line map",
+                template.source_path
+            )
+            .into());
+        }
+        let line_map = RenderedLineMap {
+            version: 1,
+            rendered_path: template.output_path.into(),
+            template_path: template.source_path.into(),
+            lines,
+        };
+        let mut line_map_bytes = serde_json::to_vec_pretty(&line_map)?;
+        line_map_bytes.push(b'\n');
+        files.push(RenderedFile {
+            path: template.output_path.into(),
+            bytes: rendered_bytes,
+        });
+        files.push(RenderedFile {
+            path: format!("{}.map.json", template.output_path),
+            bytes: line_map_bytes,
+        });
+    }
+    Ok(files)
+}
+
+fn validate_behaviour_template(template: &BehaviourTemplate, feeds: &[Feed]) -> WebgenResult<()> {
+    if template.source.contains("{%")
+        || template.source.contains("{#")
+        || template.source.contains("{{")
+    {
+        return Err(format!(
+            "behaviour template {} may not contain Minijinja constructs",
+            template.source_path
+        )
+        .into());
+    }
+    for boundary_import in template.imports {
+        let feed = feeds
+            .iter()
+            .find(|feed| feed.module == boundary_import.module)
+            .ok_or_else(|| format!("unknown boundary module {}", boundary_import.module))?;
+        let available = available_import_names(feed);
+        for name in boundary_import.names {
+            if !available.contains(*name) {
+                return Err(format!(
+                    "{} cannot import unknown {} type {name}",
+                    template.source_path, boundary_import.module
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn available_import_names(feed: &Feed) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for description in feed.descriptions {
+        names.insert(description.name.into());
+        names.insert(format!("{}Input", description.name));
+        names.insert(format!("{}Output", description.name));
+    }
+    if feed.module == "ember-boundary" {
+        for name in [
+            "GameId",
+            "ServerGameId",
+            "GameHostAddressKey",
+            "GameHostProtocolKey",
+            "GameHostVersionKey",
+            "GameHostCommitKey",
+        ] {
+            names.insert(name.into());
+        }
+    }
+    names
 }
 
 fn validate_feeds(feeds: &[Feed]) -> WebgenResult<()> {

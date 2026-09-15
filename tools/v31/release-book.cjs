@@ -2,11 +2,13 @@
 // Never copy a mirror entry into hosts[]: that would mask future mirror updates.
 'use strict';
 const assert = require('node:assert/strict');
+const { existsSync } = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
 const namePattern = /^[a-z0-9-]{3,32}$/;
 const maxBytes = 512 * 1024;
+const hostsModulePath = path.resolve(__dirname, '../../target/web-generated/js/hosts.js');
 
 async function fetchEntry(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(12000), cache: 'no-store' });
@@ -29,7 +31,10 @@ const resolveCommit = value => String(execFileSync('git', ['rev-parse', '--verif
   { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
 
 async function readyHost(book, expected, options = {}) {
-  const { mergeBook, probeHost } = await import(pathToFileURL(path.resolve(__dirname, '../../web/hosts.js')));
+  if (!existsSync(hostsModulePath)) {
+    throw new Error(`Missing emitted hosts module at ${hostsModulePath}; run the ember-webgen generator and npx --no-install tsc -p tsconfig.web.json`);
+  }
+  const { mergeBook, probeHost } = await import(pathToFileURL(hostsModulePath));
   const read = options.fetchEntry || fetchEntry;
   const probe = options.probe || (url => probeHost(url, { proto: 0, timeoutMs: 12000, handle: 'v31-release-readonly' }));
   const resolve = options.resolveCommit || resolveCommit;

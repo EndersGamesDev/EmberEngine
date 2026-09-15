@@ -41,7 +41,7 @@ Arena 12 and Fire 1 retain their established fixed-step rules inside their versi
 
 ## Hosts
 
-The game servers run on many independent machines at once. They share no state and never talk to each other; what they share is one published address book, `server.json` on the Pages site, which lists every host with its addresses, its build and the protocol each of its servers speaks. The client does the choosing — `web/hosts.js` loads the book, probes every host, and picks the newest build that speaks its own protocol. The model, the file format, the `Welcome` fields that carry a server's identity, and how to run a host are all in **`docs/hosts.md`**.
+The game servers run on many independent machines at once. They share no state and never talk to each other; what they share is one published address book, `server.json` on the Pages site, which lists every host with its addresses, its build and the protocol each of its servers speaks. The client does the choosing — the module emitted from `web/hosts.ts.j2` loads the book, probes every host, and picks the newest build that speaks its own protocol. The model, the file format, the `Welcome` fields that carry a server's identity, and how to run a host are all in **`docs/hosts.md`**.
 
 ## Rendering and assets
 

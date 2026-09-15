@@ -1,6 +1,7 @@
 # pages: after a successful release workflow, deploy the published immutable
 # asset at main HEAD. Waiting for release success prevents the main push from
-# racing the draft-to-published transition. This workflow never rebuilds source.
+# racing the draft-to-published transition. It rebuilds only the unshipped host
+# gate from the checkout; the release asset remains the site of record.
 name: pages
 
 on:
@@ -84,11 +85,25 @@ jobs:
           test -f "$RUNNER_TEMP/pages-site/index.html"
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "24.20.0"
+          cache: npm
+      - name: toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages-host-gate
+      - name: install locked TypeScript toolchain
+        run: npm ci
+      - name: rebuild the host gate from this checkout
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$SOURCE_SHA"
+          npx --no-install tsc -p tsconfig.node.json
       - name: prove every live game has a host to join
         run: |
           set -euo pipefail
-          node deploy/check-hosts.mjs --tree "$RUNNER_TEMP/pages-site"
+          node target/web-generated/node-js/check-hosts.mjs --tree "$RUNNER_TEMP/pages-site"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

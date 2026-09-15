@@ -10,7 +10,7 @@ Stage 2 should start with surfaces that speak a protocol or own state transition
 
 The immutable published pages should stay byte-for-byte frozen and become an explicit historical-artifact exception to the source rule; the rule should govern every editable and newly shipped script, because changing old JavaScript bytes and preserving those same bytes are mutually exclusive requirements.
 
-The first implementation lane should wait for `lane/loader`, then convert `web/hosts.js`, `web/loader.js`, their two Node suites and `deploy/check-hosts.mjs` to legacy TypeScript templates: this is the smallest surface that crosses Rust loader enums, hand-built `JsValue` event objects, wasm-bindgen glue, `games.json`, `server.json`, a browser module, a Node consumer and the Pages deploy gate.
+The first implementation lane is complete: `web/hosts.js`, `web/loader.js`, `deploy/check-hosts.mjs` and all three of their Node suites became legacy TypeScript templates. This is the smallest surface that crosses Rust loader enums, hand-built `JsValue` event objects, wasm-bindgen glue, `games.json`, `server.json`, a browser module, a Node consumer and the Pages deploy gate.
 
 A Fire-first lane would prove one protocol union with fewer page lines, but it would not prove the shared catalog, host book, browser-and-Node module split or deploy gate; hosts plus loader is the smaller credible proof of the whole architecture rather than only its enum renderer.
 
@@ -18,7 +18,7 @@ Landing the loader lane's 528 handwritten JavaScript lines is acceptable only as
 
 ## Measured inventory
 
-The stated 128-file, 28,203-line baseline does not describe one tree: `develop` at `0cc4387b` contains 127 tracked `.js`, `.mjs` and `.cjs` files outside every `/pkg/` directory and they total exactly 28,203 newline characters, while fetched `sokol/lane/loader` at `d19f70c9` adds one 528-line `web/loader.js`; the post-loader count is 128 files and 28,731 lines.
+The stated 128-file, 28,203-line baseline does not describe one tree: `develop` at `0cc4387b` contains 127 tracked `.js`, `.mjs` and `.cjs` files outside every `/pkg/` directory and they total exactly 28,203 newline characters, while fetched `sokol/lane/loader` at `d19f70c9` adds `web/loader.js` and its independent suite. The earlier post-loader figure counted the module but omitted `web/loader.test.mjs`; the phase 1 row below therefore uses a fresh six-file measurement at its actual base rather than extending that incomplete inventory.
 
 The line measure is `wc -l`, which reproduces the 28,203-line baseline; `web/games/fire/v1/index.html` lacks a final newline, so its reported 78 is one below its logical line count.
 
@@ -38,8 +38,8 @@ The line measure is `wc -l`, which reproduces the 28,203-line baseline; `web/gam
 |Deploy runtime|`deploy/check-hosts.mjs`|1|395|
 |Generated asset source|`assets/end-game/v10/voice-lines.js`|1|33|
 |Total|Every tracked `.js`, `.mjs` and `.cjs` outside `/pkg/`|127|28,203|
-|Loader branch snapshot|`web/loader.js` on the in-flight `sokol/lane/loader` at `d19f70c9`|1|528|
-|Post-loader total|Develop plus that branch delta|128|28,731|
+|Loader branch snapshot|`web/loader.js` and `web/loader.test.mjs` on the in-flight `sokol/lane/loader` at `d19f70c9`|2|1,222|
+|Post-loader total|Develop plus that branch delta|129|29,425|
 
 The 39 frozen external scripts break down as Arena v28–v30 at 3 files and 1,137 lines, End Game v1–v11 at 34 files and 4,651 lines, and League v2–v3 at 2 files and 1,773 lines.
 
@@ -302,27 +302,27 @@ No current `include_bytes!` site includes web scripts, so `tsc` output does not 
 
 ## Toolchain and pipeline
 
-The repository currently has no tracked `package.json`, lockfile or `tsconfig`, no CI job runs the 19 Node tests, the Pages workflow uses Node 22 only for `check-hosts`, and wasm-bindgen is invoked with `--no-typescript` in the documented and deploy paths.
+Phase 0 added the tracked package and lock files, three pedantic TypeScript projects, Node 24 declarations, wasm-bindgen declarations, the `typed web` CI job and the generated-boundary release gate. Phase 1 adds the three emitted Node suites, the rendered-source AST gate and the Pages rebuild of the emitted host tool under Node 24.20.0.
 
 The implementation pin is Node 24.20.0 and TypeScript 5.9.3, the versions measured by the spike: the lockfile is authoritative, `npm ci` is the only install path, and the host SDK TypeScript extension, sokol/osprey build pods and CI must print and compare their active versions with the lock before compiling.
 
 The spike used Node v24.20.0 and TypeScript 5.9.3; `npx -y typescript@5.9.3 tsc` could not select a binary under npm 11.19.0, while `npx -y --package typescript@5.9.3 tsc` worked, so release automation should use the lockfile's `npx --no-install tsc` rather than a network install.
 
-Phase 0 must remove `--no-typescript` from the executable and header recipes in `deploy/deploy-pages.sh` and from `CONTRIBUTING.md`, `docs/hosts.md` and `docs/julibrot/refactor-survey.md`; it must also make `deploy/tests/shims/wasm-bindgen` emit the expected `.d.ts`, teach `copy_pkg` to carry it where compilation needs it, and update `test-pages.sh` so the fixture exercises the declared pipeline rather than a two-file shim that cannot produce typings.
+Phase 0 removed `--no-typescript` from the executable and header recipes, made the wasm-bindgen shim emit the expected declarations and taught assembly to stage them as compiler inputs.
 
-Add a `typed web` CI job, or a clearly named Node section of `deploy scripts`, that sets up exact Node 24.20.0, runs `npm ci`, the generator check, every TypeScript project, all 19 rendered Node suites and the generated-tree manifest; this closes rather than merely moves the existing backlog gap.
+The `typed web` CI job sets up exact Node 24.20.0, runs `npm ci`, the generator check, every TypeScript project, the three suites converted so far and the generated-tree manifest. Later phases add their remaining suites to the same emitted runner as they convert them.
 
-Add `deploy/tests/test-typescript.sh` for pinned config, forbidden handwritten outputs, generated hashes and compile-fail fixtures; extend `test-syntax.sh` to reject new tracked JavaScript outside the frozen allowlist and generated wasm-bindgen exclusions; extend `test-pages.sh` to prove the assembled module graph comes only from the fresh generated directory and has no missing import; and add the new suite to `deploy/tests/run.sh`.
+`deploy/tests/test-typescript.sh` pins the configs, rejects forbidden handwritten outputs and AST escape hatches, checks generated hashes and compile-fail fixtures and runs each emitted suite by explicit path. `test-pages.sh` proves the assembler copies only the two named emitted browser modules. `deploy/tests/run.sh` lists the TypeScript suite; callers select required execution with `EMBER_TYPED_WEB_REQUIRED=1`.
 
 On sokol and osprey, the same release command runs Rust/wasm builds and `tsc`; the workstation remains an editor and transport endpoint, and CI becomes the independent Node owner rather than trusting a developer's extension.
 
-The template wrapper earns its place over tracked `.ts` plus the same AST gate by giving every shipped script one render path and provenance manifest, prepending generated boundary imports outside the template-controlled body so they cannot be omitted, registering every production template in the same embedded registry and stable-hash tests as `ember-shader`, and leaving no bare `.ts` for a stray compiler invocation to accept outside the gate; because expansion can shift source positions, the generator should emit an unshipped rendered-to-template line map beside each staged input, and the gate's `tsc` error printer should consult it to report the canonical template path, line and column while retaining the rendered coordinate for debugging.
+The template wrapper earns its place over tracked `.ts` plus the same AST gate by giving every shipped script one render path and provenance manifest, prepending generated boundary imports outside the template-controlled body so they cannot be omitted, registering every production template in the same embedded registry and stable-hash tests as `ember-shader`, and leaving no bare `.ts` for a stray compiler invocation to accept outside the gate. The generator emits an unshipped rendered-to-template line map beside each staged input; `test-typescript.sh` and `deploy-pages.sh` pipe compiler output through its error printer so diagnostics report the canonical template path, line and column while retaining the rendered coordinate.
 
 For a live page at `web/games/ID/vN/`, Stage 1 tracks its handwritten `.ts.j2` behavior template, a tracked HTML shell with only external module tags, styles and media; generated declarations are mandatory template inputs, `.ts` and `.js` appear only under `target/web-generated/$SOURCE_SHA/games/ID/vN/`, the assembler copies that generated `.js`, and a gate rejects a tracked editable `.js` or bare `.ts` beside the page.
 
 Stage 1 tracks no bare `.ts`, `.mts`, `.cts` or emitted JavaScript: handwritten behavior lives in `.ts.j2`, `.mts.j2` or `.cts.j2` legacy templates, generated declarations and rendered compiler inputs live under `target`, and immutable frozen JavaScript remains under the governing historical-artifact exception.
 
-The 3,384 lines in the 19 current Node suites cannot be generated from the product definitions they test without destroying their independence, so all remain handwritten tests under the legacy-template rule: 17 suites under `tools/**` and the `web/hosts` and `deploy/check-hosts` suites become `.mts.j2` or `.cts.j2`, import generated types wherever they touch a boundary, render to the Node TypeScript staging tree, compile under Node16 rules and run against emitted modules.
+The 4,202 lines in the 20 current Node suites cannot be generated from the product definitions they test without destroying their independence, so all remain handwritten tests under the legacy-template rule: 17 suites under `tools/**` plus the `web/hosts`, `web/loader` and `deploy/check-hosts` suites become `.mts.j2` or `.cts.j2`, import generated types wherever they touch a boundary, render to the Node TypeScript staging tree, compile under Node16 rules and run against emitted modules.
 
 The existing `/target` ignore already covers the recommended generation directory and `/web/pkg/` covers generated wasm bindings, so no broad new ignore is needed; if any generator writes under `web/`, add one exact generated-directory rule and make deploy refuse output whose source manifest does not name `HEAD`.
 
@@ -349,7 +349,7 @@ Lines below are measured current script or protocol lines; Stage 1 is a sequence
 |Phase|Bite|Size|What it proves|Required verification|
 |----:|----|----|--------------|---------------------|
 |0|Generator foundation complete (`0fc21b6a`, `a9464c1b`, `264273a3`, `240554ab`): registration derive, descriptors, declaration templates, catalog/book Rust models, wasm-bindgen declarations and configs, plus the wasm-bindgen flag, shim, copy and documentation path|4 protocol inputs/3,252 lines plus loader Rust 3/1,028 at `d19f70c9`; at most 1,300 new lines|One compiler-owned schema renders protocol, ABI and JSON artifacts without checked-in output, including League's intersected `t` and `a` discriminators|Rust unit/oracle tests, deterministic render hashes, real catalog schema validation, `.d.ts` Pages fixture, clean and deliberate-fail `tsc` fixtures|
-|1|`hosts` plus loader end to end after `lane/loader`: convert `web/hosts.js`, `web/loader.js`, `deploy/check-hosts.mjs` and their two Node suites to legacy TypeScript templates|5 current files/2,865 lines at `d19f70c9`|Rust loader enums and actual event lowering reach browser and Node through mandatory generated types; catalog/book decoders and deploy consume the same generated contract while tests remain independent|Pedantic `tsc`, both rendered Node suites, loader Rust tests, `test-pages`, module-graph check, raw/gzip JS and loader wasm comparison|
+|1|Complete (`7d5b4692`, `45e0a3ff`, `1e289ef6`, `9ab9cb91`): hosts, loader, emitted host gate and all three independent suites are checked legacy TypeScript templates|6 files/3,721 lines at `1b620127`; templates 4,511 lines, +790 total (+422 production, +368 tests)|Rust loader events and catalog/book data reach browser and Node through mandatory generated types; hostile inputs narrow from `unknown`; the assembler ships only two named emitted modules|Pedantic `tsc`, three rendered suites, source-AST fixtures, `test-pages`, module graph, raw/gzip JavaScript and byte-identical loader wasm|
 |2|Fire current page and protocol|2 files/503 script lines; Fire protocol input 521 lines|The smallest live game's templates compile against generated `C2S`, `S2C` and wasm declarations even though socket ownership stays in wasm|Fire core/client tests, generated union oracle, browser race/garage smoke, Pages fixture, size comparison|
 |3|Kings current page|1 HTML block/517 script lines; Kings protocol input 883 lines|The inline body becomes an external `.ts.j2` module whose direct socket messages, DOM and wasm glue use generated unions|Kings protocol/server tests, rendered Node/browser page smoke, no-inline check, Pages fixture, size comparison|
 |4|League current page|1 file/1,155 lines; League protocol input 491 lines|`C2S`, `S2C` and tag-`a` `Cmd` action exhaustiveness reaches the largest live external UI through mandatory imports|League core/client tests, UI smoke, command compile-fail fixture, Pages fixture, size comparison|
@@ -363,10 +363,12 @@ Lines below are measured current script or protocol lines; Stage 1 is a sequence
 |12|v28–v29 tools|11 files/2,499 lines|Historical automation consumes generated catalog and host-book models without a handwritten boundary copy|Rendered Node suites, browser/network smokes and publisher preservation fixtures|
 |13|v30 tools|10 files/2,170 lines|A self-contained historical tool family converts without retiring entry points or generating its own assertions|Rendered Node suites and smokes, publisher preservation, no emitted tracked files|
 |14|v31 tools and asset-side voice data|13 tool files/2,577 lines plus 1 asset file/33 lines|Current Arena automation and generated static data leave no editable naked JavaScript while preserving every tool|Rendered Node suites and smokes, asset generation equality, publisher preservation|
-|15|Node test closure|19 suites/3,384 lines already counted in phases 1, 6 and 10–14|Every independent assertion suite is a checked legacy template and CI runs the complete emitted test set; this audit adds no second conversion count|Central Node runner, source-AST gate, generated-type import audit, intentional product defect proving a test still fails|
+|15|Node test closure|20 suites/4,202 lines already counted in phases 1, 6 and 10–14|Every independent assertion suite is a checked legacy template and CI runs the complete emitted test set; this audit adds no second conversion count|Central Node runner, source-AST gate, generated-type import audit, intentional product defect proving a test still fails|
 |16|Frozen enforcement|39 external files/7,561 plus 27 HTML pages/7,798 inline lines, with Arena v0 counted in both policy sets|The existing publication policy is mechanically enforced without pretending archived bytes are editable source|Seed-directory hashes, Arena v0 preservation fixture and frozen allowlist exactness|
 
-All 68 `tools/**` files and 13,839 lines are converted, none are retired: the 4 End Game tool tests/511 lines are in phase 6 and the remaining 64 files/13,328 lines are in phases 10–14, where one mechanical conversion rule preserves their executable verification and publication record more cheaply than 64 separate retirement reviews; the 17 tool test suites plus the two non-tool Node suites make the independently checked 19-suite total.
+All 68 `tools/**` files and 13,839 lines are converted, none are retired: the 4 End Game tool tests/511 lines are in phase 6 and the remaining 64 files/13,328 lines are in phases 10–14, where one mechanical conversion rule preserves their executable verification and publication record more cheaply than 64 separate retirement reviews; the 17 tool test suites plus the three non-tool Node suites make the independently checked 20-suite total.
+
+Phase 1 emitted sizes are `hosts.js` 24,069 to 15,494 raw bytes and 8,781 to 4,235 gzip bytes, `loader.js` 21,259 to 18,145 raw and 7,228 to 4,788 gzip, and `check-hosts.mjs` 18,048 to 11,778 raw and 6,714 to 3,583 gzip. The production budget count is 785 of 1,500 non-blank lines: 380 is the converted-module delta after excluding doc comments, and 405 is other production code; tests, fixtures, goldens, lockfiles and documentation are excluded. No phase 1 deliverable is deferred; later Stage 1 rows remain the standing backlog, and the release workflow deliberately does not duplicate the Pages-owned live host gate.
 
 Each Stage 1 phase ends with `git diff --check`, LF/UTF-8 and forbidden-token scans, the TypeScript source-AST gate, relevant `deploy/tests` suites and current-tree file/line/byte counts; “no naked JS” becomes true only when every editable shipped script is compiler output, while “no naked TS” always carries the declared legacy-template exception.
 
@@ -376,7 +378,7 @@ Stage 2 is not a second repository-wide rewrite: each candidate below is one sep
 
 |Candidate surface|Stage 1 input|Why and when behavior should move|
 |-----------------|------------:|---------------------------------|
-|Hosts plus loader|5 files/2,865 lines at `d19f70c9`|First candidate because it owns loader phases, event lowering, catalog/book validation and browser/Node state transitions; retain only generated adapters once the loader ABI is stable|
+|Hosts plus loader|6 JavaScript files/3,721 lines at `1b620127`, now 6 templates/4,423 lines|First candidate because it owns loader phases, event lowering, catalog/book validation and browser/Node state transitions; retain only generated adapters once the loader ABI is stable|
 |Fire current|2 files/503 lines|Move only state duplicated outside the socket-owning wasm; keep garage and presentation DOM in templates if the wasm boundary already owns the protocol|
 |Kings current|1 inline block/517 lines|High priority because the page speaks the socket protocol directly and owns message-driven state transitions|
 |League current|1 file/1,155 lines|High priority because the page joins `C2S`, `S2C`, nested `Cmd` actions and UI state|
@@ -438,7 +440,7 @@ git rev-parse refs/remotes/sokol/lane/loader
 git show sokol/lane/loader:crates/ember-loader/src/{phase,event,wasm}.rs
 for path in crates/ember-loader/src/phase.rs crates/ember-loader/src/event.rs crates/ember-loader/src/wasm.rs; do git show "sokol/lane/loader:$path"; done | wc -l
 git show sokol/lane/loader:web/loader.js | wc -lc
-wc -l web/hosts.js web/hosts.test.mjs deploy/check-hosts.mjs deploy/check-hosts.test.mjs
+wc -l web/hosts.js web/loader.js deploy/check-hosts.mjs web/hosts.test.mjs web/loader.test.mjs deploy/check-hosts.test.mjs
 rg -n '#\[serde\([^]]*(flatten|untagged|skip|rename\s*=)|^[[:space:]]+[A-Z][A-Za-z0-9_]*\([^)]*\),' crates/{arena,fire,kings,league}-core/src/proto.rs
 nl -ba deploy/deploy-pages.sh | sed -n '245,380p'
 nl -ba web/games/end-game/v12/main.js | sed -n '1,12p'
