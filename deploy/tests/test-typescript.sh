@@ -953,6 +953,62 @@ ok "the clean generated tree compiles after the failure fixture"
 echo "== emitted browser modules and explicit Node suites =="
 mapped_tsc -p tsconfig.web.json
 mapped_tsc -p tsconfig.node.json
+end_game_modules=(
+    target/web-generated/js/games/end-game/v12/main.js
+    target/web-generated/js/games/end-game/v12/dialogue.js
+    target/web-generated/js/games/end-game/v12/castle-audio.js
+    target/web-generated/js/games/end-game/v12/castle-ui.js
+    target/web-generated/js/games/end-game/v12/quality.js
+    target/web-generated/js/games/end-game/v12/voice-lines.js
+)
+for module in "${end_game_modules[@]}"; do
+    [ -f "$module" ] || bad "the emitted End Game module is missing: $module"
+done
+check_module_closure() {
+node - "$@" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const ts = require('typescript');
+const expected = new Set(process.argv.slice(2).map(file => path.resolve(file)));
+const pending = [path.resolve(process.argv[2])];
+const visited = new Set();
+while (pending.length) {
+  const file = pending.pop();
+  if (!file || visited.has(file)) continue;
+  if (!expected.has(file)) throw new Error(`End Game import closure contains unexpected module ${file}`);
+  visited.add(file);
+  const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.ES2022, true);
+  function follow(specifierNode) {
+    if (!specifierNode || !ts.isStringLiteralLike(specifierNode)) return;
+    const specifier = specifierNode.text;
+    if (!specifier.startsWith('./')) return;
+    pending.push(path.resolve(path.dirname(file), specifier));
+  }
+  function visit(node) {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) follow(node.moduleSpecifier);
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      follow(node.arguments[0]);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+}
+const missing = [...expected].filter(file => !visited.has(file));
+if (missing.length) throw new Error(`End Game import closure omits ${missing.join(', ')}`);
+NODE
+}
+check_module_closure "${end_game_modules[@]}"
+ok "emitted End Game main import closure is exactly the six shipped modules"
+closure_fixture="$TMP/module-closure"
+mkdir -p "$closure_fixture"
+cp deploy/tests/fixtures/module-closure-main.js.j2 "$closure_fixture/main.js"
+cp deploy/tests/fixtures/module-closure-reexport.js.j2 "$closure_fixture/reexport.js"
+cp deploy/tests/fixtures/module-closure-dynamic.js.j2 "$closure_fixture/dynamic.js"
+if check_module_closure "$closure_fixture/main.js" "$closure_fixture/reexport.js" "$closure_fixture/dynamic.js"; then
+    ok "module closure follows re-exports and dynamic sibling imports"
+else
+    bad "module closure missed a re-export or dynamic sibling import"
+fi
 node_suites=(
     target/web-generated/node-js/hosts.test.mjs
     target/web-generated/node-js/loader.test.mjs
