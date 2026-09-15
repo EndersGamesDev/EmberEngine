@@ -1,25 +1,28 @@
-"""Stage the historical End Game Pages tree while preserving every peer path.
+"""Retired: stage the historical End Game Pages tree, preserving every peer path.
 
-Run after a clean committed build to assemble and report the exact scoped diff.
-Remote publication is retired; the release workflow publishes release assets.
+This tool cannot run against the current tree and is kept only as the record of
+how End Game was staged before the page was converted. `main` refuses rather
+than pretending; `assemble` is still exercised offline by `publish_test.py`,
+which is what keeps the frozen V1-V11 preservation rule under test.
+
+Six of the files in FILES are no longer tracked sources: `main.js`,
+`quality.js`, `dialogue.js`, `castle-audio.js`, `castle-ui.js` and
+`voice-lines.js` are compiler output now, emitted from the templates beside
+them. Repointing this tool at the emitted tree would not be enough to make it
+correct, because the bytes that ship also carry the loader cache stamp that
+`deploy/deploy-pages.sh` writes; reproducing that here would put a second,
+drifting answer beside the assembler that already owns the question and
+already assembles this page from the same inputs.
 """
 from pathlib import Path
-import argparse
 import hashlib
 import json
 import shutil
-import subprocess
-import tempfile
-import time
 
 ROOT = Path(__file__).resolve().parents[2]
 SLOT = Path('games/end-game/v12')
 FILES = ['index.html', 'main.js', 'quality.js', 'style.css', 'cover.png', 'prologue.mp4', 'ambience.wav', 'dialogue.js', 'warden-movement.wav', 'warden-unlocking.wav', 'warden-sword.wav', 'warden-death.wav', 'castle-audio.js', 'castle-ui.js', 'voice-lines.js', 'boss-intro.wav', 'boss-phase2.wav', 'boss-defeat.wav', 'escape-clue.wav', 'escape-ending.wav', 'castle-ambience.wav']
 ACCENT = '.card[data-game="end-game"]::before { height: 190px; opacity: .78; background: linear-gradient(0deg, #0b1426, transparent), url("games/end-game/v12/cover.png") center / cover; }'
-
-
-def git(*args, cwd=ROOT):
-    return subprocess.check_output(['git', *args], cwd=cwd, text=True, encoding='utf-8').strip()
 
 
 def assemble(source, destination, commit):
@@ -54,34 +57,16 @@ def assemble(source, destination, commit):
 
 
 def main():
-    started = time.perf_counter()
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
-    if git('status', '--porcelain'):
-        raise RuntimeError('Commit the validated source before staging a release')
-    commit = git('rev-parse', 'HEAD')
-    for name in FILES + ['pkg/end_game.js', 'pkg/end_game_bg.wasm']:
-        if not (ROOT / 'web' / SLOT / name).is_file():
-            raise RuntimeError(f'Missing built file: {name}')
-    if (ROOT / 'web' / SLOT / 'pkg/end_game_bg.wasm').read_bytes()[:4] != b'\0asm':
-        raise RuntimeError('Invalid WASM artifact')
-    # The retired branch is a read-only historical base for this old release
-    # assembler. It is never a publication target.
-    git('fetch', 'origin', 'gh-pages')
-    # Retain the isolated output for inspection; never delete a computed tree.
-    stage = Path(tempfile.mkdtemp(prefix='end-game-v12-pages-')) / 'pages'
-    git('worktree', 'add', '--detach', str(stage), 'FETCH_HEAD')
-    assemble(ROOT, stage, commit)
-    git('add', '--', str(SLOT), 'games.json', 'index.html', cwd=stage)
-    changes = git('diff', '--cached', '--name-only', cwd=stage).splitlines()
-    if not changes:
-        print('No changes to stage')
-        return
-    if any(p not in ['games.json', 'index.html'] and not p.startswith(SLOT.as_posix() + '/') for p in changes):
-        raise RuntimeError('Refusing changes outside End Game and its launcher entry')
-    print(git('diff', '--cached', '--stat', cwd=stage))
-    print('Staging directory:', stage)
-    print('Wall seconds:', round(time.perf_counter() - started, 2))
+    # The staging flow this used to drive — clean-tree check, built-file check,
+    # a detached worktree on the retired gh-pages base, then the scoped diff —
+    # is in this file's history rather than here, because keeping it runnable
+    # would mean keeping it wrong.
+    raise SystemExit(
+        'end-game publish is retired: six of the files it staged are compiler '
+        'output since the v12 page became templates, and the bytes that ship '
+        'also carry the loader stamp written by deploy/deploy-pages.sh, which '
+        'assembles this page from the same inputs. Use that assembler.'
+    )
 
 
 if __name__ == '__main__':

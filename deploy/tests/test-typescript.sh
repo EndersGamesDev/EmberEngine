@@ -798,9 +798,9 @@ else
     printf 'dynamic-import rejection: %s\n' "$rejection"
 fi
 if source_ast_gate "$TMP/ast/typescript-dynamic-import-unknown-positive.ts"; then
-    ok "a non-literal dynamic import with a declared Promise<unknown> return passes"
+    ok "a non-literal dynamic import in a contextually typed Promise<unknown> position passes"
 else
-    bad "a non-literal dynamic import with a declared Promise<unknown> return was rejected"
+    bad "a non-literal dynamic import in a contextually typed Promise<unknown> position was rejected"
 fi
 
 for fixture in named-clean named-transitive namespace overload variable export-alias inherited \
