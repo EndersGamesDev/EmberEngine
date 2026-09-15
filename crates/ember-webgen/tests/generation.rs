@@ -7,7 +7,7 @@ use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBu
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "6e04cb97f851b90e772a30a26374ab14a284a5793a465ea1f5a472450d0affb3";
+const TEMPLATE_HASH: &str = "a068bde304e34b30de000646029f40245a6abca27c00ebeefde9580b472e3b7f";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,7 +183,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
             exact("league-core.S2C.state.tick"),
         ]
     );
-    assert_eq!(manifest.files.len(), 27);
+    assert_eq!(manifest.files.len(), 29);
     assert!(
         manifest
             .files
@@ -289,6 +289,11 @@ fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
             "ts/games/fire/v2/garage.ts",
             "web/games/fire/v2/garage.ts.j2",
             "// Generated from web/games/fire/v2/garage.ts.j2 at golden. Do not edit.\n\n",
+        ),
+        (
+            "node-ts/fire.test.mts",
+            "web/games/fire/v2/fire.test.mts.j2",
+            "// Generated from web/games/fire/v2/fire.test.mts.j2 at golden. Do not edit.\nimport type { S2CInput } from '../ts/fire-core.js';\n\n",
         ),
     ];
     for (rendered_path, template_path, expected_preamble) in templates {

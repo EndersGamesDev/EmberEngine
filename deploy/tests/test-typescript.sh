@@ -507,12 +507,13 @@ node_suites=(
     target/web-generated/node-js/hosts.test.mjs
     target/web-generated/node-js/loader.test.mjs
     target/web-generated/node-js/check-hosts.test.mjs
+    target/web-generated/node-js/fire.test.mjs
 )
 for suite in "${node_suites[@]}"; do
     [ -f "$suite" ] || bad "the emitted Node suite is missing: $suite"
 done
 node --test "${node_suites[@]}"
-ok "all three explicit emitted Node suites pass"
+ok "all four explicit emitted Node suites pass"
 
 echo "== unavailable optional toolchains skip for distinct reasons =="
 mkdir -p "$TMP/node-free-path" "$TMP/mismatch-path"

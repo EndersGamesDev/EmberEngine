@@ -1,0 +1,237 @@
+// Browser-entry smoke for the emitted Fire race and garage modules.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+type UnknownRecord = Record<string, unknown>;
+type Handler = ((event: unknown) => unknown) | null;
+
+class FakeClassList {
+  private readonly names = new Set<string>();
+
+  add(...tokens: string[]): void { for (const token of tokens) this.names.add(token); }
+  remove(...tokens: string[]): void { for (const token of tokens) this.names.delete(token); }
+  contains(token: string): boolean { return this.names.has(token); }
+  toggle(token: string): boolean {
+    if (this.names.has(token)) {
+      this.names.delete(token);
+      return false;
+    }
+    this.names.add(token);
+    return true;
+  }
+}
+
+class FakeElement {
+  readonly classList = new FakeClassList();
+  readonly style: UnknownRecord = {};
+  readonly children: unknown[] = [];
+  readonly tagName: string;
+  textContent = '';
+  title = '';
+  className = '';
+  innerHTML = '';
+  value = '';
+  disabled = false;
+  onclick: Handler = null;
+  marker: FakeElement | null = null;
+
+  constructor(tagName = 'DIV') { this.tagName = tagName.toUpperCase(); }
+  addEventListener(): void {}
+  focus(): void {}
+  remove(): void {}
+  setAttribute(): void {}
+  appendChild(child: unknown): unknown { this.children.push(child); return child; }
+  append(...children: unknown[]): void { this.children.push(...children); }
+  replaceChildren(...children: unknown[]): void {
+    this.children.length = 0;
+    this.children.push(...children);
+  }
+  querySelector(selector: string): FakeElement | null {
+    return selector === '.selected' ? this.marker : new FakeElement();
+  }
+  querySelectorAll(): FakeElement[] { return []; }
+}
+
+class FakeButton extends FakeElement {
+  constructor() { super('BUTTON'); this.marker = new FakeElement('SPAN'); }
+}
+
+class FakeInput extends FakeElement {
+  constructor() { super('INPUT'); }
+}
+
+const buttons = new Set([
+  'btn-practice', 'btn-online', 'btn-refresh', 'btn-create', 'btn-garage',
+  'btn-rematch', 'sound-toggle',
+]);
+const inputs = new Set(['handle', 'newlobby', 'newpass']);
+const elements = new Map<string, FakeElement>();
+const cards: FakeButton[] = [];
+
+function byId(id: string): FakeElement {
+  const existing = elements.get(id);
+  if (existing) return existing;
+  const created = buttons.has(id) ? new FakeButton() : inputs.has(id) ? new FakeInput() : new FakeElement();
+  elements.set(id, created);
+  return created;
+}
+
+const documentDouble = {
+  baseURI: '',
+  body: new FakeElement('BODY'),
+  hidden: false,
+  title: '',
+  addEventListener(): void {},
+  getElementById(id: string): FakeElement { return byId(id); },
+  createElement(tag: string): FakeElement {
+    const created = tag.toLowerCase() === 'button' ? new FakeButton() : new FakeElement(tag);
+    if (created instanceof FakeButton) cards.push(created);
+    return created;
+  },
+  querySelector(selector: string): FakeElement {
+    if (selector === '.hero-number') return byId('hero-number');
+    if (selector === '#speed .n') return byId('speed-number');
+    if (selector === '#lap .n') return byId('lap-number');
+    if (selector === '#drift-meter i') return byId('drift-meter-fill');
+    return new FakeElement();
+  },
+  querySelectorAll(selector: string): FakeElement[] {
+    return selector === '.car-card' ? cards : [];
+  },
+};
+
+function storageDouble(): UnknownRecord {
+  return {
+    getItem: () => null,
+    setItem: () => undefined,
+    removeItem: () => undefined,
+  };
+}
+
+function unreachable(value: never): never {
+  throw new Error(`unhandled Fire message ${JSON.stringify(value)}`);
+}
+
+function dispatch(message: S2CInput): string {
+  switch (message.t) {
+    case 'welcome': return 'welcome';
+    case 'rejected': return 'rejected';
+    case 'lobbies': return 'lobbies';
+    case 'joined': return 'joined';
+    case 'player_joined': return 'player_joined';
+    case 'player_left': return 'player_left';
+    case 'phase': return 'phase';
+    case 'state': return 'state';
+    case 'results': return 'results';
+    case 'pong': return 'pong';
+    default: return unreachable(message);
+  }
+}
+
+type StateMessage = Extract<S2CInput, { t: 'state' }>;
+const stateMessage = (tick: StateMessage['tick']): StateMessage => ({
+  t: 'state',
+  tick,
+  cars: [],
+});
+
+const messages = [
+  { t: 'welcome', proto: 2 },
+  { t: 'rejected', reason: 'closed' },
+  { t: 'lobbies', lobbies: [] },
+  { t: 'joined', lobby: 'race', id: 1, slot: 1, laps: 3, roster: [] },
+  { t: 'player_joined', meta: { id: 2, handle: 'driver', slot: 2 } },
+  { t: 'player_left', id: 2 },
+  { t: 'phase', phase: 'waiting', countdown: 0 },
+  stateMessage(0n),
+  { t: 'results', order: [] },
+  { t: 'pong', nonce: 1 },
+] satisfies readonly S2CInput[];
+
+const scratch = await mkdtemp(join(tmpdir(), 'ember-fire-smoke-'));
+const pkg = join(scratch, 'pkg');
+await import('node:fs/promises').then(({ mkdir }) => mkdir(pkg));
+await writeFile(join(pkg, 'fire.js'), [
+  'export default async function initialise() {}',
+  "export function package_version() { return '2.0.0'; }",
+  'export function proto_version() { return 2; }',
+  'export function restart_local() {}',
+  'export function start_local_vehicle() {}',
+  'export function start_online() {}',
+  "export function online_status() { return ''; }",
+  "export function hud_json() { return '{}'; }",
+].join('\n'), 'utf8');
+
+const pageUrl = pathToFileURL(join(scratch, 'index.html'));
+documentDouble.baseURI = pageUrl.href;
+const locationDouble = {
+  href: pageUrl.href,
+  assign(): void {},
+  toString(): string { return pageUrl.href; },
+};
+Reflect.set(globalThis, 'HTMLElement', FakeElement);
+Reflect.set(globalThis, 'HTMLButtonElement', FakeButton);
+Reflect.set(globalThis, 'HTMLInputElement', FakeInput);
+Reflect.set(globalThis, 'document', documentDouble);
+Reflect.set(globalThis, 'window', { addEventListener: () => undefined });
+Reflect.set(globalThis, 'location', locationDouble);
+Reflect.set(globalThis, 'localStorage', storageDouble());
+Reflect.set(globalThis, 'sessionStorage', storageDouble());
+Reflect.set(globalThis, 'addEventListener', () => undefined);
+Reflect.set(globalThis, 'requestAnimationFrame', () => 0);
+Reflect.set(globalThis, 'fetch', async () => new Response('missing', { status: 404 }));
+
+const garageUrl = new URL('../js/games/fire/v2/garage.js', import.meta.url);
+const raceUrl = new URL('../js/games/fire/v2/race.js', import.meta.url);
+assert.equal(existsSync(garageUrl), true, 'the emitted garage module exists');
+assert.equal(existsSync(raceUrl), true, 'the emitted race module exists');
+const garageValue: unknown = await import(garageUrl.href);
+const raceValue: unknown = await import(raceUrl.href);
+
+interface GarageModule {
+  vehicles: readonly unknown[];
+  selectedVehicle(): number;
+  formatTime(seconds: unknown): string;
+}
+
+function garageModule(value: unknown): GarageModule {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('garage module is not an object');
+  const module = value as UnknownRecord;
+  if (!Array.isArray(module['vehicles'])
+      || typeof module['selectedVehicle'] !== 'function'
+      || typeof module['formatTime'] !== 'function') throw new Error('garage module exports are incomplete');
+  return value as GarageModule;
+}
+
+test('the generated Fire union dispatch is exhaustive without reading 64-bit fields', () => {
+  assert.deepEqual(messages.map(dispatch), [
+    'welcome', 'rejected', 'lobbies', 'joined', 'player_joined', 'player_left',
+    'phase', 'state', 'results', 'pong',
+  ]);
+});
+
+test('the emitted garage entry renders all vehicles and keeps its format', () => {
+  const garage = garageModule(garageValue);
+  assert.equal(garage.vehicles.length, 3);
+  assert.equal(cards.length, 3);
+  assert.equal(garage.selectedVehicle(), 0);
+  assert.equal(garage.formatTime(61.23), '01:01.23');
+  assert.equal(byId('hero-name').innerHTML, 'GT-01<br>PRECISION.');
+});
+
+test('the emitted race entry reaches the ready garage state with DOM doubles', () => {
+  assert.ok(raceValue && typeof raceValue === 'object');
+  assert.equal(byId('btn-practice').disabled, false);
+  assert.equal(byId('btn-online').disabled, false);
+  assert.equal(byId('btn-practice').textContent, 'Start race ↗');
+  assert.equal(byId('engine-note').textContent, 'Ready to race. Seven AI opponents. No account needed.');
+  assert.equal(documentDouble.title, 'Fire Racer · Version 2 · Ember');
+});
+
+await rm(scratch, { recursive: true, force: true });
