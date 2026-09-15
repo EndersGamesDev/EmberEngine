@@ -2,7 +2,7 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::{Boundary, Description, Field, Shape, TypeRef, VariantShape, View};
+use crate::{Boundary, Description, Field, Shape, TypeRef, VariantShape, View, Wide};
 
 /// Render a boundary type as JSON Schema draft 2020-12.
 #[must_use]
@@ -115,7 +115,7 @@ fn type_schema(ty: TypeRef, view: View) -> Value {
     match ty {
         TypeRef::Bool => json!({ "type": "boolean" }),
         TypeRef::String => json!({ "type": "string" }),
-        TypeRef::Integer { signed, bits } => integer(signed, bits),
+        TypeRef::Integer { signed, bits, wide } => integer(signed, bits, wide),
         TypeRef::Number { .. } => json!({ "type": "number" }),
         TypeRef::Nullable(inner) => {
             json!({ "anyOf": [type_schema(*inner, view), { "type": "null" }] })
@@ -136,12 +136,36 @@ fn type_schema(ty: TypeRef, view: View) -> Value {
     }
 }
 
-fn integer(signed: bool, bits: u8) -> Value {
-    if signed {
+fn integer(signed: bool, bits: u8, wide: Option<Wide>) -> Value {
+    let mut schema = if signed {
         let maximum = (1_i128 << (bits - 1)) - 1;
         json!({ "type": "integer", "minimum": -maximum - 1, "maximum": maximum })
     } else {
         let maximum = (1_u128 << bits) - 1;
         json!({ "type": "integer", "minimum": 0, "maximum": maximum })
+    };
+    let Value::Object(object) = &mut schema else {
+        unreachable!("integer schemas are objects")
+    };
+    match wide {
+        Some(Wide::Exact) => {
+            object.insert("format".into(), json!("int64-exact"));
+            object.insert(
+                "description".into(),
+                json!(
+                    "Exact 64-bit integer identity; parse without a JavaScript number intermediate."
+                ),
+            );
+        }
+        Some(Wide::Precise { bound }) => {
+            object.insert(
+                "description".into(),
+                json!(format!(
+                    "64-bit integer represented as a JavaScript number; precision bound: {bound}."
+                )),
+            );
+        }
+        None => {}
     }
+    schema
 }

@@ -44,6 +44,8 @@ pub enum TypeRef {
     Integer {
         signed: bool,
         bits: u8,
+        /// The declared script representation for a 64-bit integer.
+        wide: Option<Wide>,
     },
     Number {
         bits: u8,
@@ -55,6 +57,18 @@ pub enum TypeRef {
     Named {
         name: &'static str,
         describe: fn() -> &'static Description,
+    },
+}
+
+/// How a 64-bit integer is represented at a script boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wide {
+    /// Preserve integer identity with a JavaScript `bigint`.
+    Exact,
+    /// Use a JavaScript `number` within this field-specific precision bound.
+    Precise {
+        /// The engineering bound that keeps every value exactly representable.
+        bound: &'static str,
     },
 }
 

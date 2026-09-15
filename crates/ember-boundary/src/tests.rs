@@ -6,13 +6,25 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::models::{GameCatalog, HostBook, HostEntry, Mirror, boundary_descriptions};
-use crate::{Boundary, Registry, View, json_schema};
+use crate::{Boundary, Registry, Shape, TypeRef, View, Wide, json_schema};
 
 #[derive(Boundary, serde::Deserialize)]
 #[boundary(direction = "input")]
 #[serde(deny_unknown_fields)]
 struct StrictInput {
     value: u8,
+}
+
+#[derive(Boundary)]
+#[boundary(direction = "both")]
+struct WideIntegers {
+    #[boundary(wide = "exact")]
+    exact: u64,
+    #[boundary(
+        wide = "precise",
+        bound = "-9,007,199,254,740,991..=9,007,199,254,740,991"
+    )]
+    precise: i64,
 }
 
 fn workspace(path: &str) -> PathBuf {
@@ -110,5 +122,42 @@ fn deny_unknown_fields_is_preserved_by_the_input_schema() {
             .expect("known field deserializes")
             .value,
         1
+    );
+}
+
+#[test]
+fn wide_integer_declarations_reach_descriptors_and_schema() {
+    let fixture = WideIntegers {
+        exact: u64::MAX,
+        precise: i64::MIN,
+    };
+    assert_eq!(fixture.exact, u64::MAX);
+    assert_eq!(fixture.precise, i64::MIN);
+    let Shape::Object(fields) = WideIntegers::DESCRIPTION.shape else {
+        panic!("wide integer fixture must be an object");
+    };
+    assert!(matches!(
+        fields[0].ty,
+        TypeRef::Integer {
+            bits: 64,
+            wide: Some(Wide::Exact),
+            ..
+        }
+    ));
+    assert!(matches!(
+        fields[1].ty,
+        TypeRef::Integer {
+            bits: 64,
+            wide: Some(Wide::Precise {
+                bound: "-9,007,199,254,740,991..=9,007,199,254,740,991"
+            }),
+            ..
+        }
+    ));
+    let schema = json_schema::<WideIntegers>(View::Input);
+    assert_eq!(schema["properties"]["exact"]["format"], "int64-exact");
+    assert_eq!(
+        schema["properties"]["precise"]["description"],
+        "64-bit integer represented as a JavaScript number; precision bound: -9,007,199,254,740,991..=9,007,199,254,740,991."
     );
 }
