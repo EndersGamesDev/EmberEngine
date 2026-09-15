@@ -12,6 +12,10 @@ The manifest lists every generated file except itself, including byte lengths an
 
 The generated compiler-only compatibility declaration supplies the disposal symbol used by current wasm-bindgen declarations while keeping the checked-in ES2022 project literal and `skipLibCheck` disabled; it does not enter the Pages tree.
 
-Tests render every production template twice, pin the template hash and each emitted byte sequence, compare every union's current variant count, validate the real catalog, and audit a written manifest against its files. The golden-byte test obtains `GameId` and `ServerGameId` from the real `web/games.json`, while `real_catalog_validates_against_the_generated_schema` also reads the catalog as data; regenerate `ts__ember-boundary.d.ts.golden` when the resulting sorted unions change, and otherwise leave unrelated expected bytes alone.
+Behavior templates are pass-through source files with a mandatory generated import and provenance preamble. The renderer refuses every Jinja construct (`{%`, `{#`, or `{{`), so neither interpolation nor line-changing template logic can alter the checked body; templates cannot read the filesystem or environment.
+
+Behavior templates must contain no trailing horizontal whitespace and must already end in exactly one newline: rendering normalizes those details, so the exact-byte generation test reports either violation as template drift.
+
+Tests render every production template twice, pin the template hash and declaration, schema and consumer golden bytes, compare every behavior input byte-for-byte with its generated preamble plus tracked template, check each adjacent line map, compare every union's current variant count, validate the real catalog, and audit a written manifest against its files. The golden-byte test obtains `GameId` and `ServerGameId` from the real `web/games.json`, while `real_catalog_validates_against_the_generated_schema` also reads the catalog as data; regenerate `ts__ember-boundary.d.ts.golden` when the resulting sorted unions change, and otherwise leave unrelated expected bytes alone.
 
 This crate completes the Stage 1 phase 0 generator foundation. No page or hand-written script consumes the declarations yet; phase 1 starts by converting the host-selection, loader and host-check behavior to checked TypeScript templates.

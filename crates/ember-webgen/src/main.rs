@@ -3,10 +3,14 @@
 use std::env;
 use std::error::Error;
 use std::ffi::OsStr;
+use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    if env::args_os().nth(1).as_deref() == Some(OsStr::new("--map-diagnostics")) {
+        return print_mapped_diagnostics();
+    }
     let out = output_argument()?;
     let source_sha = source_sha()?;
     if out.file_name().and_then(|name| name.to_str()) != Some(source_sha.as_str()) {
@@ -15,6 +19,17 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let game_ids = ember_webgen::game_ids(Path::new("web/games.json"))?;
     let bundle = ember_webgen::render(&source_sha, &game_ids)?;
     ember_webgen::write(&out, &bundle)?;
+    Ok(())
+}
+
+fn print_mapped_diagnostics() -> Result<(), Box<dyn Error + Send + Sync>> {
+    if env::args_os().len() != 2 {
+        return Err("usage: ember-webgen --map-diagnostics".into());
+    }
+    let mut diagnostics = String::new();
+    io::stdin().read_to_string(&mut diagnostics)?;
+    let mapped = ember_webgen::map_diagnostics(&diagnostics)?;
+    io::stdout().lock().write_all(mapped.as_bytes())?;
     Ok(())
 }
 

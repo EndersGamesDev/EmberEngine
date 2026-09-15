@@ -7,7 +7,7 @@ use ember_webgen::{Manifest, RenderedBundle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "a44386e48d4722ee1cbbf0ff781fde7041b52394115f23f0c5cdec2abc551b69";
+const TEMPLATE_HASH: &str = "c4b777fd539a89b41501ba538ecc5471ba108aaf34fa7975b0579d828cf71f24";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -23,6 +23,12 @@ fn bundle() -> RenderedBundle {
 
 fn golden_name(path: &str) -> String {
     format!("{}.golden", path.replace('/', "__"))
+}
+
+fn has_golden(path: &str) -> bool {
+    // Behaviour inputs and line maps use the exact source-plus-preamble and
+    // adjacent-map assertions below instead of duplicated golden files.
+    path.starts_with("schema/") || path.ends_with(".d.ts") || path == "ts/exhaustive-consumer.ts"
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -49,6 +55,7 @@ fn every_emitted_file_matches_its_golden_bytes() {
     let actual_names = bundle
         .files
         .iter()
+        .filter(|file| has_golden(&file.path))
         .map(|file| golden_name(&file.path))
         .collect::<BTreeSet<_>>();
     let expected_names = fs::read_dir(&directory)
@@ -58,7 +65,11 @@ fn every_emitted_file_matches_its_golden_bytes() {
         .filter(|name| name != "README.md")
         .collect::<BTreeSet<_>>();
     assert_eq!(actual_names, expected_names);
-    for file in bundle.files {
+    for file in bundle
+        .files
+        .into_iter()
+        .filter(|file| has_golden(&file.path))
+    {
         let expected = fs::read(directory.join(golden_name(&file.path)))
             .expect("every rendered path has a golden file");
         assert_eq!(file.bytes, expected, "golden drift for {}", file.path);
@@ -148,7 +159,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
     assert_eq!(manifest.template_source_hash, TEMPLATE_HASH);
     assert!(sentinel.is_file(), "generation preserves staged ABI types");
     assert_eq!(manifest.integer_64_fields.len(), 11);
-    assert_eq!(manifest.files.len(), 11);
+    assert_eq!(manifest.files.len(), 13);
     assert!(
         manifest
             .files
@@ -166,6 +177,108 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
             );
         }
     }
+}
+
+fn assert_behaviour_input(
+    bundle: &RenderedBundle,
+    rendered_path: &str,
+    template_path: &str,
+    expected_preamble: &str,
+) {
+    let rendered = text(bundle, rendered_path);
+    let line_map = bundle
+        .files
+        .iter()
+        .find(|file| file.path == format!("{rendered_path}.map.json"))
+        .expect("the line map is emitted beside its input");
+    let line_map: ember_webgen::RenderedLineMap =
+        serde_json::from_slice(&line_map.bytes).expect("the line map is valid JSON");
+    assert_eq!(line_map.rendered_path, rendered_path);
+    assert_eq!(line_map.template_path, template_path);
+    let first_body_line = line_map
+        .lines
+        .iter()
+        .position(Option::is_some)
+        .expect("a behaviour template has a body");
+    assert_eq!(first_body_line, expected_preamble.lines().count());
+    let mut expected = expected_preamble.as_bytes().to_vec();
+    expected.extend(
+        fs::read(repository_path(template_path)).expect("the behaviour template is readable"),
+    );
+    assert_eq!(rendered.as_bytes(), expected);
+    assert!(
+        line_map.lines[..first_body_line]
+            .iter()
+            .all(Option::is_none)
+    );
+    assert_eq!(
+        line_map.lines[first_body_line..],
+        (1..=fs::read_to_string(repository_path(template_path))
+            .expect("template is readable")
+            .lines()
+            .count())
+            .map(Some)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
+    let bundle = bundle();
+    assert_behaviour_input(
+        &bundle,
+        "ts/behavior-placeholder.ts",
+        "crates/ember-webgen/templates/behavior-placeholder.ts.j2",
+        "// Generated from crates/ember-webgen/templates/behavior-placeholder.ts.j2 at golden. Do not edit.\nimport type { Phase } from './ember-loader.js';\n\n",
+    );
+}
+
+#[test]
+fn behaviour_input_check_rejects_boundary_import_drift() {
+    let mut bundle = bundle();
+    let rendered = bundle
+        .files
+        .iter_mut()
+        .find(|file| file.path == "ts/behavior-placeholder.ts")
+        .expect("the behaviour input is rendered");
+    let source = String::from_utf8(rendered.bytes.clone()).expect("the rendered input is UTF-8");
+    rendered.bytes = source
+        .replace("import type { Phase }", "import type { Status }")
+        .into_bytes();
+    let result = std::panic::catch_unwind(|| {
+        assert_behaviour_input(
+            &bundle,
+            "ts/behavior-placeholder.ts",
+            "crates/ember-webgen/templates/behavior-placeholder.ts.j2",
+            "// Generated from crates/ember-webgen/templates/behavior-placeholder.ts.j2 at golden. Do not edit.\nimport type { Phase } from './ember-loader.js';\n\n",
+        );
+    });
+    assert!(
+        result.is_err(),
+        "boundary import drift passed the exact-byte check"
+    );
+}
+
+#[test]
+fn diagnostics_keep_rendered_coordinates_and_add_template_coordinates() {
+    let temporary = tempfile::tempdir().expect("temporary directory is available");
+    let out = temporary.path().join("target/web-generated/golden");
+    ember_webgen::write(&out, &bundle()).expect("bundle writes");
+    let rendered = out.join("ts/behavior-placeholder.ts");
+    let input = format!(
+        "{}(4,14): error TS2322: deliberate\n{}(2,1): error TS1000: preamble\n",
+        rendered.display(),
+        rendered.display()
+    );
+    let mapped = ember_webgen::map_diagnostics(&input).expect("diagnostics map");
+    assert!(mapped.contains(
+        "crates/ember-webgen/templates/behavior-placeholder.ts.j2(1,14): error TS2322: deliberate"
+    ));
+    assert!(mapped.contains(&format!("[rendered {}(4,14)]", rendered.display())));
+    assert!(mapped.contains(&format!(
+        "{}(2,1): error TS1000: preamble",
+        rendered.display()
+    )));
 }
 
 #[test]
