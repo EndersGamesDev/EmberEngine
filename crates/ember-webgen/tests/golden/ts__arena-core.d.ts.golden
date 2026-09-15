@@ -112,8 +112,8 @@ export type PStateOutput = {
 export type PState = PStateOutput;
 
 export type BStateInput = {
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "projectile_id"?: number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "projectile_id"?: bigint;
   "x": number;
   "z": number;
   "vx": number;
@@ -125,8 +125,8 @@ export type BStateInput = {
 };
 
 export type BStateOutput = {
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "projectile_id": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "projectile_id": bigint;
   "x": number;
   "z": number;
   "vx": number;
@@ -224,8 +224,8 @@ export type C2SInput =
   | {
   "t": "input";
   "seq"?: number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "view_tick"?: number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "view_tick"?: bigint;
   "mx": number;
   "my": number;
   "ax": number;
@@ -275,8 +275,8 @@ export type C2SOutput =
   | {
   "t": "input";
   "seq": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "view_tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "view_tick": bigint;
   "mx": number;
   "my": number;
   "ax": number;
@@ -321,8 +321,8 @@ export type S2CInput =
   | {
   "t": "game_joined";
   "id": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "seed": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "seed": bigint;
   "arena_half": number;
   "players": Array<PlayerMetaInput>;
   "map"?: string;
@@ -340,8 +340,8 @@ export type S2CInput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "players": Array<PStateInput>;
   "bullets": Array<BStateInput>;
   "pads"?: Array<boolean>;
@@ -371,8 +371,8 @@ export type S2CInput =
 }
   | {
   "t": "shot";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "projectile_id"?: number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "projectile_id"?: bigint;
   "owner": number;
   "weapon": number;
   "x0": number;
@@ -426,8 +426,8 @@ export type S2COutput =
   | {
   "t": "game_joined";
   "id": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "seed": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "seed": bigint;
   "arena_half": number;
   "players": Array<PlayerMetaOutput>;
   "map": string;
@@ -445,8 +445,8 @@ export type S2COutput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "players": Array<PStateOutput>;
   "bullets": Array<BStateOutput>;
   "pads": Array<boolean>;
@@ -476,8 +476,8 @@ export type S2COutput =
 }
   | {
   "t": "shot";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "projectile_id": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "projectile_id": bigint;
   "owner": number;
   "weapon": number;
   "x0": number;

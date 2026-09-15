@@ -178,7 +178,7 @@ fn enum_tokens(data: DataEnum, options: &Container) -> syn::Result<Parts> {
                 if intersection && options.tag.is_some() && fields.unnamed.len() == 1 =>
             {
                 let ty = &fields.unnamed[0].ty;
-                let ty_ref = type_ref(ty)?;
+                let ty_ref = type_ref(ty, None)?;
                 let tag = options.tag.as_ref().expect("checked above");
                 quote!({
                     const _: () = ::ember_boundary::assert_intersection::<#ty>(#tag);
@@ -240,7 +240,8 @@ fn fields_tokens(
         if options.omit_none && !nullable {
             return Err(error(field, "boundary(omit_none) requires an Option field"));
         }
-        let ty = type_ref(&field.ty)?;
+        let wide = wide_tokens(field, &options)?;
+        let ty = type_ref(&field.ty, wide.as_ref())?;
         let input_optional = options.default || nullable;
         let output_optional = options.omit_none;
         output.push(quote! {
@@ -260,18 +261,33 @@ fn fields_tokens(
 struct FieldOptions {
     default: bool,
     omit_none: bool,
+    wide: Option<LitStr>,
+    bound: Option<LitStr>,
 }
 
 fn field_options(attrs: &[Attribute]) -> syn::Result<FieldOptions> {
     let mut default = false;
     let mut omit_none = false;
+    let mut wide = None;
+    let mut bound = None;
     for attr in attrs {
         if attr.path().is_ident("boundary") {
             attr.parse_nested_meta(|meta| {
-                if !meta.path.is_ident("omit_none") {
+                if meta.path.is_ident("omit_none") {
+                    omit_none = true;
+                } else if meta.path.is_ident("wide") {
+                    if wide.is_some() {
+                        return Err(meta.error("duplicate boundary wide declaration"));
+                    }
+                    wide = Some(meta.value()?.parse()?);
+                } else if meta.path.is_ident("bound") {
+                    if bound.is_some() {
+                        return Err(meta.error("duplicate boundary precision bound"));
+                    }
+                    bound = Some(meta.value()?.parse()?);
+                } else {
                     return Err(meta.error("unsupported boundary field attribute"));
                 }
-                omit_none = true;
                 Ok(())
             })?;
         }
@@ -288,7 +304,91 @@ fn field_options(attrs: &[Attribute]) -> syn::Result<FieldOptions> {
             })?;
         }
     }
-    Ok(FieldOptions { default, omit_none })
+    Ok(FieldOptions {
+        default,
+        omit_none,
+        wide,
+        bound,
+    })
+}
+
+fn wide_tokens(field: &syn::Field, options: &FieldOptions) -> syn::Result<Option<Tokens>> {
+    let Some(wide) = &options.wide else {
+        if contains_wide_integer(&field.ty) {
+            let name = field.ident.as_ref().expect("named field");
+            return Err(error(
+                field,
+                &format!(
+                    "64-bit boundary field `{name}` must declare boundary(wide = \"exact\") or boundary(wide = \"precise\", bound = \"...\")"
+                ),
+            ));
+        }
+        if let Some(bound) = &options.bound {
+            return Err(error(
+                bound,
+                "boundary precision bound requires boundary(wide = \"precise\")",
+            ));
+        }
+        return Ok(None);
+    };
+    if !contains_wide_integer(&field.ty) {
+        return Err(error(
+            wide,
+            "boundary wide declaration requires a 64-bit integer field",
+        ));
+    }
+    match wide.value().as_str() {
+        "exact" => {
+            if let Some(bound) = &options.bound {
+                return Err(error(
+                    bound,
+                    "boundary(wide = \"exact\") cannot declare a precision bound",
+                ));
+            }
+            Ok(Some(quote!(::ember_boundary::Wide::Exact)))
+        }
+        "precise" => {
+            let bound = options.bound.as_ref().ok_or_else(|| {
+                error(
+                    wide,
+                    "boundary(wide = \"precise\") requires a non-empty bound",
+                )
+            })?;
+            if bound.value().is_empty() {
+                return Err(error(
+                    bound,
+                    "boundary(wide = \"precise\") requires a non-empty bound",
+                ));
+            }
+            Ok(Some(
+                quote!(::ember_boundary::Wide::Precise { bound: #bound }),
+            ))
+        }
+        _ => Err(error(
+            wide,
+            "unknown boundary wide representation; expected exact or precise",
+        )),
+    }
+}
+
+fn contains_wide_integer(ty: &Type) -> bool {
+    match ty {
+        Type::Array(array) => contains_wide_integer(&array.elem),
+        Type::Tuple(tuple) => tuple.elems.iter().any(contains_wide_integer),
+        Type::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => {
+            let segment = path.path.segments.first().expect("one segment");
+            if matches!(segment.ident.to_string().as_str(), "u64" | "i64") {
+                return true;
+            }
+            let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+                return false;
+            };
+            arguments.args.iter().any(|argument| {
+                matches!(argument, GenericArgument::Type(inner) if contains_wide_integer(inner))
+            })
+        }
+        _ => false,
+    }
 }
 
 fn is_option(ty: &Type) -> bool {
@@ -320,9 +420,9 @@ fn variant_options(attrs: &[Attribute]) -> syn::Result<bool> {
     Ok(intersection)
 }
 
-fn type_ref(ty: &Type) -> syn::Result<Tokens> {
+fn type_ref(ty: &Type, wide: Option<&Tokens>) -> syn::Result<Tokens> {
     if let Type::Array(array) = ty {
-        let inner = type_ref(&array.elem)?;
+        let inner = type_ref(&array.elem, wide)?;
         let len = &array.len;
         return Ok(quote!(::ember_boundary::TypeRef::Array(&#inner, #len)));
     }
@@ -330,7 +430,7 @@ fn type_ref(ty: &Type) -> syn::Result<Tokens> {
         let items = tuple
             .elems
             .iter()
-            .map(type_ref)
+            .map(|item| type_ref(item, wide))
             .collect::<syn::Result<Vec<_>>>()?;
         return Ok(quote!(::ember_boundary::TypeRef::Tuple(&[#(#items),*])));
     }
@@ -355,7 +455,7 @@ fn type_ref(ty: &Type) -> syn::Result<Tokens> {
         let Some(GenericArgument::Type(inner)) = args.args.first() else {
             return Err(syn::Error::new_spanned(ty, "unsupported generic argument"));
         };
-        let inner = type_ref(inner)?;
+        let inner = type_ref(inner, wide)?;
         return Ok(if ident == "Option" {
             quote!(::ember_boundary::TypeRef::Nullable(&#inner))
         } else {
@@ -367,8 +467,8 @@ fn type_ref(ty: &Type) -> syn::Result<Tokens> {
         "String" => quote!(::ember_boundary::TypeRef::String),
         "f32" => quote!(::ember_boundary::TypeRef::Number { bits: 32 }),
         "f64" => quote!(::ember_boundary::TypeRef::Number { bits: 64 }),
-        "u8" | "u16" | "u32" | "u64" => integer(&ident, false),
-        "i8" | "i16" | "i32" | "i64" => integer(&ident, true),
+        "u8" | "u16" | "u32" | "u64" => integer(ty, &ident, false, wide)?,
+        "i8" | "i16" | "i32" | "i64" => integer(ty, &ident, true, wide)?,
         "u128" | "i128" => {
             return Err(error(
                 ty,
@@ -380,12 +480,23 @@ fn type_ref(ty: &Type) -> syn::Result<Tokens> {
     Ok(scalar)
 }
 
-fn integer(ident: &str, signed: bool) -> Tokens {
+fn integer(ty: &Type, ident: &str, signed: bool, wide: Option<&Tokens>) -> syn::Result<Tokens> {
     let bits = ident
         .trim_start_matches(['u', 'i'])
         .parse::<u8>()
         .expect("integer width");
-    quote!(::ember_boundary::TypeRef::Integer { signed: #signed, bits: #bits })
+    let wide = if bits == 64 {
+        let wide = wide.ok_or_else(|| {
+            error(
+                ty,
+                "64-bit boundary integer must declare exact or precise representation",
+            )
+        })?;
+        quote!(Some(#wide))
+    } else {
+        quote!(None)
+    };
+    Ok(quote!(::ember_boundary::TypeRef::Integer { signed: #signed, bits: #bits, wide: #wide }))
 }
 
 fn named_path(ty: &Type, path: &syn::Path) -> syn::Result<proc_macro2::TokenStream> {

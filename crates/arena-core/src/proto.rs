@@ -390,7 +390,11 @@ pub struct PState {
 #[derive(Boundary, Serialize, Deserialize, Clone, Copy, Debug)]
 #[boundary(direction = "output")]
 pub struct BState {
+    /// Exact because clients correlate projectile identity. Its 40 masked tick
+    /// bits and 12 owner/pellet bits make at most 2^52 - 1; identity wraps after
+    /// 2^40 ticks, about 581 years at 60 Hz.
     #[serde(default)]
+    #[boundary(wide = "exact")]
     pub projectile_id: u64,
     pub x: f32,
     pub z: f32,
@@ -464,7 +468,9 @@ pub enum C2S {
         seq: u32,
         /// The sim tick this client is currently rendering remote players
         /// at — the server rewinds hit tests to it (lag compensation).
+        /// Exact because the server uses this echoed tick to select history.
         #[serde(default)]
+        #[boundary(wide = "exact")]
         view_tick: u64,
         mx: f32,
         my: f32,
@@ -569,6 +575,8 @@ pub enum S2C {
         id: u8,
         /// Still sent: it is what `map` falls back to, and the seeded arena
         /// is still a level a lobby can name by naming nothing.
+        /// Exact because the full value seeds deterministic world and combat hashes.
+        #[boundary(wide = "exact")]
         seed: u64,
         arena_half: f32,
         players: Vec<PlayerMeta>,
@@ -597,6 +605,9 @@ pub enum S2C {
         id: u8,
     },
     State {
+        /// Exact history coordinate: the server indexes history by this tick and
+        /// the client derives its lag-compensation `view_tick` from it.
+        #[boundary(wide = "exact")]
         tick: u64,
         players: Vec<PState>,
         bullets: Vec<BState>,
@@ -670,7 +681,11 @@ pub enum S2C {
     /// the blast as `Blast`. Dropped by a v16 peer, which is why v17
     /// bumps (see `PROTO_VERSION`).
     Shot {
+        /// Exact because clients correlate projectile identity. Its 40 masked tick
+        /// bits and 12 owner/pellet bits make at most 2^52 - 1; identity wraps after
+        /// 2^40 ticks, about 581 years at 60 Hz.
         #[serde(default)]
+        #[boundary(wide = "exact")]
         projectile_id: u64,
         owner: u8,
         weapon: u8,

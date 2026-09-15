@@ -12,7 +12,7 @@ Generated input types have no index signature. TypeScript already accepts extra 
 
 `GameId` follows the real catalog, while `ServerGameId` is its subset whose address, protocol, version and commit keys all exist on the descriptor-backed `HostEntry`; the generated template-literal host keys cannot therefore invent keys for labs or unhosted games.
 
-The manifest lists every generated file except itself, including byte lengths and SHA-256 hashes, both scoped and fixed compiler roots, the production-template source hash, and every field containing a 64-bit integer. Those integers lower to JavaScript `number` with a declaration comment stating the exactness limit; the field-by-field representation decision remains deferred.
+The manifest lists every generated file except itself, including byte lengths and SHA-256 hashes, both scoped and fixed compiler roots, the production-template source hash, and every field containing a 64-bit integer with its `exact` or `precise` representation and optional bound. Exact fields render as TypeScript `bigint` and carry the requirement to parse JSON without a JavaScript-number intermediate; precise fields render as `number` and carry their declared bound. Generation stops with the descriptor path and a named error if any 64-bit field lacks a declaration.
 
 The generated compiler-only compatibility declaration supplies the disposal symbol used by current wasm-bindgen declarations while keeping the checked-in ES2022 project literal and `skipLibCheck` disabled; it does not enter the Pages tree.
 

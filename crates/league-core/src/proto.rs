@@ -368,6 +368,8 @@ pub enum S2C {
     },
     /// The world at `tick`, 20 Hz.
     State {
+        /// Exact authoritative simulation tick used to order presentation state.
+        #[boundary(wide = "exact")]
         tick: u64,
         secs: f32,
         units: Vec<UnitSnap>,

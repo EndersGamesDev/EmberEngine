@@ -46,9 +46,9 @@ export type EventInput = {
   "status": StatusInput;
   "elapsedMs": number;
   "phaseMs": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 browser resource bytes. */
   "loaded"?: number | null;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 browser resource bytes. */
   "total"?: number | null;
   "percent"?: number | null;
   "rateBps"?: number | null;
@@ -65,9 +65,9 @@ export type EventOutput = {
   "status": StatusOutput;
   "elapsedMs": number;
   "phaseMs": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 browser resource bytes. */
   "loaded"?: number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 browser resource bytes. */
   "total"?: number;
   "percent"?: number;
   "rateBps"?: number;

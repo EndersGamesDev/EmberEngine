@@ -435,8 +435,8 @@ export type S2CInput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "secs": number;
   "units": Array<UnitSnapInput>;
   "champs": Array<ChampViewInput>;
@@ -505,8 +505,8 @@ export type S2COutput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "secs": number;
   "units": Array<UnitSnapOutput>;
   "champs": Array<ChampViewOutput>;

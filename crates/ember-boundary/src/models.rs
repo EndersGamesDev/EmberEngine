@@ -60,6 +60,8 @@ pub struct GameRelease {
     #[serde(default)]
     pub handover: Option<bool>,
     #[serde(default)]
+    /// Optional release artifact size, bounded below JavaScript's safe-integer ceiling.
+    #[boundary(wide = "precise", bound = "0..=9,007,199,254,740,991 bytes")]
     pub bytes: Option<u64>,
     pub note: String,
 }

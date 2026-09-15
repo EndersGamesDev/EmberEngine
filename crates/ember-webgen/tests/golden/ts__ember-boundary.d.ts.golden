@@ -62,7 +62,7 @@ export type GameReleaseInput = {
   "live": boolean;
   "proto"?: number | null;
   "handover"?: boolean | null;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 bytes. */
   "bytes"?: number | null;
   "note": string;
 };
@@ -74,7 +74,7 @@ export type GameReleaseOutput = {
   "live": boolean;
   "proto": number | null;
   "handover": boolean | null;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
+  /** Precise 64-bit integer represented as number; bound: 0..=9,007,199,254,740,991 bytes. */
   "bytes": number | null;
   "note": string;
 };

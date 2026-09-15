@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ember_boundary::models::{GameCatalog, HostBook, Mirror};
-use ember_boundary::{Description, Direction, Field, Shape, TypeRef, VariantShape, View};
+use ember_boundary::{Description, Direction, Field, Shape, TypeRef, VariantShape, View, Wide};
 use minijinja::{Environment, UndefinedBehavior, context};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -167,10 +167,31 @@ pub struct RenderedBundle {
     pub source_sha: String,
     /// Hash of the registered production template names and sources.
     pub template_source_hash: String,
-    /// Sorted fields containing 64-bit integers.
-    pub integer_64_fields: Vec<String>,
+    /// Sorted fields containing 64-bit integers and their declarations.
+    pub integer_64_fields: Vec<Integer64Field>,
     /// Emitted files, excluding the self-referential manifest.
     pub files: Vec<RenderedFile>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+/// Script representation selected for one 64-bit boundary field.
+pub enum Integer64Representation {
+    /// Preserve all identity bits as a TypeScript `bigint`.
+    Exact,
+    /// Use a TypeScript `number` within a declared bound.
+    Precise,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One generated 64-bit field declaration.
+pub struct Integer64Field {
+    /// Stable module, type, optional variant and field path.
+    pub path: String,
+    /// TypeScript representation selected by the Rust field.
+    pub representation: Integer64Representation,
+    /// Precision premise for `Precise`, or null for `Exact`.
+    pub bound: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -199,8 +220,8 @@ pub struct Manifest {
     pub node_compiler_root: String,
     /// Hash of every registered production template.
     pub template_source_hash: String,
-    /// Sorted fields containing 64-bit integers.
-    pub integer_64_fields: Vec<String>,
+    /// Sorted fields containing 64-bit integers and their declarations.
+    pub integer_64_fields: Vec<Integer64Field>,
     /// Every emitted file except this manifest.
     pub files: Vec<ManifestFile>,
 }
@@ -280,6 +301,7 @@ pub fn render(source_sha: &str, game_ids: &[String]) -> WebgenResult<RenderedBun
     }
     let feeds = feeds();
     validate_feeds(&feeds)?;
+    let integer_64_fields = integer_64_fields(&feeds)?;
     let environment = environment()?;
     let game_ids = game_ids
         .iter()
@@ -348,7 +370,7 @@ pub fn render(source_sha: &str, game_ids: &[String]) -> WebgenResult<RenderedBun
     Ok(RenderedBundle {
         source_sha: source_sha.into(),
         template_source_hash: template_source_hash(),
-        integer_64_fields: integer_64_fields(&feeds),
+        integer_64_fields,
         files,
     })
 }
@@ -774,10 +796,17 @@ fn object_type(fields: &[Field], tags: &[(&str, &str)], view: View) -> String {
         let _ = write!(output, "\n  {}: {};", quoted(name), quoted(value));
     }
     for field in fields {
-        if contains_integer_64(field.ty) {
-            output.push_str(
-                "\n  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */",
-            );
+        match declared_wide(field.ty, field.name).expect("production feeds were validated") {
+            Some(Wide::Exact) => output.push_str(
+                "\n  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */",
+            ),
+            Some(Wide::Precise { bound }) => {
+                let _ = write!(
+                    output,
+                    "\n  /** Precise 64-bit integer represented as number; bound: {bound}. */"
+                );
+            }
+            None => {}
         }
         let optional = match view {
             View::Input => field.input_optional,
@@ -838,6 +867,16 @@ fn type_ref(ty: TypeRef, view: View) -> String {
     match ty {
         TypeRef::Bool => "boolean".into(),
         TypeRef::String => "string".into(),
+        TypeRef::Integer {
+            bits: 64,
+            wide: Some(Wide::Exact),
+            ..
+        } => "bigint".into(),
+        TypeRef::Integer {
+            bits: 64,
+            wide: None,
+            ..
+        } => unreachable!("production feeds were validated"),
         TypeRef::Integer { .. } | TypeRef::Number { .. } => "number".into(),
         TypeRef::Nullable(inner) => format!("{} | null", type_ref(*inner, view)),
         TypeRef::Sequence(inner) => format!("Array<{}>", type_ref(*inner, view)),
@@ -929,7 +968,7 @@ fn schema_files() -> WebgenResult<Vec<RenderedFile>> {
         .collect()
 }
 
-fn integer_64_fields(feeds: &[Feed]) -> Vec<String> {
+fn integer_64_fields(feeds: &[Feed]) -> WebgenResult<Vec<Integer64Field>> {
     let mut fields = Vec::new();
     for feed in feeds {
         for description in feed.descriptions {
@@ -941,7 +980,7 @@ fn integer_64_fields(feeds: &[Feed]) -> Vec<String> {
                         description.name,
                         None,
                         object_fields,
-                    );
+                    )?;
                 }
                 Shape::Enum { variants, .. } => {
                     for variant in variants {
@@ -952,41 +991,72 @@ fn integer_64_fields(feeds: &[Feed]) -> Vec<String> {
                                 description.name,
                                 Some(variant.name),
                                 object_fields,
-                            );
+                            )?;
                         }
                     }
                 }
             }
         }
     }
-    fields.sort();
-    fields.dedup();
-    fields
+    fields.sort_by(|left, right| left.path.cmp(&right.path));
+    fields.dedup_by(|left, right| left.path == right.path);
+    Ok(fields)
 }
 
 fn collect_integer_fields(
-    output: &mut Vec<String>,
+    output: &mut Vec<Integer64Field>,
     module: &str,
     description: &str,
     variant: Option<&str>,
     fields: &[Field],
-) {
+) -> WebgenResult<()> {
     for field in fields {
-        if contains_integer_64(field.ty) {
-            let variant = variant.map_or_else(String::new, |name| format!(".{name}"));
-            output.push(format!("{module}.{description}{variant}.{}", field.name));
+        let variant = variant.map_or_else(String::new, |name| format!(".{name}"));
+        let path = format!("{module}.{description}{variant}.{}", field.name);
+        if let Some(wide) = declared_wide(field.ty, &path)? {
+            let (representation, bound) = match wide {
+                Wide::Exact => (Integer64Representation::Exact, None),
+                Wide::Precise { bound } => {
+                    (Integer64Representation::Precise, Some(bound.to_owned()))
+                }
+            };
+            output.push(Integer64Field {
+                path,
+                representation,
+                bound,
+            });
         }
     }
+    Ok(())
 }
 
-fn contains_integer_64(ty: TypeRef) -> bool {
+fn declared_wide(ty: TypeRef, path: &str) -> WebgenResult<Option<Wide>> {
     match ty {
-        TypeRef::Integer { bits: 64, .. } => true,
+        TypeRef::Integer { bits: 64, wide, .. } => wide.map(Some).ok_or_else(|| {
+            format!(
+                "undeclared 64-bit integer representation for {path}; expected exact or precise"
+            )
+            .into()
+        }),
         TypeRef::Nullable(inner) | TypeRef::Sequence(inner) | TypeRef::Array(inner, _) => {
-            contains_integer_64(*inner)
+            declared_wide(*inner, path)
         }
-        TypeRef::Tuple(items) => items.iter().any(|item| contains_integer_64(*item)),
-        _ => false,
+        TypeRef::Tuple(items) => {
+            let mut declaration = None;
+            for item in items {
+                if let Some(current) = declared_wide(*item, path)? {
+                    if declaration.is_some_and(|previous| previous != current) {
+                        return Err(format!(
+                            "mixed 64-bit integer representations within boundary field {path}"
+                        )
+                        .into());
+                    }
+                    declaration = Some(current);
+                }
+            }
+            Ok(declaration)
+        }
+        _ => Ok(None),
     }
 }
 
@@ -1087,4 +1157,40 @@ fn clean_rendered(rendered: &str) -> Vec<u8> {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const UNDECLARED_FIELDS: &[Field] = &[Field {
+        name: "identity",
+        ty: TypeRef::Integer {
+            signed: false,
+            bits: 64,
+            wide: None,
+        },
+        input_optional: false,
+        output_optional: false,
+    }];
+    const UNDECLARED_DESCRIPTION: Description = Description {
+        name: "Undeclared",
+        direction: Direction::Output,
+        deny_unknown_fields: false,
+        shape: Shape::Object(UNDECLARED_FIELDS),
+    };
+    const UNDECLARED_DESCRIPTIONS: &[&Description] = &[&UNDECLARED_DESCRIPTION];
+
+    #[test]
+    fn undeclared_wide_integer_is_a_named_generator_error() {
+        let error = integer_64_fields(&[Feed {
+            module: "fixture",
+            descriptions: UNDECLARED_DESCRIPTIONS,
+        }])
+        .expect_err("missing declarations must fail");
+        assert_eq!(
+            error.to_string(),
+            "undeclared 64-bit integer representation for fixture.Undeclared.identity; expected exact or precise"
+        );
+    }
 }
