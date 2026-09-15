@@ -63,8 +63,8 @@ export type CarStateInput = {
   "hit_left"?: number;
   "drift_charge"?: number;
   "oil_left"?: number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "finish_tick"?: number | null;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "finish_tick"?: bigint | null;
   "finish_time"?: number | null;
 };
 
@@ -90,8 +90,8 @@ export type CarStateOutput = {
   "hit_left": number;
   "drift_charge": number;
   "oil_left": number;
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "finish_tick": number | null;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "finish_tick": bigint | null;
   "finish_time": number | null;
 };
 
@@ -298,8 +298,8 @@ export type S2CInput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "cars": Array<CarStateInput>;
   "elapsed"?: number;
   "pickups"?: Array<PickupStateInput>;
@@ -356,8 +356,8 @@ export type S2COutput =
 }
   | {
   "t": "state";
-  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */
-  "tick": number;
+  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */
+  "tick": bigint;
   "cars": Array<CarStateOutput>;
   "elapsed": number;
   "pickups": Array<PickupStateOutput>;

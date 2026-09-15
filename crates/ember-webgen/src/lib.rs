@@ -796,10 +796,17 @@ fn object_type(fields: &[Field], tags: &[(&str, &str)], view: View) -> String {
         let _ = write!(output, "\n  {}: {};", quoted(name), quoted(value));
     }
     for field in fields {
-        if contains_integer_64(field.ty) {
-            output.push_str(
-                "\n  /** 64-bit integer; JavaScript numbers are exact only through 2^53 - 1. */",
-            );
+        match declared_wide(field.ty, field.name).expect("production feeds were validated") {
+            Some(Wide::Exact) => output.push_str(
+                "\n  /** Exact 64-bit integer identity; parse JSON without a JavaScript number intermediate. */",
+            ),
+            Some(Wide::Precise { bound }) => {
+                let _ = write!(
+                    output,
+                    "\n  /** Precise 64-bit integer represented as number; bound: {bound}. */"
+                );
+            }
+            None => {}
         }
         let optional = match view {
             View::Input => field.input_optional,
@@ -860,6 +867,16 @@ fn type_ref(ty: TypeRef, view: View) -> String {
     match ty {
         TypeRef::Bool => "boolean".into(),
         TypeRef::String => "string".into(),
+        TypeRef::Integer {
+            bits: 64,
+            wide: Some(Wide::Exact),
+            ..
+        } => "bigint".into(),
+        TypeRef::Integer {
+            bits: 64,
+            wide: None,
+            ..
+        } => unreachable!("production feeds were validated"),
         TypeRef::Integer { .. } | TypeRef::Number { .. } => "number".into(),
         TypeRef::Nullable(inner) => format!("{} | null", type_ref(*inner, view)),
         TypeRef::Sequence(inner) => format!("Array<{}>", type_ref(*inner, view)),
@@ -1040,17 +1057,6 @@ fn declared_wide(ty: TypeRef, path: &str) -> WebgenResult<Option<Wide>> {
             Ok(declaration)
         }
         _ => Ok(None),
-    }
-}
-
-fn contains_integer_64(ty: TypeRef) -> bool {
-    match ty {
-        TypeRef::Integer { bits: 64, .. } => true,
-        TypeRef::Nullable(inner) | TypeRef::Sequence(inner) | TypeRef::Array(inner, _) => {
-            contains_integer_64(*inner)
-        }
-        TypeRef::Tuple(items) => items.iter().any(|item| contains_integer_64(*item)),
-        _ => false,
     }
 }
 
