@@ -17,6 +17,8 @@ use crate::event::{Event, Status};
 use crate::progress::Progress;
 use crate::text;
 
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
 /// The phases of a load, in the order a page sees them.
 #[derive(ember_boundary::Boundary, serde::Deserialize, serde::Serialize)]
 #[boundary(direction = "output")]
@@ -372,7 +374,7 @@ impl Machine {
         if self.ended || !self.download.active() {
             return self.refuse(Phase::Download, now_ms, "no download is running");
         }
-        self.progress.total = total.filter(|t| *t > 0);
+        self.progress.total = total.filter(|t| (1..=MAX_SAFE_INTEGER).contains(t));
         self.event(Phase::Download, Status::Progress, now_ms)
     }
 
@@ -524,6 +526,24 @@ mod tests {
         m.enter(0.0, Phase::Download);
         let ev = m.total(0.0, Some(0));
         assert_eq!(ev.total, None);
+    }
+
+    #[test]
+    fn a_declared_length_at_the_safe_integer_limit_is_recorded() {
+        let mut m = opened(0.0);
+        m.enter(0.0, Phase::Download);
+        let ev = m.total(0.0, Some(9_007_199_254_740_991));
+        assert_eq!(ev.total, Some(9_007_199_254_740_991));
+    }
+
+    #[test]
+    fn a_declared_length_above_the_safe_integer_limit_is_unknown() {
+        let mut m = opened(0.0);
+        m.enter(0.0, Phase::Download);
+        let ev = m.total(0.0, Some(9_007_199_254_740_992));
+        assert_eq!(ev.total, None);
+        assert_eq!(ev.percent, None);
+        assert_eq!(ev.eta_ms, None);
     }
 
     #[test]

@@ -88,13 +88,22 @@ pub struct Event {
     pub phase_ms: f64,
     /// Bytes received so far, during and after the download.
     ///
-    /// The browser lowering converts this to a JavaScript number with `as_f64`.
-    #[boundary(omit_none)]
+    /// Precise because browser resource counts stay within the safe-integer range.
+    #[boundary(
+        omit_none,
+        wide = "precise",
+        bound = "0..=9,007,199,254,740,991 browser resource bytes"
+    )]
     pub loaded: Option<u64>,
     /// The known decoded length, when there is one.
     ///
-    /// The browser lowering converts this to a JavaScript number with `as_f64`.
-    #[boundary(omit_none)]
+    /// Precise because received and advertised lengths are recorded only within
+    /// the safe-integer range; an advertised length beyond it is treated as unknown.
+    #[boundary(
+        omit_none,
+        wide = "precise",
+        bound = "0..=9,007,199,254,740,991 browser resource bytes"
+    )]
     pub total: Option<u64>,
     /// Whole percent, when the decoded length is known.
     #[boundary(omit_none)]

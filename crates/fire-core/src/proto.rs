@@ -113,7 +113,9 @@ pub struct CarState {
     pub drift_charge: f32,
     #[serde(default)]
     pub oil_left: f32,
+    /// Exact finish identity used as the stable standings ordering key.
     #[serde(default)]
+    #[boundary(wide = "exact")]
     pub finish_tick: Option<u64>,
     #[serde(default)]
     pub finish_time: Option<f32>,
@@ -280,6 +282,8 @@ pub enum S2C {
         countdown: f32,
     },
     State {
+        /// Exact authoritative simulation tick used to rebase client prediction.
+        #[boundary(wide = "exact")]
         tick: u64,
         cars: Vec<CarState>,
         #[serde(default)]
