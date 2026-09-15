@@ -19,6 +19,11 @@ case " $* " in
             printf 'export function emberLoad() { return "npx-emitted-loader"; }\n' \
                 > target/web-generated/js/loader.js
             printf 'export {};\n' > target/web-generated/js/exhaustive-consumer.js
+            mkdir -p target/web-generated/js/games/fire/v2
+            cp target/web-generated/ts/games/fire/v2/race.ts \
+                target/web-generated/js/games/fire/v2/race.js
+            cp target/web-generated/ts/games/fire/v2/garage.ts \
+                target/web-generated/js/games/fire/v2/garage.js
         fi
         ;;
 esac

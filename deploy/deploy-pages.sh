@@ -302,7 +302,16 @@ mapped_tsc() {
     npx --no-install tsc "$@" 2>&1 | "$WEBGEN_BIN" --map-diagnostics >&2
 }
 timed_step typescript mapped_tsc -p tsconfig.web.json
-for module in hosts.js loader.js; do
+EMITTED_WEB_MODULES=(
+    hosts.js
+    loader.js
+    games/fire/v2/race.js
+    games/fire/v2/garage.js
+)
+STAMPED_WEB_MODULES=(
+    games/fire/v2/race.js
+)
+for module in "${EMITTED_WEB_MODULES[@]}"; do
     [ -f "target/web-generated/js/$module" ] \
         || die "TypeScript did not emit target/web-generated/js/$module"
 done
@@ -407,7 +416,7 @@ PY
 }
 
 copy_live_source web "$PAGES_DIR" root
-for module in hosts.js loader.js; do
+for module in "${EMITTED_WEB_MODULES[@]}"; do
     cp "target/web-generated/js/$module" "$PAGES_DIR/$module"
 done
 cp web/version.json "$PAGES_DIR/"
@@ -796,9 +805,9 @@ for path in live:
         if fixed != text:
             with open(page, "w", encoding="utf-8", newline="") as handle:
                 handle.write(fixed)
-            if path in game_live:
-                stamped_pages.add(path)
             text = fixed
+        if path in game_live and "loader.js?v=%s" % stamp in text:
+            stamped_pages.add(path)
         where = page.relative_to(root).as_posix()
         for target, query in reference.findall(text):
             if not (page.parent / target).is_file():
@@ -824,15 +833,29 @@ if stamped_pages != game_live:
 print("   stamped the shared loader into %d live game page(s)" % len(stamped_pages))
 LOADER
 
+module_args=()
+for module in "${EMITTED_WEB_MODULES[@]}"; do
+    module_args+=(--module "$module")
+done
+for module in "${STAMPED_WEB_MODULES[@]}"; do
+    module_args+=(--stamped "$module")
+done
+"$PY" deploy/verify-emitted-modules.py \
+    --emitted-root target/web-generated/js \
+    --assembled-root "$PAGES_DIR" \
+    --stamp "$DEPLOY_STAMP" \
+    "${module_args[@]}"
+
 # Record outputs that do not come through the tracked-source copy above. The
 # reference proof consumes this manifest rather than trusting files inherited
 # from the seed worktree.
 "$PY" - "$PAGES_DIR" "$PLACED_PATHS" \
-    version.json games.json server.json hosts.js loader.js .nojekyll \
+    version.json games.json server.json .nojekyll \
     "$LEAGUE_LIVE/version.json" "$END_GAME_LIVE/version.json" \
     pkg "$ARENA_LIVE/pkg" "$FIRE_LIVE/pkg" \
     "$KINGS_LIVE/pkg" "$LEAGUE_LIVE/pkg" "$WHAT_LIVE/pkg" \
-    "$END_GAME_LIVE/pkg" "$LAB_JULIBROT_LIVE/pkg" <<'PY'
+    "$END_GAME_LIVE/pkg" "$LAB_JULIBROT_LIVE/pkg" \
+    "${EMITTED_WEB_MODULES[@]}" <<'PY'
 import pathlib, sys
 
 root = pathlib.Path(sys.argv[1])
