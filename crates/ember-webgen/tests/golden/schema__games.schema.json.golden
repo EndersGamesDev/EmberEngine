@@ -72,6 +72,7 @@
                 "bytes": {
                   "anyOf": [
                     {
+                      "description": "64-bit integer represented as a JavaScript number; precision bound: 0..=9,007,199,254,740,991 bytes.",
                       "maximum": 18446744073709551615,
                       "minimum": 0,
                       "type": "integer"

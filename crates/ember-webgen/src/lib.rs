@@ -188,8 +188,8 @@ pub enum Integer64Representation {
 pub struct Integer64Field {
     /// Stable module, type, optional variant and field path.
     pub path: String,
-    /// TypeScript representation selected by the Rust field, when declared.
-    pub representation: Option<Integer64Representation>,
+    /// TypeScript representation selected by the Rust field.
+    pub representation: Integer64Representation,
     /// Precision premise for `Precise`, or null for `Exact`.
     pub bound: Option<String>,
 }
@@ -996,13 +996,12 @@ fn collect_integer_fields(
     for field in fields {
         let variant = variant.map_or_else(String::new, |name| format!(".{name}"));
         let path = format!("{module}.{description}{variant}.{}", field.name);
-        if contains_integer_64(field.ty) {
-            let (representation, bound) = match declared_wide(field.ty, &path)? {
-                Some(Wide::Exact) => (Some(Integer64Representation::Exact), None),
-                Some(Wide::Precise { bound }) => {
-                    (Some(Integer64Representation::Precise), Some(bound.to_owned()))
+        if let Some(wide) = declared_wide(field.ty, &path)? {
+            let (representation, bound) = match wide {
+                Wide::Exact => (Integer64Representation::Exact, None),
+                Wide::Precise { bound } => {
+                    (Integer64Representation::Precise, Some(bound.to_owned()))
                 }
-                None => (None, None),
             };
             output.push(Integer64Field {
                 path,
@@ -1016,7 +1015,12 @@ fn collect_integer_fields(
 
 fn declared_wide(ty: TypeRef, path: &str) -> WebgenResult<Option<Wide>> {
     match ty {
-        TypeRef::Integer { bits: 64, wide, .. } => Ok(wide),
+        TypeRef::Integer { bits: 64, wide, .. } => wide.map(Some).ok_or_else(|| {
+            format!(
+                "undeclared 64-bit integer representation for {path}; expected exact or precise"
+            )
+            .into()
+        }),
         TypeRef::Nullable(inner) | TypeRef::Sequence(inner) | TypeRef::Array(inner, _) => {
             declared_wide(*inner, path)
         }
@@ -1147,4 +1151,40 @@ fn clean_rendered(rendered: &str) -> Vec<u8> {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const UNDECLARED_FIELDS: &[Field] = &[Field {
+        name: "identity",
+        ty: TypeRef::Integer {
+            signed: false,
+            bits: 64,
+            wide: None,
+        },
+        input_optional: false,
+        output_optional: false,
+    }];
+    const UNDECLARED_DESCRIPTION: Description = Description {
+        name: "Undeclared",
+        direction: Direction::Output,
+        deny_unknown_fields: false,
+        shape: Shape::Object(UNDECLARED_FIELDS),
+    };
+    const UNDECLARED_DESCRIPTIONS: &[&Description] = &[&UNDECLARED_DESCRIPTION];
+
+    #[test]
+    fn undeclared_wide_integer_is_a_named_generator_error() {
+        let error = integer_64_fields(&[Feed {
+            module: "fixture",
+            descriptions: UNDECLARED_DESCRIPTIONS,
+        }])
+        .expect_err("missing declarations must fail");
+        assert_eq!(
+            error.to_string(),
+            "undeclared 64-bit integer representation for fixture.Undeclared.identity; expected exact or precise"
+        );
+    }
 }

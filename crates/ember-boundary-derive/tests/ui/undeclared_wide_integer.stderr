@@ -1,0 +1,5 @@
+error: 64-bit boundary field `value` must declare boundary(wide = "exact") or boundary(wide = "precise", bound = "...")
+ --> tests/ui/undeclared_wide_integer.rs:6:5
+  |
+6 |     value: u64,
+  |     ^^^^^^^^^^

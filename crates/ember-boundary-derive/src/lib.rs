@@ -314,6 +314,15 @@ fn field_options(attrs: &[Attribute]) -> syn::Result<FieldOptions> {
 
 fn wide_tokens(field: &syn::Field, options: &FieldOptions) -> syn::Result<Option<Tokens>> {
     let Some(wide) = &options.wide else {
+        if contains_wide_integer(&field.ty) {
+            let name = field.ident.as_ref().expect("named field");
+            return Err(error(
+                field,
+                &format!(
+                    "64-bit boundary field `{name}` must declare boundary(wide = \"exact\") or boundary(wide = \"precise\", bound = \"...\")"
+                ),
+            ));
+        }
         if let Some(bound) = &options.bound {
             return Err(error(
                 bound,
@@ -471,13 +480,19 @@ fn type_ref(ty: &Type, wide: Option<&Tokens>) -> syn::Result<Tokens> {
     Ok(scalar)
 }
 
-fn integer(_ty: &Type, ident: &str, signed: bool, wide: Option<&Tokens>) -> syn::Result<Tokens> {
+fn integer(ty: &Type, ident: &str, signed: bool, wide: Option<&Tokens>) -> syn::Result<Tokens> {
     let bits = ident
         .trim_start_matches(['u', 'i'])
         .parse::<u8>()
         .expect("integer width");
     let wide = if bits == 64 {
-        wide.map_or_else(|| quote!(None), |wide| quote!(Some(#wide)))
+        let wide = wide.ok_or_else(|| {
+            error(
+                ty,
+                "64-bit boundary integer must declare exact or precise representation",
+            )
+        })?;
+        quote!(Some(#wide))
     } else {
         quote!(None)
     };

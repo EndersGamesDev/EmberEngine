@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ember_webgen::{Manifest, RenderedBundle};
+use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBundle};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -158,7 +158,31 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
     assert_eq!(manifest.source_sha, "golden");
     assert_eq!(manifest.template_source_hash, TEMPLATE_HASH);
     assert!(sentinel.is_file(), "generation preserves staged ABI types");
-    assert_eq!(manifest.integer_64_fields.len(), 11);
+    assert_eq!(
+        manifest.integer_64_fields,
+        vec![
+            exact("arena-core.BState.projectile_id"),
+            exact("arena-core.C2S.input.view_tick"),
+            exact("arena-core.S2C.game_joined.seed"),
+            exact("arena-core.S2C.shot.projectile_id"),
+            exact("arena-core.S2C.state.tick"),
+            precise(
+                "ember-boundary.GameRelease.bytes",
+                "0..=9,007,199,254,740,991 bytes"
+            ),
+            precise(
+                "ember-loader.Event.loaded",
+                "0..=9,007,199,254,740,991 browser resource bytes"
+            ),
+            precise(
+                "ember-loader.Event.total",
+                "0..=9,007,199,254,740,991 browser resource bytes"
+            ),
+            exact("fire-core.CarState.finish_tick"),
+            exact("fire-core.S2C.state.tick"),
+            exact("league-core.S2C.state.tick"),
+        ]
+    );
     assert_eq!(manifest.files.len(), 23);
     assert!(
         manifest
@@ -337,6 +361,22 @@ fn declarations_preserve_direction_and_special_shapes() {
     assert!(league.contains("{\n  \"t\": \"cmd\";\n} & CmdInput"));
     assert!(boundary.contains("JavaScript numbers are exact only through 2^53 - 1"));
     assert!(compat.contains("readonly dispose: unique symbol;"));
+}
+
+fn exact(path: &str) -> Integer64Field {
+    Integer64Field {
+        path: path.into(),
+        representation: Integer64Representation::Exact,
+        bound: None,
+    }
+}
+
+fn precise(path: &str, bound: &str) -> Integer64Field {
+    Integer64Field {
+        path: path.into(),
+        representation: Integer64Representation::Precise,
+        bound: Some(bound.into()),
+    }
 }
 
 fn text<'a>(bundle: &'a RenderedBundle, path: &str) -> &'a str {
