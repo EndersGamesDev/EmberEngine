@@ -82,7 +82,8 @@ mkdir -p "$REPO/crates/league-core/src"
 mkdir -p "$REPO/crates/arena" "$REPO/crates/fire" "$REPO/crates/kings" "$REPO/crates/league"
 mkdir -p "$REPO/crates/end-game" "$REPO/web/$END_GAME_LIVE"
 mkdir -p "$REPO/crates/what-is-this" "$REPO/crates/labs/julibrot/app"
-cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$DEPLOY/check-toolchain.sh" "$REPO/deploy/"
+cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stage-wasm-types.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$DEPLOY/check-toolchain.sh" "$DEPLOY/verify-emitted-modules.py" "$REPO/deploy/"
+cp "$DEPLOY/../Cargo.lock" "$REPO/"
 cp "$DEPLOY/../package.json" "$DEPLOY/../package-lock.json" "$DEPLOY/../tsconfig.web.json" "$REPO/"
 for manifest in arena fire kings league what-is-this end-game; do
     cp "$DEPLOY/../crates/$manifest/Cargo.toml" "$REPO/crates/$manifest/"
@@ -109,10 +110,12 @@ printf '{}\n' > "$REPO/web/version.json"
 printf 'arena live<script src="./settings.js?v=1"></script><script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/$ARENA_LIVE/index.html"
 printf 'arena controls\n' > "$REPO/web/$ARENA_LIVE/settings.js"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
-for name in index.html race.js garage.js style.css; do
+for name in index.html style.css; do
     printf "fire v2 fixture %s\n" "$name" > "$REPO/web/games/fire/v2/$name"
 done
-printf 'import { emberLoad } from "../../../loader.js?v=1";\n' >> "$REPO/web/games/fire/v2/race.js"
+printf '<script type="module" src="./race.js"></script>\n' >> "$REPO/web/games/fire/v2/index.html"
+printf 'import "./garage.js"; const LOADER_URL = "../../../loader.js?v=1"; export { LOADER_URL };\n' > "$REPO/web/games/fire/v2/race.ts.j2"
+printf 'export const garage = true;\n' > "$REPO/web/games/fire/v2/garage.ts.j2"
 mkdir -p "$REPO/web/games/fire/v2/fonts"
 for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
@@ -379,6 +382,69 @@ if cmp -s "$REPO/target/web-generated/js/loader.js" "$SHIM_PUBLISHED/loader.js" 
 else
     bad "the root host picker or loader did not come from compiler output"
 fi
+FIRE_EXPECTED="$TMP/fire-emitted-expected"
+verify_fire_modules() {
+    "$PY" "$REPO/deploy/verify-emitted-modules.py" "$@" \
+        --stamp "$STAMP" \
+        --module games/fire/v2/race.js \
+        --module games/fire/v2/garage.js \
+        --stamped games/fire/v2/race.js
+}
+verify_fire_modules --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$FIRE_EXPECTED" >/dev/null
+if cmp -s "$FIRE_EXPECTED/games/fire/v2/race.js" \
+        "$SHIM_PUBLISHED/games/fire/v2/race.js" \
+    && cmp -s "$FIRE_EXPECTED/games/fire/v2/garage.js" \
+        "$SHIM_PUBLISHED/games/fire/v2/garage.js"; then
+    ok "stamped and unstamped Fire modules match their emitted expectations"
+else
+    bad "a Fire module differs from its emitted expectation"
+fi
+contains "$(cat "$REPO/target/web-generated/js/games/fire/v2/race.js")" \
+    'loader.js?v=1' "the emitted Fire module remains stamp-independent"
+DUPLICATE_EMITTED="$TMP/fire-duplicate-emitted"
+mkdir -p "$DUPLICATE_EMITTED/games/fire/v2"
+cp "$REPO/target/web-generated/js/games/fire/v2/race.js" \
+    "$REPO/target/web-generated/js/games/fire/v2/garage.js" \
+    "$DUPLICATE_EMITTED/games/fire/v2/"
+printf '\nimport "../../../loader.js?v=1";\n' >> "$DUPLICATE_EMITTED/games/fire/v2/race.js"
+if verify_fire_modules \
+    --emitted-root "$DUPLICATE_EMITTED" \
+    --assembled-root "$FIRE_EXPECTED" > "$TMP/fire-duplicate.log" 2>&1; then
+    bad "a stamped module with duplicate loader tokens passed emitted verification"
+else
+    ok "a stamped module with duplicate loader tokens is rejected by emitted verification"
+fi
+contains "$(cat "$TMP/fire-duplicate.log")" \
+    "stamped emitted module must contain exactly one loader cache token" \
+    "the duplicate-token rejection comes from the emitted verifier"
+CORRUPT_STAMPED="$TMP/fire-corrupt-stamped"
+cp -R "$FIRE_EXPECTED" "$CORRUPT_STAMPED"
+printf '\n// corrupt stamped module\n' >> "$CORRUPT_STAMPED/games/fire/v2/race.js"
+if verify_fire_modules \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$CORRUPT_STAMPED" > "$TMP/fire-corrupt-stamped.log" 2>&1; then
+    bad "a corrupted stamped module passed emitted verification"
+else
+    ok "a corrupted stamped module is rejected by emitted verification"
+fi
+contains "$(cat "$TMP/fire-corrupt-stamped.log")" \
+    "assembled module does not match its emitted expectation: games/fire/v2/race.js" \
+    "the corrupted stamped-module rejection comes from the emitted verifier"
+CORRUPT_UNSTAMPED="$TMP/fire-corrupt-unstamped"
+cp -R "$FIRE_EXPECTED" "$CORRUPT_UNSTAMPED"
+printf '\n// corrupt unstamped module\n' >> "$CORRUPT_UNSTAMPED/games/fire/v2/garage.js"
+if verify_fire_modules \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$CORRUPT_UNSTAMPED" > "$TMP/fire-corrupt-unstamped.log" 2>&1; then
+    bad "a corrupted unstamped module passed emitted verification"
+else
+    ok "a corrupted unstamped module is rejected by emitted verification"
+fi
+contains "$(cat "$TMP/fire-corrupt-unstamped.log")" \
+    "assembled module does not match its emitted expectation: games/fire/v2/garage.js" \
+    "the corrupted unstamped-module rejection comes from the emitted verifier"
 for f in pkg/ember_loader.js pkg/ember_loader_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$f" ]; then ok "assembled the shared loader $f"; else bad "missing the shared loader $f"; fi
 done
@@ -398,15 +464,15 @@ else
     ok "the assembled page has no stale loader cache key"
 fi
 contains "$(cat "$REPO/web/$ARENA_LIVE/index.html")" 'loader.js?v=1' "the Arena source loader import remains pinned at v=1"
-cp "$REPO/web/games/fire/v2/race.js" "$TMP/fire-race.saved"
-sed -i '/loader\.js?v=1/d' "$REPO/web/games/fire/v2/race.js"
+cp "$REPO/web/games/fire/v2/race.ts.j2" "$TMP/fire-race.saved"
+sed -i '/loader\.js?v=1/d' "$REPO/web/games/fire/v2/race.ts.j2"
 if (cd "$REPO" && SOURCE_DATE_EPOCH=1700000000 EMBER_PAGES_ARCHIVE="$TMP/loader-missing.tar.gz" bash deploy/deploy-pages.sh) > "$TMP/loader-missing.log" 2>&1; then
     bad "a live game page with no loader import was accepted"
 else
     ok "a live game page with no loader import was refused"
 fi
 contains "$(cat "$TMP/loader-missing.log")" "missing: games/fire/v2" "the loader stamp mismatch names the missing live page"
-mv "$TMP/fire-race.saved" "$REPO/web/games/fire/v2/race.js"
+mv "$TMP/fire-race.saved" "$REPO/web/games/fire/v2/race.ts.j2"
 if grep -q '"bytes"' "$REPO/web/games.json"; then
     bad "the tracked catalog carries a generated bundle size"
 else
@@ -511,7 +577,7 @@ for spec in "${ARENA_LIVE#games/} arena" "fire/v2 fire" "kings/v1 kings" "${LEAG
     mkdir -p "$EXPECTED/games/$live/pkg"
     cp "$REPO/web/games/$live/index.html" "$EXPECTED/games/$live/"
     if [ "$bundle" = fire ]; then
-        cp "$REPO/web/games/$live/race.js" "$REPO/web/games/$live/garage.js" "$REPO/web/games/$live/style.css" "$EXPECTED/games/$live/"
+        cp "$REPO/web/games/$live/style.css" "$EXPECTED/games/$live/"
         # The faces and their licence ship; README.md does not.
         mkdir -p "$EXPECTED/games/$live/fonts"
         cp "$REPO/web/games/$live"/fonts/*.woff2 "$REPO/web/games/$live/fonts/OFL.txt" "$EXPECTED/games/$live/fonts/"
@@ -529,9 +595,16 @@ for spec in "${ARENA_LIVE#games/} arena" "fire/v2 fire" "kings/v1 kings" "${LEAG
     printf 'shim js for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/$bundle.js"
     printf 'shim wasm for %s\n' "$bundle" > "$EXPECTED/games/$live/pkg/${bundle}_bg.wasm"
 done
+"$PY" "$REPO/deploy/verify-emitted-modules.py" --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$EXPECTED" \
+    --stamp "$STAMP" \
+    --module games/fire/v2/race.js \
+    --module games/fire/v2/garage.js \
+    --stamped games/fire/v2/race.js
 mkdir -p "$EXPECTED/games/league/v2"
 cp -R "$REPO/web/games/league/v2/art" "$EXPECTED/games/league/v2/"
-for page in games/fire/v2/race.js games/kings/v1/index.html "$LEAGUE_LIVE/ui.js"; do
+for page in games/kings/v1/index.html "$LEAGUE_LIVE/ui.js"; do
     sed -i "s/loader\\.js?v=1/loader.js?v=$STAMP/" "$EXPECTED/$page"
 done
 for game in arena fire kings league; do

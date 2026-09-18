@@ -1,17 +1,112 @@
     import { chooseHost, listLobbies, probeHost, rankHosts, renderChip }
       from '../../../hosts.js';
-    import { emberLoad } from '../../../loader.js?v=1';
+    import type { HostView } from '../../../hosts.js';
     import { vehicles, selectedVehicle, formatTime, EngineAudio } from './garage.js';
+    import type { HudSnapshot } from './garage.js';
 
-    const $ = (id) => document.getElementById(id);
+    type UnknownRecord = Record<string, unknown>;
+    type LoaderModule = typeof import('../../../loader.js');
+    type FireWasm = Pick<typeof import('../../../wasm/fire/fire.js'),
+      'hud_json' | 'online_status' | 'package_version' | 'proto_version'
+      | 'restart_local' | 'start_local_vehicle' | 'start_online'>;
+    export type FireProtocolBoundary = C2SOutput | S2CInput;
+
+    interface FireLoaderEvent extends Event {
+      host?: HostView | null;
+      candidates?: HostView[];
+      wrongProto?: HostView[];
+      proto?: number | null;
+    }
+
+    interface PendingLaunch {
+      lobby: unknown;
+      ws: unknown;
+      host: unknown;
+      password: unknown;
+      action: unknown;
+    }
+
+    const $ = (id: string): HTMLElement => {
+      const found = document.getElementById(id);
+      if (!found) throw new Error(`missing Fire page element #${id}`);
+      return found;
+    };
+    const button = (id: string): HTMLButtonElement => {
+      const found = $(id);
+      if (!(found instanceof HTMLButtonElement)) throw new Error(`Fire page element #${id} is not a button`);
+      return found;
+    };
+    const input = (id: string): HTMLInputElement => {
+      const found = $(id);
+      if (!(found instanceof HTMLInputElement)) throw new Error(`Fire page element #${id} is not an input`);
+      return found;
+    };
+    const fireWasmFrom = (value: unknown): FireWasm => {
+      if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+        throw new Error('the Fire wasm module is not an object');
+      }
+      for (const name of [
+        'hud_json', 'online_status', 'package_version', 'proto_version',
+        'restart_local', 'start_local_vehicle', 'start_online',
+      ] as const) {
+        if (typeof Reflect.get(value, name) !== 'function') {
+          throw new Error(`the Fire wasm module has no ${name} function`);
+        }
+      }
+      return value as FireWasm;
+    };
+    const hudFrom = (value: unknown): value is HudSnapshot => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const hud = value as UnknownRecord;
+      for (const key of [
+        'speed', 'lap', 'laps', 'place', 'racers', 'boost', 'countdown', 'item',
+        'vehicle', 'gear', 'race_time', 'drift_charge', 'shield', 'grip', 'hit',
+      ] as const) {
+        if (typeof hud[key] !== 'number') return false;
+      }
+      for (const key of ['boosting', 'drifting', 'finished'] as const) {
+        if (typeof hud[key] !== 'boolean') return false;
+      }
+      return true;
+    };
+    const lobbyFrom = (value: unknown): LobbyInfoInput | null => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      const lobby = value as UnknownRecord;
+      if (typeof lobby['name'] !== 'string'
+          || typeof lobby['host'] !== 'string'
+          || typeof lobby['has_password'] !== 'boolean'
+          || typeof lobby['players'] !== 'number'
+          || typeof lobby['cap'] !== 'number'
+          || (lobby['racing'] !== undefined && typeof lobby['racing'] !== 'boolean')) return null;
+      return lobby as LobbyInfoInput;
+    };
+    const pendingFrom = (value: unknown): PendingLaunch | null => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      return {
+        lobby: Reflect.get(value, 'lobby'),
+        ws: Reflect.get(value, 'ws'),
+        host: Reflect.get(value, 'host'),
+        password: Reflect.get(value, 'password'),
+        action: Reflect.get(value, 'action'),
+      };
+    };
+    const loaderFrom = (value: unknown): Pick<LoaderModule, 'emberLoad'> => {
+      if (!value || typeof value !== 'object'
+          || typeof Reflect.get(value, 'emberLoad') !== 'function') {
+        throw new Error('the Fire page loader has no emberLoad function');
+      }
+      return value as Pick<LoaderModule, 'emberLoad'>;
+    };
+    const LOADER_URL = '../../../loader.js?v=1';
+    const { emberLoad } = loaderFrom(await import(LOADER_URL));
     const sound = new EngineAudio();
     let practice = true;
     let resultsShown = false;
     let awaitingRestart = false;
-    const fail = (msg) => {
-      const el = $('loading');
-      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
-      $('engine-note').textContent = 'Could not load the race. Reload to try again. ' + (msg || '');
+    const fail = (msg: unknown): void => {
+      const el = document.getElementById('loading');
+      if (el) el.textContent = 'failed to start: ' + String(msg || 'see browser console');
+      $('engine-note').textContent = 'Could not load the race. Reload to try again. ' + String(msg || '');
       $('engine-note').className = 'note bad';
       if(!$('stage').classList.contains('hidden')) {
         $('results').classList.remove('hidden');
@@ -23,42 +118,43 @@
     window.addEventListener('error', (e) => fail(e.message));
     window.addEventListener('unhandledrejection', (e) => fail(e.reason));
     // Stop the arrow keys and space scrolling the page out from under the race.
-    addEventListener('keydown', (e) => {
-      if (!['INPUT','TEXTAREA'].includes(e.target.tagName) && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key) && !$('stage').classList.contains('hidden')) e.preventDefault();
+    addEventListener('keydown', (e: KeyboardEvent) => {
+      const tagName = e.target instanceof HTMLElement ? e.target.tagName : '';
+      if (!['INPUT','TEXTAREA'].includes(tagName) && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key) && !$('stage').classList.contains('hidden')) e.preventDefault();
     }, { passive: false });
-    $('ember-root').addEventListener('pointerdown', () => document.querySelector('#ember-root canvas')?.focus());
-    $('sound-toggle').onclick = () => {
+    $('ember-root').addEventListener('pointerdown', () => document.querySelector<HTMLElement>('#ember-root canvas')?.focus());
+    button('sound-toggle').onclick = () => {
       const on = sound.toggle();
       $('sound-toggle').textContent = on ? 'SOUND ON' : 'SOUND OFF';
       $('sound-toggle').setAttribute('aria-pressed', String(on));
       if(on) sound.start().catch(()=>{});
-      document.querySelector('#ember-root canvas')?.focus();
+      document.querySelector<HTMLElement>('#ember-root canvas')?.focus();
     };
     document.addEventListener('visibilitychange', () => {
       if(sound.ctx) { if(document.hidden) sound.ctx.suspend(); else if(sound.enabled) sound.ctx.resume(); }
     });
-    $('btn-garage').onclick = () => location.assign('./');
-    $('btn-rematch').onclick = () => {
+    button('btn-garage').onclick = () => location.assign('./');
+    button('btn-rematch').onclick = () => {
       if(!practice) { location.assign('./'); return; }
       wasm.restart_local(selectedVehicle());
       awaitingRestart = true;
       resultsShown = false;
       $('results').classList.add('hidden');
       sound.start().catch(()=>{});
-      document.querySelector('#ember-root canvas')?.focus();
+      document.querySelector<HTMLElement>('#ember-root canvas')?.focus();
     };
 
-    const ROOT = new URL('../../../', location);
+    const ROOT = new URL('../../../', location.href);
 
     // The loader emits, this page renders. The two lines a driver already
     // watches carry it: the note under the stage and the placeholder inside
     // it. Before this, both said "first load may take a moment" and then
     // nothing for the rest of the download.
-    let chosen = null;       // the host we will race on
-    let candidates = [];     // it, then the fallbacks, in order
-    let wrongProto = [];     // answered, but speaking another protocol
+    let chosen: HostView | null = null;       // the host we will race on
+    let candidates: HostView[] = [];          // it, then the fallbacks, in order
+    let wrongProto: HostView[] = [];          // answered, but speaking another protocol
     let PROTO = 0;           // the bundle confirms this after the early ranking
-    function paint(e) {
+    function paint(e: FireLoaderEvent): void {
       if (e.phase === 'host') {
         if (e.status !== 'begin') {
           // The background post-bundle retry updates launch state and the chip
@@ -67,12 +163,12 @@
           candidates = e.candidates || [];
           wrongProto = e.wrongProto || [];
           if (typeof e.proto === 'number') PROTO = e.proto;
-          renderChip($('host-chip'), chosen, { wrongProto, proto: e.proto });
+          renderChip($('host-chip'), chosen, { wrongProto, proto: e.proto ?? null });
         }
         return;
       }
       if (e.phase !== 'ready') $('engine-note').textContent = e.text;
-      const el = $('loading');
+      const el = document.getElementById('loading');
       if (el) el.textContent = e.text;
       if (e.status === 'fail') fail(e.text);
     }
@@ -88,15 +184,15 @@
       bundle: './pkg/fire.js',
       onEvent: paint,
     });
-    const wasm = ember.exports;
+    const wasm = fireWasmFrom(ember.exports);
     const FULL_VERSION = ember.version || wasm.package_version();
     const VERSION_LABEL = `Version ${FULL_VERSION.split('.')[0]}`;
     $('release-version').textContent = VERSION_LABEL;
     $('release-version').title = `Full version ${FULL_VERSION}`;
     document.title = `Fire Racer · ${VERSION_LABEL} · Ember`;
     PROTO = typeof ember.proto === 'number' ? ember.proto : wasm.proto_version();
-    $('btn-practice').disabled = false;
-    $('btn-online').disabled = false;
+    button('btn-practice').disabled = false;
+    button('btn-online').disabled = false;
     $('btn-practice').textContent = 'Start race ↗';
     $('engine-note').textContent = 'Ready to race. Seven AI opponents. No account needed.';
 
@@ -110,13 +206,13 @@
 
     // One address, probed once, dressed as a ranked candidate so everything
     // downstream deals with exactly one shape.
-    async function onlyHost(url) {
+    async function onlyHost(url: unknown): Promise<ReturnType<typeof rankHosts>> {
       const entry = { name: '', fire_ws: url, version: '', commit: '', updated: '' };
       const probes = new Map([['', await probeHost(url, { proto: PROTO })]]);
       return rankHosts([entry], { game: 'fire', probes });
     }
 
-    async function discover() {
+    async function discover(): Promise<void> {
       const r = await chooseHost(ROOT.href, { game: 'fire', proto: PROTO });
       if (launched) return; // a race started while the probes were out
       chosen = r.chosen;
@@ -129,8 +225,8 @@
     // different news: the second still has a playable build behind it, and it
     // is exactly what a protocol bump looks like from the page that shipped
     // first.
-    const offlineText = () => (wrongProto.length
-      ? `${wrongProto[0].name || 'the server'} is on protocol ${wrongProto[0].proto} and this build speaks ${PROTO}`
+    const offlineText = (): string => (wrongProto.length
+      ? `${wrongProto[0]?.name || 'the server'} is on protocol ${wrongProto[0]?.proto} and this build speaks ${PROTO}`
         + ' — open the games page and pick the build that matches'
       : 'no online server is published right now — practice mode still works');
 
@@ -139,9 +235,9 @@
     // never sees a menu. The chosen host's lobbies come first and every other
     // host on this protocol below, each row tagged: two people who landed on
     // different machines still have to be able to find each other.
-    const showLobbies = async ({ quiet = false } = {}) => {
+    const showLobbies = async ({ quiet = false }: { quiet?: boolean } = {}): Promise<void> => {
       const rows = $('lobby-rows');
-      const note = (text, bad) => {
+      const note = (text: string, bad = false): void => {
         const s = document.createElement('span');
         s.className = 'note' + (bad ? ' bad' : '');
         s.textContent = text;
@@ -159,9 +255,12 @@
       }
 
       const lists = await Promise.all(candidates.map((c) => listLobbies(c.url, { proto: PROTO })));
-      const all = [];
+      const all: Array<{ host: HostView; lobby: LobbyInfoInput }> = [];
       candidates.forEach((host, i) => {
-        for (const l of lists[i]) all.push({ host, lobby: l });
+        for (const value of lists[i] ?? []) {
+          const lobby = lobbyFrom(value);
+          if (lobby) all.push({ host, lobby });
+        }
       });
       if (!all.length) { note('no lobbies yet — create one below'); return; }
 
@@ -197,25 +296,25 @@
     // looking playable — and a lobby someone else opens ten seconds from now
     // appears without anyone pressing Refresh. It stops the moment the page
     // goes online.
-    let lobbyPoll = null;
+    let lobbyPoll: ReturnType<typeof setInterval> | null = null;
     let ticking = false;
-    async function tick() {
+    async function tick(): Promise<void> {
       if (ticking) return;
       ticking = true;
       try { await showLobbies({ quiet: true }); } finally { ticking = false; }
     }
-    const pollOn = () => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
-    const pollOff = () => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
+    const pollOn = (): void => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
+    const pollOff = (): void => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
 
     // ---- launching ---------------------------------------------------------
-    const showStage = () => {
+    const showStage = (): void => {
       $('start').classList.add('hidden');
       $('stage').classList.remove('hidden');
       $('session-toolbar').classList.remove('hidden');
       document.body.classList.add('racing');
     };
 
-    const launchLocal = () => {
+    const launchLocal = (): void => {
       if (launched) return;
       launched = true;
       practice = true;
@@ -227,7 +326,12 @@
       pollHud();
     };
 
-    const launchOnline = async (lobby, password, create, target) => {
+    const launchOnline = async (
+      lobby: unknown,
+      password: unknown,
+      create: boolean,
+      target: HostView | null,
+    ): Promise<void> => {
       if (launched) return;
       sound.start().catch(()=>{});
       const wanted = target || chosen;
@@ -257,7 +361,7 @@
       const order = create
         ? [wanted, ...candidates.filter((c) => c.url !== wanted.url)]
         : [wanted];
-      let live = null;
+      let live: HostView | null = null;
       for (const c of order) {
         // Serial on purpose: the next host only matters once this one failed.
         const p = await probeHost(c.url, { proto: PROTO, timeoutMs: 3000 });
@@ -286,7 +390,7 @@
       try {
         wasm.start_online(JSON.stringify({
           ws: live.url,
-          handle: ($('handle').value || 'driver').trim(),
+          handle: (input('handle').value || 'driver').trim(),
           lobby, password: password || '', create, vehicle: selectedVehicle(),
         }));
         pollHud();
@@ -302,8 +406,8 @@
       }
     };
 
-    $('btn-practice').onclick = launchLocal;
-    $('btn-online').onclick = () => {
+    button('btn-practice').onclick = launchLocal;
+    button('btn-online').onclick = () => {
       $('online-panel').classList.toggle('hidden');
       $('btn-online').classList.add('primary');
       $('btn-practice').classList.remove('primary');
@@ -312,19 +416,22 @@
     };
     // Not `= showLobbies`: the handler would hand the click event in as the
     // options object.
-    $('btn-refresh').onclick = () => showLobbies();
-    $('btn-create').onclick = () => {
-      const name = ($('newlobby').value || '').trim();
+    button('btn-refresh').onclick = () => { void showLobbies(); };
+    button('btn-create').onclick = () => {
+      const name = (input('newlobby').value || '').trim();
       if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
-      launchOnline(name, ($('newpass').value || '').trim(), true, chosen);
+      void launchOnline(name, (input('newpass').value || '').trim(), true, chosen);
     };
 
     // ---- a join handed over from the hub's live-lobby showcase
     // The hub already picked the machine: this lobby lives on THAT host and
     // nowhere else, so its address is used verbatim with no re-ranking. It is
     // still probed once, so a dead handover says so instead of hanging.
-    let pending = null;
-    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
+    let pending: PendingLaunch | null = null;
+    try {
+      const parsed: unknown = JSON.parse(sessionStorage.getItem('ember-pending') ?? 'null');
+      pending = pendingFrom(parsed);
+    } catch {}
     sessionStorage.removeItem('ember-pending');
     if (pending && pending.lobby) {
       $('online-panel').classList.remove('hidden');
@@ -340,11 +447,11 @@
         // with it, so the normal pick applies — and the loader has made it.
         renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
       }
-      if (chosen && pending.host) chosen.name = chosen.name || pending.host;
+      if (chosen && pending.host) chosen.name = chosen.name || String(pending.host);
       renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
       // No poll here: this branch opens the panel only to race straight into
       // the handed-over lobby. `launchOnline` starts one if that fails.
-      launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
+      void launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
     } else {
       // The loader ranked once on load, so the chip is honest before anyone
       // opens the online panel; the panel's own refresh re-ranks from there.
@@ -358,6 +465,7 @@
     // lives here and reads a snapshot the game publishes every frame.
     const speedEl = document.querySelector('#speed .n');
     const lapEl = document.querySelector('#lap .n');
+    if (!speedEl || !lapEl) throw new Error('the Fire HUD is missing speed or lap output');
     const placeEl = $('place');
     const boostEl = $('boost');
     const stateEl = $('state');
@@ -367,10 +475,10 @@
       ['?', 'EMPTY', 'DRIVE THROUGH A BOX'], ['ϟ', 'NITRO', 'E / ACCELERATE'],
       ['◇', 'SHIELD', 'E / PROTECT'], ['◎', 'PULSE', 'E / ATTACK'],
       ['≋', 'OIL SLICK', 'E / DROP'], ['⌁', 'GRIP', 'E / CORNER FASTER'],
-    ];
-    let pips = [];
+    ] as const;
+    let pips: HTMLDivElement[] = [];
 
-    const setPips = (n) => {
+    const setPips = (n: number): void => {
       if (pips.length !== MAX_BOOST) {
         boostEl.querySelectorAll('.pip').forEach((p) => p.remove());
         pips = Array.from({ length: MAX_BOOST }, () => {
@@ -383,11 +491,13 @@
       pips.forEach((p, i) => p.classList.toggle('on', i < n));
     };
 
-    const pollHud = () => {
+    const pollHud = (): void => {
       const hud = $('hud');
-      const tick = () => {
+      const tick = (): void => {
         try {
-          const h = JSON.parse(wasm.hud_json());
+          const parsed: unknown = JSON.parse(wasm.hud_json());
+          if (!hudFrom(parsed)) throw new Error('the Fire wasm returned an invalid HUD snapshot');
+          const h = parsed;
           if(awaitingRestart) {
             if(h.finished) { requestAnimationFrame(tick); return; }
             awaitingRestart = false;
@@ -397,11 +507,11 @@
             $('results').classList.add('hidden');
           }
           hud.classList.add('live');
-          speedEl.textContent = Math.round(h.speed);
+          speedEl.textContent = String(Math.round(h.speed));
           lapEl.textContent = `${Math.min(h.lap + 1, h.laps)}/${h.laps}`;
           placeEl.textContent = `${h.place}/${h.racers}`;
           setPips(h.boost);
-          $('gear').textContent = h.gear === 0 ? 'R' : h.gear || '1';
+          $('gear').textContent = String(h.gear === 0 ? 'R' : h.gear || '1');
           $('hud-car').textContent = vehicles[h.vehicle || 0]?.name || 'GT-01';
           $('race-time').textContent = formatTime(h.race_time);
           const item = items[h.item] || items[0];
@@ -413,13 +523,15 @@
           const charge = Math.max(0, Math.min(1, h.drift_charge || 0));
           driftEl.style.display = h.drifting || charge > .02 ? 'block' : 'none';
           $('drift-label').textContent = charge >= .65 ? 'RELEASE TO BOOST' : 'BUILD YOUR DRIFT';
-          document.querySelector('#drift-meter i').style.width = `${charge * 100}%`;
-          const network = !practice && wasm.online_status ? wasm.online_status() : '';
+          const driftMeter = document.querySelector<HTMLElement>('#drift-meter i');
+          if (!driftMeter) throw new Error('the Fire HUD is missing its drift meter');
+          driftMeter.style.width = `${charge * 100}%`;
+          const network = !practice ? wasm.online_status() : '';
           $('effect').textContent = network || (h.hit > .1 ? 'IMPACT · RECOVERING' : h.shield > .1 ? 'SHIELD ACTIVE' : h.grip > .1 ? 'GRIP ACTIVE' : h.boosting ? 'BOOST ACTIVE' : '');
           sound.update(h);
           if (h.countdown > 0.01) {
             stateEl.style.display = 'block';
-            stateEl.textContent = Math.ceil(h.countdown);
+            stateEl.textContent = String(Math.ceil(h.countdown));
           } else if (h.finished) {
             stateEl.style.display = 'none';
             if(!resultsShown) {

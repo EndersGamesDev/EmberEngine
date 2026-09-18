@@ -1,1 +1,37 @@
-export function start(value: any): void;
+export interface UnsafeResult {
+  value: any;
+}
+
+export function clean(): void;
+
+export function reachesUnsafe(): UnsafeResult;
+
+export function overloaded(value: any): void;
+
+export function overloaded(value: string): void;
+
+export const variableLeak: any;
+
+export { ImportedUnsafe as aliasLeak } from './imported.js';
+
+interface UnsafeBase {
+  inherited: any;
+}
+
+export interface InheritedLeak extends UnsafeBase {}
+
+import type { ImportedUnsafe } from './imported.js';
+export type AliasLeak = ImportedUnsafe;
+
+declare namespace Nested {
+  namespace Inner {
+    type Unsafe = any;
+    const unsafeValue: any;
+  }
+}
+
+export interface NestedTypeLeak {
+  value: Nested.Inner.Unsafe;
+}
+
+export type NestedTypeofLeak = typeof Nested.Inner.unsafeValue;

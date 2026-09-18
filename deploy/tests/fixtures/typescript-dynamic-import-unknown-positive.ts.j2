@@ -1,0 +1,7 @@
+type Importer = (url: string) => Promise<unknown>;
+interface Settings {
+  importer: Importer;
+}
+export function settings(): Settings {
+  return { importer: (url: string) => import(url) };
+}

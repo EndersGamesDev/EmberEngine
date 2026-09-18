@@ -1,0 +1,5 @@
+const moduleUrl = './module.js';
+export async function loadModule() {
+  const module = await import(moduleUrl);
+  return module.default;
+}

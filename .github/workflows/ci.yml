@@ -83,7 +83,9 @@ jobs:
           node-version: "24.20.0"
           cache: npm
       - name: toolchain (pinned by rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           key: typed-web
@@ -91,9 +93,26 @@ jobs:
         run: npm ci
       - name: verify pinned TypeScript toolchain
         run: bash deploy/check-toolchain.sh
+      - name: install matching wasm-bindgen CLI
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          with pathlib.Path("Cargo.lock").open("rb") as stream:
+              lock = tomllib.load(stream)
+          versions = {package["version"] for package in lock["package"] if package["name"] == "wasm-bindgen"}
+          if len(versions) != 1:
+              raise SystemExit("typed web: Cargo.lock does not contain exactly one wasm-bindgen version")
+          print(versions.pop())
+          PY
+          )"
+          cargo install wasm-bindgen-cli --version "$version" --locked
       - name: generate and compile declarations
         run: |
           cargo run --locked -p ember-webgen --release -- --out "target/web-generated/$EMBER_SOURCE_SHA"
+          bash deploy/stage-wasm-types.sh "$EMBER_SOURCE_SHA"
           npx --no-install tsc -p tsconfig.web.json --noEmit
       - name: typed web fixtures
         run: bash deploy/tests/test-typescript.sh
