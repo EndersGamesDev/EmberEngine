@@ -485,6 +485,21 @@ fi
 contains "$(cat "$TMP/fire-corrupt-unstamped.log")" \
     "assembled module does not match its emitted expectation: games/fire/v2/garage.js" \
     "the corrupted unstamped-module rejection comes from the emitted verifier"
+KINGS_EXPECTED="$TMP/kings-emitted-expected"
+"$PY" "$REPO/deploy/verify-emitted-modules.py" --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$KINGS_EXPECTED" \
+    --stamp "$STAMP" \
+    --module games/kings/v1/main.js \
+    --stamped games/kings/v1/main.js >/dev/null
+if cmp -s "$KINGS_EXPECTED/games/kings/v1/main.js" \
+        "$SHIM_PUBLISHED/games/kings/v1/main.js"; then
+    ok "the stamped Kings module matches its emitted expectation"
+else
+    bad "the Kings module differs from its emitted expectation"
+fi
+contains "$(cat "$REPO/target/web-generated/js/games/kings/v1/main.js")" \
+    'loader.js?v=1' "the emitted Kings module remains stamp-independent"
 for f in pkg/ember_loader.js pkg/ember_loader_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$f" ]; then ok "assembled the shared loader $f"; else bad "missing the shared loader $f"; fi
 done

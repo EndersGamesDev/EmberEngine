@@ -22,11 +22,12 @@ if [[ " $* " == *" run "* ]] && [[ " $* " == *" -p ember-webgen "* ]]; then
     done
     [ -n "$output" ] || { echo "cargo shim: ember-webgen run has no --out" >&2; exit 2; }
     for root in "$output/ts" target/web-generated/ts; do
-        mkdir -p "$root/games/fire/v2"
+        mkdir -p "$root/games/fire/v2" "$root/games/kings/v1"
         printf 'export const renderedHosts = true;\n' > "$root/hosts.ts"
         printf 'export const renderedLoader = true;\n' > "$root/loader.ts"
         cp web/games/fire/v2/race.ts.j2 "$root/games/fire/v2/race.ts"
         cp web/games/fire/v2/garage.ts.j2 "$root/games/fire/v2/garage.ts"
+        printf 'export const renderedKings = true;\n' > "$root/games/kings/v1/main.ts"
     done
     for root in "$output/node-ts" target/web-generated/node-ts; do
         mkdir -p "$root"

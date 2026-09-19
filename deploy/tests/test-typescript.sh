@@ -123,11 +123,11 @@ converted_javascript=(
     web/loader.js
     web/hosts.test.mjs
     web/loader.test.mjs
-    web/games/kings/v1/main.js
     deploy/check-hosts.mjs
     deploy/check-hosts.test.mjs
     web/games/fire/v2/race.js
     web/games/fire/v2/garage.js
+    web/games/kings/v1/main.js
     web/games/end-game/v12/main.js
     web/games/end-game/v12/dialogue.js
     web/games/end-game/v12/castle-audio.js
@@ -148,6 +148,24 @@ while IFS= read -r path; do
 done < <(git ls-files '*.js' '*.mjs' '*.cjs')
 [ "$frozen_javascript" -gt 0 ] || bad "the frozen JavaScript allowlist matched no files"
 ok "converted names are absent and the phase allowlist preserves $frozen_javascript frozen files"
+
+no_inline_pages=(
+    "web/games/kings/v1/index.html|  <script type=\"module\">import './main.js?v=1';</script>"
+)
+for specification in "${no_inline_pages[@]}"; do
+    page="${specification%%|*}"
+    bootstrap="${specification#*|}"
+    if "$PY" - "$page" "$bootstrap" <<'PY'
+import pathlib, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+raise SystemExit(0 if text.lower().count("<script") == 1 and text.splitlines().count(sys.argv[2]) == 1 else 1)
+PY
+    then
+        ok "$page carries only its stamped module bootstrap"
+    else
+        bad "$page contains inline script beyond its stamped module bootstrap"
+    fi
+done
 
 skip_execution() {
     local reason="$1"
@@ -1015,6 +1033,7 @@ node_suites=(
     target/web-generated/node-js/loader.test.mjs
     target/web-generated/node-js/check-hosts.test.mjs
     target/web-generated/node-js/fire.test.mjs
+    target/web-generated/node-js/games/kings/v1/main.test.mjs
     target/web-generated/node-js/tools/end-game/castle.test.mjs
     target/web-generated/node-js/tools/end-game/dialogue.test.mjs
     target/web-generated/node-js/tools/end-game/guard.test.mjs
@@ -1025,7 +1044,7 @@ for suite in "${node_suites[@]}"; do
     [ -f "$suite" ] || bad "the emitted Node suite is missing: $suite"
 done
 node --test "${node_suites[@]}"
-ok "all nine explicit emitted Node suites pass"
+ok "all ten explicit emitted Node suites pass"
 
 echo "== unavailable optional toolchains skip for distinct reasons =="
 mkdir -p "$TMP/node-free-path" "$TMP/mismatch-path"

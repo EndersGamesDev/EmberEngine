@@ -7,7 +7,7 @@ use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBu
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "6ca9754b59bcf814ceff91dbd7563a79c33b97021f4b8e8b4c491dfcb04e58e7";
+const TEMPLATE_HASH: &str = "21afcdecf7729c2c89f10e4ff89214ad3d41d1aee7afa29f5913e397f58c2bc6";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,7 +183,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
             exact("league-core.S2C.state.tick"),
         ]
     );
-    assert_eq!(manifest.files.len(), 53);
+    assert_eq!(manifest.files.len(), 55);
     assert!(
         manifest
             .files
@@ -264,6 +264,11 @@ fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
             "ts/games/kings/v1/main.ts",
             "web/games/kings/v1/main.ts.j2",
             "// Generated from web/games/kings/v1/main.ts.j2 at golden. Do not edit.\nimport type { C2SOutput, EndReason, Kind, LastAction, LobbyInfoInput, Phase, PieceState, PlayerMeta, S2CInput, SeatState } from '../../../kings-core.js';\nimport type { EventOutput } from '../../../ember-loader.js';\nimport type { HostBook } from '../../../ember-boundary.js';\n\n",
+        ),
+        (
+            "node-ts/games/kings/v1/main.test.mts",
+            "web/games/kings/v1/main.test.mts.j2",
+            "// Generated from web/games/kings/v1/main.test.mts.j2 at golden. Do not edit.\nimport type { C2SOutput, S2CInput } from '../../../../ts/kings-core.js';\n\n",
         ),
         (
             "node-ts/hosts.test.mts",
