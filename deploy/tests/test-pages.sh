@@ -60,6 +60,14 @@ export SHIM_PUBLISHED="$TMP/published"
 export SHIM_GIT_INDEX="$TMP/git-index"
 export SHIM_GIT_TRACKED="$TMP/git-tracked"
 export SHIM_LOG="$TMP/argv.log"
+# Carries a loader import of its own, so the stamp pass accepts it and the copy
+# order is the only thing that can keep it out of the publication.
+# The mark is what the assembled bytes are searched for, and it carries no
+# loader token: the stamp pass rewrites every `loader.js?v=` it finds in the
+# published tree, so a needle containing one could never match and the search
+# would report success whatever the copy order did.
+TRACKED_RACE_DECOY_MARK='tracked race.js that must never reach the publication'
+TRACKED_RACE_DECOY="import \"../../../loader.js?v=1\"; /* $TRACKED_RACE_DECOY_MARK */"
 unset CARGO_TARGET_DIR
 
 SHIMS="$TMP/shims"
@@ -116,6 +124,9 @@ done
 printf '<script type="module" src="./race.js"></script>\n' >> "$REPO/web/games/fire/v2/index.html"
 printf 'import "./garage.js"; const LOADER_URL = "../../../loader.js?v=1"; export { LOADER_URL };\n' > "$REPO/web/games/fire/v2/race.ts.j2"
 printf 'export const garage = true;\n' > "$REPO/web/games/fire/v2/garage.ts.j2"
+# A tracked page file whose name collides with an emitted module. The live-page
+# copy places it; only the copy order decides whether compiler output survives.
+printf '%s\n' "$TRACKED_RACE_DECOY" > "$REPO/web/games/fire/v2/race.js"
 mkdir -p "$REPO/web/games/fire/v2/fonts"
 for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
@@ -403,6 +414,11 @@ else
 fi
 contains "$(cat "$REPO/target/web-generated/js/games/fire/v2/race.js")" \
     'loader.js?v=1' "the emitted Fire module remains stamp-independent"
+if grep -qF "$TRACKED_RACE_DECOY_MARK" "$SHIM_PUBLISHED/games/fire/v2/race.js"; then
+    bad "a same-named tracked page source replaced the emitted module"
+else
+    ok "the emitted module survives a same-named tracked page source"
+fi
 DUPLICATE_EMITTED="$TMP/fire-duplicate-emitted"
 mkdir -p "$DUPLICATE_EMITTED/games/fire/v2"
 cp "$REPO/target/web-generated/js/games/fire/v2/race.js" \
