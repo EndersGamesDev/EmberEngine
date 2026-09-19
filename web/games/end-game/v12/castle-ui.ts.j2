@@ -1,4 +1,36 @@
-export function castleView(state) {
+export interface CastleQuest {
+  sequence?: number;
+  journal?: string[];
+  seal?: boolean;
+  shrinesUsed?: number;
+  defeated?: number;
+}
+
+export interface CastleEnemy {
+  name: string;
+  health: number;
+  maxHealth: number;
+  boss?: boolean;
+  cue: string;
+  unblockable?: boolean;
+  blockCost?: number | null;
+}
+
+export interface CastleState {
+  quest?: CastleQuest;
+  stage: number;
+  enemy?: CastleEnemy | null;
+  objective: string;
+  finished: boolean;
+  exploration?: { visited: number };
+}
+
+export interface CastleElementGetter {
+  (id: 'enemy-health'): HTMLMeterElement;
+  (id: string): HTMLElement;
+}
+
+export function castleView(state: CastleState) {
   const quest = state.quest;
   if (!quest || state.stage < 5) return null;
   const sequence = Math.max(0, Math.min(3, Number(quest.sequence) || 0));
@@ -21,7 +53,7 @@ export function castleView(state) {
   };
 }
 
-export function renderCastle(state, get) {
+export function renderCastle(state: CastleState, get: CastleElementGetter) {
   const view = castleView(state);
   get('seal-progress').hidden = !view;
   get('journal-hint').hidden = !view;
@@ -32,16 +64,16 @@ export function renderCastle(state, get) {
   get('journal-inventory').textContent = view.inventory;
   // Only rebuild the journal when discoveries change; never interpret story text as HTML.
   const entries = get('journal-entries'), key = JSON.stringify(view.journal);
-  if (entries.dataset.entries !== key) {
-    entries.dataset.entries = key;
+  if (entries.dataset['entries'] !== key) {
+    entries.dataset['entries'] = key;
     entries.replaceChildren(...view.journal.map(text => {
       const li = entries.ownerDocument.createElement('li'); li.textContent = text; return li;
     }));
   }
   if (view.enemy) {
     const enemy = view.enemy;
-    get('enemy-status').dataset.boss = String(enemy.boss);
-    get('enemy-status').dataset.danger = String(enemy.danger);
+    get('enemy-status').dataset['boss'] = String(enemy.boss);
+    get('enemy-status').dataset['danger'] = String(enemy.danger);
     get('enemy-name').textContent = enemy.name;
     get('enemy-health').max = enemy.maximum;
     get('enemy-health').value = enemy.health;

@@ -28,6 +28,27 @@ const CHECK_HOSTS_TEST_TEMPLATE: &str = include_str!("../../../deploy/check-host
 const FIRE_RACE_TEMPLATE: &str = include_str!("../../../web/games/fire/v2/race.ts.j2");
 const FIRE_GARAGE_TEMPLATE: &str = include_str!("../../../web/games/fire/v2/garage.ts.j2");
 const FIRE_TEST_TEMPLATE: &str = include_str!("../../../web/games/fire/v2/fire.test.mts.j2");
+const END_GAME_MAIN_TEMPLATE: &str = include_str!("../../../web/games/end-game/v12/main.ts.j2");
+const END_GAME_DIALOGUE_TEMPLATE: &str =
+    include_str!("../../../web/games/end-game/v12/dialogue.ts.j2");
+const END_GAME_CASTLE_AUDIO_TEMPLATE: &str =
+    include_str!("../../../web/games/end-game/v12/castle-audio.ts.j2");
+const END_GAME_CASTLE_UI_TEMPLATE: &str =
+    include_str!("../../../web/games/end-game/v12/castle-ui.ts.j2");
+const END_GAME_QUALITY_TEMPLATE: &str =
+    include_str!("../../../web/games/end-game/v12/quality.ts.j2");
+const END_GAME_VOICE_LINES_TEMPLATE: &str =
+    include_str!("../../../web/games/end-game/v12/voice-lines.ts.j2");
+const END_GAME_CASTLE_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/castle.test.mts.j2");
+const END_GAME_DIALOGUE_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/dialogue.test.mts.j2");
+const END_GAME_GUARD_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/guard.test.mts.j2");
+const END_GAME_QUALITY_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/quality.test.mts.j2");
+const END_GAME_MAIN_BOOT_TEST_TEMPLATE: &str =
+    include_str!("../../../tools/end-game/main-boot.test.mts.j2");
 const CORE_TEMPLATES: [(&str, &str); 3] = [
     ("declaration", DECLARATION_TEMPLATE),
     ("exhaustive", EXHAUSTIVE_TEMPLATE),
@@ -50,7 +71,7 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 9] = [
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 20] = [
     BehaviourTemplate {
         name: "hosts",
         source_path: "web/hosts.ts.j2",
@@ -187,6 +208,87 @@ const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 9] = [
             specifier: "../ts/fire-core.js",
             names: &["S2CInput"],
         }],
+    },
+    BehaviourTemplate {
+        name: "end-game-main",
+        source_path: "web/games/end-game/v12/main.ts.j2",
+        output_path: "ts/games/end-game/v12/main.ts",
+        source: END_GAME_MAIN_TEMPLATE,
+        imports: &[BoundaryImport {
+            module: "ember-loader",
+            specifier: "../../../ember-loader.js",
+            names: &["EventOutput"],
+        }],
+    },
+    BehaviourTemplate {
+        name: "end-game-dialogue",
+        source_path: "web/games/end-game/v12/dialogue.ts.j2",
+        output_path: "ts/games/end-game/v12/dialogue.ts",
+        source: END_GAME_DIALOGUE_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-castle-audio",
+        source_path: "web/games/end-game/v12/castle-audio.ts.j2",
+        output_path: "ts/games/end-game/v12/castle-audio.ts",
+        source: END_GAME_CASTLE_AUDIO_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-castle-ui",
+        source_path: "web/games/end-game/v12/castle-ui.ts.j2",
+        output_path: "ts/games/end-game/v12/castle-ui.ts",
+        source: END_GAME_CASTLE_UI_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-quality",
+        source_path: "web/games/end-game/v12/quality.ts.j2",
+        output_path: "ts/games/end-game/v12/quality.ts",
+        source: END_GAME_QUALITY_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-voice-lines",
+        source_path: "web/games/end-game/v12/voice-lines.ts.j2",
+        output_path: "ts/games/end-game/v12/voice-lines.ts",
+        source: END_GAME_VOICE_LINES_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-castle-test",
+        source_path: "tools/end-game/castle.test.mts.j2",
+        output_path: "node-ts/tools/end-game/castle.test.mts",
+        source: END_GAME_CASTLE_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-dialogue-test",
+        source_path: "tools/end-game/dialogue.test.mts.j2",
+        output_path: "node-ts/tools/end-game/dialogue.test.mts",
+        source: END_GAME_DIALOGUE_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-guard-test",
+        source_path: "tools/end-game/guard.test.mts.j2",
+        output_path: "node-ts/tools/end-game/guard.test.mts",
+        source: END_GAME_GUARD_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-quality-test",
+        source_path: "tools/end-game/quality.test.mts.j2",
+        output_path: "node-ts/tools/end-game/quality.test.mts",
+        source: END_GAME_QUALITY_TEST_TEMPLATE,
+        imports: &[],
+    },
+    BehaviourTemplate {
+        name: "end-game-main-boot-test",
+        source_path: "tools/end-game/main-boot.test.mts.j2",
+        output_path: "node-ts/tools/end-game/main-boot.test.mts",
+        source: END_GAME_MAIN_BOOT_TEST_TEMPLATE,
+        imports: &[],
     },
 ];
 

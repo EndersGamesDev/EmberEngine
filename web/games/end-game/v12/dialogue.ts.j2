@@ -1,4 +1,45 @@
-export const LINES = Object.freeze({
+export interface VoiceLine {
+  file: string;
+  text: string;
+  duration: number;
+  speaker?: string;
+}
+
+export type VoiceLines = Readonly<Record<string, VoiceLine>>;
+
+export interface VoiceOutput {
+  stop(): void;
+  pause(): void;
+  resume(): void;
+  ready(kind: string): boolean;
+  play(kind: string): void;
+}
+
+export interface DialogueEvent {
+  id: number;
+  kind: string;
+  time: number;
+}
+
+export interface DialogueSnapshot {
+  life: number;
+  events?: DialogueEvent[];
+  dead?: boolean;
+}
+
+interface ActiveLine {
+  event: DialogueEvent;
+  line: VoiceLine;
+  elapsed: number;
+}
+
+interface AudioClip {
+  buffer: AudioBuffer;
+  offset: number;
+  started: number;
+}
+
+export const LINES: VoiceLines = Object.freeze({
   movement: {file: 'warden-movement.wav', text: 'Shut up and go back to your place!', duration: 2.27008},
   key: {file: 'warden-unlocking.wav', text: 'Where did you get that key from?', duration: 2.06546},
   sword: {file: 'warden-sword.wav', text: 'Why you have a sword here?', duration: 1.96713},
@@ -8,7 +49,20 @@ export const LINES = Object.freeze({
 // One speaker, with a per-life cursor. The simulation retains recent events so
 // several fixed updates between rendered frames cannot swallow a story line.
 export class WardenDialogue {
-  constructor(output, caption = () => {}) {
+  output: VoiceOutput;
+  caption: (text: string | null) => void;
+  life: number | null;
+  cursor: number;
+  queue: DialogueEvent[];
+  active: ActiveLine | null;
+  paused: boolean;
+  dead: boolean;
+  finished: boolean;
+  now: number;
+  waiting: number;
+  justResumed: boolean;
+
+  constructor(output: VoiceOutput, caption: (text: string | null) => void = () => {}) {
     this.output = output;
     this.caption = caption;
     this.life = null;
@@ -29,7 +83,7 @@ export class WardenDialogue {
     this.waiting = 0;
     this.caption(null);
   }
-  ingest(snapshot, now) {
+  ingest(snapshot: DialogueSnapshot | null | undefined, now: number) {
     if (!snapshot) return;
     if (snapshot.life !== this.life) {
       this.clear();
@@ -68,7 +122,7 @@ export class WardenDialogue {
       }
     }
   }
-  tick(seconds) {
+  tick(seconds: number) {
     if (this.paused) return;
     // A resume can happen before RAF measures its first frame after background
     // throttling. That frame's delta includes the paused interval.
@@ -83,12 +137,15 @@ export class WardenDialogue {
       }
     }
     if (this.active) return;
-    while (this.queue.length && this.now-this.queue[0].time > (this.queue[0].kind === 'movement' ? 3 : 12)) {
+    while (this.queue[0] && this.now-this.queue[0].time > (this.queue[0].kind === 'movement' ? 3 : 12)) {
       this.queue.shift();
     }
     if (!this.queue.length) { this.waiting = 0; return; }
     this.waiting += dt;
-    const event = this.queue[0], line = LINES[event.kind];
+    const event = this.queue[0];
+    if (!event) return;
+    const line = LINES[event.kind];
+    if (!line) return;
     // Briefly wait for decoding; unavailable audio still gets a timed caption.
     if (!this.output.ready(event.kind) && this.waiting < 1.2) return;
     this.queue.shift();
@@ -97,7 +154,7 @@ export class WardenDialogue {
     this.caption(line.text);
     this.output.play(event.kind);
   }
-  setPaused(value) {
+  setPaused(value: boolean) {
     if (this.paused === value) return;
     this.paused = value;
     if (value) { this.output.pause(); this.caption(null); }
@@ -116,7 +173,17 @@ export class WardenDialogue {
 // Decode once after the same user gesture that unlocks the game's AudioContext.
 // Sources are recreated at their saved offset when the pause menu is closed.
 export class VoiceAudio {
-  constructor(getContext, lines = LINES) {
+  getContext: () => AudioContext | undefined;
+  lines: VoiceLines;
+  buffers: Map<string, AudioBuffer>;
+  failed: Set<string>;
+  loading: boolean;
+  clip: AudioClip | null;
+  source: AudioBufferSourceNode | null;
+  gain: GainNode | null;
+  volume: number;
+
+  constructor(getContext: () => AudioContext | undefined, lines: VoiceLines = LINES) {
     this.getContext = getContext;
     this.lines = lines;
     this.buffers = new Map();
@@ -139,8 +206,8 @@ export class VoiceAudio {
         .catch(() => this.failed.add(kind));
     }
   }
-  ready(kind) { return this.buffers.has(kind) || this.failed.has(kind); }
-  play(kind) {
+  ready(kind: string) { return this.buffers.has(kind) || this.failed.has(kind); }
+  play(kind: string) {
     this.stop();
     const buffer = this.buffers.get(kind), context = this.getContext();
     // No delayed surprise playback if the browser blocked audio or decoding.
@@ -155,7 +222,7 @@ export class VoiceAudio {
   }
   stop() { this.disconnect(); this.clip = null; }
   pause() {
-    if (this.source && this.clip) this.clip.offset += this.getContext().currentTime - this.clip.started;
+    if (this.source && this.clip) this.clip.offset += this.getContext()!.currentTime - this.clip.started;
     this.disconnect();
   }
   resume() {
@@ -171,7 +238,7 @@ export class VoiceAudio {
       this.source.start(0, clip.offset);
     } catch { this.stop(); }
   }
-  setVolume(value) {
+  setVolume(value: number) {
     this.volume = Math.max(0, Math.min(1, value));
     if (this.gain) this.gain.gain.value = this.volume;
   }

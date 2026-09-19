@@ -2,46 +2,180 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-import {CastleDialogue} from '../../web/games/end-game/v12/castle-audio.js';
-import {renderCastle} from '../../web/games/end-game/v12/castle-ui.js';
+
+type UnknownRecord = Record<string, unknown>;
+type TestCall = unknown[];
+interface TestEvent extends UnknownRecord {
+  pointerId: number;
+  pointerType: string;
+  button: number;
+  buttons: number;
+  repeat: boolean;
+  prevented?: boolean;
+  target: unknown;
+  currentTarget: unknown;
+  preventDefault(): void;
+}
+type Listener = (event: TestEvent) => unknown;
+interface ParameterDouble {
+  values: number[];
+  setValueAtTime(value: number): void;
+  exponentialRampToValueAtTime(value: number): void;
+}
+interface AudioNodeDouble {
+  kind: string;
+  type: string;
+  frequency: ParameterDouble;
+  gain: ParameterDouble;
+  Q: {value: number};
+  connect(next: unknown): unknown;
+  start(): void;
+  stop(): void;
+}
+
+function moduleRecord(value: unknown): UnknownRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('End Game test module is not an object');
+  return value as UnknownRecord;
+}
+const castleModule = moduleRecord(await import(new URL('../../../js/games/end-game/v12/castle-audio.js', import.meta.url).href));
+const castleUiModule = moduleRecord(await import(new URL('../../../js/games/end-game/v12/castle-ui.js', import.meta.url).href));
+if (typeof castleModule['CastleDialogue'] !== 'function' || typeof castleUiModule['renderCastle'] !== 'function') {
+  throw new Error('End Game guard test exports are incomplete');
+}
+const CastleDialogue = castleModule['CastleDialogue'];
+const renderCastle = castleUiModule['renderCastle'];
+
+function completeState(overrides: UnknownRecord): UnknownRecord {
+  const guard = overrides['guard'];
+  const guardOverrides = guard && typeof guard === 'object' && !Array.isArray(guard) ? guard as UnknownRecord : {};
+  const enemy = overrides['enemy'];
+  const enemyOverrides = enemy && typeof enemy === 'object' && !Array.isArray(enemy) ? enemy as UnknownRecord : {};
+  const combat = overrides['combat'];
+  const combatOverrides = combat && typeof combat === 'object' && !Array.isArray(combat) ? combat as UnknownRecord : {};
+  return {
+    version: '12.0.0', time: 1, stage: 1, finished: false, form: 'Wolf', health: 100,
+    stamina: 100, objective: 'Leave the cell', location: 'The basement', prompt: '', alert: 0,
+    event: 0, message: '', footsteps: 0, crouched: false, pad: false,
+    exploration: {visited: 0, total: 9}, quest: {sequence: 0, journal: []}, castleEvents: [],
+    dialogue: {life: 1, dead: false, events: []}, enemy: null,
+    enemyCombat: {hitEvent: 0, attackEvent: 0, hitLeft: 0},
+    combat: {label: 'Ready', swingEvent: 0, impactEvent: 0, impactLeft: 0,
+      impactStrength: 0, queued: 0, quickLeft: 0, rhythmLeft: 0},
+    ...overrides,
+    ...(enemy === undefined ? {} : enemy === null ? {enemy: null} : {enemy: {
+      name: 'Enemy', health: 100, maxHealth: 100, cue: '', ...enemyOverrides,
+    }}),
+    ...(guard === undefined ? {} : {guard: {
+      amount: 0, ready: true, impactLeft: 0, brokenLeft: 0, blockEvent: 0, breakEvent: 0,
+      parryEvent: 0, parryWindowLeft: 0, parryCooldown: 0, ...guardOverrides,
+    }}),
+    ...(combat === undefined ? {} : combat === null ? {combat: null} : {combat: {
+      label: 'Ready', swingEvent: 0, impactEvent: 0, impactLeft: 0,
+      impactStrength: 0, queued: 0, quickLeft: 0, rhythmLeft: 0, ...combatOverrides,
+    }}),
+  };
+}
 
 // Execute the actual shell with passive DOM/API doubles. No browser, display,
 // workstation input or audio playback is driven by these input regressions.
-const source=readFileSync(new URL('../../web/games/end-game/v12/main.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
-const html=readFileSync(new URL('../../web/games/end-game/v12/index.html',import.meta.url),'utf8');
+const source=readFileSync(new URL('../../../js/games/end-game/v12/main.js',import.meta.url),'utf8')
+  .replace(/^import .*;\r?\n/gm,'')
+  .replace("const loaderModulePromise = loadLoaderModule();", "const loaderModulePromise = Promise.resolve({emberLoad: () => Promise.reject(new Error('loader unused'))});");
+const html=readFileSync(new URL('../../../../../web/games/end-game/v12/index.html',import.meta.url),'utf8');
 function fixture() {
-  const nodes=new Map(), calls=[], audio=[];
-  class Element {
-    constructor(id='') { this.id=id;this.handlers=new Map();this.style={};this.dataset={};this.tagName='DIV';this.hidden=false;this.open=false;this.value=55; }
-    addEventListener(name,fn) { const list=this.handlers.get(name)||[];list.push(fn);this.handlers.set(name,list); }
-    emit(name,props={}) { const e={pointerId:1,pointerType:'touch',button:0,buttons:0,repeat:false,preventDefault(){this.prevented=true;},target:this,currentTarget:this,...props};for(const fn of this.handlers.get(name)||[])fn(e);return e; }
-    querySelector(selector) { return get(selector); }
-    querySelectorAll() { return []; }
-    setPointerCapture() {} focus() {} append() {} close() {this.open=false;} showModal(){this.open=true;}
+  const nodes=new Map<string, HTMLElementDouble>(), classes=new Map<string, HTMLElementDouble>(), calls: TestCall[] = [], audio: AudioNodeDouble[] = [];
+  class ElementDouble {
+    id: string;
+    handlers = new Map<string, Listener[]>();
+    style: Record<string, string> = {};
+    dataset: Record<string, string> = {};
+    tagName: string;
+    hidden = false;
+    open = false;
+    disabled = false;
+    value: string | number = 55;
+    textContent = '';
+    ownerDocument?: HTMLElementDouble;
+    body?: HTMLElementDouble;
+    getElementById?: (id: string) => HTMLElementDouble | null;
+    createElement?: (tagName: string) => HTMLElementDouble;
+    setTimeout?: () => void;
+    onclick: Listener | null = null;
+    constructor(tagName='div',id='') { this.id=id;this.tagName=tagName.toUpperCase(); }
+    addEventListener(name: string,fn: Listener) { const list=this.handlers.get(name)||[];list.push(fn);this.handlers.set(name,list); }
+    emit(name: string,props: UnknownRecord = {}) {
+      const event = {pointerId:1,pointerType:'touch',button:0,buttons:0,repeat:false,preventDefault(){event.prevented=true;},target:this,currentTarget:this,...props} as TestEvent;
+      for(const listener of this.handlers.get(name)||[]) listener(event);
+      return event;
+    }
+    querySelector(selector: string): ElementDouble | null { return get(selector); }
+    querySelectorAll(_selector?: string): ElementDouble[] { return []; }
+    setPointerCapture() {} focus() {} append() {} replaceChildren() {} close() {this.open=false;} showModal(){this.open=true;}
     getContext(){return null;} getBoundingClientRect(){return {left:0,top:0,width:100,height:100};}
   }
-  const get=id=>{if(!nodes.has(id))nodes.set(id,new Element(id));return nodes.get(id);};
+  class HTMLElementDouble extends ElementDouble {}
+  class HTMLButtonElementDouble extends HTMLElementDouble {}
+  class HTMLCanvasElementDouble extends HTMLElementDouble {}
+  class HTMLDialogElementDouble extends HTMLElementDouble {}
+  class HTMLHeadingElementDouble extends HTMLElementDouble {}
+  class HTMLInputElementDouble extends HTMLElementDouble {}
+  class HTMLMeterElementDouble extends HTMLElementDouble {}
+  class HTMLProgressElementDouble extends HTMLElementDouble {}
+  class HTMLSelectElementDouble extends HTMLElementDouble {}
+  class HTMLVideoElementDouble extends HTMLElementDouble {}
+  const elementFor=(tagName: string,id=''): HTMLElementDouble=>{
+    const tag=tagName.toLowerCase();
+    if(tag==='button')return new HTMLButtonElementDouble(tag,id);
+    if(tag==='canvas')return new HTMLCanvasElementDouble(tag,id);
+    if(tag==='dialog')return new HTMLDialogElementDouble(tag,id);
+    if(/^h[1-6]$/.test(tag))return new HTMLHeadingElementDouble(tag,id);
+    if(tag==='input')return new HTMLInputElementDouble(tag,id);
+    if(tag==='meter')return new HTMLMeterElementDouble(tag,id);
+    if(tag==='progress')return new HTMLProgressElementDouble(tag,id);
+    if(tag==='select')return new HTMLSelectElementDouble(tag,id);
+    if(tag==='video')return new HTMLVideoElementDouble(tag,id);
+    return new HTMLElementDouble(tag,id);
+  };
+  for(const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*)>/gi)) {
+    const tagName=match[1],attributes=match[2]||'';if(!tagName)continue;
+    const id=/\bid="([^"]+)"/.exec(attributes)?.[1]||'',element=elementFor(tagName,id);
+    if(id)nodes.set(id,element);
+    for(const name of (/\bclass="([^"]+)"/.exec(attributes)?.[1]||'').split(/\s+/).filter(Boolean))if(!classes.has(name))classes.set(name,element);
+  }
+  const get=(id: string): HTMLElementDouble=>{
+    if(id.startsWith('.')) {const element=classes.get(id.slice(1));assert.ok(element);return element;}
+    const existing=nodes.get(id);if(existing)return existing;
+    const element=id==='canvas'?elementFor('canvas'):id.endsWith('-button')?elementFor('button'):elementFor('div');
+    nodes.set(id,element);return element;
+  };
   const guard=get('guard-button'), crouch=get('crouch-button'), strike=get('strike-button'), heavy=get('heavy-button'), jump=get('jump-button');
-  guard.dataset.hold='4';crouch.dataset.hold='2';strike.dataset.action='2';jump.dataset.action='4';
-  heavy.dataset.action=html.match(/<button[^>]*class="touch-heavy"[^>]*data-action="(\d+)"/)[1];
-  const document=new Element('document');document.body=get('body');document.getElementById=get;
-  document.createElement=()=>new Element();document.querySelector=get;
-  document.querySelectorAll=selector=>selector==='[data-action],[data-hold]'?[guard,crouch,strike,heavy,jump]:[];
-  const window=new Element('window');window.setTimeout=()=>{};
+  guard.dataset['hold']='4';crouch.dataset['hold']='2';strike.dataset['action']='2';jump.dataset['action']='4';
+  const heavyMatch=html.match(/<button[^>]*class="touch-heavy"[^>]*data-action="(\d+)"/);assert.ok(heavyMatch);
+  heavy.dataset['action']=heavyMatch[1] ?? '';
+  const document=new HTMLElementDouble('document');document.body=elementFor('body');document.getElementById=id=>nodes.get(id)||null;
+  document.createElement=tagName=>elementFor(tagName);document.querySelector=selector=>selector.startsWith('.')?classes.get(selector.trim().split(/\s+/).at(-1)?.slice(1)||'')||null:get(selector);
+  document.querySelectorAll=(selector: string)=>selector==='[data-action],[data-hold]'?[guard,crouch,strike,heavy,jump]:[];
+  for(const element of [...nodes.values(),...classes.values()])element.ownerDocument=document;
+  const window=new HTMLElementDouble('window');window.setTimeout=()=>{};
   const noop=()=>{};
-  const parameter=()=>({values:[],setValueAtTime(value){this.values.push(value);},exponentialRampToValueAtTime(value){this.values.push(value);}});
-  const audioNode=kind=>{const node={kind,type:'',frequency:parameter(),gain:parameter(),Q:{value:0},connect(next){return next;},start(){},stop(){}};audio.push(node);return node;};
+  const parameter=(): ParameterDouble=>({values:[],setValueAtTime(value: number){this.values.push(value);},exponentialRampToValueAtTime(value: number){this.values.push(value);}});
+  const audioNode=(kind: string): AudioNodeDouble=>{const node={kind,type:'',frequency:parameter(),gain:parameter(),Q:{value:0},connect(next: unknown){return next;},start(){},stop(){}};audio.push(node);return node;};
   const audioGraph={currentTime:10,sampleRate:24000,destination:{},createBuffer:()=>({getChannelData:()=>new Float32Array(7680)}),createBufferSource:()=>audioNode('noise'),createBiquadFilter:()=>audioNode('filter'),createGain:()=>audioNode('gain'),createOscillator:()=>audioNode('tone')};
+  class QualityDouble { scale=1;mode='auto';display: UnknownRecord={};sample(){}clamp(){}set(){} }
   const context=vm.createContext({document,window,console,Map,Math,Number,JSON,Array,Event:class{},
+    HTMLElement:HTMLElementDouble,HTMLButtonElement:HTMLButtonElementDouble,HTMLCanvasElement:HTMLCanvasElementDouble,
+    HTMLDialogElement:HTMLDialogElementDouble,HTMLHeadingElement:HTMLHeadingElementDouble,HTMLInputElement:HTMLInputElementDouble,
+    HTMLMeterElement:HTMLMeterElementDouble,HTMLProgressElement:HTMLProgressElementDouble,
+    HTMLSelectElement:HTMLSelectElementDouble,HTMLVideoElement:HTMLVideoElementDouble,
     performance:{now:()=>0},requestAnimationFrame:noop,matchMedia:()=>({matches:true}),
     innerWidth:1000,innerHeight:700,devicePixelRatio:1,navigator:{getGamepads:()=>[],deviceMemory:4},
     Audio:class{play(){return Promise.resolve();}pause(){}},
-    Quality:class{constructor(){this.scale=1;this.mode='auto';this.display={};}sample(){}clamp(){}},
+    Quality:QualityDouble,
     VoiceAudio:class{resume(){}setVolume(){}preload(){}stop(){}pause(){}ready(){return true;}play(){}},
-    CastleDialogue, renderCastle, CASTLE_LINES:{},
+    CastleDialogue, renderCastle, CASTLE_LINES:{},__state:completeState,
     WardenDialogue:class{setPaused(){}ingest(){}tick(){}finish(){}},__calls:calls,__audioGraph:audioGraph});
   vm.runInContext(source,context);
-  const run=code=>vm.runInContext(code,context);
+  const run=(code: string): unknown=>vm.runInContext(code,context);
   run('api={touch_input:(...args)=>__calls.push(["held",...args]),action:mask=>__calls.push(["action",mask]),pause:flag=>__calls.push(["pause",flag])}; started=true;');
   return {run,calls,get,guard,crouch,strike,heavy,jump,audio,document,window,held:()=>run('held')};
 }
@@ -72,12 +206,12 @@ test('mouse cancellation and lost capture clear guard immediately',()=>{
     const f=fixture(),canvas=f.get('canvas');canvas.tagName='CANVAS';
     f.get('ember-root').emit('mousedown',{pointerType:'mouse',button:2,target:canvas});
     f.window.emit(ending,{pointerType:'mouse'});assert.equal(f.held(),0);
-    assert.equal(f.calls.at(-1).at(-1),0);
+    assert.equal(f.calls.at(-1)?.at(-1),0);
   }
 });
 
 test('pause, blur and hidden document clear guard; key repeat cannot resume it',()=>{
-  for(const pause of [f=>f.run('setPause(true)'),f=>f.window.emit('blur'),f=>{f.document.hidden=true;f.document.emit('visibilitychange');}]) {
+  for(const pause of [(f: ReturnType<typeof fixture>)=>f.run('setPause(true)'), (f: ReturnType<typeof fixture>)=>f.window.emit('blur'), (f: ReturnType<typeof fixture>)=>{f.document.hidden=true;f.document.emit('visibilitychange');}]) {
     const f=fixture();f.document.emit('keydown',{code:'KeyF'});f.guard.emit('pointerdown');pause(f);
     assert.equal(f.held(),0);assert.equal(f.run('paused'),true);
     f.guard.emit('pointerdown');assert.equal(f.held(),0);
@@ -91,21 +225,21 @@ test('guard discards new mouse/touch strikes without replaying them on release',
   f.guard.emit('pointerdown');f.strike.emit('pointerdown',{pointerId:2});
   f.get('ember-root').emit('pointerdown',{pointerType:'mouse',button:0,target:canvas});
   f.guard.emit('pointerup');assert.equal(f.calls.some(c=>c[0]==='action'),false);
-  f.strike.emit('pointerdown',{pointerId:2});assert.equal(f.calls.at(-1)[0],'action');
+  f.strike.emit('pointerdown',{pointerId:2});assert.equal(f.calls.at(-1)?.[0],'action');
 });
 
 test('block and break events are consumed every frame before the HUD throttle',()=>{
   const f=fixture();
-  f.run('guardSound=broken=>__calls.push(["metal",!!broken]);lastHudAt=100;api.state_json=()=>JSON.stringify({time:1,guard:{amount:1,ready:true,impactLeft:.24,brokenLeft:0,blockEvent:1,breakEvent:0}});loop(110);loop(111);');
+  f.run('guardSound=broken=>__calls.push(["metal",!!broken]);lastHudAt=100;api.state_json=()=>JSON.stringify(__state({time:1,guard:{amount:1,ready:true,impactLeft:.24,brokenLeft:0,blockEvent:1,breakEvent:0}}));loop(110);loop(111);');
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal').map(c=>c[1]),[false]);
-  f.run('api.state_json=()=>JSON.stringify({time:1,guard:{amount:0,ready:false,impactLeft:0,brokenLeft:.9,blockEvent:1,breakEvent:1}});loop(112);loop(113);');
+  f.run('api.state_json=()=>JSON.stringify(__state({time:1,guard:{amount:0,ready:false,impactLeft:0,brokenLeft:.9,blockEvent:1,breakEvent:1}}));loop(112);loop(113);');
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal').map(c=>c[1]),[false,true]);
 });
 
 test('ready guard uses the visible strike cost and warns separately for unblockable slams',()=>{
   const f=fixture();
-  const show=(stamina,enemy)=>{
-    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify({version:'10.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:${stamina},objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,guard:{amount:1,ready:true,impactLeft:0,brokenLeft:0,blockEvent:0,breakEvent:0},enemy:${JSON.stringify(enemy)}});loop(100);`);
+  const show=(stamina: number,enemy: unknown)=>{
+    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify(__state({version:'10.0.0',time:2,stage:5,stamina:${stamina},objective:'Face the weapon',location:'Great hall',guard:{amount:1,ready:true},enemy:${JSON.stringify(enemy)}}));loop(100);`);
     return f.get('guard-cue').textContent;
   };
   for(const cost of [32,38]) {
@@ -120,19 +254,19 @@ test('ready guard uses the visible strike cost and warns separately for unblocka
 test('castle exploration keeps controls active and shows location after escape',()=>{
   const f=fixture();
   f.get('complete').hidden=true;
-  f.run(`api.state_json=()=>JSON.stringify({version:'9.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Explore the garden',location:'Backyard garden',exploration:{visited:4,total:7},prompt:'',event:0,footsteps:0});loop(100);`);
+  f.run(`api.state_json=()=>JSON.stringify(__state({version:'9.0.0',time:2,stage:5,objective:'Explore the garden',location:'Backyard garden',exploration:{visited:4,total:7}}));loop(100);`);
   assert.equal(f.get('location').textContent,'Backyard garden');
   assert.equal(f.get('exploration').textContent,'4 / 7 places discovered');
   assert.equal(f.get('hint').hidden,true);
   assert.equal(f.get('complete').hidden,true);
   assert.equal(f.run('paused || ended'),false);
   f.strike.emit('pointerdown');
-  assert.equal(f.calls.at(-1)[0],'action');
+  assert.equal(f.calls.at(-1)?.[0],'action');
 });
 
 test('only final castle escape opens completion and stops new strikes',()=>{
   const f=fixture();f.get('complete').hidden=true;
-  f.run(`api.state_json=()=>JSON.stringify({version:'10.0.0',time:100,stage:5,finished:true,form:'Wolf',health:66,stamina:80,objective:'You escaped the castle',location:'Backyard garden',exploration:{visited:7,total:7},prompt:'',event:7,footsteps:20});loop(100);`);
+  f.run(`api.state_json=()=>JSON.stringify(__state({version:'10.0.0',time:100,stage:5,finished:true,health:66,stamina:80,objective:'You escaped the castle',location:'Backyard garden',exploration:{visited:7,total:7},event:7,footsteps:20}));loop(100);`);
   assert.equal(f.get('complete').hidden,false);
   assert.equal(f.get('hud').hidden,true);
   assert.equal(f.run('playing()'),false);
@@ -142,7 +276,7 @@ test('only final castle escape opens completion and stops new strikes',()=>{
 
 test('R, middle click and the actual touch Heavy button count separate heavy presses',()=>{
   const f=fixture(),canvas=f.get('canvas');canvas.tagName='CANVAS';
-  assert.equal(f.heavy.dataset.action,'64');
+  assert.equal(f.heavy.dataset['action'],'64');
   f.document.emit('keydown',{code:'KeyR'});
   f.document.emit('keydown',{code:'KeyR',repeat:true});
   f.document.emit('keyup',{code:'KeyR'});
@@ -175,8 +309,20 @@ test('guard, pause and ending reject every heavy input without replay after rele
   }
 });
 
-const shellState=combat=>({version:'11.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,combat:{swingEvent:0,impactEvent:0,impactLeft:0,impactStrength:.7,queued:0,quickLeft:0,rhythmLeft:0,aimProjection:{x:0,y:0},...combat}});
-function frame(f,state,now=100) {f.run(`api.state_json=()=>${JSON.stringify(JSON.stringify(state))};loop(${now});`);}
+const shellState=(combat: UnknownRecord)=>({version:'11.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,combat:{label:'Ready',swingEvent:0,impactEvent:0,impactLeft:0,impactStrength:.7,queued:0,quickLeft:0,rhythmLeft:0,aimProjection:{x:0,y:0},...combat}});
+function frame(f: ReturnType<typeof fixture>,state: UnknownRecord,now=100) {f.run(`api.state_json=()=>${JSON.stringify(JSON.stringify(completeState(state)))};loop(${now});`);}
+
+test('state decoder accepts Rust nullable fields and rejects malformed HUD fields',()=>{
+  const f=fixture();
+  assert.equal(f.run("isGameState(__state({enemy:null,combat:{active:null,aimedZone:null,aimProjection:null,impactKind:null,impactSurface:null,impactZone:null}}))"),true);
+  assert.equal(f.run("isGameState(__state({combat:null}))"),false);
+  assert.equal(f.run("isGameState(__state({health:'full'}))"),false);
+  assert.equal(f.run("isGameState(__state({combat:{label:'Ready',swingEvent:0,impactEvent:0,impactLeft:0,active:{kind:'Heavy',elapsed:'late',windup:1}}}))"),false);
+  for(const name of ['impactStrength','queued','quickLeft','rhythmLeft']) {
+    assert.equal(f.run(`isGameState(__state({combat:{${name}:'wrong'}}))`),false,name);
+  }
+  assert.equal(f.run("isGameState(__state({combat:{landingWait:'wrong'}}))"),false);
+});
 
 test('five aim zones remain intent; only confirmed timed contact shows a hit label',()=>{
   const f=fixture();
@@ -213,9 +359,11 @@ test('airborne heavy cuts whoosh before the later landing hold and contact event
   frame(f,shellState({active:attack,swingEvent:1,impactEvent:1,impactSurface:'Stone',impactKind:'Surface',impactLeft:.15}),111);
   assert.deepEqual(f.calls.filter(c=>c[0]==='sword').map(c=>Array.from(c).slice(1)),[[false],[true,.7,'Stone']]);
   frame(f,shellState({swingEvent:1,impactEvent:2,impactZone:'Head',impactSurface:'Iron',impactKind:'Enemy',impactLeft:.2}),112);
-  assert.deepEqual(Array.from(f.calls.filter(c=>c[0]==='sword').at(-1)).slice(1),[true,.7,'Body']);
+  const bodyCall=f.calls.filter(c=>c[0]==='sword').at(-1);assert.ok(bodyCall);
+  assert.deepEqual(Array.from(bodyCall).slice(1),[true,.7,'Body']);
   frame(f,shellState({swingEvent:1,impactEvent:3,impactKind:'Chain',impactLeft:.2}),113);
-  assert.deepEqual(Array.from(f.calls.filter(c=>c[0]==='sword').at(-1)).slice(1),[true,.7,'Iron']);
+  const chainCall=f.calls.filter(c=>c[0]==='sword').at(-1);assert.ok(chainCall);
+  assert.deepEqual(Array.from(chainCall).slice(1),[true,.7,'Iron']);
   attack.elapsed=.62;attack.landingWait=true;
   frame(f,shellState({active:attack,label:'Jumping heavy',swingEvent:1,impactEvent:3}),300);
   assert.match(f.get('combo-cue').textContent,/waiting for landing/);
@@ -243,36 +391,36 @@ test('blade reticle uses frame projection and viewport aspect every frame',()=>{
   const f=fixture();f.run('innerWidth=1200;innerHeight=600;');
   frame(f,shellState({aimedZone:'Head',aimProjection:{x:.8,y:-.4}}),100);
   const reticle=f.get('.crosshair');
-  assert.equal(reticle.hidden,false);assert.equal(reticle.style.left,'70%');assert.equal(reticle.style.top,'70%');
+  assert.equal(reticle.hidden,false);assert.equal(reticle.style['left'],'70%');assert.equal(reticle.style['top'],'70%');
   f.run('innerWidth=600;innerHeight=600;');
   frame(f,shellState({aimedZone:'Head',aimProjection:{x:.8,y:-.4}}),101);
-  assert.equal(reticle.style.left,'90%');assert.equal(reticle.style.top,'70%');
-  assert.equal(f.get('.blade-focus').style.left,'510px');
+  assert.equal(reticle.style['left'],'90%');assert.equal(reticle.style['top'],'70%');
+  assert.equal(f.get('.blade-focus').style['left'],'510px');
   frame(f,shellState({aimProjection:{x:-.8,y:.5}}),102);
-  assert.ok(Math.abs(Number.parseFloat(reticle.style.left)-10)<1e-8);
-  assert.equal(reticle.style.top,'25%');assert.equal(f.get('aim-zone').hidden,true);
+  assert.ok(Math.abs(Number.parseFloat(reticle.style['left'] ?? '')-10)<1e-8);
+  assert.equal(reticle.style['top'],'25%');assert.equal(f.get('aim-zone').hidden,true);
   assert.equal(reticle.hidden,false,'a neutral valid blade aim still has a reticle');
 });
 
 test('offscreen or invalid blade projection hides aim rather than clamping the reticle',()=>{
   const f=fixture();f.run('innerWidth=600;innerHeight=600;');
   frame(f,shellState({aimedZone:'Head',aimProjection:{x:.5,y:0}}),100);
-  const reticle=f.get('.crosshair');assert.equal(reticle.style.left,'75%');
+  const reticle=f.get('.crosshair');assert.equal(reticle.style['left'],'75%');
   for(const projection of [null,{x:1.01,y:0},{x:-1.01,y:0},{x:0,y:1.01},{x:0,y:-1.01},{x:null,y:0},{x:0,y:null}]) {
     frame(f,shellState({aimedZone:'Head',aimProjection:projection}),101);
     assert.equal(reticle.hidden,true,JSON.stringify(projection));assert.equal(f.get('aim-zone').hidden,true);
-    assert.equal(reticle.style.left,'75%','invalid aim must not be moved to a viewport edge');
+    assert.equal(reticle.style['left'],'75%','invalid aim must not be moved to a viewport edge');
   }
   const unarmed=shellState({aimProjection:null});unarmed.stage=2;frame(f,unarmed,102);
-  assert.equal(reticle.hidden,false);assert.equal(reticle.style.left,'50%');assert.equal(reticle.style.top,'50%');
+  assert.equal(reticle.hidden,false);assert.equal(reticle.style['left'],'50%');assert.equal(reticle.style['top'],'50%');
 });
 
 test('the open parry window and its cooldown read differently from a block',()=>{
   const base={amount:1,ready:true,impactLeft:0,brokenLeft:0,blockEvent:0,breakEvent:0,parryEvent:0,parryWindowLeft:0,parryCooldown:0,parryWindow:.12,parryCost:22};
-  const show=guard=>{
+  const show=(guard: UnknownRecord)=>{
     const f=fixture();
-    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify({version:'12.0.0',time:2,stage:5,finished:false,form:'Wolf',health:100,stamina:100,objective:'Face the weapon',location:'Great hall',prompt:'',event:0,footsteps:0,guard:${JSON.stringify(guard)}});loop(100);`);
-    return {label:f.get('guard-label').textContent,cue:f.get('guard-cue').textContent,state:f.get('guard-status').dataset.state};
+    f.run(`lastHudAt=0;api.state_json=()=>JSON.stringify(__state({version:'12.0.0',time:2,stage:5,objective:'Face the weapon',location:'Great hall',guard:${JSON.stringify(guard)}}));loop(100);`);
+    return {label:f.get('guard-label').textContent,cue:f.get('guard-cue').textContent,state:f.get('guard-status').dataset['state']};
   };
   const open=show({...base,parryWindowLeft:.09});
   assert.match(open.label,/Parry window open/);
@@ -289,8 +437,8 @@ test('the open parry window and its cooldown read differently from a block',()=>
 
 test('a deflection rings and flashes differently from a block',()=>{
   const f=fixture();
-  f.run('guardSound=broken=>__calls.push(["metal",!!broken]);parrySound=()=>__calls.push(["parry"]);lastHudAt=100;api.state_json=()=>JSON.stringify({time:1,guard:{amount:1,ready:true,impactLeft:.24,brokenLeft:0,blockEvent:0,breakEvent:0,parryEvent:1,parryWindowLeft:0,parryCooldown:.5,parryWindow:.12,parryCost:22}});loop(110);loop(111);');
+  f.run('guardSound=broken=>__calls.push(["metal",!!broken]);parrySound=()=>__calls.push(["parry"]);lastHudAt=100;api.state_json=()=>JSON.stringify(__state({time:1,guard:{amount:1,ready:true,impactLeft:.24,brokenLeft:0,blockEvent:0,breakEvent:0,parryEvent:1,parryWindowLeft:0,parryCooldown:.5,parryWindow:.12,parryCost:22}}));loop(110);loop(111);');
   assert.equal(f.calls.filter(c=>c[0]==='parry').length,1);
   assert.deepEqual(f.calls.filter(c=>c[0]==='metal'),[]);
-  assert.equal(f.get('guard-flash').dataset.parry,'true');
+  assert.equal(f.get('guard-flash').dataset['parry'],'true');
 });

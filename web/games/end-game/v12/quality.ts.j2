@@ -1,6 +1,32 @@
 // Only render budget changes: simulation remains fixed at 60 Hz.
+export type QualityMode = 'auto' | 'native' | 'performance';
+
+interface DisplaySize {
+  width: number;
+  height: number;
+  dpr?: number;
+  memory?: number;
+  mobile?: boolean;
+  maxDimension?: number;
+}
+
+interface NormalizedDisplaySize {
+  width: number;
+  height: number;
+  dpr: number;
+  maxDimension: number;
+}
+
 export class Quality {
-  constructor({width, height, dpr = 1, memory = 4, mobile = false, maxDimension = 8192}) {
+  display: NormalizedDisplaySize;
+  mobile: boolean;
+  mode: QualityMode;
+  samples: number[];
+  stable: number;
+  fps: number | undefined;
+  scale: number;
+
+  constructor({width, height, dpr = 1, memory = 4, mobile = false, maxDimension = 8192}: DisplaySize) {
     this.display = {width, height, dpr, maxDimension};
     this.mobile = mobile;
     this.mode = 'auto';
@@ -15,8 +41,8 @@ export class Quality {
     return Math.min(1, 5120 / Math.max(width * dpr, 1), maxDimension / Math.max(width * dpr, height * dpr, 1), Math.sqrt(14745600 / Math.max(pixels, 1)));
   }
   clamp() { this.scale = Math.min(this.limit(), Math.max(0.25, this.scale)); }
-  set(mode) { this.mode = mode; this.scale = this.limit() * (mode === 'performance' ? 0.60 : mode === 'auto' && this.mobile ? 0.72 : 1); this.samples = []; this.stable = 0; }
-  sample(ms) {
+  set(mode: QualityMode) { this.mode = mode; this.scale = this.limit() * (mode === 'performance' ? 0.60 : mode === 'auto' && this.mobile ? 0.72 : 1); this.samples = []; this.stable = 0; }
+  sample(ms: number) {
     if (!Number.isFinite(ms) || ms < 2) return;
     this.samples.push(Math.min(ms, 1000));
     if (this.samples.length < 120 && this.samples.reduce((a, b) => a + b, 0) < 2000) return;

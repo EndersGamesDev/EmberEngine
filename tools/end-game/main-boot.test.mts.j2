@@ -1,0 +1,196 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+
+type UnknownRecord = Record<string, unknown>;
+type Listener = (event: UnknownRecord) => unknown;
+
+const emitted = readFileSync(new URL('../../../js/games/end-game/v12/main.js', import.meta.url), 'utf8');
+const html = readFileSync(new URL('../../../../../web/games/end-game/v12/index.html', import.meta.url), 'utf8');
+const executable = emitted
+  .replace(/^import .*;\r?\n/gm, '')
+  .replace(
+    'const loaderModulePromise = loadLoaderModule();',
+    'const loaderModulePromise = Promise.resolve({emberLoad: __emberLoad});',
+  );
+
+function record(value: unknown): UnknownRecord | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null;
+}
+
+test('emitted main parses the page DOM and reaches a real HUD tick after loader hand-off', async () => {
+  const nodes = new Map<string, HTMLElementDouble>();
+  const classes = new Map<string, HTMLElementDouble>();
+  const tags = new Map<string, HTMLElementDouble[]>();
+  let select: (selector: string) => HTMLElementDouble | null;
+  let selectAll: (selector: string) => HTMLElementDouble[];
+
+  class HTMLElementDouble {
+    id: string;
+    tagName: string;
+    handlers = new Map<string, Listener[]>();
+    style: UnknownRecord = {};
+    dataset: Record<string, string> = {};
+    hidden = false;
+    open = false;
+    disabled = false;
+    value: string | number = 55;
+    max = 100;
+    width = 1280;
+    height = 720;
+    textContent = '';
+    className = '';
+    ownerDocument: HTMLElementDouble | null = null;
+    onclick: Listener | null = null;
+    onchange: Listener | null = null;
+    oninput: Listener | null = null;
+    onended: Listener | null = null;
+
+    constructor(tagName = 'div', id = '') { this.id = id; this.tagName = tagName.toUpperCase(); }
+    addEventListener(name: string, listener: Listener) {
+      const listeners = this.handlers.get(name) || [];
+      listeners.push(listener);
+      this.handlers.set(name, listeners);
+    }
+    querySelector(selector: string) { return select(selector); }
+    querySelectorAll(selector: string) { return selectAll(selector); }
+    setPointerCapture() {}
+    focus() {}
+    append() {}
+    replaceChildren() {}
+    scrollBy() {}
+    removeAttribute(name: string) { if (name === 'value') this.value = ''; }
+    close() { this.open = false; }
+    showModal() { this.open = true; }
+    getContext() { return null; }
+    getBoundingClientRect() { return {left: 0, top: 0, width: 100, height: 100}; }
+    requestFullscreen() { return Promise.resolve(); }
+  }
+  class HTMLButtonElementDouble extends HTMLElementDouble {}
+  class HTMLCanvasElementDouble extends HTMLElementDouble {}
+  class HTMLDialogElementDouble extends HTMLElementDouble {}
+  class HTMLHeadingElementDouble extends HTMLElementDouble {}
+  class HTMLInputElementDouble extends HTMLElementDouble {}
+  class HTMLMeterElementDouble extends HTMLElementDouble {}
+  class HTMLProgressElementDouble extends HTMLElementDouble {}
+  class HTMLSelectElementDouble extends HTMLElementDouble { selectedIndex = 0; options: unknown[] = []; }
+  class HTMLVideoElementDouble extends HTMLElementDouble { play() { return Promise.resolve(); } pause() {} }
+
+  const elementFor = (tagName: string, id = ''): HTMLElementDouble => {
+    const tag = tagName.toLowerCase();
+    if (tag === 'button') return new HTMLButtonElementDouble(tag, id);
+    if (tag === 'canvas') return new HTMLCanvasElementDouble(tag, id);
+    if (tag === 'dialog') return new HTMLDialogElementDouble(tag, id);
+    if (/^h[1-6]$/.test(tag)) return new HTMLHeadingElementDouble(tag, id);
+    if (tag === 'input') return new HTMLInputElementDouble(tag, id);
+    if (tag === 'meter') return new HTMLMeterElementDouble(tag, id);
+    if (tag === 'progress') return new HTMLProgressElementDouble(tag, id);
+    if (tag === 'select') return new HTMLSelectElementDouble(tag, id);
+    if (tag === 'video') return new HTMLVideoElementDouble(tag, id);
+    return new HTMLElementDouble(tag, id);
+  };
+  for (const match of html.matchAll(/<([a-z][a-z0-9-]*)\b([^>]*)>/gi)) {
+    const tagName = match[1];
+    const attributes = match[2] || '';
+    if (!tagName) continue;
+    const id = /\bid="([^"]+)"/.exec(attributes)?.[1] || '';
+    const element = elementFor(tagName, id);
+    if (id) nodes.set(id, element);
+    const byTag = tags.get(tagName.toLowerCase()) || [];
+    byTag.push(element);
+    tags.set(tagName.toLowerCase(), byTag);
+    for (const name of (/\bclass="([^"]+)"/.exec(attributes)?.[1] || '').split(/\s+/).filter(Boolean)) {
+      if (!classes.has(name)) classes.set(name, element);
+    }
+  }
+  const canvas = elementFor('canvas');
+  tags.set('canvas', [canvas]);
+  select = selector => {
+    const leaf = selector.trim().split(/\s+/).at(-1) || '';
+    if (leaf.startsWith('#')) return nodes.get(leaf.slice(1)) || null;
+    if (leaf.startsWith('.')) return classes.get(leaf.slice(1)) || null;
+    return tags.get(leaf.toLowerCase())?.[0] || null;
+  };
+  selectAll = selector => selector === 'button,select,input'
+    ? [...(tags.get('button') || []), ...(tags.get('select') || []), ...(tags.get('input') || [])]
+    : [];
+
+  const documentDouble = new HTMLElementDouble('document');
+  for (const element of [...nodes.values(), ...classes.values(), canvas]) element.ownerDocument = documentDouble;
+  Reflect.set(documentDouble, 'body', tags.get('body')?.[0]);
+  Reflect.set(documentDouble, 'getElementById', (id: string) => nodes.get(id) || null);
+  Reflect.set(documentDouble, 'createElement', (tagName: string) => elementFor(tagName));
+  Reflect.set(documentDouble, 'querySelector', select);
+  Reflect.set(documentDouble, 'querySelectorAll', selectAll);
+  const windowDouble = new HTMLElementDouble('window');
+  Reflect.set(windowDouble, 'setTimeout', () => 0);
+  const state = {
+    version: '12.0.1', stage: 1, objective: 'Leave the cell', location: 'The basement',
+    prompt: 'Use', health: 75, stamina: 60, form: 'Wolf', alert: 0, event: 1,
+    message: 'Awake', footsteps: 0, crouched: false, pad: false, time: 1, finished: false,
+    exploration: {visited: 1, total: 9}, quest: {sequence: 0, journal: []}, castleEvents: [],
+    dialogue: {life: 1, dead: false, events: []}, enemy: null,
+    enemyCombat: {hitEvent: 0, attackEvent: 0, hitLeft: 0},
+    guard: {amount: 0, ready: true, brokenLeft: 0, impactLeft: 0, blockEvent: 0,
+      breakEvent: 0, parryEvent: 0, parryWindowLeft: 0, parryCooldown: 0},
+    warden: {phase: 'Sleeping', label: 'Sleeping', health: 100, elapsed: 0, near: false,
+      attackEvent: 0, hitEvent: 0, hitLeft: 0, windup: 1, contact: 1},
+    combat: {label: 'Ready', queued: 0, rhythmLeft: 0, quickLeft: 0, swingEvent: 0,
+      impactEvent: 0, impactStrength: 0, aimedZone: null, aimProjection: null,
+      impactZone: null, impactSurface: null, impactKind: null, impactLeft: 0, active: null},
+  };
+  const api = {action() {}, pause() {}, start() {}, state_json: () => JSON.stringify(state), touch_input() {}};
+  let handoffs = 0;
+  const emberLoad = async (value: unknown) => {
+    const options = record(value);
+    assert.ok(options);
+    assert.equal(options['game'], 'end-game');
+    assert.equal(options['version'], 'v12');
+    assert.equal(options['bundle'], './pkg/end_game.js');
+    const start = options['start'];
+    if (typeof start !== 'function') throw new Error('End Game start callback is missing');
+    Reflect.apply(start, undefined, [api]);
+    handoffs += 1;
+    return {exports: api, version: '12.0.1', host: null};
+  };
+  class AudioDouble {
+    loop = false;
+    volume = 0;
+    constructor(_url: string) {}
+    play() { return Promise.resolve(); }
+    pause() {}
+  }
+  class QualityDouble { scale = 1; mode = 'auto'; fps: number | undefined; display: UnknownRecord = {}; sample() {} clamp() {} set() {} }
+  class VoiceAudioDouble { resume() {} setVolume() {} preload() {} stop() {} pause() {} ready() { return true; } play() {} }
+  class DialogueDouble { speaking = false; setPaused() {} ingest() {} tick() {} finish() {} }
+  let frame: ((now: number) => void) | null = null;
+  const context = vm.createContext({
+    HTMLElement: HTMLElementDouble,
+    HTMLButtonElement: HTMLButtonElementDouble,
+    HTMLCanvasElement: HTMLCanvasElementDouble,
+    HTMLDialogElement: HTMLDialogElementDouble,
+    HTMLHeadingElement: HTMLHeadingElementDouble,
+    HTMLInputElement: HTMLInputElementDouble,
+    HTMLMeterElement: HTMLMeterElementDouble,
+    HTMLProgressElement: HTMLProgressElementDouble,
+    HTMLSelectElement: HTMLSelectElementDouble,
+    HTMLVideoElement: HTMLVideoElementDouble,
+    document: documentDouble, window: windowDouble, console, Event: class {}, performance: {now: () => 0},
+    requestAnimationFrame(callback: (now: number) => void) { frame = callback; },
+    matchMedia: () => ({matches: false}), innerWidth: 1000, innerHeight: 700, devicePixelRatio: 1,
+    navigator: {getGamepads: () => [], deviceMemory: 4}, Audio: AudioDouble, Quality: QualityDouble,
+    VoiceAudio: VoiceAudioDouble, CastleDialogue: DialogueDouble, WardenDialogue: DialogueDouble,
+    renderCastle() {}, CASTLE_LINES: {}, __emberLoad: emberLoad,
+  });
+  vm.runInContext(executable, context);
+  await vm.runInContext('begin()', context);
+  assert.equal(handoffs, 1);
+  assert.ok(frame);
+  Reflect.apply(frame, undefined, [100]);
+  assert.equal(nodes.get('health')?.value, 75);
+  assert.equal(nodes.get('stamina')?.value, 60);
+  assert.equal(nodes.get('objective')?.textContent, 'Leave the cell');
+  assert.equal(nodes.get('title-screen')?.hidden, true);
+  assert.equal(nodes.get('boot-detail')?.textContent, 'Lighting the torches…');
+});

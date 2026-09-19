@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Quality } from '../../web/games/end-game/v12/quality.js';
+
+interface QualityPlayer {
+  scale: number;
+  set(mode: 'auto' | 'native' | 'performance'): void;
+  sample(milliseconds: number): void;
+}
+interface QualityModule {
+  Quality: new(options: {
+    width: number;
+    height: number;
+    dpr?: number;
+    memory?: number;
+    maxDimension?: number;
+  }) => QualityPlayer;
+}
+type UnknownRecord = Record<string, unknown>;
+const moduleValue: unknown = await import(new URL('../../../js/games/end-game/v12/quality.js', import.meta.url).href);
+if (!moduleValue || typeof moduleValue !== 'object' || Array.isArray(moduleValue)) throw new Error('End Game quality module is not an object');
+const moduleRecord = moduleValue as UnknownRecord;
+if (typeof moduleRecord['Quality'] !== 'function') throw new Error('End Game quality export is missing');
+const {Quality} = moduleRecord as UnknownRecord & QualityModule;
 
 test('5K and hardware dimension budgets are respected on dense ultrawide displays', () => {
   for (const maxDimension of [2048, 4096, 8192]) {

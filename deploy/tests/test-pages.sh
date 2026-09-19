@@ -60,6 +60,14 @@ export SHIM_PUBLISHED="$TMP/published"
 export SHIM_GIT_INDEX="$TMP/git-index"
 export SHIM_GIT_TRACKED="$TMP/git-tracked"
 export SHIM_LOG="$TMP/argv.log"
+# Carries a loader import of its own, so the stamp pass accepts it and the copy
+# order is the only thing that can keep it out of the publication.
+# The mark is what the assembled bytes are searched for, and it carries no
+# loader token: the stamp pass rewrites every `loader.js?v=` it finds in the
+# published tree, so a needle containing one could never match and the search
+# would report success whatever the copy order did.
+TRACKED_RACE_DECOY_MARK='tracked race.js that must never reach the publication'
+TRACKED_RACE_DECOY="import \"../../../loader.js?v=1\"; /* $TRACKED_RACE_DECOY_MARK */"
 unset CARGO_TARGET_DIR
 
 SHIMS="$TMP/shims"
@@ -116,6 +124,9 @@ done
 printf '<script type="module" src="./race.js"></script>\n' >> "$REPO/web/games/fire/v2/index.html"
 printf 'import "./garage.js"; const LOADER_URL = "../../../loader.js?v=1"; export { LOADER_URL };\n' > "$REPO/web/games/fire/v2/race.ts.j2"
 printf 'export const garage = true;\n' > "$REPO/web/games/fire/v2/garage.ts.j2"
+# A tracked page file whose name collides with an emitted module. The live-page
+# copy places it; only the copy order decides whether compiler output survives.
+printf '%s\n' "$TRACKED_RACE_DECOY" > "$REPO/web/games/fire/v2/race.js"
 mkdir -p "$REPO/web/games/fire/v2/fonts"
 for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
@@ -286,6 +297,11 @@ if [ -e "$REPO/target/wasm32-unknown-unknown" ]; then bad "the configured-target
 for f in index.html main.js quality.js dialogue.js castle-audio.js castle-ui.js voice-lines.js style.css cover.png prologue.mp4 ambience.wav boss-defeat.wav boss-intro.wav boss-phase2.wav castle-ambience.wav escape-clue.wav escape-ending.wav warden-death.wav warden-movement.wav warden-sword.wav warden-unlocking.wav pkg/end_game.js pkg/end_game_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$END_GAME_LIVE/$f" ]; then ok "assembled End Game $f"; else bad "missing End Game $f"; fi
 done
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    contains "$(cat "$SHIM_PUBLISHED/$END_GAME_LIVE/$module.js")" \
+        "/* emitted $module */" \
+        "assembled End Game $module.js comes from TypeScript emission"
+done
 contains "$ARGV" "[-p] [end-game] [--lib]" "End Game is built as an Ember wasm library"
 if [ "$END_GAME_LIVE" != games/end-game/v1 ]; then
     if diff -r "$SEED/games/end-game/v1" "$SHIM_PUBLISHED/games/end-game/v1" > "$TMP/end-game-v1.diff"; then ok "frozen End Game v1 remains byte-identical"; else bad "frozen End Game v1 changed"; fi
@@ -350,6 +366,25 @@ else
     ok "only the named emitted browser modules enter the root publication"
 fi
 STAMP="$(jget "$SHIM_PUBLISHED/server.json" 'd["v"]')"
+END_GAME_EXPECTED="$TMP/end-game-emitted-expected"
+module_args=()
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    module_args+=(--module "$END_GAME_LIVE/$module.js")
+done
+"$PY" "$REPO/deploy/verify-emitted-modules.py" --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$END_GAME_EXPECTED" \
+    --stamp "$STAMP" \
+    "${module_args[@]}" \
+    --stamped "$END_GAME_LIVE/main.js" >/dev/null
+for module in main dialogue castle-audio castle-ui quality voice-lines; do
+    if cmp -s "$END_GAME_EXPECTED/$END_GAME_LIVE/$module.js" \
+            "$SHIM_PUBLISHED/$END_GAME_LIVE/$module.js"; then
+        ok "assembled End Game $module.js matches its emitted expectation"
+    else
+        bad "assembled End Game $module.js differs from its emitted expectation"
+    fi
+done
 is "$STAMP" "recomputed-stamp" "address recompute changed the deploy stamp"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["ws"]')" "wss://new.example" "address recompute changed the legacy address"
 is "$(jget "$SHIM_PUBLISHED/server.json" 'd["league_proto"]')" "$LEAGUE_PROTO" "League ships its independent source protocol"
@@ -403,6 +438,11 @@ else
 fi
 contains "$(cat "$REPO/target/web-generated/js/games/fire/v2/race.js")" \
     'loader.js?v=1' "the emitted Fire module remains stamp-independent"
+if grep -qF "$TRACKED_RACE_DECOY_MARK" "$SHIM_PUBLISHED/games/fire/v2/race.js"; then
+    bad "a same-named tracked page source replaced the emitted module"
+else
+    ok "the emitted module survives a same-named tracked page source"
+fi
 DUPLICATE_EMITTED="$TMP/fire-duplicate-emitted"
 mkdir -p "$DUPLICATE_EMITTED/games/fire/v2"
 cp "$REPO/target/web-generated/js/games/fire/v2/race.js" \
@@ -640,6 +680,12 @@ printf 'shim wasm for league\n' > "$REPO/web/pkg/league_bg.wasm"
 printf 'shim js for ember_loader\n' > "$REPO/web/pkg/ember_loader.js"
 printf 'shim js for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot.js"
 printf 'shim wasm for ember_lab_julibrot\n' > "$REPO/web/labs/julibrot/pkg/ember_lab_julibrot_bg.wasm"
+rm -rf "$REPO/web/$END_GAME_LIVE/pkg"
+if [ -f "$REPO/web/pkg/end_game.d.ts" ] && [ -f "$REPO/web/pkg/end_game_bg.wasm.d.ts" ] && [ ! -e "$REPO/web/$END_GAME_LIVE/pkg" ]; then
+    ok "complete prebuilt mode needs End Game declarations only at the documented root package path"
+else
+    bad "the End Game prebuilt fixture did not isolate the documented root package path"
+fi
 : > "$SHIM_LOG"
 rm -f "$SHIM_GIT_INDEX"
 if (cd "$REPO" && EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh) > "$TMP/prebuilt.log" 2>&1; then

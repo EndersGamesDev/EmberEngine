@@ -24,6 +24,13 @@ case " $* " in
                 target/web-generated/js/games/fire/v2/race.js
             cp target/web-generated/ts/games/fire/v2/garage.ts \
                 target/web-generated/js/games/fire/v2/garage.js
+            mkdir -p target/web-generated/js/games/end-game/v12
+            for module in main dialogue castle-audio castle-ui quality voice-lines; do
+                printf '/* emitted %s */\n' "$module" \
+                    > "target/web-generated/js/games/end-game/v12/$module.js"
+                cat "web/games/end-game/v12/$module.js" \
+                    >> "target/web-generated/js/games/end-game/v12/$module.js"
+            done
         fi
         ;;
 esac

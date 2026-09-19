@@ -307,9 +307,16 @@ EMITTED_WEB_MODULES=(
     loader.js
     games/fire/v2/race.js
     games/fire/v2/garage.js
+    games/end-game/v12/main.js
+    games/end-game/v12/dialogue.js
+    games/end-game/v12/castle-audio.js
+    games/end-game/v12/castle-ui.js
+    games/end-game/v12/quality.js
+    games/end-game/v12/voice-lines.js
 )
 STAMPED_WEB_MODULES=(
     games/fire/v2/race.js
+    games/end-game/v12/main.js
 )
 for module in "${EMITTED_WEB_MODULES[@]}"; do
     [ -f "target/web-generated/js/$module" ] \
@@ -416,9 +423,6 @@ PY
 }
 
 copy_live_source web "$PAGES_DIR" root
-for module in "${EMITTED_WEB_MODULES[@]}"; do
-    cp "target/web-generated/js/$module" "$PAGES_DIR/$module"
-done
 cp web/version.json "$PAGES_DIR/"
 for live in "$ARENA_LIVE" "$FIRE_LIVE" "$KINGS_LIVE" "$LEAGUE_LIVE" "$WHAT_LIVE" "$END_GAME_LIVE" "$LAB_JULIBROT_LIVE"; do
     copy_live_source "web/$live" "$PAGES_DIR/$live" page
@@ -427,6 +431,9 @@ done
 # that source tree even though v2 itself is frozen, so v4 never depends on
 # whatever an older Pages seed happens to contain.
 copy_live_source web/games/league/v2/art "$PAGES_DIR/games/league/v2/art" assets
+for module in "${EMITTED_WEB_MODULES[@]}"; do
+    cp "target/web-generated/js/$module" "$PAGES_DIR/$module"
+done
 # League and End Game publish the source build stamp beside their page.
 cp web/version.json "$PAGES_DIR/$LEAGUE_LIVE/"
 cp web/version.json "$PAGES_DIR/$END_GAME_LIVE/"

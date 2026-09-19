@@ -10,21 +10,22 @@ try {
     foreach ($name in @('warden-movement.wav','warden-unlocking.wav','warden-sword.wav','warden-death.wav')) {
         Copy-Item -LiteralPath (Join-Path 'assets/end-game/v6' $name) -Destination (Join-Path 'web/games/end-game/v12' $name)
     }
-    foreach ($name in @('voice-lines.js','boss-intro.wav','boss-phase2.wav','boss-defeat.wav','escape-clue.wav','escape-ending.wav','castle-ambience.wav')) {
+    # voice-lines is no longer copied from the asset tree: the live module is the
+    # checked template web/games/end-game/v12/voice-lines.ts.j2, and dropping a
+    # stale .js beside it would leave a second answer to the same question.
+    foreach ($name in @('boss-intro.wav','boss-phase2.wav','boss-defeat.wav','escape-clue.wav','escape-ending.wav','castle-ambience.wav')) {
         Copy-Item -LiteralPath (Join-Path 'assets/end-game/v10' $name) -Destination (Join-Path 'web/games/end-game/v12' $name)
     }
     cargo test --locked -p end-game-core -p end-game --lib
     if ($LASTEXITCODE -ne 0) { throw 'Dungeon simulation tests failed' }
-    node --test tools/end-game/quality.test.mjs tools/end-game/dialogue.test.mjs tools/end-game/guard.test.mjs tools/end-game/castle.test.mjs
-    if ($LASTEXITCODE -ne 0) { throw 'Resolution or dialogue tests failed' }
-    node --check web/games/end-game/v12/main.js
-    if ($LASTEXITCODE -ne 0) { throw 'Game shell syntax failed' }
-    node --check web/games/end-game/v12/dialogue.js
-    if ($LASTEXITCODE -ne 0) { throw 'Dialogue player syntax failed' }
-    foreach ($name in @('castle-audio.js','castle-ui.js','voice-lines.js')) {
-        node --check (Join-Path 'web/games/end-game/v12' $name)
-        if ($LASTEXITCODE -ne 0) { throw 'Castle shell syntax failed' }
-    }
+    # The five End Game suites and the six live modules are templates now, so
+    # neither has a file that node can read directly. The typed web gate renders
+    # them, compiles both projects and runs the suites by emitted path, which is
+    # the same route CI takes; a local syntax check would only duplicate a
+    # weaker part of it.
+    $env:EMBER_TYPED_WEB_REQUIRED = '1'
+    bash deploy/tests/test-typescript.sh
+    if ($LASTEXITCODE -ne 0) { throw 'Typed web gate failed' }
     cargo build --locked --target wasm32-unknown-unknown --release -p end-game --lib
     if ($LASTEXITCODE -ne 0) { throw 'End Game WASM build failed' }
     wasm-bindgen --target web --no-typescript --out-dir web/games/end-game/v12/pkg (Join-Path $artifacts 'wasm32-unknown-unknown/release/end_game.wasm')

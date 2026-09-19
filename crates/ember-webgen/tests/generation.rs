@@ -7,7 +7,7 @@ use ember_webgen::{Integer64Field, Integer64Representation, Manifest, RenderedBu
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const TEMPLATE_HASH: &str = "5bb16146213f3c625659c3d8e9c2d03f2f344facda2efc705e1e97cc74547a63";
+const TEMPLATE_HASH: &str = "cb824247e7e18ac4ef6ebc4a2bacc03f54a961bb2aa9623d8493463195f79e9f";
 
 fn repository_path(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,7 +183,7 @@ fn written_manifest_matches_every_file_and_fixed_compiler_copy() {
             exact("league-core.S2C.state.tick"),
         ]
     );
-    assert_eq!(manifest.files.len(), 29);
+    assert_eq!(manifest.files.len(), 51);
     assert!(
         manifest
             .files
@@ -294,6 +294,36 @@ fn behaviour_inputs_have_exact_bodies_and_adjacent_template_line_maps() {
             "node-ts/fire.test.mts",
             "web/games/fire/v2/fire.test.mts.j2",
             "// Generated from web/games/fire/v2/fire.test.mts.j2 at golden. Do not edit.\nimport type { S2CInput } from '../ts/fire-core.js';\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/main.ts",
+            "web/games/end-game/v12/main.ts.j2",
+            "// Generated from web/games/end-game/v12/main.ts.j2 at golden. Do not edit.\nimport type { EventOutput } from '../../../ember-loader.js';\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/dialogue.ts",
+            "web/games/end-game/v12/dialogue.ts.j2",
+            "// Generated from web/games/end-game/v12/dialogue.ts.j2 at golden. Do not edit.\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/castle-audio.ts",
+            "web/games/end-game/v12/castle-audio.ts.j2",
+            "// Generated from web/games/end-game/v12/castle-audio.ts.j2 at golden. Do not edit.\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/castle-ui.ts",
+            "web/games/end-game/v12/castle-ui.ts.j2",
+            "// Generated from web/games/end-game/v12/castle-ui.ts.j2 at golden. Do not edit.\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/quality.ts",
+            "web/games/end-game/v12/quality.ts.j2",
+            "// Generated from web/games/end-game/v12/quality.ts.j2 at golden. Do not edit.\n\n",
+        ),
+        (
+            "ts/games/end-game/v12/voice-lines.ts",
+            "web/games/end-game/v12/voice-lines.ts.j2",
+            "// Generated from web/games/end-game/v12/voice-lines.ts.j2 at golden. Do not edit.\n\n",
         ),
     ];
     for (rendered_path, template_path, expected_preamble) in templates {
