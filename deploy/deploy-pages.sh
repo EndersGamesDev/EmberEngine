@@ -234,7 +234,6 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p arena --lib
-    cargo build --target wasm32-unknown-unknown --release -p kings --lib
     cargo build --target wasm32-unknown-unknown --release -p league --lib
     cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
     cargo build --target wasm32-unknown-unknown --release -p end-game --lib
@@ -242,8 +241,6 @@ else
     cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/arena.wasm"
-    wasm-bindgen --target web --out-dir web/pkg \
-        "$CARGO_WASM_RELEASE/kings.wasm"
     wasm-bindgen --target web --out-dir web/pkg \
         "$CARGO_WASM_RELEASE/league.wasm"
     wasm-bindgen --target web --out-dir web/pkg \
@@ -267,7 +264,7 @@ stage_pkg_types() {
 }
 
 rm -rf "$PKG_TYPES_DIR"
-stage_pkg_types web/pkg arena kings league what_is_this end_game ember_loader
+stage_pkg_types web/pkg arena league what_is_this end_game ember_loader
 stage_pkg_types web/labs/julibrot/pkg ember_lab_julibrot
 
 echo "== generating and compiling Rust-owned web declarations =="
@@ -278,7 +275,7 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
 else
     bash deploy/stage-wasm-types.sh "$SOURCE_SHA"
 fi
-for crate in arena kings league what_is_this end_game ember_loader ember_lab_julibrot; do
+for crate in arena league what_is_this end_game ember_loader ember_lab_julibrot; do
     for destination in \
         "$REPO_DIR/target/web-generated/$SOURCE_SHA/ts/wasm/$crate" \
         "$REPO_DIR/target/web-generated/ts/wasm/$crate"
@@ -307,6 +304,7 @@ EMITTED_WEB_MODULES=(
     loader.js
     games/fire/v2/race.js
     games/fire/v2/garage.js
+    games/kings/v1/main.js
     games/end-game/v12/main.js
     games/end-game/v12/dialogue.js
     games/end-game/v12/castle-audio.js
@@ -316,6 +314,7 @@ EMITTED_WEB_MODULES=(
 )
 STAMPED_WEB_MODULES=(
     games/fire/v2/race.js
+    games/kings/v1/main.js
     games/end-game/v12/main.js
 )
 for module in "${EMITTED_WEB_MODULES[@]}"; do
@@ -795,6 +794,19 @@ game_live = {
     for release in game.get("versions", [])
     if game.get("kind") != "lab" and release.get("live") is True
 }
+page_modules = (
+    ("games/kings/v1", "main.js"),
+)
+
+for path, module in page_modules:
+    page = root / path / "index.html"
+    text = page.read_text(encoding="utf-8")
+    module_token = re.compile(r"(" + re.escape(module) + r")\?v=1(?![0-9])")
+    fixed, count = module_token.subn(lambda found: "%s?v=%s" % (found.group(1), stamp), text)
+    if count != 1:
+        raise SystemExit("FAILED: %s cache key must occur exactly once in %s" % (module, page))
+    with open(page, "w", encoding="utf-8", newline="") as handle:
+        handle.write(fixed)
 
 token = re.compile(r"(loader\.js)\?v=1(?![0-9])")
 reference = re.compile(r"""["']([^"']*loader\.js)(\?[^"']*)?["']""")

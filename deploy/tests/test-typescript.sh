@@ -123,6 +123,7 @@ converted_javascript=(
     web/loader.js
     web/hosts.test.mjs
     web/loader.test.mjs
+    web/games/kings/v1/main.js
     deploy/check-hosts.mjs
     deploy/check-hosts.test.mjs
     web/games/fire/v2/race.js

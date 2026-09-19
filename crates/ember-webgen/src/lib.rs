@@ -21,6 +21,7 @@ const EXHAUSTIVE_TEMPLATE: &str = include_str!("../templates/exhaustive-consumer
 const WASM_BINDGEN_COMPAT_TEMPLATE: &str = include_str!("../templates/wasm-bindgen-compat.d.ts.j2");
 const HOSTS_TEMPLATE: &str = include_str!("../../../web/hosts.ts.j2");
 const LOADER_TEMPLATE: &str = include_str!("../../../web/loader.ts.j2");
+const KINGS_MAIN_TEMPLATE: &str = include_str!("../../../web/games/kings/v1/main.ts.j2");
 const HOSTS_TEST_TEMPLATE: &str = include_str!("../../../web/hosts.test.mts.j2");
 const LOADER_TEST_TEMPLATE: &str = include_str!("../../../web/loader.test.mts.j2");
 const CHECK_HOSTS_TEMPLATE: &str = include_str!("../../../deploy/check-hosts.mts.j2");
@@ -71,7 +72,7 @@ struct BehaviourTemplate {
     imports: &'static [BoundaryImport],
 }
 
-const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 20] = [
+const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 21] = [
     BehaviourTemplate {
         name: "hosts",
         source_path: "web/hosts.ts.j2",
@@ -98,6 +99,40 @@ const BEHAVIOUR_TEMPLATES: [BehaviourTemplate; 20] = [
                 module: "ember-boundary",
                 specifier: "./ember-boundary.js",
                 names: &["GameCatalog", "GameRelease"],
+            },
+        ],
+    },
+    BehaviourTemplate {
+        name: "kings-main",
+        source_path: "web/games/kings/v1/main.ts.j2",
+        output_path: "ts/games/kings/v1/main.ts",
+        source: KINGS_MAIN_TEMPLATE,
+        imports: &[
+            BoundaryImport {
+                module: "kings-core",
+                specifier: "../../../kings-core.js",
+                names: &[
+                    "C2SOutput",
+                    "EndReason",
+                    "Kind",
+                    "LastAction",
+                    "LobbyInfoInput",
+                    "Phase",
+                    "PieceState",
+                    "PlayerMeta",
+                    "S2CInput",
+                    "SeatState",
+                ],
+            },
+            BoundaryImport {
+                module: "ember-loader",
+                specifier: "../../../ember-loader.js",
+                names: &["EventOutput"],
+            },
+            BoundaryImport {
+                module: "ember-boundary",
+                specifier: "../../../ember-boundary.js",
+                names: &["HostBook"],
             },
         ],
     },
