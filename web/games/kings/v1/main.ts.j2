@@ -1,0 +1,1018 @@
+// Four Kings page behaviour. The board rules stay in kings-core and the
+// renderer stays in the Kings wasm; this module owns only the page DOM, the
+// short-lived lobby browser and the hand-off into the already initialised
+// wasm-bindgen module.
+
+import { chooseHost } from '../../../hosts.js';
+
+type UnknownRecord = Record<string, unknown>;
+type Coordinate = readonly [number, number];
+type LoaderModule = typeof import('../../../loader.js');
+type KingsWasm = Pick<typeof import('../../../wasm/kings/kings.js'),
+  | 'clear_selection'
+  | 'click_tile'
+  | 'package_version'
+  | 'proto_version'
+  | 'start_game'
+  | 'start_local'
+  | 'start_online'
+  | 'state_json'>;
+type HostChoice = NonNullable<Awaited<ReturnType<typeof chooseHost>>['chosen']>;
+type PageBook = HostBook & UnknownRecord;
+type SocketTag = S2CInput['t'];
+type RejectedMessage = Extract<S2CInput, { t: 'rejected' }>;
+type LobbiesMessage = Extract<S2CInput, { t: 'lobbies' }>;
+
+const loaderSpecifier: string = '../../../loader.js?v=1';
+const loaderFrom = (value: unknown): Pick<LoaderModule, 'emberLoad'> => {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')
+      || typeof Reflect.get(value, 'emberLoad') !== 'function') {
+    throw new Error('the Kings page loader has no emberLoad function');
+  }
+  return value as Pick<LoaderModule, 'emberLoad'>;
+};
+const { emberLoad } = loaderFrom(await import(loaderSpecifier));
+
+interface PageEvent extends EventOutput {
+  host?: HostChoice | null;
+  proto?: number | null;
+}
+
+interface HudTarget {
+  x: number;
+  y: number;
+  k: string;
+}
+
+interface HudState extends UnknownRecord {
+  mode: string;
+  connected: boolean;
+  screen: string;
+  phase: Phase;
+  winner: number | null;
+  end: EndReason | null;
+  me: number | null;
+  creator: number;
+  is_creator: boolean;
+  can_start: boolean;
+  turn: number;
+  seat: number;
+  left_ms: number;
+  my_turn: boolean;
+  quiet: number;
+  stalls: number;
+  roster: PlayerMeta[];
+  seats: SeatState[];
+  pieces: PieceState[];
+  joker_fl: Array<Coordinate | null>;
+  cursor: Coordinate | null;
+  sel: Coordinate | null;
+  targets: HudTarget[];
+  last: LastAction | null;
+  pending: boolean;
+  notice: string | null;
+}
+
+interface SeatPanel {
+  p: HTMLDivElement;
+  nm: HTMLDivElement;
+  st: HTMLDivElement;
+  tu: HTMLDivElement;
+  to: HTMLDivElement;
+  cap: HTMLDivElement;
+}
+
+interface PendingJoin extends UnknownRecord {
+  lobby: string;
+}
+
+const isRecord = (value: unknown): value is UnknownRecord => (
+  !!value && typeof value === 'object' && !Array.isArray(value)
+);
+
+function requiredElement<T extends HTMLElement>(
+  id: string,
+  constructor: { new(): T },
+): T {
+  const found = document.getElementById(id);
+  if (!(found instanceof constructor)) throw new Error(`missing ${id}`);
+  return found;
+}
+
+const element = (id: string): HTMLElement => requiredElement(id, HTMLElement);
+const button = (id: string): HTMLButtonElement => requiredElement(id, HTMLButtonElement);
+const input = (id: string): HTMLInputElement => requiredElement(id, HTMLInputElement);
+
+function requiredQuery<T extends Element>(selector: string, constructor: { new(): T }): T {
+  const found = document.querySelector(selector);
+  if (!(found instanceof constructor)) throw new Error(`missing ${selector}`);
+  return found;
+}
+
+function requiredChild(parent: Element): HTMLElement {
+  const child = parent.firstElementChild;
+  if (!(child instanceof HTMLElement)) throw new Error(`missing child of ${parent.id}`);
+  return child;
+}
+
+function kingsWasmFrom(value: unknown): KingsWasm {
+  if (!isRecord(value)) throw new Error('the Kings wasm module is not an object');
+  const methods: ReadonlyArray<keyof KingsWasm> = [
+    'clear_selection',
+    'click_tile',
+    'package_version',
+    'proto_version',
+    'start_game',
+    'start_local',
+    'start_online',
+    'state_json',
+  ];
+  if (!methods.every((method) => typeof value[method] === 'function')) {
+    throw new Error('the Kings wasm module is missing a page entry point');
+  }
+  return value as KingsWasm;
+}
+
+function hudFrom(value: unknown): HudState {
+  if (!isRecord(value)) throw new Error('the Kings HUD is not an object');
+  const array = <T>(candidate: unknown, decode: (entry: unknown) => T): T[] => {
+    if (candidate === undefined || candidate === null) return [];
+    if (!Array.isArray(candidate)) throw new Error('a Kings HUD list is not an array');
+    return candidate.map(decode);
+  };
+  const number = (candidate: unknown): number => {
+    if (candidate === undefined || candidate === null) return 0;
+    if (typeof candidate !== 'number') throw new Error('a Kings HUD number is invalid');
+    return candidate;
+  };
+  const boolean = (candidate: unknown): boolean => {
+    if (candidate === undefined || candidate === null) return false;
+    if (typeof candidate !== 'boolean') throw new Error('a Kings HUD flag is invalid');
+    return candidate;
+  };
+  const coordinate = (candidate: unknown): Coordinate | null => {
+    if (candidate === undefined || candidate === null) return null;
+    if (!Array.isArray(candidate) || candidate.length !== 2
+        || typeof candidate[0] !== 'number' || typeof candidate[1] !== 'number') {
+      throw new Error('a Kings HUD coordinate is invalid');
+    }
+    return [candidate[0], candidate[1]];
+  };
+  const kind = (candidate: unknown): Kind => {
+    switch (candidate) {
+      case 'king': case 'queen': case 'rook': case 'bishop': case 'knight':
+      case 'pawn': case 'joker': case 'hero': case 'hero_awake': return candidate;
+      default: throw new Error('a Kings HUD piece kind is invalid');
+    }
+  };
+  const player = (candidate: unknown): PlayerMeta => {
+    if (!isRecord(candidate) || typeof candidate['handle'] !== 'string') {
+      throw new Error('a Kings HUD player is invalid');
+    }
+    return {
+      id: number(candidate['id']),
+      handle: candidate['handle'],
+      seat: number(candidate['seat']),
+    } satisfies PlayerMeta;
+  };
+  const seat = (candidate: unknown): SeatState => {
+    if (!isRecord(candidate)) throw new Error('a Kings HUD seat is invalid');
+    return {
+      seat: number(candidate['seat']),
+      present: boolean(candidate['present']),
+      alive: boolean(candidate['alive']),
+      garrison: boolean(candidate['garrison']),
+      own_turns: number(candidate['own_turns']),
+      timeouts: number(candidate['timeouts']),
+      captured: array(candidate['captured'], kind),
+    } satisfies SeatState;
+  };
+  const piece = (candidate: unknown): PieceState => {
+    if (!isRecord(candidate)) throw new Error('a Kings HUD piece is invalid');
+    return {
+      id: number(candidate['id']),
+      owner: number(candidate['owner']),
+      kind: kind(candidate['kind']),
+      x: number(candidate['x']),
+      y: number(candidate['y']),
+    } satisfies PieceState;
+  };
+  const target = (candidate: unknown): HudTarget => {
+    if (!isRecord(candidate) || typeof candidate['k'] !== 'string') {
+      throw new Error('a Kings HUD target is invalid');
+    }
+    return { x: number(candidate['x']), y: number(candidate['y']), k: candidate['k'] };
+  };
+  const phase = (candidate: unknown): Phase => {
+    switch (candidate) {
+      case 'waiting': case 'playing': case 'finished': return candidate;
+      case undefined: case null: return 'waiting';
+      default: throw new Error('the Kings HUD phase is invalid');
+    }
+  };
+  const end = (candidate: unknown): EndReason | null => {
+    switch (candidate) {
+      case 'last_king': case 'no_progress': case 'stalemate': case 'turn_cap':
+      case 'abandoned': return candidate;
+      case undefined: case null: return null;
+      default: throw new Error('the Kings HUD end reason is invalid');
+    }
+  };
+  const last = (candidate: unknown): LastAction | null => {
+    if (candidate === undefined || candidate === null) return null;
+    if (!isRecord(candidate)) throw new Error('the Kings HUD last action is invalid');
+    const action = candidate['kind'];
+    if (action !== 'move' && action !== 'joker_teleport' && action !== 'joker_place'
+        && action !== 'hero_swap' && action !== 'hero_wake' && action !== 'pass'
+        && action !== 'timeout') throw new Error('the Kings HUD action kind is invalid');
+    const captured = candidate['captured'];
+    const eliminated = candidate['eliminated'];
+    return {
+      seat: number(candidate['seat']),
+      kind: action,
+      fx: number(candidate['fx']),
+      fy: number(candidate['fy']),
+      tx: number(candidate['tx']),
+      ty: number(candidate['ty']),
+      captured: captured === undefined || captured === null ? null : kind(captured),
+      promoted: boolean(candidate['promoted']),
+      eliminated: eliminated === undefined || eliminated === null ? null : number(eliminated),
+    } satisfies LastAction;
+  };
+  const winner = value['winner'];
+  const me = value['me'];
+  const notice = value['notice'];
+  const mode = value['mode'];
+  const screen = value['screen'];
+  return {
+    mode: mode === 'online' ? 'online' : 'local',
+    connected: value['connected'] === undefined ? true : boolean(value['connected']),
+    screen: screen === 'browsing' ? 'browsing' : 'lobby',
+    phase: phase(value['phase']),
+    winner: winner === undefined || winner === null ? null : number(winner),
+    end: end(value['end']),
+    me: me === undefined || me === null ? null : number(me),
+    creator: number(value['creator']),
+    is_creator: boolean(value['is_creator']),
+    can_start: boolean(value['can_start']),
+    turn: number(value['turn']),
+    seat: number(value['seat']),
+    left_ms: number(value['left_ms']),
+    my_turn: boolean(value['my_turn']),
+    quiet: number(value['quiet']),
+    stalls: number(value['stalls']),
+    roster: array(value['roster'], player),
+    seats: array(value['seats'], seat),
+    pieces: array(value['pieces'], piece),
+    joker_fl: array(value['joker_fl'], coordinate),
+    cursor: coordinate(value['cursor']),
+    sel: coordinate(value['sel']),
+    targets: array(value['targets'], target),
+    last: last(value['last']),
+    pending: boolean(value['pending']),
+    notice: notice === undefined || notice === null ? null : String(notice),
+  } satisfies HudState;
+}
+
+function pageBookFrom(value: unknown): PageBook {
+  return isRecord(value) ? value as PageBook : {};
+}
+
+function pendingJoinFrom(value: unknown): PendingJoin | null {
+  if (!isRecord(value) || typeof value['lobby'] !== 'string' || !value['lobby']) return null;
+  return value as PendingJoin;
+}
+
+function socketTagFrom(value: unknown): SocketTag | null {
+  switch (value) {
+    case 'welcome': case 'rejected': case 'lobbies': case 'joined': case 'roster':
+    case 'can_start': case 'phase': case 'state': case 'clock': case 'pong': return value;
+    default: return null;
+  }
+}
+
+function lobbyFrom(value: unknown): LobbyInfoInput | null {
+  if (!isRecord(value)
+      || typeof value['name'] !== 'string'
+      || typeof value['host'] !== 'string'
+      || typeof value['has_password'] !== 'boolean'
+      || typeof value['players'] !== 'number'
+      || typeof value['cap'] !== 'number'
+      || (value['playing'] !== undefined && typeof value['playing'] !== 'boolean')) return null;
+  return {
+    name: value['name'],
+    host: value['host'],
+    has_password: value['has_password'],
+    players: value['players'],
+    cap: value['cap'],
+    playing: value['playing'] === true,
+  } satisfies LobbyInfoInput;
+}
+
+function lobbiesFrom(value: unknown): LobbyInfoInput[] | null {
+  if (!Array.isArray(value)) return null;
+  const lobbies = value.map(lobbyFrom);
+  return lobbies.every((lobby): lobby is LobbyInfoInput => lobby !== null) ? lobbies : null;
+}
+
+function rejectedMessageFrom(value: UnknownRecord): RejectedMessage | null {
+  return typeof value['reason'] === 'string'
+    ? { t: 'rejected', reason: value['reason'] } satisfies RejectedMessage
+    : null;
+}
+
+function lobbiesMessageFrom(value: UnknownRecord): LobbiesMessage | null {
+  const lobbies = lobbiesFrom(value['lobbies']);
+  return lobbies ? { t: 'lobbies', lobbies } satisfies LobbiesMessage : null;
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled value ${String(value)}`);
+}
+
+const fail = (message: unknown): void => {
+  const loading = document.getElementById('loading');
+  if (loading) loading.textContent = `failed to start: ${message || 'see browser console'}`;
+};
+window.addEventListener('error', (event) => fail(event.message));
+window.addEventListener('unhandledrejection', (event) => fail(event.reason));
+
+// ---- keyboard hygiene --------------------------------------------------
+// Arrows and space drive the cursor in the wasm; keep them off the page.
+// Esc clears the selection. Typing in the lobby inputs is left alone.
+let wasm: KingsWasm | null = null;
+let launched = false;
+const typing = (event: globalThis.Event): boolean => (
+  event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
+);
+addEventListener('keydown', (event) => {
+  if (typing(event)) return;
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
+    event.preventDefault();
+  }
+  if (event.key === 'Escape' && launched && wasm) {
+    try { wasm.clear_selection(); } catch {}
+  }
+}, { passive: false });
+document.addEventListener('pointerdown', (event) => {
+  if (typing(event)) return;
+  document.querySelector<HTMLCanvasElement>('#ember-root canvas')?.focus();
+});
+
+// ---- constants shared with the rules of record -------------------------
+const SEAT_NAME = ['gold', 'crimson', 'azure', 'emerald'];
+const SEAT_CORNER = ['SW', 'SE', 'NE', 'NW'];
+const GLYPH: Record<Kind, string> = {
+  king: '♔', queen: '♕', rook: '♖', bishop: '♗', knight: '♘', pawn: '♙',
+  joker: 'J', hero: 'H', hero_awake: 'H',
+};
+const TURN_MS = 15000;
+const NO_PROGRESS_TURNS = 100;
+const TIMEOUTS_TO_ELIMINATE = 3;
+const JOKER_PLACE_EVERY = 5;
+const END_TEXT: Record<EndReason, string> = {
+  last_king: 'last king standing',
+  no_progress: `${NO_PROGRESS_TURNS} turns without progress, decided on material`,
+  stalemate: 'every seat was stuck in a row, decided on material',
+  turn_cap: 'the turn cap was reached, decided on material',
+  abandoned: 'everyone left',
+};
+
+// Global (x, y) to the local frame of a seat: u forward, v left. The table
+// of docs/kings-design.md section 1.2. On screen u is the column and v the
+// row from the bottom, so the local corner sits bottom-left.
+const toLocal = (seat: number, x: number, y: number): Coordinate => {
+  switch (seat) {
+    case 1: return [y, 9 - x];
+    case 2: return [9 - x, 9 - y];
+    case 3: return [9 - y, x];
+    default: return [x, y];
+  }
+};
+const blockOf = (x: number, y: number): number => {
+  if (x <= 3 && y <= 3) return 0;
+  if (x >= 6 && y <= 3) return 1;
+  if (x >= 6 && y >= 6) return 2;
+  if (x <= 3 && y >= 6) return 3;
+  return -1;
+};
+
+// ---- the board: 100 buttons, created once, restyled in place ------------
+const boardEl = element('board');
+const cells: HTMLButtonElement[] = [];
+for (let y = 0; y < 10; y += 1) {
+  for (let x = 0; x < 10; x += 1) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = `cell${((x + y) & 1) ? '' : ' dark'}`;
+    const block = blockOf(x, y);
+    if (block >= 0) cell.classList.add(`block${block}`);
+    cell.dataset['x'] = String(x);
+    cell.dataset['y'] = String(y);
+    const glyph = document.createElement('span');
+    glyph.className = 'g';
+    const dot = document.createElement('span');
+    dot.className = 'd';
+    cell.append(glyph, dot);
+    cell.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (launched && wasm) {
+        try { wasm.click_tile(x, y); } catch (error) { console.error(error); }
+      }
+    });
+    cells[y * 10 + x] = cell;
+    boardEl.append(cell);
+  }
+}
+// A click on the board's gaps (not a tile) clears the selection.
+boardEl.addEventListener('click', () => {
+  if (launched && wasm) {
+    try { wasm.clear_selection(); } catch {}
+  }
+});
+
+let placedFor = -1;
+const placeCells = (seat: number): void => {
+  if (placedFor === seat) return;
+  placedFor = seat;
+  for (let y = 0; y < 10; y += 1) {
+    for (let x = 0; x < 10; x += 1) {
+      const [u, v] = toLocal(seat, x, y);
+      const cell = cells[y * 10 + x]!;
+      cell.style.gridColumn = String(u + 1);
+      cell.style.gridRow = String(10 - v);
+    }
+  }
+};
+placeCells(0);
+
+// ---- seat panels, created once -----------------------------------------
+const seatsEl = element('seats');
+const seatPanels: SeatPanel[] = [0, 1, 2, 3].map((seat) => {
+  const panel = document.createElement('div');
+  panel.className = `seat s${seat}`;
+  const name = document.createElement('div');
+  name.className = 'nm';
+  const state = document.createElement('div');
+  state.className = 'st';
+  const turns = document.createElement('div');
+  turns.className = 'tu';
+  const timeouts = document.createElement('div');
+  timeouts.className = 'to';
+  const captured = document.createElement('div');
+  captured.className = 'cap';
+  panel.append(name, state, turns, timeouts, captured);
+  seatsEl.append(panel);
+  return { p: panel, nm: name, st: state, tu: turns, to: timeouts, cap: captured };
+});
+
+// ---- render: state_json object -> DOM, nothing else ---------------------
+const bannerEl = element('banner');
+const whoseEl = element('whose');
+const timerN = requiredQuery('#timer .n', HTMLElement);
+const barEl = element('bar');
+const barFill = requiredChild(barEl);
+const noticeEl = element('notice');
+const lastEl = element('lastact');
+const quietEl = element('quiet');
+const waitingEl = element('waiting');
+const creatorLine = element('creator-line');
+const startBtn = button('btn-start');
+const seatingEl = element('seating');
+const timerEl = element('timer');
+const CELL_DYN = [
+  'own0', 'own1', 'own2', 'own3', 'garrison', 'awake', 'has', 'sel', 'cursor',
+  'last-from', 'last-to', 't-move', 't-capture', 't-teleport', 't-place',
+  't-swap', 't-wake', 'jfl0', 'jfl1', 'jfl2', 'jfl3',
+];
+let noticeText: string | null = null;
+let noticeAt = 0;
+
+const tile = (x: number, y: number): string => `(${x},${y})`;
+const seatLabel = (hud: HudState, seat: number): string => {
+  const member = hud.roster.find((player) => player.seat === seat);
+  const state = hud.seats[seat];
+  if (member) return `${member.handle} (${SEAT_NAME[seat]})`;
+  if (state?.garrison) return `${SEAT_NAME[seat]} garrison`;
+  return SEAT_NAME[seat] || `seat ${seat}`;
+};
+const kindName = (kind: Kind | null | undefined): string => (
+  kind === 'hero_awake' ? 'awake hero' : String(kind || 'piece').replace('_', ' ')
+);
+const lastSentence = (hud: HudState, byTile: Array<PieceState | null>): string => {
+  const last = hud.last;
+  if (!last) return '';
+  const who = seatLabel(hud, last.seat);
+  const eliminated = last.eliminated !== null
+    ? `; ${seatLabel(hud, last.eliminated)} is eliminated`
+    : '';
+  const from = tile(last.fx, last.fy);
+  const to = tile(last.tx, last.ty);
+  const moverNow = byTile[last.ty * 10 + last.tx];
+  const mover = last.promoted
+    ? 'pawn'
+    : (moverNow?.owner === last.seat ? kindName(moverNow.kind) : 'piece');
+  const took = last.captured ? ` took a ${kindName(last.captured)}` : '';
+  switch (last.kind) {
+    case 'joker_teleport': return `${who} joker teleported ${from} to ${to}${eliminated}`;
+    case 'joker_place': return `${who} joker placed from ${from} onto ${to}${eliminated}`;
+    case 'hero_swap': return `${who} hero swapped with its pawn at ${to} and awoke`;
+    case 'hero_wake': return `${who} hero awoke in place at ${to}`;
+    case 'pass': return `${who} had no legal move and passed${eliminated}`;
+    case 'timeout': return `${who} ran out of time${eliminated}`;
+    case 'move': {
+      const promotion = last.promoted ? ', promoted to queen' : '';
+      return `${who} ${mover} ${from} to ${to}${took}${promotion}${eliminated}`;
+    }
+    default: return assertNever(last.kind);
+  }
+};
+const nextPlacement = (
+  hud: HudState,
+  seat: number,
+  state: SeatState,
+  hasJoker: boolean,
+): string => {
+  if (!hasJoker) return 'joker lost';
+  const own = state.own_turns | 0;
+  if (hud.phase === 'playing' && hud.seat === seat
+      && own > 0 && own % JOKER_PLACE_EVERY === 0) return 'joker placement now';
+  const next = (Math.floor(own / JOKER_PLACE_EVERY) + 1) * JOKER_PLACE_EVERY;
+  return `joker placement on own turn ${next}`;
+};
+
+function render(hud: HudState): void {
+  const me = hud.me === null ? 0 : hud.me;
+  placeCells(me);
+
+  const byTile: Array<PieceState | null> = new Array<PieceState | null>(100).fill(null);
+  const jokerOf = [false, false, false, false];
+  for (const piece of hud.pieces) {
+    byTile[piece.y * 10 + piece.x] = piece;
+    if (piece.kind === 'joker') jokerOf[piece.owner] = true;
+  }
+  const targets = new Map<number, string>();
+  for (const target of hud.targets) targets.set(target.y * 10 + target.x, target.k);
+  const selected = hud.sel ? hud.sel[1] * 10 + hud.sel[0] : -1;
+  const cursor = hud.cursor ? hud.cursor[1] * 10 + hud.cursor[0] : -1;
+  const last = hud.last;
+  const lastMoves = !!last && last.kind !== 'pass' && last.kind !== 'timeout';
+  const from = lastMoves ? last.fy * 10 + last.fx : -1;
+  const to = lastMoves ? last.ty * 10 + last.tx : -1;
+  const jokerFrontLeft = new Map<number, number>();
+  hud.joker_fl.forEach((position, seat) => {
+    if (position) jokerFrontLeft.set(position[1] * 10 + position[0], seat);
+  });
+
+  for (let index = 0; index < 100; index += 1) {
+    const cell = cells[index]!;
+    const piece = byTile[index];
+    cell.classList.remove(...CELL_DYN);
+    const glyph = requiredChild(cell);
+    if (piece) {
+      glyph.textContent = GLYPH[piece.kind];
+      cell.classList.add('has', `own${piece.owner}`);
+      if (piece.kind === 'hero_awake') cell.classList.add('awake');
+      if (hud.seats[piece.owner]?.garrison) cell.classList.add('garrison');
+      cell.title = `${SEAT_NAME[piece.owner]} ${kindName(piece.kind)} ${tile(index % 10, (index / 10) | 0)}`;
+    } else {
+      glyph.textContent = '';
+      cell.title = tile(index % 10, (index / 10) | 0);
+    }
+    const target = targets.get(index);
+    if (target) cell.classList.add(`t-${target}`);
+    if (index === selected) cell.classList.add('sel');
+    if (index === cursor) cell.classList.add('cursor');
+    if (index === from) cell.classList.add('last-from');
+    if (index === to) cell.classList.add('last-to');
+    const jokerSeat = jokerFrontLeft.get(index);
+    if (jokerSeat !== undefined) cell.classList.add(`jfl${jokerSeat}`);
+  }
+
+  bannerEl.classList.remove('win');
+  switch (hud.phase) {
+    case 'finished': {
+      bannerEl.classList.add('win');
+      const why = hud.end ? END_TEXT[hud.end] : '';
+      bannerEl.textContent = hud.winner !== null
+        ? `${seatLabel(hud, hud.winner)} wins: ${why}`
+        : `draw${why ? `: ${why}` : ''}`;
+      whoseEl.textContent = '';
+      whoseEl.classList.remove('mine');
+      break;
+    }
+    case 'playing':
+      bannerEl.textContent = `turn ${hud.turn}`;
+      if (hud.my_turn) {
+        whoseEl.textContent = 'your turn';
+        whoseEl.classList.add('mine');
+      } else {
+        whoseEl.textContent = `${seatLabel(hud, hud.seat)} (seat ${hud.seat}) to move`;
+        whoseEl.classList.remove('mine');
+      }
+      break;
+    case 'waiting':
+      bannerEl.textContent = hud.mode === 'online' && !hud.connected
+        ? 'connecting…'
+        : hud.screen === 'browsing' ? 'joining the lobby…' : 'waiting for players';
+      whoseEl.textContent = '';
+      whoseEl.classList.remove('mine');
+      break;
+    default: assertNever(hud.phase);
+  }
+  if (hud.mode === 'online' && !hud.connected && hud.phase !== 'waiting') {
+    whoseEl.textContent = 'connection lost';
+  }
+
+  const playing = hud.phase === 'playing';
+  timerEl.classList.toggle('hidden', !playing);
+  if (playing) {
+    const milliseconds = Math.max(0, Math.min(TURN_MS, hud.left_ms | 0));
+    timerN.textContent = `${(milliseconds / 1000).toFixed(1)} s`;
+    barFill.style.width = `${(100 * milliseconds / TURN_MS).toFixed(1)}%`;
+    barEl.classList.toggle('low', milliseconds < 3000);
+  }
+
+  if (hud.notice !== noticeText) {
+    noticeText = hud.notice;
+    noticeAt = performance.now();
+    noticeEl.textContent = hud.notice || '';
+  }
+  noticeEl.classList.toggle('show', !!hud.notice && performance.now() - noticeAt < 4000);
+
+  lastEl.textContent = lastSentence(hud, byTile);
+  quietEl.textContent = playing
+    ? `no progress ${hud.quiet | 0} of ${NO_PROGRESS_TURNS}`
+      + (hud.stalls ? ` · forced passes in a row ${hud.stalls}` : '')
+      + (hud.pending ? ' · sending…' : '')
+    : '';
+
+  const waiting = hud.phase === 'waiting' && hud.mode === 'online';
+  waitingEl.classList.toggle('hidden', !waiting);
+  if (waiting) {
+    const creatorSeat = hud.roster.find((player) => player.id === hud.creator)?.seat ?? 0;
+    const creatorName = seatLabel(hud, creatorSeat);
+    startBtn.classList.toggle('hidden', !hud.is_creator);
+    startBtn.disabled = !hud.can_start;
+    creatorLine.textContent = hud.is_creator
+      ? (hud.can_start
+        ? 'you may start: the empty corners become garrisons'
+        : 'you are the creator; the game can start with two players')
+      : `waiting for ${creatorName} to start`;
+    seatingEl.replaceChildren(...[0, 1, 2, 3].map((seat) => {
+      const line = document.createElement('div');
+      const swatch = document.createElement('span');
+      swatch.className = 'sw';
+      swatch.style.background = `var(--seat${seat})`;
+      const member = hud.roster.find((player) => player.seat === seat);
+      const who = member
+        ? `${member.handle}${member.id === hud.creator ? ' (creator)' : ''}${seat === hud.me ? ' (you)' : ''}`
+        : 'empty, a garrison if the game starts';
+      line.append(swatch, `seat ${seat} ${SEAT_NAME[seat]} ${SEAT_CORNER[seat]}: ${who}`);
+      return line;
+    }));
+  }
+
+  for (let seat = 0; seat < 4; seat += 1) {
+    const state = hud.seats[seat];
+    const panel = seatPanels[seat]!;
+    panel.p.classList.toggle('tomove', playing && hud.seat === seat);
+    panel.p.classList.toggle('dead', !!(
+      state?.garrison
+      || (state?.present === false && !state.garrison)
+      || (state?.alive === false && !state.garrison)
+    ));
+    panel.nm.textContent = `${seatLabel(hud, seat)}${hud.me === seat ? ' (you)' : ''}`;
+    panel.st.textContent = state?.garrison
+      ? `garrison, ${SEAT_CORNER[seat]} corner`
+      : state?.alive === false ? 'eliminated'
+        : state?.present === false ? 'absent'
+          : `seated, ${SEAT_CORNER[seat]} corner`;
+    if (playing && state?.alive && !state.garrison) {
+      panel.tu.textContent = `own turns ${state.own_turns | 0} · ${nextPlacement(hud, seat, state, jokerOf[seat] ?? false)}`;
+      panel.to.textContent = `timeouts ${state.timeouts | 0} of ${TIMEOUTS_TO_ELIMINATE}`;
+    } else {
+      panel.tu.textContent = '';
+      panel.to.textContent = '';
+    }
+    panel.cap.textContent = (state?.captured || []).map((kind) => GLYPH[kind]).join(' ');
+    panel.cap.title = state?.captured.length
+      ? `captured: ${state.captured.map(kindName).join(', ')}`
+      : '';
+  }
+}
+Reflect.set(window, '__kingsRender', render);
+
+// ---- the bundle and the server -----------------------------------------
+const ROOT = new URL('../../../', location.href);
+let cfg: PageBook = {};
+let chosen: HostChoice | null = null;
+let catalogProto: number | null = null;
+function paint(event: PageEvent): void {
+  if (event.phase === 'host') {
+    if (event.status !== 'begin') {
+      chosen = event.host || null;
+      catalogProto = event.proto ?? null;
+    }
+    return;
+  }
+  element('engine-note').textContent = event.phase === 'ready' ? '' : event.text;
+  const loading = document.getElementById('loading');
+  if (loading) loading.textContent = event.text;
+  if (event.status === 'fail') fail(event.text);
+}
+
+// A page may be published ahead of its bundle. It then keeps the lobby list
+// and rules visible and says why no game can start, as it did inline.
+try {
+  const loaded = await emberLoad({
+    game: 'kings',
+    version: 'v1',
+    bundle: './pkg/kings.js',
+    onEvent: paint,
+  });
+  wasm = kingsWasmFrom(loaded.exports);
+  chosen = loaded.host;
+  cfg = pageBookFrom(loaded.book);
+  catalogProto = loaded.proto;
+  const fullVersion = loaded.version || wasm.package_version();
+  const versionLabel = `Version ${fullVersion.split('.')[0]}`;
+  const releaseVersion = element('release-version');
+  releaseVersion.textContent = versionLabel;
+  releaseVersion.title = `Full version ${fullVersion}`;
+  document.title = `Four Kings · ${versionLabel} · Ember`;
+} catch (error) {
+  wasm = null;
+  console.error(error);
+  try {
+    const ranking = await chooseHost(ROOT.href, { game: 'kings', proto: null });
+    chosen = ranking.chosen;
+    cfg = pageBookFrom(ranking.book);
+  } catch (second) {
+    console.error(second);
+  }
+}
+
+const proto = (): number => {
+  if (catalogProto !== null) return catalogProto;
+  try { return wasm ? wasm.proto_version() : 0; } catch { return 0; }
+};
+const kingsWs = (): string => chosen?.url || '';
+{
+  const pageProto = proto();
+  const publishedProto = cfg['kings_proto'];
+  const published = typeof publishedProto === 'number' ? publishedProto : null;
+  element('proto').textContent = (wasm ? `protocol v${pageProto}` : 'engine bundle missing')
+    + (published !== null ? ` · server publishes v${published}` : '');
+  if (wasm && published !== null && published !== pageProto) {
+    element('proto').style.color = '#ff9c8f';
+  }
+}
+if (!wasm) {
+  const note = element('engine-note');
+  note.className = 'note bad';
+  note.textContent = 'the engine bundle (pkg/kings.js) is not published for this page yet, so no game can start here; the lobby list and the rules still work';
+  button('btn-practice').disabled = true;
+  button('btn-create').disabled = true;
+}
+
+// ---- account handle (shared with the hub and the arena) ----------------
+const ACCT_KEY = 'ember-account';
+const readAccount = (): UnknownRecord | null => {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(ACCT_KEY) || 'null');
+    return isRecord(parsed) && parsed['handle'] ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+const account = readAccount();
+if (account) input('handle').value = String(account['handle']);
+const handleValue = (): string => {
+  const handle = input('handle').value.trim().slice(0, 20) || 'player';
+  try {
+    const saved = readAccount() || {
+      id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
+      created: new Date().toISOString(),
+    };
+    saved['handle'] = handle;
+    localStorage.setItem(ACCT_KEY, JSON.stringify(saved));
+  } catch {}
+  return handle;
+};
+
+const note = (rows: HTMLElement, text: string, bad = false): void => {
+  const message = document.createElement('span');
+  message.className = `note${bad ? ' bad' : ''}`;
+  message.textContent = text;
+  rows.replaceChildren(message);
+};
+
+const send = (socket: WebSocket, message: C2SOutput): void => {
+  socket.send(JSON.stringify(message));
+};
+
+function showLobbies(rows: HTMLElement, lobbies: LobbyInfoInput[]): void {
+  if (lobbies.length === 0) {
+    note(rows, 'no lobbies yet, create one below');
+    return;
+  }
+  rows.replaceChildren(...lobbies.map((lobby) => {
+    const row = document.createElement('div');
+    row.className = 'lobby';
+    const name = document.createElement('span');
+    name.className = 'nm';
+    name.textContent = `${lobby.name}${lobby.has_password ? ' 🔒' : ''}`;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${lobby.players}/${lobby.cap} · host ${lobby.host}${lobby.playing ? ' · playing' : ''}`;
+    const join = document.createElement('button');
+    join.textContent = lobby.playing ? 'In play' : 'Join';
+    join.disabled = !!lobby.playing || !wasm;
+    join.title = lobby.playing ? 'no joining once the game has started' : '';
+    join.onclick = () => {
+      const password = lobby.has_password ? prompt(`Password for "${lobby.name}"`) : null;
+      if (lobby.has_password && password === null) return;
+      launchOnline(lobby.name, password, false);
+    };
+    row.append(name, meta, join);
+    return row;
+  }));
+}
+
+function handleSocketMessage(
+  rows: HTMLElement,
+  value: unknown,
+  finish: (text: string, bad: boolean) => void,
+): SocketTag | null {
+  if (!isRecord(value)) return null;
+  const tag = socketTagFrom(value['t']);
+  switch (tag) {
+    case 'rejected': {
+      const message = rejectedMessageFrom(value);
+      if (!message) return null;
+      finish(`server refused: ${message.reason}`, true);
+      return tag;
+    }
+    case 'lobbies': {
+      const message = lobbiesMessageFrom(value);
+      if (!message) return null;
+      showLobbies(rows, message.lobbies);
+      return tag;
+    }
+    case 'welcome':
+    case 'joined':
+    case 'roster':
+    case 'can_start':
+    case 'phase':
+    case 'state':
+    case 'clock':
+    case 'pong':
+      return tag;
+    case null:
+      return null;
+    default: return assertNever(tag);
+  }
+}
+
+// ---- lobby browser -----------------------------------------------------
+// Its own short-lived socket, as in fire: listing is ungated on the server,
+// so it works even without the bundle (proto 0, like the hub).
+const listLobbies = (): void => {
+  const rows = element('lobby-rows');
+  const url = kingsWs();
+  if (!url) {
+    note(rows, 'no online server is published right now, hotseat still works');
+    return;
+  }
+  note(rows, 'looking for lobbies…');
+
+  let done = false;
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(url);
+  } catch (error) {
+    const message = isRecord(error) && typeof error['message'] === 'string'
+      ? error['message']
+      : String(error);
+    note(rows, `bad server url: ${message}`, true);
+    return;
+  }
+  const finish = (message: string, bad: boolean): void => {
+    if (done) return;
+    done = true;
+    if (message) note(rows, message, bad);
+    socket.close();
+  };
+  setTimeout(() => finish('server did not answer', true), 6000);
+  socket.onerror = () => finish('server not reachable', true);
+  socket.onopen = () => {
+    send(socket, { t: 'hello', proto: proto(), handle: 'browser' });
+    send(socket, { t: 'list_lobbies' });
+  };
+  socket.onmessage = (event: MessageEvent<unknown>) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(String(event.data)); } catch { return; }
+    const tag = handleSocketMessage(rows, parsed, finish);
+    if (tag === 'lobbies') {
+      done = true;
+      socket.close();
+    }
+  };
+};
+
+// ---- launching ---------------------------------------------------------
+const showStage = (): void => {
+  element('start').classList.add('hidden');
+  element('stage').classList.remove('hidden');
+};
+
+let warnedHud = false;
+const pollHud = (): void => {
+  const tick = (): void => {
+    try {
+      if (wasm) render(hudFrom(JSON.parse(wasm.state_json()) as unknown));
+    } catch (error) {
+      if (!warnedHud) {
+        warnedHud = true;
+        console.error(error);
+      }
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+};
+
+const launchLocal = (): void => {
+  if (launched || !wasm) return;
+  launched = true;
+  showStage();
+  wasm.start_local();
+  pollHud();
+};
+
+const launchOnline = (lobby: string, password: string | null, create: boolean): void => {
+  if (launched || !wasm) return;
+  const url = kingsWs();
+  if (!url) {
+    element('online-note').className = 'note bad';
+    element('online-note').textContent = 'no server published';
+    return;
+  }
+  launched = true;
+  showStage();
+  try {
+    wasm.start_online(JSON.stringify({
+      ws: url,
+      handle: handleValue(),
+      lobby,
+      password: password || '',
+      create,
+    }));
+    pollHud();
+  } catch (error) {
+    launched = false;
+    element('stage').classList.add('hidden');
+    element('start').classList.remove('hidden');
+    element('online-note').className = 'note bad';
+    element('online-note').textContent = String(error);
+  }
+};
+
+button('btn-practice').onclick = launchLocal;
+button('btn-online').onclick = () => {
+  element('online-panel').classList.toggle('hidden');
+  button('btn-online').classList.add('primary');
+  button('btn-practice').classList.remove('primary');
+  if (!element('online-panel').classList.contains('hidden')) listLobbies();
+};
+button('btn-refresh').onclick = listLobbies;
+button('btn-create').onclick = () => {
+  const name = input('newlobby').value.trim();
+  if (!name) {
+    element('online-note').className = 'note bad';
+    element('online-note').textContent = 'give the lobby a name';
+    return;
+  }
+  launchOnline(name, input('newpass').value.trim(), true);
+};
+startBtn.onclick = () => {
+  if (launched && wasm) {
+    try { wasm.start_game(); } catch (error) { console.error(error); }
+  }
+};
+
+// ---- pending join handed over from the hub -----------------------------
+let pending: PendingJoin | null = null;
+try {
+  pending = pendingJoinFrom(JSON.parse(sessionStorage.getItem('ember-pending') || 'null'));
+} catch {}
+sessionStorage.removeItem('ember-pending');
+if (pending) {
+  element('online-panel').classList.remove('hidden');
+  button('btn-online').classList.add('primary');
+  button('btn-practice').classList.remove('primary');
+  const password = typeof pending['password'] === 'string' ? pending['password'] : null;
+  if (wasm) launchOnline(pending.lobby, password, pending['action'] === 'create');
+  else listLobbies();
+}

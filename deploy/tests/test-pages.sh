@@ -131,7 +131,7 @@ mkdir -p "$REPO/web/games/fire/v2/fonts"
 for name in barlow-latin-400.woff2 barlow-condensed-latin-800.woff2 OFL.txt README.md; do
     printf "fire v2 font fixture %s\n" "$name" > "$REPO/web/games/fire/v2/fonts/$name"
 done
-printf 'kings v1<script type="module">import { emberLoad } from "../../../loader.js?v=1";</script>\n' > "$REPO/web/games/kings/v1/index.html"
+printf 'kings v1<script type="module">import "./main.js?v=1";</script>\n' > "$REPO/web/games/kings/v1/index.html"
 printf '<link href="./ui.css"><script src="./ui.js"></script><img src="../v2/art/arena.webp">\n' > "$REPO/web/$LEAGUE_LIVE/index.html"
 printf 'import { emberLoad } from "../../../loader.js?v=1"; const ART = ["../v2/art/swarm.webp", "../v2/art/emberknight.webp", "../v2/art/hallow.webp", "../v2/art/bogmaw.webp", "../v2/art/tessera.webp"]; const ICONS = "../v2/art/icons.svg";\n' > "$REPO/web/$LEAGUE_LIVE/ui.js"
 printf 'league CSS\n' > "$REPO/web/$LEAGUE_LIVE/ui.css"
@@ -485,6 +485,21 @@ fi
 contains "$(cat "$TMP/fire-corrupt-unstamped.log")" \
     "assembled module does not match its emitted expectation: games/fire/v2/garage.js" \
     "the corrupted unstamped-module rejection comes from the emitted verifier"
+KINGS_EXPECTED="$TMP/kings-emitted-expected"
+"$PY" "$REPO/deploy/verify-emitted-modules.py" --write \
+    --emitted-root "$REPO/target/web-generated/js" \
+    --assembled-root "$KINGS_EXPECTED" \
+    --stamp "$STAMP" \
+    --module games/kings/v1/main.js \
+    --stamped games/kings/v1/main.js >/dev/null
+if cmp -s "$KINGS_EXPECTED/games/kings/v1/main.js" \
+        "$SHIM_PUBLISHED/games/kings/v1/main.js"; then
+    ok "the stamped Kings module matches its emitted expectation"
+else
+    bad "the Kings module differs from its emitted expectation"
+fi
+contains "$(cat "$REPO/target/web-generated/js/games/kings/v1/main.js")" \
+    'loader.js?v=1' "the emitted Kings module remains stamp-independent"
 for f in pkg/ember_loader.js pkg/ember_loader_bg.wasm; do
     if [ -f "$SHIM_PUBLISHED/$f" ]; then ok "assembled the shared loader $f"; else bad "missing the shared loader $f"; fi
 done
@@ -627,6 +642,9 @@ for spec in "${ARENA_LIVE#games/} arena" "fire/v2 fire" "kings/v1 kings" "${LEAG
         cp "$REPO/web/games/$live/ui.js" "$REPO/web/games/$live/ui.css" "$EXPECTED/games/$live/"
         cp -R "$REPO/web/games/$live/art" "$EXPECTED/games/$live/"
     fi
+    if [ "$bundle" = kings ]; then
+        cp "$REPO/target/web-generated/js/games/kings/v1/main.js" "$EXPECTED/games/$live/"
+    fi
     if [ "games/$live" = "$ARENA_LIVE" ]; then
         # Expected output is authored independently of the publisher's rewrite.
         printf 'arena live<script src="./settings.js?v=%s"></script><script type="module">import { emberLoad } from "../../../loader.js?v=%s";</script>\n' "$STAMP" "$STAMP" > "$EXPECTED/games/$live/index.html"
@@ -641,12 +659,15 @@ done
     --stamp "$STAMP" \
     --module games/fire/v2/race.js \
     --module games/fire/v2/garage.js \
-    --stamped games/fire/v2/race.js
+    --module games/kings/v1/main.js \
+    --stamped games/fire/v2/race.js \
+    --stamped games/kings/v1/main.js
 mkdir -p "$EXPECTED/games/league/v2"
 cp -R "$REPO/web/games/league/v2/art" "$EXPECTED/games/league/v2/"
 for page in games/kings/v1/index.html "$LEAGUE_LIVE/ui.js"; do
     sed -i "s/loader\\.js?v=1/loader.js?v=$STAMP/" "$EXPECTED/$page"
 done
+sed -i "s/main\\.js?v=1/main.js?v=$STAMP/" "$EXPECTED/games/kings/v1/index.html"
 for game in arena fire kings league; do
     if diff -r "$EXPECTED/games/$game" "$SHIM_PUBLISHED/games/$game" > "$TMP/$game.diff"; then
         ok "$game Pages tree is unchanged"

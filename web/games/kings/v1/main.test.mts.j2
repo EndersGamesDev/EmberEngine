@@ -1,0 +1,278 @@
+// Smoke the emitted Kings page module with the browser-owned edges replaced
+// by small recording doubles. Protocol exhaustiveness stays in main.ts; this
+// suite proves the emitted module boots, builds the board and uses the lobby
+// socket without a browser.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+type UnknownRecord = Record<string, unknown>;
+type ProtocolWitness = { sent: C2SOutput['t']; received: S2CInput['t'] };
+type Listener = (event: UnknownRecord) => void;
+
+class FakeClassList {
+  readonly values = new Set<string>();
+
+  add(...names: string[]): void {
+    names.forEach((name) => this.values.add(name));
+  }
+
+  remove(...names: string[]): void {
+    names.forEach((name) => this.values.delete(name));
+  }
+
+  contains(name: string): boolean {
+    return this.values.has(name);
+  }
+
+  toggle(name: string, force?: boolean): boolean {
+    const enabled = force ?? !this.values.has(name);
+    if (enabled) this.values.add(name);
+    else this.values.delete(name);
+    return enabled;
+  }
+}
+
+class FakeElement {
+  readonly children: FakeElement[] = [];
+  readonly classList = new FakeClassList();
+  readonly dataset: UnknownRecord = {};
+  readonly style: UnknownRecord = {};
+  readonly listeners = new Map<string, Listener[]>();
+  id = '';
+  className = '';
+  textContent = '';
+  title = '';
+  disabled = false;
+  value = '';
+  type = '';
+  onclick: (() => void) | null = null;
+
+  get firstElementChild(): FakeElement | null {
+    return this.children[0] ?? null;
+  }
+
+  append(...items: Array<FakeElement | string>): void {
+    for (const item of items) {
+      if (item instanceof FakeElement) this.children.push(item);
+    }
+  }
+
+  replaceChildren(...items: Array<FakeElement | string>): void {
+    this.children.length = 0;
+    this.append(...items);
+  }
+
+  addEventListener(name: string, listener: Listener): void {
+    const listeners = this.listeners.get(name) ?? [];
+    listeners.push(listener);
+    this.listeners.set(name, listeners);
+  }
+
+  focus(): void {}
+}
+
+class FakeButtonElement extends FakeElement {}
+class FakeInputElement extends FakeElement {}
+class FakeTextAreaElement extends FakeElement {}
+class FakeCanvasElement extends FakeElement {}
+
+class FakeDocument {
+  readonly elements = new Map<string, FakeElement>();
+  readonly listeners = new Map<string, Listener[]>();
+  title = '';
+
+  getElementById(id: string): FakeElement | null {
+    return this.elements.get(id) ?? null;
+  }
+
+  createElement(tag: string): FakeElement {
+    if (tag === 'button') return new FakeButtonElement();
+    return new FakeElement();
+  }
+
+  querySelector(selector: string): FakeElement | null {
+    if (selector === '#ember-root canvas') return this.elements.get('canvas') ?? null;
+    if (selector === '#timer .n') return this.elements.get('timer-number') ?? null;
+    return null;
+  }
+
+  addEventListener(name: string, listener: Listener): void {
+    const listeners = this.listeners.get(name) ?? [];
+    listeners.push(listener);
+    this.listeners.set(name, listeners);
+  }
+
+  dispatch(name: string, event: UnknownRecord): void {
+    this.listeners.get(name)?.forEach((listener) => listener(event));
+  }
+}
+
+class FakeStorage {
+  readonly values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+}
+
+const sent: C2SOutput[] = [];
+const lobbyListing: S2CInput = {
+  t: 'lobbies',
+  lobbies: [{ name: 'table one', host: 'host', has_password: false, players: 1, cap: 4 }],
+};
+let lobbyReply: S2CInput = lobbyListing;
+let closedSockets = 0;
+
+class FakeWebSocket {
+  onerror: Listener | null = null;
+  onclose: Listener | null = null;
+  onopen: Listener | null = null;
+  onmessage: Listener | null = null;
+
+  constructor(readonly url: string) {
+    queueMicrotask(() => this.onopen?.({}));
+  }
+
+  send(data: string): void {
+    const parsed: unknown = JSON.parse(data);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+    const record = parsed as UnknownRecord;
+    if (record['t'] === 'hello') {
+      sent.push({ t: 'hello', proto: Number(record['proto']), handle: String(record['handle']) });
+    } else if (record['t'] === 'list_lobbies') {
+      sent.push({ t: 'list_lobbies' });
+      queueMicrotask(() => this.onmessage?.({ data: JSON.stringify(lobbyReply) }));
+    }
+  }
+
+  close(): void {
+    closedSockets += 1;
+    this.onclose?.({});
+  }
+}
+
+function installBrowser(): { document: FakeDocument; restore(): void } {
+  const document = new FakeDocument();
+  const ids = [
+    'loading', 'board', 'seats', 'banner', 'whose', 'bar', 'notice', 'lastact',
+    'quiet', 'waiting', 'creator-line', 'seating', 'timer', 'start', 'stage',
+    'engine-note', 'release-version', 'proto', 'online-panel', 'online-note',
+    'lobby-rows', 'newlobby', 'newpass', 'handle',
+  ];
+  ids.forEach((id) => {
+    const input = ['newlobby', 'newpass', 'handle'].includes(id);
+    const element = input ? new FakeInputElement() : new FakeElement();
+    element.id = id;
+    document.elements.set(id, element);
+  });
+  ['btn-start', 'btn-practice', 'btn-create', 'btn-online', 'btn-refresh'].forEach((id) => {
+    const button = new FakeButtonElement();
+    button.id = id;
+    document.elements.set(id, button);
+  });
+  document.elements.get('bar')?.append(new FakeElement());
+  document.elements.get('online-panel')?.classList.add('hidden');
+  document.elements.set('timer-number', new FakeElement());
+  document.elements.set('canvas', new FakeCanvasElement());
+
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  const assign = (name: string, value: unknown): void => {
+    saved.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+  };
+  assign('window', globalThis);
+  assign('document', document);
+  assign('location', { href: 'https://example.test/games/kings/v1/index.html' });
+  assign('HTMLElement', FakeElement);
+  assign('HTMLButtonElement', FakeButtonElement);
+  assign('HTMLInputElement', FakeInputElement);
+  assign('HTMLTextAreaElement', FakeTextAreaElement);
+  assign('HTMLCanvasElement', FakeCanvasElement);
+  assign('WebSocket', FakeWebSocket);
+  assign('localStorage', new FakeStorage());
+  assign('sessionStorage', new FakeStorage());
+  assign('prompt', () => null);
+  assign('requestAnimationFrame', () => 1);
+  assign('addEventListener', () => undefined);
+  assign('setTimeout', () => 1);
+
+  return {
+    document,
+    restore(): void {
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+        else Reflect.deleteProperty(globalThis, name);
+      }
+    },
+  };
+}
+
+test('the emitted Kings page boots and lists a lobby', async () => {
+  const witness: ProtocolWitness = { sent: 'list_lobbies', received: 'lobbies' };
+  assert.deepEqual(witness, { sent: 'list_lobbies', received: 'lobbies' });
+  const generated = dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))));
+  const emitted = join(generated, 'js');
+  const scratch = await mkdtemp(join(tmpdir(), 'ember-kings-page-'));
+  const copied = join(scratch, 'js');
+  await cp(emitted, copied, { recursive: true });
+  const loader = join(copied, 'loader.js');
+  const originalLoader = await readFile(loader, 'utf8');
+  assert.match(originalLoader, /export async function emberLoad/);
+  await writeFile(loader, [
+    'export async function emberLoad(options) {',
+    "  options.onEvent({ phase: 'ready', status: 'done', text: 'ready' });",
+    '  return {',
+    "    version: '1.0.4+smoke', proto: 7, book: { kings_proto: 7 },",
+    "    host: { name: 'host', url: 'wss://kings.test/ws', proto: 7 },",
+    '    candidates: [], wrongProto: [], hostSettled: Promise.resolve({}), stamp: \'1\', degraded: false,',
+    '    exports: {',
+    '      clear_selection() {}, click_tile() {}, start_game() {}, start_local() {}, start_online() {},',
+    "      package_version() { return '1.0.4+smoke'; }, proto_version() { return 7; }, state_json() { return '{}'; },",
+    '    },',
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
+
+  const browser = installBrowser();
+  try {
+    const main = join(copied, 'games/kings/v1/main.js');
+    await import(`${pathToFileURL(main).href}?smoke=${Date.now()}`);
+    assert.equal(browser.document.elements.get('board')?.children.length, 100);
+    assert.equal(browser.document.elements.get('release-version')?.textContent, 'Version 1');
+    assert.equal(browser.document.elements.get('proto')?.textContent, 'protocol v7 · server publishes v7');
+    browser.document.elements.get('btn-online')?.onclick?.();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    assert.deepEqual(sent.map((message) => message.t), ['hello', 'list_lobbies']);
+    assert.equal(browser.document.elements.get('lobby-rows')?.children.length, 1);
+    assert.equal(closedSockets, 1);
+    browser.document.elements.delete('canvas');
+    browser.document.dispatch('pointerdown', { target: browser.document.elements.get('board')! });
+    lobbyReply = { t: 'rejected', reason: 'unavailable' };
+    browser.document.elements.get('btn-refresh')?.onclick?.();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    assert.equal(browser.document.elements.get('lobby-rows')?.children[0]?.textContent, 'server refused: unavailable');
+    assert.equal(closedSockets, 2);
+  } finally {
+    browser.restore();
+    await rm(scratch, { recursive: true, force: true });
+    sent.length = 0;
+    lobbyReply = lobbyListing;
+    closedSockets = 0;
+  }
+});

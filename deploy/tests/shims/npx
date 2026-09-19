@@ -13,11 +13,13 @@ case " $* " in
             exit 2
         fi
         if [[ " $* " == *" tsc -p tsconfig.web.json "* ]] && [[ " $* " != *" --noEmit "* ]]; then
-            mkdir -p target/web-generated/js
+            mkdir -p target/web-generated/js/games/kings/v1
             printf 'export const generatedHosts = "npx-emitted-hosts";\n' \
                 > target/web-generated/js/hosts.js
             printf 'export function emberLoad() { return "npx-emitted-loader"; }\n' \
                 > target/web-generated/js/loader.js
+            printf 'import { emberLoad } from "../../../loader.js?v=1"; export const generatedKings = emberLoad;\n' \
+                > target/web-generated/js/games/kings/v1/main.js
             printf 'export {};\n' > target/web-generated/js/exhaustive-consumer.js
             mkdir -p target/web-generated/js/games/fire/v2
             cp target/web-generated/ts/games/fire/v2/race.ts \
